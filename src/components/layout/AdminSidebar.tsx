@@ -17,6 +17,7 @@ import {
   Bell,
   BarChart3,
   ShieldCheck,
+  Shield,
   FileClock,
   Activity,
   FileSpreadsheet,
@@ -60,9 +61,12 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({
 
   const navGroups: NavGroup[] = [
     {
-      groupName: "Executive & Core",
+      groupName: "Phase 1 Core Governance",
       items: [
-        { id: "dashboard", label: "Executive Dashboard", icon: LayoutDashboard }
+        { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
+        { id: "users", label: "Users", icon: Users },
+        { id: "roles", label: "Roles", icon: Shield },
+        { id: "audit", label: "Audit Logs", icon: FileClock }
       ]
     },
     {
@@ -100,11 +104,9 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({
       ]
     },
     {
-      groupName: "Security & Governance",
+      groupName: "Security & System",
       items: [
-        { id: "users", label: "User Management (RBAC)", icon: Users },
         { id: "security", label: "Security & IAM", icon: ShieldCheck },
-        { id: "audit", label: "Immutable Audit Logs", icon: FileClock },
         { id: "health", label: "System Health", icon: Activity },
         { id: "reports", label: "Centralized Reports", icon: FileSpreadsheet },
         { id: "settings", label: "Administrative Settings", icon: Settings }

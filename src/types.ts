@@ -15,10 +15,12 @@ export type PermissionAction = "view" | "create" | "edit" | "delete" | "publish"
 
 export type SystemModule =
   | "dashboard"
+  | "users"
+  | "roles"
+  | "audit"
   | "website"
   | "products"
   | "blog"
-  | "users"
   | "customers"
   | "leads"
   | "onboarding"
@@ -31,7 +33,6 @@ export type SystemModule =
   | "ai"
   | "integrations"
   | "security"
-  | "audit"
   | "health"
   | "reports"
   | "settings";
@@ -39,6 +40,19 @@ export type SystemModule =
 export interface UserPermission {
   module: SystemModule;
   actions: PermissionAction[];
+}
+
+export interface RbacMatrixItem {
+  module: string;
+  canView: boolean;
+  canCreate: boolean;
+  canEdit: boolean;
+  canDelete: boolean;
+  canPublish: boolean;
+  canApprove: boolean;
+  canExport: boolean;
+  canManage: boolean;
+  [key: string]: any;
 }
 
 export interface User {

@@ -1264,3 +1264,16 @@ export const initialSystemSettings: SystemSettings = {
   aiMonthlyTokenBudget: 5000000,
   defaultCurrency: "USD"
 };
+
+export const initialRbacMatrix = [
+  { module: "Dashboard & Analytics", canView: true, canCreate: true, canEdit: true, canDelete: false, canPublish: false, canApprove: true, canExport: true, canManage: true },
+  { module: "Users & Identities", canView: true, canCreate: true, canEdit: true, canDelete: true, canPublish: false, canApprove: true, canExport: true, canManage: true },
+  { module: "Roles & RBAC Policies", canView: true, canCreate: true, canEdit: true, canDelete: true, canPublish: false, canApprove: true, canExport: true, canManage: true },
+  { module: "Immutable Audit Logs", canView: true, canCreate: false, canEdit: false, canDelete: false, canPublish: false, canApprove: false, canExport: true, canManage: false },
+  { module: "Leads & CRM Pipeline", canView: true, canCreate: true, canEdit: true, canDelete: false, canPublish: true, canApprove: true, canExport: true, canManage: true },
+  { module: "Customer Accounts", canView: true, canCreate: true, canEdit: true, canDelete: false, canPublish: false, canApprove: true, canExport: true, canManage: true },
+  { module: "Products & Solutions", canView: true, canCreate: true, canEdit: true, canDelete: true, canPublish: true, canApprove: true, canExport: true, canManage: true },
+  { module: "Website & Content CMS", canView: true, canCreate: true, canEdit: true, canDelete: true, canPublish: true, canApprove: true, canExport: false, canManage: false },
+  { module: "AI Control Center", canView: true, canCreate: true, canEdit: true, canDelete: false, canPublish: true, canApprove: true, canExport: true, canManage: true },
+  { module: "System Health & Infrastructure", canView: true, canCreate: false, canEdit: true, canDelete: false, canPublish: false, canApprove: false, canExport: true, canManage: true }
+];

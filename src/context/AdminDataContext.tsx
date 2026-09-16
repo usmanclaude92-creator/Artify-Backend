@@ -19,7 +19,8 @@ import {
   EcosystemApp,
   IntegrationService,
   NotificationTemplate,
-  SystemSettings
+  SystemSettings,
+  RbacMatrixItem
 } from "../types";
 import {
   initialUsers,
@@ -38,7 +39,8 @@ import {
   initialEcosystemApps,
   initialIntegrations,
   initialNotificationTemplates,
-  initialSystemSettings
+  initialSystemSettings,
+  initialRbacMatrix
 } from "../data/seedData";
 
 interface AdminDataContextType {
@@ -46,6 +48,7 @@ interface AdminDataContextType {
   currentView: "admin" | "public_website";
   activeModule: SystemModule;
   currentUser: User;
+  isAuthenticated: boolean;
   selectedDateRange: string;
   isSearchOpen: boolean;
 
@@ -67,6 +70,7 @@ interface AdminDataContextType {
   integrations: IntegrationService[];
   notificationTemplates: NotificationTemplate[];
   systemSettings: SystemSettings;
+  rbacMatrix: RbacMatrixItem[];
 
   // Setters & Navigation
   setCurrentView: (view: "admin" | "public_website") => void;
@@ -74,6 +78,9 @@ interface AdminDataContextType {
   setSelectedDateRange: (range: string) => void;
   setIsSearchOpen: (open: boolean) => void;
   switchUserRole: (role: UserRole) => void;
+  login: (email?: string, role?: UserRole) => void;
+  logout: () => void;
+  updateRbacPermission: (moduleName: string, permissionKey: string, allowed: boolean) => void;
 
   // Actions
   logAuditEvent: (
@@ -145,6 +152,7 @@ const AdminDataContext = createContext<AdminDataContextType | undefined>(undefin
 export const AdminDataProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [currentView, setCurrentView] = useState<"admin" | "public_website">("admin");
   const [activeModule, setActiveModule] = useState<SystemModule>("dashboard");
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(true);
   const [selectedDateRange, setSelectedDateRange] = useState<string>("Last 30 days");
   const [isSearchOpen, setIsSearchOpen] = useState<boolean>(false);
 
@@ -304,6 +312,28 @@ export const AdminDataProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     }
   });
 
+  const [rbacMatrix, setRbacMatrix] = useState<RbacMatrixItem[]>(() => {
+    try {
+      const saved = localStorage.getItem(`${STORAGE_KEY}_rbac`);
+      return saved ? JSON.parse(saved) : initialRbacMatrix;
+    } catch {
+      return initialRbacMatrix;
+    }
+  });
+
+  const updateRbacPermission = (moduleName: string, permissionKey: string, allowed: boolean) => {
+    setRbacMatrix((prev) =>
+      prev.map((item) =>
+        item.module === moduleName ? { ...item, [permissionKey]: allowed } : item
+      )
+    );
+    logAuditEvent(
+      "UPDATE_RBAC_POLICY",
+      "Roles & Permissions",
+      `Modified '${permissionKey}' policy for ${moduleName} to ${allowed ? "ENABLED" : "DISABLED"}`
+    );
+  };
+
   // Sync to localStorage
   useEffect(() => {
     try {
@@ -421,6 +451,22 @@ export const AdminDataProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       setCurrentUser(tempUser);
     }
     logAuditEvent("SWITCH_ACTIVE_ROLE", "Security & IAM", `Active administrative persona changed to ${role}`);
+  };
+
+  const login = (email?: string, role?: UserRole) => {
+    setIsAuthenticated(true);
+    if (email) {
+      const match = users.find((u) => u.email.toLowerCase() === email.toLowerCase());
+      if (match) setCurrentUser(match);
+    } else if (role) {
+      switchUserRole(role);
+    }
+    logAuditEvent("USER_LOGIN", "Authentication", `User ${currentUser.email} authenticated to Super Admin`);
+  };
+
+  const logout = () => {
+    setIsAuthenticated(false);
+    logAuditEvent("USER_LOGOUT", "Authentication", `User ${currentUser.email} logged out from control center`);
   };
 
   // Product Actions
@@ -843,11 +889,16 @@ export const AdminDataProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         integrations,
         notificationTemplates,
         systemSettings,
+        rbacMatrix,
+        updateRbacPermission,
+        isAuthenticated,
         setCurrentView,
         setActiveModule,
         setSelectedDateRange,
         setIsSearchOpen,
         switchUserRole,
+        login,
+        logout,
         logAuditEvent,
         saveProduct,
         deleteProduct,
