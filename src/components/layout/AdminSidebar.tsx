@@ -65,7 +65,7 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({
       items: [
         { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
         { id: "users", label: "Users", icon: Users },
-        { id: "roles", label: "Roles", icon: Shield },
+        { id: "governance", label: "Governance Control", icon: Shield, badge: "RBAC" },
         { id: "audit", label: "Audit Logs", icon: FileClock }
       ]
     },

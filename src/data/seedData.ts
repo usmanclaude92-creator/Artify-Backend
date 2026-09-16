@@ -92,6 +92,241 @@ export const initialUsers: User[] = [
 
 export const initialProducts: Product[] = [
   {
+    id: "prod-swarm-1",
+    name: "Artify Swarm™",
+    slug: "artify-swarm",
+    tagline: "Multi-Agent Autonomous Workforce Orchestrator",
+    shortDescription: "Deploy autonomous agent swarms that coordinate across ERP, CRM, and communication channels for zero-touch enterprise operations.",
+    description: "Artify Swarm™ is an enterprise-grade multi-agent autonomous workforce platform. It deploys specialized agent swarms that operate 24/7, negotiating tasks across legacy ERPs, CRMs, ticketing systems, and messaging protocols to execute complex workflows with human-in-the-loop oversight.",
+    category: "Autonomous AI Agents",
+    industry: ["Finance & Accounting", "Healthcare", "Logistics & Fleet", "Manufacturing", "E-Commerce"],
+    platforms: ["Cloud", "Web", "Desktop"],
+    pricingModel: "Usage Based",
+    status: "published",
+    trialAvailable: true,
+    trialDurationDays: 14,
+    version: "3.2.0",
+    updatedAt: "2026-09-15T12:00:00.000Z",
+    seoTitle: "Artify Swarm™ | Autonomous Multi-Agent Workforce Orchestrator",
+    seoDescription: "Coordinate autonomous agent swarms across ERP, CRM, and cloud services for automated enterprise operations with Artify Swarm™.",
+    screenshots: [
+      "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=800&auto=format&fit=crop&q=80",
+      "https://images.unsplash.com/photo-1551288049-bebda4e38f71?w=800&auto=format&fit=crop&q=80"
+    ],
+    documents: [
+      { name: "Artify Swarm Whitepaper.pdf", url: "https://artifysols.com", type: "PDF" },
+      { name: "Multi-Agent Orchestration Architecture.pdf", url: "https://artifysols.com", type: "PDF" }
+    ],
+    features: [
+      { id: "f-sw-1", title: "Cross-System Orchestration", description: "Coordinate workflows seamlessly across SAP, Salesforce, Slack, and SQL databases.", includedInPlans: ["Growth", "Enterprise"] },
+      { id: "f-sw-2", title: "24/7 Autonomous Workers", description: "Zero-touch ops executing repetitive reconciliations, triage, and ticket dispatch.", includedInPlans: ["Starter", "Growth", "Enterprise"] },
+      { id: "f-sw-3", title: "Human-in-the-Loop Safeguards", description: "Configurable approval thresholds for high-stakes business operations.", includedInPlans: ["Growth", "Enterprise"] },
+      { id: "f-sw-4", title: "Sovereign Dual-Engine Router", description: "Intelligent fallback between frontier models and private fine-tuned weights.", includedInPlans: ["Enterprise"] }
+    ],
+    plans: [
+      {
+        id: "plan-swarm-growth",
+        productId: "prod-swarm-1",
+        name: "Swarm Pro Tier",
+        code: "SWARM-PRO",
+        priceMonthly: 1950,
+        priceAnnual: 19500,
+        billingInterval: "monthly",
+        trialDays: 14,
+        isPopular: true,
+        maxUsers: 50,
+        features: ["Up to 25 concurrent agent swarms", "5,000,000 reasoning tokens/mo", "Cross-system ERP connectors", "SOC2 compliance audit logs"],
+        entitlements: { maxAgents: 25, tokensPerMonth: 5000000 }
+      },
+      {
+        id: "plan-swarm-ent",
+        productId: "prod-swarm-1",
+        name: "Swarm Enterprise Core",
+        code: "SWARM-ENT",
+        priceMonthly: 4800,
+        priceAnnual: 48000,
+        billingInterval: "annual",
+        trialDays: 30,
+        maxUsers: 500,
+        features: ["Unlimited concurrent agent swarms", "Dedicated VPC cluster", "Fine-tuned local weights support", "24/7 dedicated solution architect SLA"],
+        entitlements: { maxAgents: 999, tokensPerMonth: 50000000, dedicatedVpc: true }
+      }
+    ]
+  },
+  {
+    id: "prod-rag-2",
+    name: "Artify Neural RAG™",
+    slug: "artify-neural-rag",
+    tagline: "Enterprise Multi-Modal Knowledge & Vector Intelligence Core",
+    shortDescription: "Unify company documentation, PDFs, codebases, contracts, and audio recordings into a conversational intelligence engine with zero data leakage.",
+    description: "Artify Neural RAG™ transforms fragmented enterprise repositories into a high-precision, low-latency conversational intelligence layer. Using hybrid dense-sparse vector indexing, temporal metadata filtering, and citation verification, it eliminates hallucinations and guarantees data sovereignty.",
+    category: "Enterprise AI & RAG",
+    industry: ["Healthcare", "Finance & Accounting", "Legal & Compliance", "Energy & Utilities", "Government"],
+    platforms: ["Cloud", "Web", "Desktop"],
+    pricingModel: "Tiered Flat",
+    status: "published",
+    trialAvailable: true,
+    trialDurationDays: 14,
+    version: "3.1.0",
+    updatedAt: "2026-09-14T10:00:00.000Z",
+    seoTitle: "Artify Neural RAG™ | Enterprise Multi-Modal Vector Knowledge Core",
+    seoDescription: "Private vector embeddings and multi-modal knowledge synthesis across enterprise PDFs, databases, and audio with Artify Neural RAG™.",
+    screenshots: [
+      "https://images.unsplash.com/photo-1526374965328-7f61d4dc18c5?w=800&auto=format&fit=crop&q=80"
+    ],
+    documents: [
+      { name: "Neural RAG Benchmark Report.pdf", url: "https://artifysols.com", type: "PDF" }
+    ],
+    features: [
+      { id: "f-rag-1", title: "Multi-Modal Parsing Engine", description: "Ingests scanned PDFs, complex tables, audio transcripts, and CAD specs.", includedInPlans: ["Starter", "Growth", "Enterprise"] },
+      { id: "f-rag-2", title: "Verifiable Citation Mesh", description: "Exact character-level source attribution preventing hallucinations.", includedInPlans: ["Growth", "Enterprise"] },
+      { id: "f-rag-3", title: "Zero Data Leakage Boundary", description: "Private tenant encryption with sovereign on-premise vector embeddings.", includedInPlans: ["Enterprise"] }
+    ],
+    plans: [
+      {
+        id: "plan-rag-corp",
+        productId: "prod-rag-2",
+        name: "Enterprise Knowledge Core",
+        code: "RAG-CORP",
+        priceMonthly: 2400,
+        priceAnnual: 24000,
+        billingInterval: "monthly",
+        trialDays: 14,
+        isPopular: true,
+        maxUsers: 100,
+        features: ["Up to 500,000 indexed documents", "Real-time vector pipeline", "Role-based knowledge access filters", "Sub-200ms semantic search SLA"],
+        entitlements: { maxDocuments: 500000, semanticLatencyMs: 200 }
+      }
+    ]
+  },
+  {
+    id: "prod-mesh-3",
+    name: "Artify Mesh™",
+    slug: "artify-mesh",
+    tagline: "Zero-Latency System Integration & Real-Time Event Pipeline",
+    shortDescription: "An intelligent real-time data mesh connecting legacy databases, modern microservices, and external APIs with sub-millisecond event routing.",
+    description: "Artify Mesh™ acts as the high-throughput nervous system of the digital enterprise. It bridges disparate legacy mainframes, modern cloud databases, webhooks, and IoT streams into an immutable, unified event spine.",
+    category: "Integration & Data Mesh",
+    industry: ["Manufacturing", "Logistics & Fleet", "FinTech", "Retail & E-Commerce"],
+    platforms: ["Cloud"],
+    pricingModel: "Usage Based",
+    status: "published",
+    trialAvailable: true,
+    trialDurationDays: 30,
+    version: "2.9.4",
+    updatedAt: "2026-09-12T08:00:00.000Z",
+    seoTitle: "Artify Mesh™ | Intelligent Real-Time Event Pipeline & Data Mesh",
+    seoDescription: "High-throughput, zero-latency data pipeline connecting legacy systems, ERPs, and microservices with Artify Mesh™.",
+    screenshots: [
+      "https://images.unsplash.com/photo-1558494949-ef010cbdcc31?w=800&auto=format&fit=crop&q=80"
+    ],
+    documents: [],
+    features: [
+      { id: "f-mesh-1", title: "Sub-Millisecond Event Bus", description: "High-throughput stream processing built on Rust & Kafka protocols.", includedInPlans: ["Growth", "Enterprise"] },
+      { id: "f-mesh-2", title: "Automated Schema Synthesis", description: "Auto-detects and transforms contrasting JSON, XML, and Protobuf payloads.", includedInPlans: ["Growth", "Enterprise"] }
+    ],
+    plans: [
+      {
+        id: "plan-mesh-scale",
+        productId: "prod-mesh-3",
+        name: "High-Throughput Mesh",
+        code: "MESH-SCALE",
+        priceMonthly: 1600,
+        priceAnnual: 16000,
+        billingInterval: "monthly",
+        trialDays: 30,
+        maxUsers: 50,
+        features: ["100M monthly processed events", "Zero-downtime hot reloading", "End-to-end payload encryption", "Automatic Dead-Letter Queue remediation"],
+        entitlements: { monthlyEvents: 100000000 }
+      }
+    ]
+  },
+  {
+    id: "prod-bi-4",
+    name: "Artify CommandBI™",
+    slug: "artify-command-bi",
+    tagline: "Executive Real-Time Natural Language Analytics & Forecasting Hub",
+    shortDescription: "Ask questions in plain English and receive instant executive dashboards, predictive revenue models, and operational alerts.",
+    description: "Artify CommandBI™ eliminates the friction of SQL queries and static BI dashboards. Executives and operations leaders query their live business metrics using natural language dialogue, generating predictive cash models, supply chain stress tests, and board-ready visual decks instantly.",
+    category: "Executive Analytics BI",
+    industry: ["Finance & Accounting", "Healthcare", "Real Estate", "Professional Services"],
+    platforms: ["Web", "iOS", "Android", "Desktop"],
+    pricingModel: "Per Seat",
+    status: "published",
+    trialAvailable: true,
+    trialDurationDays: 14,
+    version: "2.4.1",
+    updatedAt: "2026-09-10T11:00:00.000Z",
+    seoTitle: "Artify CommandBI™ | Conversational Enterprise Intelligence & Analytics",
+    seoDescription: "Natural language query synthesis, real-time forecasting, and executive telemetry with Artify CommandBI™.",
+    screenshots: [
+      "https://images.unsplash.com/photo-1460925895917-afdab827c52f?w=800&auto=format&fit=crop&q=80"
+    ],
+    documents: [],
+    features: [
+      { id: "f-bi-1", title: "NL-to-Metric Synthesis", description: "Convert complex executive questions into verified multi-table aggregation graphs.", includedInPlans: ["Growth", "Enterprise"] },
+      { id: "f-bi-2", title: "Algorithmic Cash Forecasting", description: "Monte Carlo simulations across receivables, pipeline, and cost structures.", includedInPlans: ["Enterprise"] }
+    ],
+    plans: [
+      {
+        id: "plan-bi-exec",
+        productId: "prod-bi-4",
+        name: "Executive Leadership Suite",
+        code: "BI-EXEC",
+        priceMonthly: 1200,
+        priceAnnual: 12000,
+        billingInterval: "monthly",
+        trialDays: 14,
+        isPopular: true,
+        maxUsers: 20,
+        features: ["Unlimited natural language BI queries", "Automated Monday executive digest", "Multi-scenario financial modeling", "Mobile executive app for iPad & iOS"],
+        entitlements: { maxQueriesPerDay: 5000 }
+      }
+    ]
+  },
+  {
+    id: "prod-cx-5",
+    name: "Artify CX Flow™",
+    slug: "artify-cx-flow",
+    tagline: "Omnichannel Conversational Support & Agentic Customer Experience Copilot",
+    shortDescription: "Empower front-line support and sales with an autonomous customer copilot that resolves inquiries across web chat, WhatsApp, and email.",
+    description: "Artify CX Flow™ delivers unified omnichannel customer engagement. It learns your product catalogs, warranty rules, and account statuses, resolving up to 85% of tier-1 customer inquiries autonomously while intelligently routing edge cases to senior specialists.",
+    category: "AI Business Suite",
+    industry: ["Retail & E-Commerce", "Hospitality", "FinTech", "Education"],
+    platforms: ["Web", "iOS", "Android", "Cloud"],
+    pricingModel: "Per Seat",
+    status: "published",
+    trialAvailable: true,
+    trialDurationDays: 14,
+    version: "2.1.0",
+    updatedAt: "2026-09-08T09:00:00.000Z",
+    seoTitle: "Artify CX Flow™ | Omnichannel AI Support & Agentic Copilot",
+    seoDescription: "Autonomous customer support, multilingual ticket triage, and CRM sync with Artify CX Flow™.",
+    screenshots: [
+      "https://images.unsplash.com/photo-1556740738-b6a63e27c4df?w=800&auto=format&fit=crop&q=80"
+    ],
+    documents: [],
+    features: [
+      { id: "f-cx-1", title: "Autonomous First-Contact Resolution", description: "Resolves booking, order status, and technical questions instantly.", includedInPlans: ["Growth", "Enterprise"] },
+      { id: "f-cx-2", title: "Multilingual In-Flight Translation", description: "Native support for 60+ global languages without translation latency.", includedInPlans: ["Starter", "Growth", "Enterprise"] }
+    ],
+    plans: [
+      {
+        id: "plan-cx-growth",
+        productId: "prod-cx-5",
+        name: "Omnichannel Growth",
+        code: "CX-GROWTH",
+        priceMonthly: 850,
+        priceAnnual: 8500,
+        billingInterval: "monthly",
+        trialDays: 14,
+        maxUsers: 15,
+        features: ["Up to 10,000 monthly conversations", "Web chat, WhatsApp & Zendesk sync", "Sentiment & escalation alerting", "Agent performance analytics"],
+        entitlements: { maxConversations: 10000 }
+      }
+    ]
+  },
+  {
     id: "prod-erp-1",
     name: "Artify ERP One",
     slug: "artify-erp-one",
@@ -426,6 +661,52 @@ export const initialCustomers: CustomerCompany[] = [
 
 export const initialLeads: Lead[] = [
   {
+    id: "lead-wh-seed-1",
+    name: "Dr. Alistair Finch",
+    email: "a.finch@globalfintech.ch",
+    phone: "+41 22 555 1099",
+    companyName: "Swiss Capital & Asset Management",
+    companySize: "1,000+ Employees",
+    productInterest: "Artify Swarm™",
+    leadSource: "artifysols.com Webhook",
+    stage: "Qualified",
+    assignedStaff: "Dr. Aris Thorne (AI Principal)",
+    estimatedValue: 120000,
+    priority: "Urgent",
+    aiScore: 96,
+    department: "Enterprise AI & Swarm",
+    submissionType: "Discovery Call",
+    notes: [
+      "Inbound discovery call requested from artifysols.com RFP portal.",
+      "High urgency: Requires multi-agent autonomous reconciliation across Zurich and London offices."
+    ],
+    createdAt: "2024-11-20T10:14:00.000Z",
+    updatedAt: "2024-11-21T16:20:00.000Z"
+  },
+  {
+    id: "lead-wh-seed-2",
+    name: "Elena Rostova",
+    email: "e.rostova@bioventure-nordic.com",
+    phone: "+46 8 555 9921",
+    companyName: "BioVenture Pharma Labs",
+    companySize: "500-1,000 Employees",
+    productInterest: "Artify Neural RAG™",
+    leadSource: "artifysols.com Webhook",
+    stage: "New",
+    assignedStaff: "Dr. Elena Vance (Chief AI Architect)",
+    estimatedValue: 95000,
+    priority: "High",
+    aiScore: 91,
+    department: "Vector Intelligence & RAG",
+    submissionType: "RFP Submission",
+    notes: [
+      "Webhook submission from artifysols.com healthcare compliance section.",
+      "Requires private vector indexing for 200k FDA trial clinical PDF submissions."
+    ],
+    createdAt: "2024-11-21T11:30:00.000Z",
+    updatedAt: "2024-11-21T11:30:00.000Z"
+  },
+  {
     id: "lead-1",
     name: "David Sterling",
     email: "d.sterling@vanguardindustrial.com",
@@ -437,6 +718,10 @@ export const initialLeads: Lead[] = [
     stage: "Proposal/Opportunity",
     assignedStaff: "Marcus Vance",
     estimatedValue: 48000,
+    priority: "Medium",
+    aiScore: 78,
+    department: "Enterprise Systems",
+    submissionType: "Discovery Call",
     notes: [
       "Requested demo on dynamic multi-warehouse routing.",
       "Custom ERP architecture proposal sent on Nov 19th. Follow up next Tuesday."
@@ -456,6 +741,10 @@ export const initialLeads: Lead[] = [
     stage: "Qualified",
     assignedStaff: "Marcus Vance",
     estimatedValue: 62000,
+    priority: "High",
+    aiScore: 84,
+    department: "Enterprise Systems",
+    submissionType: "Contact Form",
     notes: [
       "Needs biometrics and mobile GPS shift verification across 8 regional depots.",
       "Security compliance packet approved by their IT director."
@@ -473,8 +762,12 @@ export const initialLeads: Lead[] = [
     productInterest: "Artify FinCore Suite",
     leadSource: "Product Enquiry",
     stage: "Contacted",
-    assignedStaff: "Elena Rostova",
+    assignedStaff: "Alexander Wright",
     estimatedValue: 24000,
+    priority: "Medium",
+    aiScore: 68,
+    department: "Enterprise Systems",
+    submissionType: "Discovery Call",
     notes: [
       "Evaluating automated recurring billing reconciliation to replace Chargebee.",
       "Technical discovery call scheduled."
@@ -489,11 +782,15 @@ export const initialLeads: Lead[] = [
     phone: "+46 8 555 7890",
     companyName: "Nordic BioScience Labs",
     companySize: "100-250 Employees",
-    productInterest: "Artify AI Business Suite",
+    productInterest: "Artify CommandBI™",
     leadSource: "Demo Request",
     stage: "New",
-    assignedStaff: "Marcus Vance",
+    assignedStaff: "Jessica Sterling",
     estimatedValue: 36000,
+    priority: "Medium",
+    aiScore: 74,
+    department: "Executive BI",
+    submissionType: "Architecture Review",
     notes: [
       "Submitted demo form via homepage: 'Need automated research document summarization and compliance check.'"
     ],
@@ -510,6 +807,10 @@ export const initialLeads: Lead[] = [
     stage: "Converted",
     assignedStaff: "Marcus Vance",
     estimatedValue: 32000,
+    priority: "Standard",
+    aiScore: 62,
+    department: "Enterprise Systems",
+    submissionType: "Contact Form",
     notes: [
       "Converted to customer: Apex Global Logistics sister subsidiary.",
       "Account setup initiated."
@@ -746,32 +1047,32 @@ export const initialWebsiteSections: WebsiteSection[] = [
     pageId: "page-1",
     sectionKey: "hero",
     title: "Software should adapt your business, not your business adapt software.",
-    subtitle: "Artify Sols engineers unified enterprise ecosystems — from adaptive ERP and biometric workforce HRM to private AI copilots and high-load mobile applications.",
+    subtitle: "Artify Solutions engineers AI-native software and autonomous agentic systems. We empower forward-thinking organizations with custom intelligence, high-throughput data meshes, and enterprise multi-agent swarms operating 24/7.",
     isVisible: true,
     orderIndex: 1,
-    updatedAt: "2024-11-22T09:00:00.000Z",
+    updatedAt: "2026-09-15T09:00:00.000Z",
     content: {
-      ctaPrimaryText: "Request Architecture Demo",
+      ctaPrimaryText: "Deploy Artify Kernel V3.0",
       ctaPrimaryLink: "#demo",
-      ctaSecondaryText: "Explore Ecosystem Solutions",
+      ctaSecondaryText: "Explore AI Solutions",
       ctaSecondaryLink: "#solutions",
-      badgeText: "ENTERPRISE ADAPTIVE SUITE 2025"
+      badgeText: "ARTIFY KERNEL V3.0 — SOC2 CERTIFIED"
     }
   },
   {
     id: "sec-stats",
     pageId: "page-1",
     sectionKey: "stats",
-    title: "Proven Scale Across Global Operations",
+    title: "Enterprise Scale Powered by Autonomous Intelligence",
     isVisible: true,
     orderIndex: 2,
-    updatedAt: "2024-11-20T10:00:00.000Z",
+    updatedAt: "2026-09-15T10:00:00.000Z",
     content: {
       stats: [
-        { label: "Active Enterprise Users", value: "140k+" },
-        { label: "Quarterly Transactions Handled", value: "$4.8B" },
-        { label: "Deployment Adaptability SLA", value: "99.99%" },
-        { label: "Average Efficiency Lift", value: "3.8x" }
+        { label: "Autonomous Agent Ops / Day", value: "2.4M+" },
+        { label: "Quarterly Volume Orchestrated", value: "$6.2B" },
+        { label: "Event Pipeline Latency", value: "<1.2ms" },
+        { label: "Operational Cost Reduction", value: "64%" }
       ]
     }
   },
@@ -779,24 +1080,46 @@ export const initialWebsiteSections: WebsiteSection[] = [
     id: "sec-products",
     pageId: "page-1",
     sectionKey: "products_grid",
-    title: "The Artify Enterprise Ecosystem",
-    subtitle: "Modularity at its finest. Deploy one specialized solution or coordinate the entire digital enterprise from a single governance plane.",
+    title: "Featured AI Solutions & Autonomous Workforce",
+    subtitle: "Artify Swarm™, Neural RAG™, Mesh™, CommandBI™, and CX Flow™ — modular AI-native architectures orchestrating zero-touch enterprise operations.",
     isVisible: true,
     orderIndex: 3,
-    updatedAt: "2024-11-20T10:00:00.000Z",
+    updatedAt: "2026-09-15T10:00:00.000Z",
     content: {
-      highlightBadge: "Unified Data Fabric"
+      highlightBadge: "AI-Native Kernel Architecture"
+    }
+  },
+  {
+    id: "sec-industries",
+    pageId: "page-1",
+    sectionKey: "industries_matrix",
+    title: "Custom Intelligence Engineered for Every Industry",
+    subtitle: "Tailored AI solutions engineered for high-compliance sectors with custom vector intelligence, regulatory guardrails, and automated reconciliation.",
+    isVisible: true,
+    orderIndex: 4,
+    updatedAt: "2026-09-15T10:00:00.000Z",
+    content: {
+      industries: [
+        "Finance & Accounting",
+        "Healthcare & Life Sciences",
+        "Construction & Engineering",
+        "Real Estate & Property",
+        "Retail & E-Commerce",
+        "Manufacturing & Industrial",
+        "Logistics & Fleet Ops",
+        "Government & Public Sector"
+      ]
     }
   },
   {
     id: "sec-testimonials",
     pageId: "page-1",
     sectionKey: "testimonials",
-    title: "Trusted by Enterprise Operational Leaders",
-    subtitle: "Hear directly from CIOs, operations vice presidents, and finance directors who broke free from rigid legacy software.",
+    title: "Trusted by Enterprise Innovation Leaders",
+    subtitle: "Hear directly from CIOs, operations vice presidents, and engineering directors running mission-critical operations on the Artify platform.",
     isVisible: true,
-    orderIndex: 4,
-    updatedAt: "2024-11-18T10:00:00.000Z",
+    orderIndex: 5,
+    updatedAt: "2026-09-14T10:00:00.000Z",
     content: {}
   },
   {
@@ -804,23 +1127,23 @@ export const initialWebsiteSections: WebsiteSection[] = [
     pageId: "page-1",
     sectionKey: "faq",
     title: "Frequently Asked Questions",
-    subtitle: "Clear answers on our architecture, deployment options, migration, and custom bespoke extensions.",
+    subtitle: "Clear answers on Artify Kernel V3.0, sovereign multi-agent swarms, data residency, and ERP integration.",
     isVisible: true,
-    orderIndex: 5,
-    updatedAt: "2024-11-15T10:00:00.000Z",
+    orderIndex: 6,
+    updatedAt: "2026-09-12T10:00:00.000Z",
     content: {}
   },
   {
     id: "sec-cta",
     pageId: "page-1",
     sectionKey: "cta_banner",
-    title: "Ready to make software adapt to your enterprise?",
-    subtitle: "Consult directly with our solution architects to design your bespoke operational blueprint.",
+    title: "Ready to deploy custom intelligence for your enterprise?",
+    subtitle: "Consult directly with Artify Solutions enterprise architects to design and deploy your custom AI agent workforce.",
     isVisible: true,
-    orderIndex: 6,
-    updatedAt: "2024-11-22T09:00:00.000Z",
+    orderIndex: 7,
+    updatedAt: "2026-09-15T09:00:00.000Z",
     content: {
-      buttonText: "Schedule Executive Briefing",
+      buttonText: "Schedule Architecture Briefing",
       phoneNumber: "+1 (800) 555-ARTIFY"
     }
   }

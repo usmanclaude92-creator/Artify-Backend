@@ -31,10 +31,14 @@ export const ProductsModule: React.FC = () => {
 
   const categories: ("All" | ProductCategory)[] = [
     "All",
+    "Autonomous AI Agents",
+    "Enterprise AI & RAG",
+    "Integration & Data Mesh",
+    "Executive Analytics BI",
+    "AI Business Suite",
     "Enterprise ERP",
     "HRM & Workforce",
     "FinTech & Billing",
-    "AI Business Suite",
     "Mobile Solutions",
     "Bespoke Enterprise"
   ];

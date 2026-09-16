@@ -187,31 +187,31 @@ export const DashboardView: React.FC = () => {
           </div>
         </div>
 
-        {/* Roles & Governance Card */}
+        {/* Governance Control Card */}
         <div
-          onClick={() => setActiveModule("roles")}
+          onClick={() => setActiveModule("governance")}
           className="p-5 rounded-2xl bg-slate-900 border border-slate-800 hover:border-purple-500/50 transition cursor-pointer group shadow-sm flex flex-col justify-between"
         >
           <div>
             <div className="flex items-center justify-between mb-3">
               <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
-                RBAC Security Roles
+                Governance Control
               </span>
               <div className="w-9 h-9 rounded-xl bg-purple-500/10 text-purple-400 border border-purple-500/20 flex items-center justify-center group-hover:scale-105 transition">
                 <Shield className="w-4 h-4" />
               </div>
             </div>
             <div className="flex items-baseline gap-2">
-              <span className="text-3xl font-black text-white">5</span>
-              <span className="text-xs text-purple-300 font-medium">Defined Personas</span>
+              <span className="text-3xl font-black text-white">8</span>
+              <span className="text-xs text-purple-300 font-medium">RBAC Role Tiers</span>
             </div>
           </div>
           <div className="mt-4 pt-3 border-t border-slate-800/80 flex items-center justify-between text-xs">
             <span className="text-slate-400 text-[11px]">
-              Super Admin, Admin, CRM, etc.
+              Access Matrix & Revocation
             </span>
             <span className="text-slate-500 group-hover:text-purple-400 flex items-center gap-0.5 text-[11px] font-semibold transition">
-              Matrix <ArrowUpRight className="w-3 h-3" />
+              Control <ArrowUpRight className="w-3 h-3" />
             </span>
           </div>
         </div>

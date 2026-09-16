@@ -17,6 +17,7 @@ export type SystemModule =
   | "dashboard"
   | "users"
   | "roles"
+  | "governance"
   | "audit"
   | "website"
   | "products"
@@ -82,7 +83,17 @@ export interface ProductFeature {
 }
 
 export type ProductStatus = "draft" | "published" | "archived" | "coming_soon";
-export type ProductCategory = "Enterprise ERP" | "HRM & Workforce" | "FinTech & Billing" | "AI Business Suite" | "Mobile Solutions" | "Bespoke Enterprise";
+export type ProductCategory =
+  | "Autonomous AI Agents"
+  | "Enterprise AI & RAG"
+  | "Integration & Data Mesh"
+  | "Executive Analytics BI"
+  | "AI Business Suite"
+  | "Enterprise ERP"
+  | "HRM & Workforce"
+  | "FinTech & Billing"
+  | "Mobile Solutions"
+  | "Bespoke Enterprise";
 
 export interface ProductPlan {
   id: string;
@@ -164,7 +175,7 @@ export interface WebsitePage {
 export interface WebsiteSection {
   id: string;
   pageId: string;
-  sectionKey: "hero" | "stats" | "products_grid" | "adaptive_philosophy" | "testimonials" | "faq" | "cta_banner" | "footer";
+  sectionKey: "hero" | "stats" | "products_grid" | "adaptive_philosophy" | "testimonials" | "faq" | "cta_banner" | "footer" | "industries_matrix" | "architecture";
   title: string;
   subtitle?: string;
   content: Record<string, unknown>;
@@ -216,6 +227,37 @@ export interface CustomerCompany {
 }
 
 export type LeadStage = "New" | "Contacted" | "Qualified" | "Proposal/Opportunity" | "Converted" | "Lost";
+export type LeadPriority = "Urgent" | "High" | "Medium" | "Standard";
+export type TriageDepartment =
+  | "Enterprise AI & Swarm"
+  | "Vector Intelligence & RAG"
+  | "Integration & Data Mesh"
+  | "Executive BI"
+  | "Enterprise Systems"
+  | "Consulting & Custom Dev";
+
+export interface InboundWebhookEvent {
+  id: string;
+  timestamp: string;
+  sourceUrl: string;
+  ip: string;
+  verified: boolean;
+  signatureHeader?: string;
+  status: "processed" | "triaged" | "failed";
+  department: TriageDepartment;
+  assignedSpecialist: string;
+  leadScore: number;
+  priority: LeadPriority;
+  rawPayload: Record<string, unknown>;
+  leadId?: string;
+  notificationsTriggered: {
+    slackWebhook: boolean;
+    slackChannel: string;
+    emailAlert: boolean;
+    emailRecipient: string;
+    smsAlert?: boolean;
+  };
+}
 
 export interface Lead {
   id: string;
@@ -225,7 +267,7 @@ export interface Lead {
   companyName: string;
   companySize?: string;
   productInterest: string;
-  leadSource: "Website Contact" | "Demo Request" | "Product Enquiry" | "Consultation" | "Newsletter" | "Inbound Phone";
+  leadSource: "Website Contact" | "Demo Request" | "Product Enquiry" | "Consultation" | "Newsletter" | "Inbound Phone" | "artifysols.com Webhook" | "RFP Tender";
   stage: LeadStage;
   assignedStaff: string;
   estimatedValue: number;
@@ -233,6 +275,11 @@ export interface Lead {
   createdAt: string;
   updatedAt: string;
   convertedCustomerId?: string;
+  priority?: LeadPriority;
+  aiScore?: number;
+  department?: TriageDepartment;
+  webhookEventId?: string;
+  submissionType?: "Discovery Call" | "RFP Submission" | "Contact Form" | "AI Consultation" | "Architecture Review";
 }
 
 export interface OnboardingStep {

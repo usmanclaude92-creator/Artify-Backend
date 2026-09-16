@@ -15,10 +15,20 @@ import {
   Lock,
   MessageSquare,
   HelpCircle,
-  Laptop
+  Laptop,
+  Bot,
+  Network,
+  Activity,
+  Zap,
+  BarChart3,
+  Server,
+  Code,
+  ShieldAlert,
+  Sliders,
+  Check
 } from "lucide-react";
 import { useAdminData } from "../../context/AdminDataContext";
-import { Lead } from "../../types";
+import { Lead, ProductCategory } from "../../types";
 
 export const PublicWebsiteView: React.FC = () => {
   const {
@@ -35,13 +45,29 @@ export const PublicWebsiteView: React.FC = () => {
   const [leadName, setLeadName] = useState("");
   const [leadEmail, setLeadEmail] = useState("");
   const [leadPhone, setLeadPhone] = useState("");
-  const [selectedProduct, setSelectedProduct] = useState("Artify ERP One");
+  const [selectedProduct, setSelectedProduct] = useState("Artify Swarm™");
   const [leadMessage, setLeadMessage] = useState("");
   const [submitted, setSubmitted] = useState(false);
+  const [selectedCategory, setSelectedCategory] = useState<string>("All");
 
   const heroSection = websiteSections.find((s) => s.sectionKey === "hero");
   const adaptiveSection = websiteSections.find((s) => s.sectionKey === "adaptive_philosophy");
   const productsSection = websiteSections.find((s) => s.sectionKey === "products_grid");
+
+  const categories: string[] = [
+    "All",
+    "Autonomous AI Agents",
+    "Enterprise AI & RAG",
+    "Integration & Data Mesh",
+    "Executive Analytics BI",
+    "AI Business Suite",
+    "Enterprise ERP"
+  ];
+
+  const filteredProducts = products.filter((p) => {
+    if (selectedCategory === "All") return true;
+    return p.category === selectedCategory;
+  });
 
   const handleLeadSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -51,10 +77,10 @@ export const PublicWebsiteView: React.FC = () => {
       companyName: leadCompany,
       name: leadName,
       email: leadEmail,
-      phone: leadPhone || "+1 (555) 000-0000",
+      phone: leadPhone || "+1 (800) 555-0199",
       productInterest: selectedProduct,
       stage: "New",
-      estimatedValue: 48000,
+      estimatedValue: 64000,
       leadSource: "Website Contact",
       notes: [leadMessage || "Requesting custom enterprise architectural demonstration."],
       assignedStaff: "Jessica Sterling"
@@ -104,19 +130,31 @@ export const PublicWebsiteView: React.FC = () => {
 
           <nav className="hidden md:flex items-center gap-6 text-xs font-semibold text-slate-300">
             <a href="#products" className="hover:text-indigo-400 transition">Solutions</a>
+            <a href="#architecture" className="hover:text-indigo-400 transition">Kernel V3 Architecture</a>
+            <a href="#industries" className="hover:text-indigo-400 transition">Industries</a>
             <a href="#philosophy" className="hover:text-indigo-400 transition">Adaptive Philosophy</a>
-            <a href="#architecture" className="hover:text-indigo-400 transition">Architecture</a>
             <a href="#testimonials" className="hover:text-indigo-400 transition">Testimonials</a>
             <a href="#faqs" className="hover:text-indigo-400 transition">FAQs</a>
           </nav>
 
-          <a
-            href="#contact"
-            className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold shadow-lg shadow-indigo-600/30 transition flex items-center gap-1.5"
-          >
-            <span>Request Architecture Demo</span>
-            <ArrowRight className="w-3.5 h-3.5" />
-          </a>
+          <div className="flex items-center gap-3">
+            <a
+              href="https://artifysols.com"
+              target="_blank"
+              rel="noreferrer"
+              className="hidden sm:inline-flex items-center gap-1 text-xs text-slate-400 hover:text-cyan-400 transition"
+            >
+              <span>artifysols.com</span>
+              <ExternalLink className="w-3 h-3" />
+            </a>
+            <a
+              href="#contact"
+              className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold shadow-lg shadow-indigo-600/30 transition flex items-center gap-1.5"
+            >
+              <span>Request Architecture Demo</span>
+              <ArrowRight className="w-3.5 h-3.5" />
+            </a>
+          </div>
         </div>
       </header>
 
@@ -230,48 +268,84 @@ export const PublicWebsiteView: React.FC = () => {
       {/* Solutions / Products Section */}
       <section id="products" className="py-20 border-b border-slate-900">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex flex-col sm:flex-row items-start sm:items-end justify-between gap-4 mb-12">
+          <div className="flex flex-col sm:flex-row items-start sm:items-end justify-between gap-4 mb-8">
             <div>
               <span className="text-xs font-bold font-mono uppercase text-indigo-400 tracking-wider">
-                Ecosystem Solutions
+                Production Solutions Catalog
               </span>
               <h2 className="text-3xl font-extrabold text-white mt-1">
-                Modular Enterprise Software Catalog
+                AI-Native Products & Enterprise Workforces
               </h2>
             </div>
             <p className="text-xs text-slate-400 max-w-md">
-              Deploy individually as specialized point-solutions or seamlessly interconnect into a unified corporate control plane.
+              Deploy individually as specialized autonomous point-solutions or coordinate across the entire enterprise using the Artify Kernel V3.0.
             </p>
           </div>
 
+          {/* Category Filter Pills */}
+          <div className="flex items-center gap-2 overflow-x-auto pb-4 mb-8 scrollbar-thin">
+            {categories.map((cat) => (
+              <button
+                key={cat}
+                onClick={() => setSelectedCategory(cat)}
+                className={`px-3.5 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition ${
+                  selectedCategory === cat
+                    ? "bg-indigo-600 text-white shadow-lg shadow-indigo-600/30"
+                    : "bg-slate-900 text-slate-400 hover:text-slate-200 hover:bg-slate-800 border border-slate-800"
+                }`}
+              >
+                {cat}
+              </button>
+            ))}
+          </div>
+
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {products.map((p) => (
+            {filteredProducts.map((p) => (
               <div
                 key={p.id}
-                className="p-6 rounded-2xl bg-slate-900 border border-slate-800 hover:border-slate-700 transition flex flex-col justify-between group shadow-sm"
+                className="p-6 rounded-2xl bg-slate-900 border border-slate-800 hover:border-indigo-500/50 transition flex flex-col justify-between group shadow-sm relative overflow-hidden"
               >
                 <div>
                   <div className="flex items-center justify-between gap-2 mb-3">
-                    <span className="text-[10px] uppercase font-bold text-indigo-400 tracking-wider">
+                    <span className="text-[10px] uppercase font-bold text-indigo-400 tracking-wider px-2 py-0.5 rounded-md bg-indigo-950/60 border border-indigo-800/40">
                       {p.category}
                     </span>
                     <span className="text-xs font-mono font-bold text-emerald-400">
-                      ${p.pricingStartingAt}/mo
+                      {p.plans[0]?.priceMonthly
+                        ? `$${p.plans[0].priceMonthly.toLocaleString()}/mo`
+                        : "Custom Enterprise"}
                     </span>
                   </div>
 
-                  <h3 className="text-lg font-bold text-white group-hover:text-indigo-300 transition">
-                    {p.name}
-                  </h3>
+                  <div className="flex items-center justify-between gap-2">
+                    <h3 className="text-lg font-bold text-white group-hover:text-indigo-300 transition">
+                      {p.name}
+                    </h3>
+                    <span className="text-[10px] font-mono text-slate-400 bg-slate-800/80 px-1.5 py-0.5 rounded">
+                      v{p.version}
+                    </span>
+                  </div>
+
                   <p className="text-xs text-slate-300 mt-2 mb-4 leading-relaxed line-clamp-3">
-                    {p.description}
+                    {p.shortDescription || p.description}
                   </p>
 
-                  <div className="space-y-1.5 pt-2 border-t border-slate-800/80 mb-6">
+                  <div className="flex flex-wrap gap-1.5 mb-4">
+                    {p.platforms.map((plat) => (
+                      <span
+                        key={plat}
+                        className="text-[10px] font-semibold text-slate-400 bg-slate-800/60 px-2 py-0.5 rounded-md border border-slate-700/50"
+                      >
+                        {plat}
+                      </span>
+                    ))}
+                  </div>
+
+                  <div className="space-y-1.5 pt-3 border-t border-slate-800/80 mb-6">
                     {p.features.slice(0, 3).map((f) => (
-                      <div key={f} className="flex items-center gap-2 text-xs text-slate-300">
+                      <div key={f.id} className="flex items-center gap-2 text-xs text-slate-300">
                         <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                        <span className="truncate">{f}</span>
+                        <span className="truncate">{f.title}</span>
                       </div>
                     ))}
                   </div>
@@ -282,11 +356,190 @@ export const PublicWebsiteView: React.FC = () => {
                   onClick={() => setSelectedProduct(p.name)}
                   className="w-full py-2.5 rounded-xl bg-slate-800 hover:bg-indigo-600 text-slate-200 hover:text-white font-semibold text-xs text-center transition flex items-center justify-center gap-1.5"
                 >
-                  <span>Select & Request Demo</span>
+                  <span>Request Solution Demo</span>
                   <ChevronRight className="w-4 h-4" />
                 </a>
               </div>
             ))}
+          </div>
+        </div>
+      </section>
+
+      {/* Artify Kernel V3.0 Architecture Showcase */}
+      <section id="architecture" className="py-24 bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 border-b border-slate-900">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="text-center max-w-3xl mx-auto mb-16 space-y-3">
+            <span className="text-xs font-bold font-mono uppercase text-cyan-400 tracking-wider inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-cyan-950/60 border border-cyan-800/40">
+              <Cpu className="w-3.5 h-3.5" />
+              <span>Foundation Architecture</span>
+            </span>
+            <h2 className="text-3xl sm:text-4xl font-extrabold text-white tracking-tight">
+              Artify Kernel V3.0: The Atomic Core
+            </h2>
+            <p className="text-slate-400 text-sm leading-relaxed">
+              Engineered for organizations that demand high-speed autonomous execution without compromising data sovereignty, audit compliance, or latency SLAs.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-12">
+            <div className="p-6 rounded-2xl bg-slate-900/80 border border-slate-800 space-y-3 hover:border-cyan-500/40 transition">
+              <div className="w-10 h-10 rounded-xl bg-cyan-500/10 text-cyan-400 flex items-center justify-center font-bold">
+                <Network className="w-5 h-5" />
+              </div>
+              <h3 className="text-sm font-bold text-white">Agent Memory Mesh</h3>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                Episodic and working memory synchronized across all deployed swarms with millisecond vector indexing.
+              </p>
+              <div className="pt-2 text-[10px] font-mono text-cyan-400">
+                • Sub-50ms Vector Recall
+              </div>
+            </div>
+
+            <div className="p-6 rounded-2xl bg-slate-900/80 border border-slate-800 space-y-3 hover:border-indigo-500/40 transition">
+              <div className="w-10 h-10 rounded-xl bg-indigo-500/10 text-indigo-400 flex items-center justify-center font-bold">
+                <Zap className="w-5 h-5" />
+              </div>
+              <h3 className="text-sm font-bold text-white">Dual-Engine LLM Router</h3>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                Intelligent fallback between Gemini 3.8 Flash, Gemini 3.8 Pro, and private fine-tuned local weights.
+              </p>
+              <div className="pt-2 text-[10px] font-mono text-indigo-400">
+                • Zero-Downtime Hot Fallback
+              </div>
+            </div>
+
+            <div className="p-6 rounded-2xl bg-slate-900/80 border border-slate-800 space-y-3 hover:border-emerald-500/40 transition">
+              <div className="w-10 h-10 rounded-xl bg-emerald-500/10 text-emerald-400 flex items-center justify-center font-bold">
+                <Server className="w-5 h-5" />
+              </div>
+              <h3 className="text-sm font-bold text-white">Zero-Latency Event Spine</h3>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                High-throughput event bus bridging legacy SQL/SAP databases with real-time webhooks and IoT telemetry.
+              </p>
+              <div className="pt-2 text-[10px] font-mono text-emerald-400">
+                • 100M+ Monthly Events
+              </div>
+            </div>
+
+            <div className="p-6 rounded-2xl bg-slate-900/80 border border-slate-800 space-y-3 hover:border-purple-500/40 transition">
+              <div className="w-10 h-10 rounded-xl bg-purple-500/10 text-purple-400 flex items-center justify-center font-bold">
+                <ShieldCheck className="w-5 h-5" />
+              </div>
+              <h3 className="text-sm font-bold text-white">SOC2 & Zero-Trust IAM</h3>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                Cryptographically audited action journals, biometric access tokens, and fine-grained per-tenant permissions.
+              </p>
+              <div className="pt-2 text-[10px] font-mono text-purple-400">
+                • Immutable Audit Ledgers
+              </div>
+            </div>
+          </div>
+
+          <div className="p-6 rounded-2xl bg-slate-950 border border-slate-800/80 flex flex-col md:flex-row items-center justify-between gap-6 text-xs">
+            <div className="flex items-center gap-3">
+              <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></span>
+              <div>
+                <span className="font-bold text-white">Production Gateway Connected: </span>
+                <span className="text-slate-400">Artify Kernel V3.0 is serving live enterprise requests at </span>
+                <span className="font-mono text-cyan-400">api.artifysols.com</span>
+              </div>
+            </div>
+            <a
+              href="#contact"
+              className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white font-semibold flex items-center gap-1.5 transition"
+            >
+              <span>Download Architectural Blueprint</span>
+              <ArrowRight className="w-3.5 h-3.5" />
+            </a>
+          </div>
+        </div>
+      </section>
+
+      {/* Industries Matrix Section */}
+      <section id="industries" className="py-20 border-b border-slate-900">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="text-center max-w-3xl mx-auto mb-16 space-y-3">
+            <span className="text-xs font-bold font-mono uppercase text-emerald-400 tracking-wider">
+              Tailored Sector Deployments
+            </span>
+            <h2 className="text-3xl font-extrabold text-white">
+              Engineered for High-Compliance Global Industries
+            </h2>
+            <p className="text-slate-400 text-sm leading-relaxed">
+              Every vertical comes with pre-configured regulatory guardrails, specialized vector schemas, and tailored domain integrations.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+            {[
+              {
+                title: "Finance & Accounting",
+                icon: BarChart3,
+                desc: "Algorithmic cash forecasting, multi-currency ledger sync, and automated 3-way invoice matching.",
+                tag: "ASC 606 & SOX"
+              },
+              {
+                title: "Healthcare & Life Sciences",
+                icon: ShieldCheck,
+                desc: "HIPAA-sovereign vector embeddings for clinical documentation, trial records, and doctor scheduling.",
+                tag: "HIPAA Certified"
+              },
+              {
+                title: "Logistics & Fleet Ops",
+                icon: Activity,
+                desc: "Real-time dispatch optimization, telematics mesh, driver biometric clock-in, and route forecasting.",
+                tag: "Sub-second Telemetry"
+              },
+              {
+                title: "Manufacturing & Industrial",
+                icon: Cpu,
+                desc: "Predictive equipment maintenance, bill of materials dynamic graph, and supply replenishment swarms.",
+                tag: "IoT & SCADA Sync"
+              },
+              {
+                title: "Retail & E-Commerce",
+                icon: Bot,
+                desc: "Omnichannel inventory sync across Amazon/Shopify, and autonomous 24/7 customer support copilots.",
+                tag: "Omnichannel RAG"
+              },
+              {
+                title: "Real Estate & Construction",
+                icon: Building2,
+                desc: "Multi-tenant lease contract parsing, subcontractor compliance checks, and automated job costing.",
+                tag: "Document AI"
+              },
+              {
+                title: "Government & Public Sector",
+                icon: Lock,
+                desc: "Air-gapped on-premise deployments, zero data leakage boundaries, and citizen query portals.",
+                tag: "FedRAMP Ready"
+              },
+              {
+                title: "Professional Services",
+                icon: Users,
+                desc: "Dynamic resource allocation, automated utilization forecasts, and milestone billing engines.",
+                tag: "Capacity AI"
+              }
+            ].map((ind) => {
+              const IconComp = ind.icon;
+              return (
+                <div
+                  key={ind.title}
+                  className="p-5 rounded-2xl bg-slate-900 border border-slate-800 hover:border-slate-700 transition space-y-2.5"
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="w-8 h-8 rounded-lg bg-indigo-500/10 text-indigo-400 flex items-center justify-center">
+                      <IconComp className="w-4 h-4" />
+                    </div>
+                    <span className="text-[10px] font-mono text-cyan-400 bg-cyan-950/60 px-2 py-0.5 rounded border border-cyan-800/40">
+                      {ind.tag}
+                    </span>
+                  </div>
+                  <h4 className="text-sm font-bold text-white">{ind.title}</h4>
+                  <p className="text-xs text-slate-400 leading-relaxed">{ind.desc}</p>
+                </div>
+              );
+            })}
           </div>
         </div>
       </section>
@@ -484,11 +737,18 @@ export const PublicWebsiteView: React.FC = () => {
           <div className="flex items-center gap-2">
             <span className="font-bold text-slate-300">{systemSettings.companyName}</span>
             <span>•</span>
-            <span>{systemSettings.positioningStatement}</span>
+            <span className="text-slate-400">{systemSettings.tagline}</span>
           </div>
 
           <div className="flex items-center gap-4">
-            <span>Domain: {systemSettings.domain}</span>
+            <a
+              href="https://artifysols.com"
+              target="_blank"
+              rel="noreferrer"
+              className="text-cyan-400 hover:underline font-mono"
+            >
+              artifysols.com
+            </a>
             <span>•</span>
             <span>Support: {systemSettings.supportEmail}</span>
             <span>•</span>

@@ -15,6 +15,7 @@ import { GlobalSearchModal } from "../common/GlobalSearchModal";
 
 // Phase 1 Core Views & Modules
 import { DashboardView } from "../dashboard/DashboardView";
+import { GovernanceControlModule } from "../governance/GovernanceControlModule";
 import { RolesModule } from "../modules/RolesModule";
 import { UsersModule } from "../modules/UsersModule";
 import { AuditLogsModule } from "../modules/AuditLogsModule";
@@ -47,7 +48,7 @@ export const AdminLayout: React.FC = () => {
   const phase1NavLinks = [
     { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
     { id: "users", label: "Users", icon: Users },
-    { id: "roles", label: "Roles", icon: Shield },
+    { id: "governance", label: "Governance Control", icon: Shield },
     { id: "audit", label: "Audit Logs", icon: FileClock }
   ] as const;
 
@@ -57,8 +58,9 @@ export const AdminLayout: React.FC = () => {
         return <DashboardView />;
       case "users":
         return <UsersModule />;
+      case "governance":
       case "roles":
-        return <RolesModule />;
+        return <GovernanceControlModule />;
       case "audit":
         return <AuditLogsModule />;
       case "website":

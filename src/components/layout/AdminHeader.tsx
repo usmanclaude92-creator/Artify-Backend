@@ -79,6 +79,8 @@ export const AdminHeader: React.FC<{
         return "Integrations & API Gateways";
       case "users":
         return "User Management & Directory";
+      case "governance":
+        return "Governance Control & Permission Matrix";
       case "roles":
         return "Roles & RBAC Governance Matrix";
       case "security":
