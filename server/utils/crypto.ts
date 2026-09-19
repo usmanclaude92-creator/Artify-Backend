@@ -1,0 +1,36 @@
+/**
+ * Crypto primitives: session token generation and HMAC signing/verification
+ * for webhooks. Constant-time comparison throughout — Phase 0 finding S3/R3
+ * (the old webhook check used `!==` string comparison and, worse, defaulted
+ * to "verified" when the header was simply absent) must not recur anywhere
+ * that compares a secret-derived value.
+ */
+import { randomBytes, createHmac, timingSafeEqual } from "node:crypto";
+
+export function generateSessionToken(): string {
+  return `art_sess_${randomBytes(32).toString("hex")}`;
+}
+
+export function generateId(prefix: string): string {
+  return `${prefix}_${randomBytes(8).toString("hex")}`;
+}
+
+export function signHmac(secret: string, payload: Buffer | string): string {
+  return createHmac("sha256", secret).update(payload).digest("hex");
+}
+
+/**
+ * Constant-time HMAC signature comparison. Returns false (never throws) for
+ * any malformed input — a malformed signature must be treated the same as
+ * a wrong one, not as a special "skip verification" case.
+ */
+export function verifyHmacSignature(secret: string, payload: Buffer | string, providedSignatureHex: string): boolean {
+  if (!providedSignatureHex || typeof providedSignatureHex !== "string") return false;
+
+  const expected = signHmac(secret, payload);
+  const expectedBuf = Buffer.from(expected, "hex");
+  const providedBuf = Buffer.from(providedSignatureHex, "hex");
+
+  if (expectedBuf.length !== providedBuf.length) return false;
+  return timingSafeEqual(expectedBuf, providedBuf);
+}

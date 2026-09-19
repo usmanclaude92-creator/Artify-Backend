@@ -119,6 +119,21 @@ export const AdminHeader: React.FC<{
             Artify Sols Central Governance • artifysols.com
           </p>
         </div>
+
+        {/*
+          Phase 1 honesty label (docs/PHASE_1_IMPLEMENTATION.md §26): this
+          console's data and login are not yet backed by the real Platform
+          API (that wiring is Phase 4). Rather than silently presenting
+          demo/seed data and a client-side role switcher as if they were
+          production RBAC, label it plainly until the real cutover lands.
+        */}
+        <span
+          title="This console currently runs on local seed/demo data and a client-side role switcher. Real authentication and persistence land in Phase 3–4 (see docs/IMPLEMENTATION_PLAN.md)."
+          className="hidden md:inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-amber-300 bg-amber-500/10 border border-amber-500/30 rounded-full px-2 py-0.5"
+        >
+          <AlertTriangle className="w-3 h-3" />
+          Demo Data — Not Yet Connected to Production Backend
+        </span>
       </div>
 
       {/* Center / Right controls */}

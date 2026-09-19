@@ -1,0 +1,185 @@
+// Artify Platform — Phase 1 identity + webhook foundation schema.
+// Scope note: only the tables required to establish the authentication and
+// webhook-verification foundation are created in Phase 1, per
+// docs/IMPLEMENTATION_PLAN.md Phase 2 and docs/PHASE_1_IMPLEMENTATION.md.
+// Business-domain tables (CRM, products, CMS, subscriptions, AI tasks, etc.)
+// are added in their respective phases against this same Company/User/AuditLog
+// foundation, not duplicated.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum CompanyTier {
+  GROWTH
+  ENTERPRISE
+  CUSTOM
+}
+
+enum CompanyStatus {
+  ACTIVE
+  SUSPENDED
+  TRIAL
+}
+
+enum UserStatus {
+  ACTIVE
+  INVITED
+  DISABLED
+}
+
+// Mirrors server/types/index.ts RoleName from the Phase 0 audit, ported to a
+// DB-safe enum. Human-readable labels are mapped in server/types/domain.ts.
+enum RoleName {
+  SUPER_ADMINISTRATOR
+  SYSTEM_ADMINISTRATOR
+  COMPANY_ADMINISTRATOR
+  MANAGER
+  CONTENT_MANAGER
+  MARKETING_MANAGER
+  SALES_MANAGER
+  FINANCE_MANAGER
+  AI_MANAGER
+  SUPPORT_USER
+  EMPLOYEE
+  CUSTOMER
+  READ_ONLY
+}
+
+enum AuditActorType {
+  USER
+  AI_COWORKER
+  SYSTEM
+  API_KEY
+}
+
+enum WebhookEventStatus {
+  RECEIVED
+  VERIFIED
+  REJECTED
+  PROCESSED
+}
+
+model Company {
+  id        String        @id @default(uuid())
+  name      String
+  slug      String        @unique
+  industry  String?
+  tier      CompanyTier   @default(GROWTH)
+  status    CompanyStatus @default(TRIAL)
+  domain    String?
+  settings  Json          @default("{}")
+  createdAt DateTime      @default(now()) @map("created_at")
+  updatedAt DateTime      @updatedAt @map("updated_at")
+  deletedAt DateTime?     @map("deleted_at")
+
+  users         User[]
+  sessions      Session[]
+  auditLogs     AuditLog[]
+  webhookEvents WebhookEvent[]
+
+  @@map("companies")
+}
+
+// Phase 1 scoping decision (see docs/PHASE_1_IMPLEMENTATION.md):
+// permissions remain a flat string array on User, matching the Phase 0
+// prototype's shape, rather than a normalized role_permissions join table.
+// Full RBAC editability (Super Administrator managing role→permission
+// mappings through the Control Center UI) is Phase 3 work; this array is
+// sufficient to establish and test the authentication/authorization
+// *middleware* foundation now.
+model User {
+  id           String     @id @default(uuid())
+  companyId    String     @map("company_id")
+  email        String     @unique
+  passwordHash String     @map("password_hash")
+  fullName     String     @map("full_name")
+  title        String?
+  role         RoleName
+  permissions  String[]   @default([])
+  status       UserStatus @default(ACTIVE)
+  mfaEnabled   Boolean    @default(false) @map("mfa_enabled")
+  lastLoginAt  DateTime?  @map("last_login_at")
+  failedLoginCount Int    @default(0) @map("failed_login_count")
+  lockedUntil  DateTime?  @map("locked_until")
+  createdAt    DateTime   @default(now()) @map("created_at")
+  updatedAt    DateTime   @updatedAt @map("updated_at")
+  deletedAt    DateTime?  @map("deleted_at")
+  version      Int        @default(1)
+
+  company  Company   @relation(fields: [companyId], references: [id])
+  sessions Session[]
+
+  @@index([companyId])
+  @@map("users")
+}
+
+model Session {
+  token     String    @id
+  userId    String    @map("user_id")
+  companyId String    @map("company_id")
+  createdAt DateTime  @default(now()) @map("created_at")
+  expiresAt DateTime  @map("expires_at")
+  revokedAt DateTime? @map("revoked_at")
+  ipAddress String?   @map("ip_address")
+  userAgent String?   @map("user_agent")
+
+  user    User    @relation(fields: [userId], references: [id])
+  company Company @relation(fields: [companyId], references: [id])
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+// Append-only by application convention (no update/delete service method
+// exists — see server/repositories/auditLogRepository.ts). A DB-role-level
+// REVOKE UPDATE/DELETE grant is a Phase 16 deployment hardening step once a
+// dedicated least-privilege app DB role is provisioned.
+model AuditLog {
+  id         String         @id @default(uuid())
+  companyId  String?        @map("company_id")
+  actorId    String?        @map("actor_id")
+  actorName  String?        @map("actor_name")
+  actorType  AuditActorType @default(SYSTEM) @map("actor_type")
+  action     String
+  resource   String
+  resourceId String?        @map("resource_id")
+  details    Json?
+  ipAddress  String?        @map("ip_address")
+  userAgent  String?        @map("user_agent")
+  requestId  String?        @map("request_id")
+  createdAt  DateTime       @default(now()) @map("created_at")
+
+  company Company? @relation(fields: [companyId], references: [id])
+
+  @@index([companyId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+// Idempotency + signature-verification audit trail for inbound webhooks.
+// (provider, deliveryId) uniqueness is the replay/duplicate-delivery guard
+// required by docs/SECURITY_MODEL.md and Phase 1 §20.
+model WebhookEvent {
+  id             String             @id @default(uuid())
+  companyId      String?            @map("company_id")
+  provider       String
+  eventType      String             @map("event_type")
+  deliveryId     String             @map("delivery_id")
+  signatureValid Boolean            @map("signature_valid")
+  status         WebhookEventStatus @default(RECEIVED)
+  payload        Json
+  receivedAt     DateTime           @default(now()) @map("received_at")
+
+  company Company? @relation(fields: [companyId], references: [id])
+
+  @@unique([provider, deliveryId])
+  @@index([receivedAt])
+  @@map("webhook_events")
+}

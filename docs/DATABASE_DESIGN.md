@@ -1,14 +1,14 @@
 # Database Design Recommendation
 
-No implementation in Phase 0/1 planning docs — this defines the target only. No migrations exist yet in either repo.
+> **Phase 1 update**: the identity + webhook slice of this design is now implemented — see `prisma/schema.prisma` and `docs/PHASE_1_COMPLETION_REPORT.md` for what's real today vs. still just this recommendation. Two decisions below were resolved or intentionally scoped down for Phase 1; both are called out inline rather than silently diverging from this doc.
 
 ## 1. Technology
 **PostgreSQL** (managed — Railway Postgres or Supabase, both already implied by existing deploy config/MCP tooling available to this project). Rationale: relational integrity for tenant/permission/billing data, native JSON columns for the flexible fields the prototype already models loosely (`Company.settings`, `AiCoworker.approvalPolicy`), mature migration tooling, and every entity in `server/types/index.ts` is already relational in shape (foreign keys via `companyId` everywhere).
 
-**ORM**: Prisma or Drizzle (either is compatible with the existing TypeScript-first codebase; Drizzle if the team wants SQL-close control, Prisma if migration ergonomics matter more). Either replaces `server/core/db.ts`'s hand-rolled `Map` store.
+**ORM**: **Prisma** (resolved in Phase 1 — see `ADR-002-database.md`). Replaces `server/core/db.ts`'s hand-rolled `Map` store.
 
 ## 2. Conventions
-- **Primary keys**: UUID v7 (time-ordered) generated app-side or via `gen_random_uuid()` — keeps the existing prefixed-ID *display* convention (`usr_`, `org_`, `art_`) as a separate human-readable `slug`/`display_id` column if that UX is worth preserving, but the actual PK is a UUID.
+- **Primary keys**: UUID v7 (time-ordered) generated app-side or via `gen_random_uuid()` — keeps the existing prefixed-ID *display* convention (`usr_`, `org_`, `art_`) as a separate human-readable `slug`/`display_id` column if that UX is worth preserving, but the actual PK is a UUID. **Phase 1 note**: the identity tables implemented so far use Prisma's default `uuid()` (v4, non-time-ordered), not v7 — v7 support in Prisma's stable API wasn't worth the risk for a first migration. This is a low-cost, low-risk follow-up (index locality only, no schema-shape change) rather than a blocker; revisit alongside Phase 2's broader schema work.
 - **Foreign keys**: every tenant-scoped table carries `company_id UUID NOT NULL REFERENCES companies(id)`, indexed.
 - **Timestamps**: `created_at`, `updated_at` (`timestamptz`, default `now()`), trigger-maintained `updated_at`.
 - **Soft deletion**: `deleted_at timestamptz NULL` on user-facing entities (users, articles, products, customers) so RBAC/audit history stays intact; hard-delete only for genuinely ephemeral data (sessions, telemetry events).
@@ -24,7 +24,7 @@ No implementation in Phase 0/1 planning docs — this defines the target only. N
 
 | Family | Core tables | Source of current shape |
 |---|---|---|
-| Identity | `users`, `roles`, `permissions`, `role_permissions`, `sessions` | `server/types/index.ts` `User`, `UserSession`, `RoleName`, `PermissionKey` |
+| Identity | `users`, `roles`, `permissions`, `role_permissions`, `sessions` | `server/types/index.ts` `User`, `UserSession`, `RoleName`, `PermissionKey` — **Phase 1 implemented**: `companies`, `users`, `sessions`, `audit_logs`, `webhook_events`. Permissions remain a flat string array on `users.permissions` for now rather than a normalized `role_permissions` join table — see `prisma/schema.prisma`'s comment on the `User` model and `docs/PHASE_1_IMPLEMENTATION.md` for why that's deferred to Phase 3, not silently dropped. |
 | Organizations | `companies`, `memberships`, `contacts` | `server/types/index.ts` `Company` |
 | CRM | `leads`, `opportunities`, `activities`, `tasks` | `server/types/index.ts` `LeadInquiry`; `Customer` |
 | Products | `products`, `services`, `features`, `plans` | `server/types/index.ts` `ProductServiceItem` |

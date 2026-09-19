@@ -600,12 +600,20 @@ export const AdminDataProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     sourceUrl?: string;
   }) => {
     try {
-      const res = await fetch("/api/webhooks/leads", {
+      // NOTE: the Phase 0 audit found this endpoint hardcoded a compromised
+      // webhook secret here (client bundle) and on the old server.ts
+      // fallback (server-side). Both were removed in Phase 1 — see
+      // docs/SECURITY_MODEL.md S3/S4. Real webhook delivery is
+      // server-to-server only (server/routes/v1/webhookRoutes.ts) and can
+      // never be legitimately triggered from a browser, since doing so
+      // would require shipping the signing secret to the client. This
+      // demo action now always falls through to the local-only simulation
+      // below until Phase 5 replaces it with a real CRM lead-creation
+      // endpoint that authenticates the *user's session*, not a webhook
+      // secret.
+      const res = await fetch("/api/v1/leads", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-artify-webhook-token": "artify_whsec_prod_2026_soc2"
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
       });
       if (res.ok) {

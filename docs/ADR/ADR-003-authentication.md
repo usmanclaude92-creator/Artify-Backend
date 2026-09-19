@@ -1,13 +1,15 @@
 # ADR-003: Authentication — Bearer Session Tokens + bcrypt/argon2
 
 ## Status
-Accepted (Phase 0)
+Accepted (Phase 0); implemented in the identity foundation (Phase 1)
 
 ## Context
 Three authentication realities exist today (`CURRENT_STATE.md` §1.3, §2.3, §2.4): two are complete fabrications reachable from the browser (critical findings S1/S2 in `SECURITY_MODEL.md`), one (`artifysolscom/server/services/authService.ts`) is a real, reasonably designed bearer-token session system undermined only by unsalted SHA-256 password hashing and zero persistence.
 
 ## Decision
 Keep the existing bearer-token session shape (`art_sess_<32 random bytes>`, `Authorization: Bearer <token>`, server-side session store with TTL and revocation) — it already works and required no redesign. Replace `crypto.createHash('sha256')` password hashing with bcrypt (cost ≥ 12) or argon2id. Add rate limiting on login/register, password reset, and refresh-token rotation on top of the existing design. Remove every client-side-fabricated login/role path (`AuthContext.login`, `AdminDataContext.switchUserRole`) once the real API is wired (Phase 3-4).
+
+**Phase 1 resolution: `bcryptjs` (cost 12), not native `bcrypt` or argon2id.** `bcryptjs` is a pure-JS bcrypt implementation with no native-addon build step, which matters because the deploy targets already in use (`Dockerfile`, Vercel serverless via `api/index.ts` in `artifysolscom`) shouldn't depend on a working native-compilation toolchain at install time just for password hashing. This is a portability choice, not a rejection of argon2id's stronger memory-hardness guarantees — worth revisiting under Phase 15's security hardening pass if bcrypt's GPU-crackability becomes a real threat model concern at scale. Rate limiting (10 attempts/15min per IP+email), account lockout after 5 failed attempts (15min), and session revocation are implemented; password reset and refresh-token rotation remain Phase 3 work — the foundation (hashing, sessions, lockout) is real, but those two flows are not yet built.
 
 ## Consequences
 - Minimal rework of the already-sound `authService` middleware chain (`authenticateToken`, `requirePermission`, `requireRole`, `enforceTenantIsolation`) — ported near-verbatim.
