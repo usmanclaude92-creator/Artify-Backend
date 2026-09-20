@@ -1,25 +1,29 @@
 /**
  * Authentication service. Ported from the Phase 0 audit's
  * artifysolscom/server/services/authService.ts design and hardened across
- * Phase 1 (bcrypt, real sessions, transactional registration) and Phase 2
+ * Phase 1 (bcrypt, real sessions, transactional registration), Phase 2
  * (docs/ADR/ADR-011-permission-based-rbac-schema.md — role/permission
  * resolution via the roles/permissions/role_permissions tables instead of
- * a flat per-user array; docs/ADR/ADR-010-multi-tenant-organization-model.md
- * — organizationId replaces companyId; session tokens are hashed at rest).
+ * a flat per-user array), and Phase 3 (docs/AUTHENTICATION_ARCHITECTURE.md —
+ * session-scoped role resolution via OrganizationMembership rather than
+ * User.roleId directly, password change/reset, logout-all, organization
+ * switching).
  */
 import { prisma } from "../db/prisma";
 import { userRepository } from "../repositories/userRepository";
 import { sessionRepository } from "../repositories/sessionRepository";
 import { auditLogRepository } from "../repositories/auditLogRepository";
 import { roleRepository } from "../repositories/roleRepository";
+import { organizationMembershipRepository } from "../repositories/organizationMembershipRepository";
+import { passwordResetRepository } from "../repositories/passwordResetRepository";
 import { hashPassword, verifyPassword } from "../utils/password";
-import { generateSessionToken } from "../utils/crypto";
-import { AuthenticationError, ConflictError, InternalError } from "../core/errors";
-import { sanitizeUser, type SanitizedUser } from "../types/domain";
+import { generateSessionToken, generateResetToken } from "../utils/crypto";
+import { AuthenticationError, AuthorizationError, ConflictError, InternalError } from "../core/errors";
+import { sanitizeUser, type SanitizedUser, type MembershipSummary } from "../types/domain";
 import type { RegisterInput } from "../schemas/authSchemas";
+import { config } from "../config/env";
 import { logger } from "../core/logger";
-
-const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
+import type { User } from "@prisma/client";
 
 /** Self-registration always creates the organization's ADMIN (not SUPER_ADMIN — that role is reserved for Artify's own platform operators, granted only via the seed/bootstrap procedure, never through the public register endpoint). */
 const SELF_REGISTRATION_ROLE_KEY = "ADMIN";
@@ -34,19 +38,34 @@ export interface LoginResult {
   user: SanitizedUser;
 }
 
-async function loadSanitizedUser(user: NonNullable<Awaited<ReturnType<typeof userRepository.findById>>>): Promise<SanitizedUser> {
-  const role = await roleRepository.resolveById(user.roleId);
+function sessionExpiry(): Date {
+  return new Date(Date.now() + config.sessionTtlHours * 60 * 60 * 1000);
+}
+
+/**
+ * Resolves a SanitizedUser for a SPECIFIC organization context via that
+ * user's OrganizationMembership — never via User.roleId directly. Returns
+ * null if the user has no currently-usable (ACTIVE membership + ACTIVE/
+ * TRIAL organization) access to that organization, which callers must
+ * treat as "this session/request is no longer valid" (e.g. an admin
+ * removed the membership after the session was issued).
+ */
+async function resolveSanitizedUserForOrganization(user: User, organizationId: string): Promise<SanitizedUser | null> {
+  const membership = await organizationMembershipRepository.findActiveMembership(user.id, organizationId);
+  if (!membership) return null;
+
+  const role = await roleRepository.resolveById(membership.roleId);
   if (!role) {
-    // A user with no resolvable role is a data-integrity bug, not a normal
-    // auth failure — the roleId FK is NOT NULL + RESTRICT, so this should
-    // be unreachable outside a corrupted database.
+    // A membership with no resolvable role is a data-integrity bug, not a
+    // normal auth failure — role_id is NOT NULL + RESTRICT.
     throw new InternalError("User role could not be resolved.");
   }
-  return sanitizeUser(user, role);
+
+  return sanitizeUser({ ...user, organizationId }, role);
 }
 
 export const authService = {
-  async login(email: string, password: string, meta: RequestMeta = {}): Promise<LoginResult> {
+  async login(email: string, password: string, meta: RequestMeta = {}, targetOrganizationId?: string): Promise<LoginResult> {
     const user = await userRepository.findByEmail(email);
 
     // Same generic error whether the email doesn't exist or the password is
@@ -65,8 +84,30 @@ export const authService = {
     const validPassword = await verifyPassword(password, user.passwordHash);
     if (!validPassword) {
       const nowLocked = await userRepository.recordFailedLogin(user.id);
+      await auditLogRepository.record({
+        organizationId: user.organizationId,
+        actorUserId: user.id,
+        actorType: "USER",
+        action: "AUTH_LOGIN_FAILED",
+        resourceType: "session",
+        resourceId: user.id,
+        result: "FAILURE",
+        ipAddress: meta.ip,
+        userAgent: meta.userAgent,
+      });
       if (nowLocked) {
         logger.warn({ event: "account_locked", userId: user.id }, "Account locked after repeated failed logins");
+        await auditLogRepository.record({
+          organizationId: user.organizationId,
+          actorUserId: user.id,
+          actorType: "USER",
+          action: "AUTH_ACCOUNT_LOCKED",
+          resourceType: "user",
+          resourceId: user.id,
+          result: "FAILURE",
+          ipAddress: meta.ip,
+          userAgent: meta.userAgent,
+        });
       }
       throw genericFailure();
     }
@@ -75,23 +116,27 @@ export const authService = {
       throw new AuthenticationError("This account cannot sign in. Contact your administrator.");
     }
 
+    const organizationId = targetOrganizationId ?? user.organizationId;
+    const sanitized = await resolveSanitizedUserForOrganization(user, organizationId);
+    if (!sanitized) {
+      throw new AuthenticationError("This account does not have active access to the requested organization.");
+    }
+
     await userRepository.recordSuccessfulLogin(user.id);
 
     const token = generateSessionToken();
-    const expiresAt = new Date(Date.now() + SESSION_TTL_MS);
+    const expiresAt = sessionExpiry();
     await sessionRepository.create({
       token,
       userId: user.id,
-      organizationId: user.organizationId,
+      organizationId,
       expiresAt,
       ipAddress: meta.ip,
       userAgent: meta.userAgent,
     });
 
-    const sanitized = await loadSanitizedUser(user);
-
     await auditLogRepository.record({
-      organizationId: user.organizationId,
+      organizationId,
       actorUserId: user.id,
       actorName: sanitized.displayName ?? `${user.firstName} ${user.lastName}`,
       actorType: "USER",
@@ -121,8 +166,11 @@ export const authService = {
 
     const passwordHash = await hashPassword(payload.password);
 
-    // Single atomic transaction: organization + admin user are created
-    // together or not at all (Phase 1 hardening, unchanged in Phase 2).
+    // Single atomic transaction: organization + admin user + membership are
+    // created together or not at all (Phase 1 hardening, unchanged in
+    // Phase 2/3). Self-registration can never assign SUPER_ADMIN — the role
+    // used here is always the fixed ADMIN constant above, never
+    // caller-supplied (Phase 3 §10).
     await prisma.$transaction(async (tx) => {
       const baseSlug =
         payload.organizationName
@@ -185,12 +233,222 @@ export const authService = {
     const user = await userRepository.findById(session.userId);
     if (!user || user.status !== "ACTIVE") return null;
 
+    // If the organization membership backing this session has since been
+    // revoked/suspended (or the organization itself deactivated), the
+    // session must stop working immediately — do not trust a session's
+    // stored organizationId once it was issued; re-verify on every request.
+    const sanitized = await resolveSanitizedUserForOrganization(user, session.organizationId);
+    if (!sanitized) return null;
+
     void sessionRepository.touchLastUsed(session.id); // fire-and-forget, not on the request's critical path
 
-    return loadSanitizedUser(user);
+    return sanitized;
   },
 
-  async logout(token: string): Promise<void> {
+  async logout(token: string, actor?: { userId: string; organizationId: string }, meta: RequestMeta = {}): Promise<void> {
     await sessionRepository.revoke(token);
+    if (actor) {
+      await auditLogRepository.record({
+        organizationId: actor.organizationId,
+        actorUserId: actor.userId,
+        actorType: "USER",
+        action: "AUTH_LOGOUT",
+        resourceType: "session",
+        ipAddress: meta.ip,
+        userAgent: meta.userAgent,
+      });
+    }
+  },
+
+  /** Revokes every active session for the user (all devices/tabs) — a broader action than logout(), which only revokes the caller's current session. */
+  async logoutAll(user: SanitizedUser, meta: RequestMeta = {}): Promise<void> {
+    await sessionRepository.revokeAllForUser(user.id);
+    await auditLogRepository.record({
+      organizationId: user.organizationId,
+      actorUserId: user.id,
+      actorType: "USER",
+      action: "AUTH_LOGOUT_ALL",
+      resourceType: "user",
+      resourceId: user.id,
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent,
+    });
+  },
+
+  async changePassword(
+    user: SanitizedUser,
+    currentSessionToken: string,
+    currentPassword: string,
+    newPassword: string,
+    meta: RequestMeta = {}
+  ): Promise<void> {
+    const fullUser = await userRepository.findById(user.id);
+    if (!fullUser) throw new InternalError("User record could not be loaded.");
+
+    const validCurrent = await verifyPassword(currentPassword, fullUser.passwordHash);
+    if (!validCurrent) {
+      throw new AuthenticationError("Current password is incorrect.");
+    }
+
+    const newHash = await hashPassword(newPassword);
+    await userRepository.updatePasswordHash(user.id, newHash);
+
+    // Revoke every OTHER active session — a password change is a strong
+    // security-relevant event, other devices/sessions should not remain
+    // trusted on the old credential. The session used to authenticate
+    // *this* request is kept: it just proved fresh knowledge of the
+    // (now-previous) password, so forcing an immediate re-login here would
+    // add friction without a security benefit.
+    await sessionRepository.revokeAllForUserExcept(user.id, currentSessionToken);
+
+    await auditLogRepository.record({
+      organizationId: user.organizationId,
+      actorUserId: user.id,
+      actorType: "USER",
+      action: "AUTH_PASSWORD_CHANGE",
+      resourceType: "user",
+      resourceId: user.id,
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent,
+    });
+  },
+
+  /**
+   * Always resolves without revealing whether the email exists (§12
+   * enumeration hardening). Returns a `devToken` ONLY outside production —
+   * the safe development/test mechanism the brief asks for in place of a
+   * real email provider (Phase 13). In production this is always
+   * undefined; the raw token is never logged, never included in a
+   * production response, and never persisted anywhere but as a hash.
+   */
+  async requestPasswordReset(email: string, meta: RequestMeta = {}): Promise<{ devToken?: string }> {
+    const user = await userRepository.findByEmail(email);
+    if (!user || user.status !== "ACTIVE") {
+      return {};
+    }
+
+    await passwordResetRepository.invalidateAllForUser(user.id);
+
+    const token = generateResetToken();
+    const expiresAt = new Date(Date.now() + config.passwordResetTokenTtlMinutes * 60 * 1000);
+    await passwordResetRepository.create({
+      token,
+      userId: user.id,
+      expiresAt,
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent,
+    });
+
+    await auditLogRepository.record({
+      organizationId: user.organizationId,
+      actorUserId: user.id,
+      actorType: "USER",
+      action: "AUTH_PASSWORD_RESET_REQUESTED",
+      resourceType: "user",
+      resourceId: user.id,
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent,
+    });
+
+    // Phase 13 integration point: send `token` via the email provider
+    // instead of returning it here. Until then, non-production callers get
+    // it back directly so the reset flow is testable end-to-end.
+    return config.isProduction ? {} : { devToken: token };
+  },
+
+  async confirmPasswordReset(token: string, newPassword: string, meta: RequestMeta = {}): Promise<void> {
+    const resetRow = await passwordResetRepository.findValidByToken(token);
+    if (!resetRow) {
+      throw new AuthenticationError("This password reset link is invalid or has expired.");
+    }
+
+    const user = await userRepository.findById(resetRow.userId);
+    if (!user) {
+      throw new InternalError("Reset token references a user that no longer exists.");
+    }
+
+    const newHash = await hashPassword(newPassword);
+    await userRepository.updatePasswordHash(user.id, newHash);
+    await passwordResetRepository.markUsed(resetRow.id);
+    await passwordResetRepository.invalidateAllForUser(user.id);
+
+    // A password reset means the previous credential may have been
+    // compromised — revoke every session everywhere, not just the caller's.
+    await sessionRepository.revokeAllForUser(user.id);
+
+    await auditLogRepository.record({
+      organizationId: user.organizationId,
+      actorUserId: user.id,
+      actorType: "USER",
+      action: "AUTH_PASSWORD_RESET_COMPLETED",
+      resourceType: "user",
+      resourceId: user.id,
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent,
+    });
+  },
+
+  /**
+   * Switches the caller's active session to a different organization they
+   * hold active membership in (§18). Never trusts the target organizationId
+   * without re-verifying membership; permissions are recalculated from
+   * that organization's role, not carried over. Implemented as session
+   * rotation (new token issued, old one revoked) rather than mutating the
+   * existing session row in place.
+   */
+  async switchOrganization(
+    user: SanitizedUser,
+    currentSessionToken: string,
+    targetOrganizationId: string,
+    meta: RequestMeta = {}
+  ): Promise<LoginResult> {
+    const fullUser = await userRepository.findById(user.id);
+    if (!fullUser) throw new InternalError("User record could not be loaded.");
+
+    const sanitized = await resolveSanitizedUserForOrganization(fullUser, targetOrganizationId);
+    if (!sanitized) {
+      throw new AuthorizationError("You do not have active access to the requested organization.");
+    }
+
+    const token = generateSessionToken();
+    const expiresAt = sessionExpiry();
+    await sessionRepository.create({
+      token,
+      userId: user.id,
+      organizationId: targetOrganizationId,
+      expiresAt,
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent,
+    });
+    await sessionRepository.revoke(currentSessionToken);
+
+    await auditLogRepository.record({
+      organizationId: targetOrganizationId,
+      actorUserId: user.id,
+      actorType: "USER",
+      action: "AUTH_ORGANIZATION_SWITCH",
+      resourceType: "session",
+      resourceId: user.id,
+      beforeData: { organizationId: user.organizationId },
+      afterData: { organizationId: targetOrganizationId },
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent,
+    });
+
+    return { session: { token, expiresAt }, user: sanitized };
+  },
+
+  /** The org-switcher list for GET /auth/me — every organization the user can currently switch into. */
+  async listMemberships(userId: string, currentOrganizationId: string): Promise<MembershipSummary[]> {
+    const memberships = await organizationMembershipRepository.listActiveForUser(userId);
+    return memberships.map((m) => ({
+      organizationId: m.organizationId,
+      organizationName: m.organization.name,
+      organizationSlug: m.organization.slug,
+      roleKey: m.role.key,
+      roleName: m.role.name,
+      isPrimary: m.isPrimary,
+      isCurrent: m.organizationId === currentOrganizationId,
+    }));
   },
 };

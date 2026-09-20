@@ -51,6 +51,12 @@ export const PERMISSION_KEYS = [
   "organizations.create",
   "organizations.update",
   "organizations.delete",
+  "organizations.manage_members",
+  "roles.read",
+  "roles.create",
+  "roles.update",
+  "roles.delete",
+  "roles.assign",
   "clients.read",
   "clients.create",
   "clients.update",
@@ -99,7 +105,16 @@ export interface ResolvedRole {
   permissions: string[];
 }
 
-/** A User row with the password hash stripped — the only shape allowed to leave the service layer — plus the resolved role/permissions. */
+/**
+ * A User row with the password hash stripped — the only shape allowed to
+ * leave the service layer — plus the role/permissions resolved for the
+ * CURRENT SESSION's organization context (Phase 3 —
+ * docs/AUTHENTICATION_ARCHITECTURE.md "Session-scoped authorization").
+ * `organizationId` here reflects the active session's organization, which
+ * may differ from the user's home organization after
+ * `switchOrganization()` — it is not simply `User.organizationId` echoed
+ * back unmodified.
+ */
 export type SanitizedUser = Omit<PrismaUser, "passwordHash"> & {
   role: ResolvedRole;
 };
@@ -107,4 +122,15 @@ export type SanitizedUser = Omit<PrismaUser, "passwordHash"> & {
 export function sanitizeUser(user: PrismaUser, role: ResolvedRole): SanitizedUser {
   const { passwordHash: _passwordHash, ...rest } = user;
   return { ...rest, role };
+}
+
+/** One row of the "which organizations can this user act in" list surfaced by GET /auth/me. */
+export interface MembershipSummary {
+  organizationId: string;
+  organizationName: string;
+  organizationSlug: string;
+  roleKey: string;
+  roleName: string;
+  isPrimary: boolean;
+  isCurrent: boolean;
 }

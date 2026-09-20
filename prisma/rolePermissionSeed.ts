@@ -29,6 +29,9 @@ const ROLE_PERMISSION_SETS: Record<RoleKey, readonly string[] | "*"> = {
     "users.update",
     "organizations.read",
     "organizations.update",
+    "organizations.manage_members",
+    "roles.read",
+    "roles.assign",
     "clients.read",
     "clients.create",
     "clients.update",
@@ -95,6 +98,7 @@ const ROLE_PERMISSION_SETS: Record<RoleKey, readonly string[] | "*"> = {
   VIEWER: [
     "users.read",
     "organizations.read",
+    "roles.read",
     "clients.read",
     "leads.read",
     "products.read",

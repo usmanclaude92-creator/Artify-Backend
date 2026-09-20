@@ -14,8 +14,9 @@ Phase 1's `Company` model assumed one organization per user (`User.companyId`, a
 
 ## Consequences
 - Every tenant-scoped table (leads, clients, contracts, subscriptions, invoices, CMS content, media, settings, ...) carries an explicit `organization_id` FK to this table — see `docs/DATABASE_SCHEMA.md` for the full list and `docs/AUTHORIZATION_MODEL.md` for how it's enforced.
-- **Not fully realized yet, by design**: a session cannot currently be issued for anything other than a user's home organization, and there is no "switch active organization" flow. `organization_memberships` is real and queryable today (multiple memberships can exist per user), but the session/auth layer doesn't yet let a multi-org user act as a different organization within one session — that is explicitly Phase 3 scope (reworking the session/auth flow itself is out of Phase 2's bounds per the brief's non-goals). This is stated plainly rather than claimed as fully done.
 - Every future Artify product (HCMS, Payroll, Accounting, CRM, ERP) is scoped by this same `organization_id`, not a product-specific tenant concept.
+
+**Phase 3 update**: the "not fully realized yet" gap below is closed — see `ADR-016-session-scoped-authorization.md`. A session's role is now resolved from `organization_memberships` for that session's own organization, not from `users.role_id`; `POST /auth/switch-organization` lets a multi-org user act as a different organization within their existing login, re-verifying membership and rotating the session token. `users.organization_id` is kept as the home/default org pointer (unchanged rationale above), not retired.
 
 ## Alternatives considered
 - Fully removing `users.organization_id` in favor of `organization_memberships` alone: rejected for Phase 2 — it would require reworking session issuance/verification (which organization does a session represent when a user has several memberships?), which is exactly the "authentication redesign beyond what is required to connect the schema" the brief prohibits. Revisit in Phase 3.

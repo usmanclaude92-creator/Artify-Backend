@@ -1,19 +1,26 @@
 /**
  * Artify Platform API v1 — canonical namespace (Phase 1 §11).
- * Business-domain route groups (cms, products, subscriptions, leads
- * business-logic, ai) are added in their respective phases per
- * docs/IMPLEMENTATION_PLAN.md — Phase 1 mounts only the auth, webhook, and
- * system foundation.
+ * Phase 3 adds the identity/RBAC management surface (users, roles,
+ * permissions, organizations/memberships — docs/RBAC_IMPLEMENTATION.md).
+ * Other business-domain route groups (cms, products, subscriptions, leads
+ * business-logic, ai) remain for their respective future phases.
  */
 import { Router } from "express";
 import authRoutes from "./authRoutes";
 import webhookRoutes from "./webhookRoutes";
 import systemRoutes from "./systemRoutes";
+import userRoutes from "./userRoutes";
+import roleRoutes, { permissionsRouter } from "./roleRoutes";
+import organizationRoutes from "./organizationRoutes";
 
 const v1Router = Router();
 
 v1Router.use("/auth", authRoutes);
 v1Router.use("/webhooks", webhookRoutes);
 v1Router.use("/system", systemRoutes);
+v1Router.use("/users", userRoutes);
+v1Router.use("/roles", roleRoutes);
+v1Router.use("/permissions", permissionsRouter);
+v1Router.use("/organizations", organizationRoutes);
 
 export default v1Router;

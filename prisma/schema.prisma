@@ -128,6 +128,7 @@ model User {
   role                    Role                     @relation(fields: [roleId], references: [id], onDelete: Restrict)
   memberships             OrganizationMembership[]
   sessions                Session[]
+  passwordResetTokens     PasswordResetToken[]
   author                  Author?
   assignedLeads           Lead[]                   @relation("LeadAssignee")
   managedClients          Client[]                 @relation("ClientAccountManager")
@@ -251,6 +252,31 @@ model Session {
   @@index([userId])
   @@index([expiresAt])
   @@map("sessions")
+}
+
+// Password-reset credentials (Phase 3 — docs/AUTHENTICATION_ARCHITECTURE.md).
+// Same at-rest hashing rationale as Session.tokenHash: the raw value is
+// generated server-side as high-entropy random data, never derived from a
+// low-entropy secret, so a fast SHA-256 hash is appropriate (unlike
+// password hashing). Single-use (usedAt), short-lived (expiresAt), and a
+// new request invalidates any prior outstanding token for the same user
+// (server/services/authService.ts) rather than allowing several to be
+// valid at once.
+model PasswordResetToken {
+  id        String    @id @default(uuid())
+  userId    String    @map("user_id")
+  tokenHash String    @unique @map("token_hash")
+  expiresAt DateTime  @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  ipAddress String?   @map("ip_address")
+  userAgent String?   @map("user_agent")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("password_reset_tokens")
 }
 
 // =============================================================================

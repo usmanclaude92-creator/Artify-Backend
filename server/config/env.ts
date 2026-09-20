@@ -51,6 +51,15 @@ const envSchema = z
 
     OBJECT_STORAGE_PROVIDER: z.enum(["none", "s3", "r2", "supabase"]).default("none"),
     OBJECT_STORAGE_BUCKET: z.string().optional().default(""),
+
+    // Phase 3 — centralized security tunables (docs/AUTHENTICATION_ARCHITECTURE.md).
+    // Never hard-code these values inline in service code; every consumer
+    // reads them from `config` here.
+    SESSION_TTL_HOURS: z.coerce.number().int().positive().default(24),
+    ACCOUNT_LOCKOUT_THRESHOLD: z.coerce.number().int().positive().default(5),
+    ACCOUNT_LOCKOUT_DURATION_MINUTES: z.coerce.number().int().positive().default(15),
+    PASSWORD_RESET_TOKEN_TTL_MINUTES: z.coerce.number().int().positive().default(30),
+    PASSWORD_MIN_LENGTH: z.coerce.number().int().min(8).default(10),
   })
   .superRefine((val, ctx) => {
     const isProdLike = val.NODE_ENV === "production" || val.NODE_ENV === "staging";
@@ -103,6 +112,11 @@ export type AppConfig = Readonly<{
   geminiApiKey: string;
   objectStorageProvider: "none" | "s3" | "r2" | "supabase";
   objectStorageBucket: string;
+  sessionTtlHours: number;
+  accountLockoutThreshold: number;
+  accountLockoutDurationMinutes: number;
+  passwordResetTokenTtlMinutes: number;
+  passwordMinLength: number;
 }>;
 
 export type EnvValidationResult =
@@ -143,6 +157,11 @@ export function validateEnv(raw: NodeJS.ProcessEnv | Record<string, string | und
       geminiApiKey: env.GEMINI_API_KEY,
       objectStorageProvider: env.OBJECT_STORAGE_PROVIDER,
       objectStorageBucket: env.OBJECT_STORAGE_BUCKET,
+      sessionTtlHours: env.SESSION_TTL_HOURS,
+      accountLockoutThreshold: env.ACCOUNT_LOCKOUT_THRESHOLD,
+      accountLockoutDurationMinutes: env.ACCOUNT_LOCKOUT_DURATION_MINUTES,
+      passwordResetTokenTtlMinutes: env.PASSWORD_RESET_TOKEN_TTL_MINUTES,
+      passwordMinLength: env.PASSWORD_MIN_LENGTH,
     }),
   };
 }

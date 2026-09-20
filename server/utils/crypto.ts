@@ -11,6 +11,13 @@ export function generateSessionToken(): string {
   return `art_sess_${randomBytes(32).toString("hex")}`;
 }
 
+/** Same entropy/shape family as generateSessionToken, distinct prefix so a
+ * reset credential can never be confused with (or accidentally accepted
+ * as) a session token by a caller that forgets which endpoint it's for. */
+export function generateResetToken(): string {
+  return `art_reset_${randomBytes(32).toString("hex")}`;
+}
+
 /**
  * Hashes a session token for at-rest storage (Phase 2 §18). Deliberately a
  * plain, fast SHA-256 — the input is already a 256-bit cryptographically

@@ -47,3 +47,26 @@ export const webhookLimiter = rateLimit({
   legacyHeaders: false,
   handler: rateLimitHandler,
 });
+
+/** Password-reset request/confirm — prevents token-guessing and reset-spam against a single account, keyed the same way as authLimiter. */
+export const passwordResetLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  limit: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: rateLimitHandler,
+  keyGenerator: (req: Request) => {
+    const email = typeof req.body?.email === "string" ? req.body.email.toLowerCase() : "unknown";
+    return `${req.ip ?? "unknown-ip"}:${email}`;
+  },
+});
+
+/** Authenticated sensitive actions (change-password, organization switch) — lower volume than general API traffic, keyed per-caller. */
+export const sensitiveActionLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: rateLimitHandler,
+  keyGenerator: (req: Request) => req.user?.id ?? req.ip ?? "unknown",
+});

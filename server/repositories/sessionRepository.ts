@@ -57,4 +57,12 @@ export const sessionRepository = {
       data: { revokedAt: new Date() },
     });
   },
+
+  /** Revokes every other active session for the user, keeping the one matching `exceptToken` — used by change-password to avoid logging the caller out of the session they just authenticated the change with. */
+  async revokeAllForUserExcept(userId: string, exceptToken: string): Promise<void> {
+    await prisma.session.updateMany({
+      where: { userId, revokedAt: null, tokenHash: { not: hashToken(exceptToken) } },
+      data: { revokedAt: new Date() },
+    });
+  },
 };

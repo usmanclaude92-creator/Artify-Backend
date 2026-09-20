@@ -80,7 +80,7 @@ describe("GET /api/v1/system/database (Phase 2 §57/§67 — authenticated, SUPE
       data: { name: "DB Check Internal", slug: "db-check-internal", type: "INTERNAL" },
     });
     const passwordHash = await hashPassword("CorrectHorseBatteryStaple123");
-    await prisma.user.create({
+    const user = await prisma.user.create({
       data: {
         organizationId: org.id,
         email: "db-check-super-admin@example.com",
@@ -89,6 +89,12 @@ describe("GET /api/v1/system/database (Phase 2 §57/§67 — authenticated, SUPE
         lastName: "Admin",
         roleId: superAdminRole.id,
       },
+    });
+    // Phase 3: login resolves the caller's role via an active
+    // OrganizationMembership, not User.roleId directly — a user with no
+    // membership row has no usable session (see authService.login).
+    await prisma.organizationMembership.create({
+      data: { userId: user.id, organizationId: org.id, roleId: superAdminRole.id, status: "ACTIVE", isPrimary: true },
     });
 
     const login = await authService.login("db-check-super-admin@example.com", "CorrectHorseBatteryStaple123");
