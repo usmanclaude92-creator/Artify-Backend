@@ -52,6 +52,23 @@ export const clientRepository = {
     return prisma.client.findFirst({ where: { id, organizationId, deletedAt: null }, ...clientWithWorkspace });
   },
 
+  /**
+   * The Client Portal boundary (Phase 10 §25/§26 —
+   * docs/CLIENT_PORTAL_ARCHITECTURE.md): Contract/Subscription/Invoice/
+   * Payment.organizationId is always the AGENCY's own org (the same org
+   * that owns this Client row), never the client's own provisioned
+   * workspace org — so portal access resolves the caller's *session*
+   * organizationId (after they've switched into a client's workspace via
+   * the Phase 3 switchOrganization mechanism) to the one Client row whose
+   * `workspaceOrganizationId` matches, then scopes every portal query by
+   * that Client's id. An agency staffer viewing their own internal org
+   * naturally finds no matching row here and is blocked from a portal
+   * view of it.
+   */
+  async findByWorkspaceOrganizationId(workspaceOrganizationId: string): Promise<Client | null> {
+    return prisma.client.findFirst({ where: { workspaceOrganizationId, deletedAt: null } });
+  },
+
   /** Case-insensitive duplicate-name check within a tenant (§19) — soft, service-level, not a DB unique constraint (see schema.prisma's Client doc comment for why). */
   async findByNameInOrg(organizationId: string, name: string): Promise<Client | null> {
     return prisma.client.findFirst({

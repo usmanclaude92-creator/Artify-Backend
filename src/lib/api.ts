@@ -892,3 +892,276 @@ export const mediaApi = {
     return completed.media;
   },
 };
+
+// ---------------------------------------------------------------------------
+// Phase 10 — Commercial/Billing (contracts, subscriptions, invoices,
+// payments) & the read-only Client Portal. Every monetary field is the
+// server's Decimal serialized as a string (e.g. "1290.5") — never parsed
+// back into a JS number for calculation, only for display (docs/BILLING_ARCHITECTURE.md).
+// ---------------------------------------------------------------------------
+
+export type ContractStatusValue = "DRAFT" | "ACTIVE" | "SUSPENDED" | "EXPIRED" | "TERMINATED";
+export type SubscriptionStatusValue = "DRAFT" | "TRIALING" | "ACTIVE" | "PAST_DUE" | "PAUSED" | "CANCELLED" | "EXPIRED";
+export type BillingCycleValue = "ONE_TIME" | "MONTHLY" | "QUARTERLY" | "ANNUAL";
+export type InvoiceStatusValue = "DRAFT" | "ISSUED" | "PARTIALLY_PAID" | "PAID" | "OVERDUE" | "VOID" | "CANCELLED";
+export type PaymentMethodValue = "BANK_TRANSFER" | "CARD" | "CASH" | "CHEQUE" | "ONLINE" | "OTHER";
+export type PaymentStatusValue = "PENDING" | "COMPLETED" | "FAILED" | "REVERSED";
+
+export interface ContractVariation {
+  id: string;
+  contractId: string;
+  variationNumber: number;
+  amount: string;
+  effectiveDate: string;
+  reason: string;
+  createdById: string | null;
+  createdAt: string;
+}
+
+export interface Contract {
+  id: string;
+  contractNumber: string;
+  organizationId: string;
+  clientId: string;
+  title: string;
+  description: string | null;
+  status: ContractStatusValue;
+  startDate: string;
+  endDate: string | null;
+  /** The original, never-overwritten contract value (§5) — see currentValue for the figure that includes variations. */
+  contractValue: string;
+  /** Computed on every read as contractValue + Σ(variations.amount) — never cached. */
+  currentValue: string;
+  currency: string;
+  notes: string | null;
+  createdById: string | null;
+  createdAt: string;
+  updatedAt: string;
+  variations: ContractVariation[];
+}
+
+export interface SubscriptionItem {
+  id: string;
+  subscriptionId: string;
+  productModuleId: string | null;
+  description: string;
+  quantity: number;
+  unitPrice: string;
+  currency: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface Subscription {
+  id: string;
+  subscriptionNumber: string;
+  organizationId: string;
+  clientId: string;
+  productId: string;
+  status: SubscriptionStatusValue;
+  startDate: string;
+  renewalDate: string | null;
+  endDate: string | null;
+  billingCycle: BillingCycleValue;
+  quantity: number;
+  price: string;
+  currency: string;
+  cancelledAt: string | null;
+  cancellationReason: string | null;
+  cancelledById: string | null;
+  createdById: string | null;
+  createdAt: string;
+  updatedAt: string;
+  items: SubscriptionItem[];
+}
+
+export interface InvoiceItem {
+  id: string;
+  invoiceId: string;
+  productModuleId: string | null;
+  description: string;
+  quantity: number;
+  unitPrice: string;
+  discount: string;
+  lineTotal: string;
+  createdAt: string;
+}
+
+export interface Payment {
+  id: string;
+  invoiceId: string;
+  organizationId: string;
+  amount: string;
+  currency: string;
+  paymentDate: string;
+  method: PaymentMethodValue;
+  reference: string | null;
+  status: PaymentStatusValue;
+  notes: string | null;
+  reversalReason: string | null;
+  reversedAt: string | null;
+  reversedById: string | null;
+  createdById: string | null;
+  createdAt: string;
+}
+
+export interface Invoice {
+  id: string;
+  invoiceNumber: string;
+  organizationId: string;
+  clientId: string;
+  contractId: string | null;
+  subscriptionId: string | null;
+  status: InvoiceStatusValue;
+  /** OVERDUE is never a stored status — this is status combined with dueDate, computed server-side on every read. */
+  effectiveStatus: InvoiceStatusValue;
+  issueDate: string;
+  dueDate: string;
+  currency: string;
+  subtotal: string;
+  tax: string;
+  discount: string;
+  total: string;
+  amountPaid: string;
+  amountDue: string;
+  notes: string | null;
+  voidReason: string | null;
+  createdById: string | null;
+  createdAt: string;
+  updatedAt: string;
+  items: InvoiceItem[];
+  payments: Payment[];
+}
+
+export interface InvoiceItemPayload {
+  productModuleId?: string;
+  description: string;
+  quantity: number;
+  unitPrice: string;
+  discount?: string;
+}
+
+export const contractsApi = {
+  list: (
+    params: { page?: number; limit?: number; search?: string; status?: ContractStatusValue; clientId?: string; sort?: string; order?: "asc" | "desc" } = {}
+  ) => paginatedGet<Contract>("/contracts", "contracts", params),
+  get: (id: string) => apiClient.get<{ contract: Contract }>(`/contracts/${id}`),
+  create: (payload: { clientId: string; title: string; description?: string; startDate: string; endDate?: string; contractValue: string; currency?: string; notes?: string }) =>
+    apiClient.post<{ contract: Contract }>("/contracts", payload),
+  update: (id: string, payload: Partial<{ title: string; description: string | null; endDate: string | null; notes: string | null }>) =>
+    apiClient.patch<{ contract: Contract }>(`/contracts/${id}`, payload),
+  activate: (id: string) => apiClient.post<{ contract: Contract }>(`/contracts/${id}/activate`),
+  suspend: (id: string) => apiClient.post<{ contract: Contract }>(`/contracts/${id}/suspend`),
+  terminate: (id: string, reason: string) => apiClient.post<{ contract: Contract }>(`/contracts/${id}/terminate`, { reason }),
+  addVariation: (id: string, payload: { amount: string; effectiveDate: string; reason: string }) =>
+    apiClient.post<{ contract: Contract }>(`/contracts/${id}/variations`, payload),
+};
+
+export const subscriptionsApi = {
+  list: (
+    params: {
+      page?: number;
+      limit?: number;
+      search?: string;
+      status?: SubscriptionStatusValue;
+      clientId?: string;
+      productId?: string;
+      sort?: string;
+      order?: "asc" | "desc";
+    } = {}
+  ) => paginatedGet<Subscription>("/subscriptions", "subscriptions", params),
+  get: (id: string) => apiClient.get<{ subscription: Subscription }>(`/subscriptions/${id}`),
+  create: (payload: {
+    clientId: string;
+    productId: string;
+    startDate: string;
+    billingCycle: BillingCycleValue;
+    quantity?: number;
+    price: string;
+    currency?: string;
+    items?: { productModuleId?: string; description: string; quantity?: number; unitPrice: string }[];
+  }) => apiClient.post<{ subscription: Subscription }>("/subscriptions", payload),
+  update: (id: string, payload: Partial<{ renewalDate: string | null; endDate: string | null; quantity: number; price: string }>) =>
+    apiClient.patch<{ subscription: Subscription }>(`/subscriptions/${id}`, payload),
+  activate: (id: string) => apiClient.post<{ subscription: Subscription }>(`/subscriptions/${id}/activate`),
+  pause: (id: string) => apiClient.post<{ subscription: Subscription }>(`/subscriptions/${id}/pause`),
+  cancel: (id: string, reason: string) => apiClient.post<{ subscription: Subscription }>(`/subscriptions/${id}/cancel`, { reason }),
+};
+
+export const invoicesApi = {
+  list: (
+    params: {
+      page?: number;
+      limit?: number;
+      search?: string;
+      status?: InvoiceStatusValue;
+      clientId?: string;
+      contractId?: string;
+      subscriptionId?: string;
+      dateFrom?: string;
+      dateTo?: string;
+      sort?: string;
+      order?: "asc" | "desc";
+    } = {}
+  ) => paginatedGet<Invoice>("/invoices", "invoices", params),
+  get: (id: string) => apiClient.get<{ invoice: Invoice }>(`/invoices/${id}`),
+  create: (payload: {
+    clientId: string;
+    contractId?: string;
+    subscriptionId?: string;
+    issueDate: string;
+    dueDate: string;
+    currency?: string;
+    discount?: string;
+    tax?: string;
+    notes?: string;
+    items: InvoiceItemPayload[];
+  }) => apiClient.post<{ invoice: Invoice }>("/invoices", payload),
+  update: (id: string, payload: Partial<{ issueDate: string; dueDate: string; discount: string; tax: string; notes: string | null; items: InvoiceItemPayload[] }>) =>
+    apiClient.patch<{ invoice: Invoice }>(`/invoices/${id}`, payload),
+  issue: (id: string) => apiClient.post<{ invoice: Invoice }>(`/invoices/${id}/issue`, {}),
+  void: (id: string, reason: string) => apiClient.post<{ invoice: Invoice }>(`/invoices/${id}/void`, { reason }),
+  listPayments: (id: string) => apiClient.get<{ payments: Payment[] }>(`/invoices/${id}/payments`),
+  recordPayment: (id: string, payload: { amount: string; currency?: string; paymentDate: string; method: PaymentMethodValue; reference?: string; notes?: string }) =>
+    apiClient.post<{ payment: Payment }>(`/invoices/${id}/payments`, payload),
+};
+
+export const paymentsApi = {
+  list: (
+    params: {
+      page?: number;
+      limit?: number;
+      status?: PaymentStatusValue;
+      method?: PaymentMethodValue;
+      invoiceId?: string;
+      clientId?: string;
+      dateFrom?: string;
+      dateTo?: string;
+      sort?: string;
+      order?: "asc" | "desc";
+    } = {}
+  ) => paginatedGet<Payment>("/payments", "payments", params),
+  get: (id: string) => apiClient.get<{ payment: Payment }>(`/payments/${id}`),
+  reverse: (id: string, reason: string) => apiClient.post<{ payment: Payment }>(`/payments/${id}/reverse`, { reason }),
+};
+
+export interface ClientPortalDashboard {
+  activeContractCount: number;
+  activeSubscriptionCount: number;
+  outstandingInvoiceCount: number;
+  amountDue: string;
+  currency: string | undefined;
+  recentPayments: Payment[];
+}
+
+/** Read-only — the client portal never exposes create/update/issue/void/reverse (§25/§26). */
+export const portalApi = {
+  dashboard: () => apiClient.get<{ dashboard: ClientPortalDashboard }>("/portal/dashboard"),
+  contracts: (params: { page?: number; limit?: number } = {}) => paginatedGet<Contract & { currentValue: string }>("/portal/contracts", "contracts", params),
+  contract: (id: string) => apiClient.get<{ contract: Contract }>(`/portal/contracts/${id}`),
+  subscriptions: (params: { page?: number; limit?: number } = {}) => paginatedGet<Subscription>("/portal/subscriptions", "subscriptions", params),
+  subscription: (id: string) => apiClient.get<{ subscription: Subscription }>(`/portal/subscriptions/${id}`),
+  invoices: (params: { page?: number; limit?: number; status?: InvoiceStatusValue } = {}) => paginatedGet<Invoice>("/portal/invoices", "invoices", params),
+  invoice: (id: string) => apiClient.get<{ invoice: Invoice }>(`/portal/invoices/${id}`),
+  payments: (params: { page?: number; limit?: number } = {}) => paginatedGet<Payment>("/portal/payments", "payments", params),
+};

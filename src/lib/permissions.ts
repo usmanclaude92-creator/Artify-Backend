@@ -31,6 +31,11 @@ import {
   FolderTree,
   UserSquare2,
   Image as ImageIcon,
+  FileSignature,
+  Repeat,
+  Receipt,
+  Wallet,
+  UserCircle,
 } from "lucide-react";
 import { DashboardPage } from "../components/modules/DashboardPage";
 import { UsersPage } from "../components/modules/UsersPage";
@@ -52,6 +57,11 @@ import { PostsPage } from "../components/modules/PostsPage";
 import { CmsTaxonomyPage } from "../components/modules/CmsTaxonomyPage";
 import { AuthorsPage } from "../components/modules/AuthorsPage";
 import { MediaLibraryPage } from "../components/modules/MediaLibraryPage";
+import { ContractsPage } from "../components/modules/ContractsPage";
+import { SubscriptionsPage } from "../components/modules/SubscriptionsPage";
+import { InvoicesPage } from "../components/modules/InvoicesPage";
+import { PaymentsPage } from "../components/modules/PaymentsPage";
+import { ClientPortalPage } from "../components/modules/ClientPortalPage";
 
 export function hasPermission(permissions: readonly string[] | undefined, key: string): boolean {
   return !!permissions?.includes(key);
@@ -66,7 +76,7 @@ export interface NavItem {
   requiresAnyPermission?: string[];
   component: ComponentType;
   /** Groups items under a heading in the sidebar (§22/§31) — purely presentational. */
-  section: "Platform" | "CRM" | "Onboarding" | "Workspaces" | "Products" | "CMS";
+  section: "Platform" | "CRM" | "Onboarding" | "Workspaces" | "Products" | "CMS" | "Commercial" | "Client Portal";
 }
 
 /**
@@ -266,6 +276,51 @@ export const NAV_ITEMS: NavItem[] = [
     requiresAnyPermission: ["media.read"],
     component: MediaLibraryPage,
     section: "CMS",
+  },
+  {
+    id: "commercial-contracts",
+    label: "Contracts",
+    path: "/commercial/contracts",
+    icon: FileSignature,
+    requiresAnyPermission: ["contracts.read"],
+    component: ContractsPage,
+    section: "Commercial",
+  },
+  {
+    id: "commercial-subscriptions",
+    label: "Subscriptions",
+    path: "/commercial/subscriptions",
+    icon: Repeat,
+    requiresAnyPermission: ["subscriptions.read"],
+    component: SubscriptionsPage,
+    section: "Commercial",
+  },
+  {
+    id: "commercial-invoices",
+    label: "Invoices",
+    path: "/commercial/invoices",
+    icon: Receipt,
+    requiresAnyPermission: ["invoices.read"],
+    component: InvoicesPage,
+    section: "Commercial",
+  },
+  {
+    id: "commercial-payments",
+    label: "Payments",
+    path: "/commercial/payments",
+    icon: Wallet,
+    requiresAnyPermission: ["payments.read"],
+    component: PaymentsPage,
+    section: "Commercial",
+  },
+  {
+    id: "client-portal",
+    label: "Your Account",
+    path: "/portal",
+    icon: UserCircle,
+    requiresAnyPermission: ["portal.dashboard.read"],
+    component: ClientPortalPage,
+    section: "Client Portal",
   },
 ];
 

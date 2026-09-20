@@ -91,10 +91,6 @@ export const PERMISSION_KEYS = [
   "media.upload",
   "media.update",
   "media.delete",
-  "subscriptions.read",
-  "subscriptions.manage",
-  "billing.read",
-  "billing.manage",
   "reports.read",
   "reports.export",
   "settings.read",
@@ -113,6 +109,43 @@ export const PERMISSION_KEYS = [
   "invitations.read",
   "invitations.create",
   "invitations.revoke",
+  // Phase 10 — commercial/billing (docs/COMMERCIAL_ARCHITECTURE.md,
+  // docs/BILLING_ARCHITECTURE.md). Sensitive financial actions
+  // (activate/suspend/terminate/variations.create, issue/void,
+  // reverse) are deliberately separate from read/create/update — §34.
+  "contracts.read",
+  "contracts.create",
+  "contracts.update",
+  "contracts.activate",
+  "contracts.suspend",
+  "contracts.terminate",
+  "contracts.variations.create",
+  "subscriptions.read",
+  "subscriptions.create",
+  "subscriptions.update",
+  "subscriptions.activate",
+  "subscriptions.pause",
+  "subscriptions.cancel",
+  "invoices.read",
+  "invoices.create",
+  "invoices.update",
+  "invoices.issue",
+  "invoices.void",
+  "payments.read",
+  "payments.create",
+  "payments.reverse",
+  // Client Portal — read-only client-facing capabilities, deliberately
+  // separate from the internal contracts.*/invoices.*/payments.* keys
+  // above (§25/§26). Granted broadly (every internal role too, so an
+  // agency user who switches their session into a client's workspace
+  // organization can see that workspace's own portal) — the real
+  // boundary is portalService resolving the caller's Client record from
+  // their session's own organizationId, never a client-supplied id.
+  "portal.dashboard.read",
+  "portal.contracts.read",
+  "portal.subscriptions.read",
+  "portal.invoices.read",
+  "portal.payments.read",
 ] as const;
 
 export type PermissionKey = (typeof PERMISSION_KEYS)[number];

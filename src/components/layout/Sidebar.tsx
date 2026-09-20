@@ -8,13 +8,15 @@ export const Sidebar: React.FC<{ mobileOpen: boolean; onCloseMobile: () => void 
   const { user } = useAuth();
   const { path, navigate } = useRouter();
   const items = visibleNavItems(user?.role.permissions);
-  const sections: Array<"Platform" | "CRM" | "Onboarding" | "Workspaces" | "Products" | "CMS"> = [
+  const sections: Array<"Platform" | "CRM" | "Onboarding" | "Workspaces" | "Products" | "CMS" | "Commercial" | "Client Portal"> = [
     "Platform",
     "CRM",
     "Onboarding",
     "Workspaces",
     "Products",
     "CMS",
+    "Commercial",
+    "Client Portal",
   ];
 
   const content = (

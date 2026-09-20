@@ -79,6 +79,7 @@ model Organization {
   contracts            Contract[]
   subscriptions        Subscription[]
   invoices             Invoice[]
+  payments             Payment[]
   pages                Page[]
   posts                Post[]
   categories           Category[]
@@ -131,29 +132,36 @@ model User {
   deletedAt           DateTime?  @map("deleted_at")
   version             Int        @default(1)
 
-  organization            Organization             @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  role                    Role                     @relation(fields: [roleId], references: [id], onDelete: Restrict)
-  memberships             OrganizationMembership[]
-  sessions                Session[]
-  passwordResetTokens     PasswordResetToken[]
-  author                  Author?
-  assignedLeads           Lead[]                   @relation("LeadAssignee")
-  managedClients          Client[]                 @relation("ClientAccountManager")
-  createdPages            Page[]                   @relation("PageCreatedBy")
-  createdPosts            Post[]                   @relation("PostCreatedBy")
-  createdRevisions        ContentRevision[]        @relation("RevisionCreatedBy")
-  uploadedMedia           MediaAsset[]             @relation("MediaUploadedBy")
-  uploadSessions          MediaUploadSession[]     @relation("UploadSessionUploadedBy")
-  notifications           Notification[]
-  notificationPreferences NotificationPreference[]
-  updatedSystemSettings   SystemSetting[]          @relation("SettingUpdatedBy")
-  auditLogs               AuditLog[]               @relation("AuditActor")
-  createdOnboardings      ClientOnboarding[]       @relation("OnboardingCreatedBy")
-  completedOnboardings    ClientOnboarding[]       @relation("OnboardingCompletedBy")
-  sentInvitations         WorkspaceInvitation[]    @relation("InvitationInvitedBy")
-  acceptedInvitations     WorkspaceInvitation[]    @relation("InvitationAcceptedUser")
-  createdProducts         Product[]                @relation("ProductCreatedBy")
-  updatedProducts         Product[]                @relation("ProductUpdatedBy")
+  organization              Organization             @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  role                      Role                     @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  memberships               OrganizationMembership[]
+  sessions                  Session[]
+  passwordResetTokens       PasswordResetToken[]
+  author                    Author?
+  assignedLeads             Lead[]                   @relation("LeadAssignee")
+  managedClients            Client[]                 @relation("ClientAccountManager")
+  createdPages              Page[]                   @relation("PageCreatedBy")
+  createdPosts              Post[]                   @relation("PostCreatedBy")
+  createdRevisions          ContentRevision[]        @relation("RevisionCreatedBy")
+  uploadedMedia             MediaAsset[]             @relation("MediaUploadedBy")
+  uploadSessions            MediaUploadSession[]     @relation("UploadSessionUploadedBy")
+  notifications             Notification[]
+  notificationPreferences   NotificationPreference[]
+  updatedSystemSettings     SystemSetting[]          @relation("SettingUpdatedBy")
+  auditLogs                 AuditLog[]               @relation("AuditActor")
+  createdOnboardings        ClientOnboarding[]       @relation("OnboardingCreatedBy")
+  completedOnboardings      ClientOnboarding[]       @relation("OnboardingCompletedBy")
+  sentInvitations           WorkspaceInvitation[]    @relation("InvitationInvitedBy")
+  acceptedInvitations       WorkspaceInvitation[]    @relation("InvitationAcceptedUser")
+  createdProducts           Product[]                @relation("ProductCreatedBy")
+  updatedProducts           Product[]                @relation("ProductUpdatedBy")
+  createdContracts          Contract[]               @relation("ContractCreatedBy")
+  createdContractVariations ContractVariation[]      @relation("ContractVariationCreatedBy")
+  createdSubscriptions      Subscription[]           @relation("SubscriptionCreatedBy")
+  cancelledSubscriptions    Subscription[]           @relation("SubscriptionCancelledBy")
+  createdInvoices           Invoice[]                @relation("InvoiceCreatedBy")
+  createdPayments           Payment[]                @relation("PaymentCreatedBy")
+  reversedPayments          Payment[]                @relation("PaymentReversedBy")
 
   @@index([organizationId])
   @@map("users")
@@ -693,6 +701,7 @@ model ProductModule {
   // so this path is now theoretical, not a live data-loss risk).
   product           Product            @relation(fields: [productId], references: [id], onDelete: Cascade)
   subscriptionItems SubscriptionItem[]
+  invoiceItems      InvoiceItem[]
 
   @@unique([productId, code])
   @@unique([productId, slug])
@@ -702,37 +711,49 @@ model ProductModule {
 }
 
 // =============================================================================
-// COMMERCIAL: contracts, subscriptions, invoices — schema foundation only,
-// no payment processing/integration (Phase 2 explicitly excludes this).
-// All monetary columns are NUMERIC(18,3) — see ADR-012.
+// COMMERCIAL: contracts, subscriptions, invoices, payments (Phase 10 —
+// docs/COMMERCIAL_ARCHITECTURE.md, docs/BILLING_ARCHITECTURE.md). Phase 2
+// built the schema foundation only, with no payment processing/model —
+// Phase 10 completes it. All monetary columns are NUMERIC(18,3) — see
+// ADR-012 — and are Prisma Decimal end-to-end; JS floating-point never
+// touches an authoritative financial value (server/services/billingCalculations.ts).
 // =============================================================================
 
 enum ContractStatus {
   DRAFT
   ACTIVE
+  SUSPENDED
   EXPIRED
   TERMINATED
 }
 
 // Historical/master record — not soft-deleted (§21/§46): a contract's
 // existence is a fact of record, its lifecycle is tracked via `status`,
-// not deletion.
+// not deletion. `contractValue` is the ORIGINAL value only — never
+// overwritten; the current value is original + Σ(variations.amount),
+// computed on read from ContractVariation, never cached (see that
+// model's doc comment for why).
 model Contract {
   id             String         @id @default(uuid())
   contractNumber String         @unique @map("contract_number")
   organizationId String         @map("organization_id")
   clientId       String         @map("client_id")
+  title          String
+  description    String?
   status         ContractStatus @default(DRAFT)
   startDate      DateTime       @map("start_date") @db.Date
   endDate        DateTime?      @map("end_date") @db.Date
   contractValue  Decimal        @map("contract_value") @db.Decimal(18, 3)
   currency       String         @db.Char(3)
   notes          String?
+  createdById    String?        @map("created_by")
   createdAt      DateTime       @default(now()) @map("created_at")
   updatedAt      DateTime       @updatedAt @map("updated_at")
 
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  client       Client       @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  organization Organization        @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  client       Client              @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  createdBy    User?               @relation("ContractCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  variations   ContractVariation[]
   invoices     Invoice[]
 
   @@index([organizationId])
@@ -740,39 +761,84 @@ model Contract {
   @@map("contracts")
 }
 
+/**
+ * A commercial change to a contract's value over time (§5). Never
+ * overwrites `Contract.contractValue` — each variation is its own
+ * immutable row; the contract's *current* value is always
+ * `contractValue + Σ(variations.amount)`, computed on read
+ * (contractService.getContract/withCurrentValue) rather than cached on Contract, so
+ * there is exactly one source of truth and no cache-consistency surface
+ * to maintain. `amount` may be negative (a reduction) or positive (an
+ * increase) — `variationNumber` is a per-contract sequential counter
+ * assigned transactionally, so the full history can always be replayed
+ * in order.
+ */
+model ContractVariation {
+  id              String   @id @default(uuid())
+  contractId      String   @map("contract_id")
+  variationNumber Int      @map("variation_number")
+  amount          Decimal  @db.Decimal(18, 3)
+  effectiveDate   DateTime @map("effective_date") @db.Date
+  reason          String
+  createdById     String?  @map("created_by")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  contract  Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  createdBy User?    @relation("ContractVariationCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@unique([contractId, variationNumber])
+  @@map("contract_variations")
+}
+
 enum SubscriptionStatus {
+  DRAFT
   TRIALING
   ACTIVE
   PAST_DUE
+  PAUSED
   CANCELLED
   EXPIRED
 }
 
 enum BillingCycle {
+  ONE_TIME
   MONTHLY
+  QUARTERLY
   ANNUAL
 }
 
 // Not soft-deleted — same reasoning as Contract; use `status` (CANCELLED/
-// EXPIRED) instead of deletion.
+// EXPIRED) instead of deletion. `price`/`currency` are this subscription's
+// own snapshot at creation time — never a live FK to a mutable Product
+// price, so a later product price change never rewrites an existing
+// subscription (§9/§10; Product/ProductModule have no shared price list
+// to snapshot from in the first place — see docs/BILLING_ARCHITECTURE.md).
 model Subscription {
-  id             String             @id @default(uuid())
-  organizationId String             @map("organization_id")
-  clientId       String             @map("client_id")
-  productId      String             @map("product_id")
-  status         SubscriptionStatus @default(TRIALING)
-  startDate      DateTime           @map("start_date") @db.Date
-  endDate        DateTime?          @map("end_date") @db.Date
-  billingCycle   BillingCycle       @map("billing_cycle")
-  quantity       Int                @default(1)
-  price          Decimal            @db.Decimal(18, 3)
-  currency       String             @db.Char(3)
-  createdAt      DateTime           @default(now()) @map("created_at")
-  updatedAt      DateTime           @updatedAt @map("updated_at")
+  id                 String             @id @default(uuid())
+  subscriptionNumber String             @unique @map("subscription_number")
+  organizationId     String             @map("organization_id")
+  clientId           String             @map("client_id")
+  productId          String             @map("product_id")
+  status             SubscriptionStatus @default(DRAFT)
+  startDate          DateTime           @map("start_date") @db.Date
+  renewalDate        DateTime?          @map("renewal_date") @db.Date
+  endDate            DateTime?          @map("end_date") @db.Date
+  billingCycle       BillingCycle       @map("billing_cycle")
+  quantity           Int                @default(1)
+  price              Decimal            @db.Decimal(18, 3)
+  currency           String             @db.Char(3)
+  cancelledAt        DateTime?          @map("cancelled_at")
+  cancellationReason String?            @map("cancellation_reason")
+  cancelledById      String?            @map("cancelled_by")
+  createdById        String?            @map("created_by")
+  createdAt          DateTime           @default(now()) @map("created_at")
+  updatedAt          DateTime           @updatedAt @map("updated_at")
 
   organization Organization       @relation(fields: [organizationId], references: [id], onDelete: Restrict)
   client       Client             @relation(fields: [clientId], references: [id], onDelete: Restrict)
   product      Product            @relation(fields: [productId], references: [id], onDelete: Restrict)
+  createdBy    User?              @relation("SubscriptionCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  cancelledBy  User?              @relation("SubscriptionCancelledBy", fields: [cancelledById], references: [id], onDelete: SetNull)
   items        SubscriptionItem[]
   invoices     Invoice[]
 
@@ -798,16 +864,33 @@ model SubscriptionItem {
   @@map("subscription_items")
 }
 
+/**
+ * DRAFT: being built, freely editable. ISSUED (renamed from SENT — the
+ * exact word the Phase 10 brief's workflow/endpoints use, "POST
+ * /invoices/:id/issue"): immutable financial record from this point on
+ * (§36) — line items, totals, currency, invoice number, and issue date
+ * can no longer change. PARTIALLY_PAID/PAID are derived from persisted
+ * Payment rows, never set directly by a caller (§19). OVERDUE is a
+ * computed *effective* state (issued, outstanding, past due date), not a
+ * column a background job flips — see billingService.effectiveInvoiceStatus.
+ * VOID/CANCELLED are terminal, reached only through their own dedicated
+ * endpoints.
+ */
 enum InvoiceStatus {
   DRAFT
-  SENT
+  ISSUED
+  PARTIALLY_PAID
   PAID
   OVERDUE
   VOID
+  CANCELLED
 }
 
-// Immutable financial record — no soft delete (§21/§46). Void via
-// `status: VOID`, never deletion.
+// Immutable financial record once ISSUED — no soft delete (§21/§46/§50).
+// Void via `status: VOID`, never deletion. `amountPaid`/`amountDue` are
+// cached totals, always recomputed transactionally from the Invoice's own
+// Payment rows on every payment record/reversal (§19) — never trusted
+// from a request body.
 model Invoice {
   id             String        @id @default(uuid())
   invoiceNumber  String        @unique @map("invoice_number")
@@ -823,6 +906,11 @@ model Invoice {
   tax            Decimal       @default(0) @db.Decimal(18, 3)
   discount       Decimal       @default(0) @db.Decimal(18, 3)
   total          Decimal       @db.Decimal(18, 3)
+  amountPaid     Decimal       @default(0) @map("amount_paid") @db.Decimal(18, 3)
+  amountDue      Decimal       @map("amount_due") @db.Decimal(18, 3)
+  notes          String?
+  voidReason     String?       @map("void_reason")
+  createdById    String?       @map("created_by")
   createdAt      DateTime      @default(now()) @map("created_at")
   updatedAt      DateTime      @updatedAt @map("updated_at")
 
@@ -830,25 +918,87 @@ model Invoice {
   client       Client        @relation(fields: [clientId], references: [id], onDelete: Restrict)
   contract     Contract?     @relation(fields: [contractId], references: [id], onDelete: SetNull)
   subscription Subscription? @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+  createdBy    User?         @relation("InvoiceCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
   items        InvoiceItem[]
+  payments     Payment[]
 
   @@index([organizationId])
   @@index([clientId])
+  @@index([status])
   @@map("invoices")
 }
 
+// A line's historical snapshot — description/unitPrice/discount/lineTotal
+// never change after the invoice is issued (§13/§36), regardless of any
+// later change to the referenced Product/ProductModule.
 model InvoiceItem {
-  id          String   @id @default(uuid())
-  invoiceId   String   @map("invoice_id")
-  description String
-  quantity    Int      @default(1)
-  unitPrice   Decimal  @map("unit_price") @db.Decimal(18, 3)
-  amount      Decimal  @db.Decimal(18, 3)
-  createdAt   DateTime @default(now()) @map("created_at")
+  id              String   @id @default(uuid())
+  invoiceId       String   @map("invoice_id")
+  productModuleId String?  @map("product_module_id")
+  description     String
+  quantity        Int      @default(1)
+  unitPrice       Decimal  @map("unit_price") @db.Decimal(18, 3)
+  discount        Decimal  @default(0) @db.Decimal(18, 3)
+  lineTotal       Decimal  @map("line_total") @db.Decimal(18, 3)
+  createdAt       DateTime @default(now()) @map("created_at")
 
-  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  invoice       Invoice        @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  productModule ProductModule? @relation(fields: [productModuleId], references: [id], onDelete: SetNull)
 
   @@map("invoice_items")
+}
+
+enum PaymentMethod {
+  BANK_TRANSFER
+  CARD
+  CASH
+  CHEQUE
+  ONLINE
+  OTHER
+}
+
+/**
+ * PENDING: recorded but not yet cleared (rare — most manually-recorded
+ * payments go straight to COMPLETED). COMPLETED: money received,
+ * counts toward the invoice's amountPaid. FAILED: recorded but never
+ * cleared, never counted. REVERSED: a completed payment that was
+ * corrected — the row is never deleted or its amount/date/method
+ * changed (§17/§50); reversal is recorded as an additional, append-only
+ * set of fields on this same row (reversedAt/reversedById/reversalReason),
+ * and a REVERSED payment stops counting toward amountPaid.
+ */
+enum PaymentStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  REVERSED
+}
+
+model Payment {
+  id             String        @id @default(uuid())
+  invoiceId      String        @map("invoice_id")
+  organizationId String        @map("organization_id")
+  amount         Decimal       @db.Decimal(18, 3)
+  currency       String        @db.Char(3)
+  paymentDate    DateTime      @map("payment_date") @db.Date
+  method         PaymentMethod
+  reference      String?
+  status         PaymentStatus @default(COMPLETED)
+  notes          String?
+  reversalReason String?       @map("reversal_reason")
+  reversedAt     DateTime?     @map("reversed_at")
+  reversedById   String?       @map("reversed_by")
+  createdById    String?       @map("created_by")
+  createdAt      DateTime      @default(now()) @map("created_at")
+
+  invoice      Invoice      @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  createdBy    User?        @relation("PaymentCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  reversedBy   User?        @relation("PaymentReversedBy", fields: [reversedById], references: [id], onDelete: SetNull)
+
+  @@index([invoiceId])
+  @@index([organizationId])
+  @@map("payments")
 }
 
 // =============================================================================

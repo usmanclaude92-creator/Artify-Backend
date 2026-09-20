@@ -10,8 +10,13 @@
  * docs/PRODUCT_CATALOG_ARCHITECTURE.md, docs/PRODUCT_MODULE_ARCHITECTURE.md).
  * Phase 8 adds the CMS (pages, posts, categories, tags —
  * docs/CMS_ARCHITECTURE.md).
- * Other business-domain route groups (subscriptions/billing, media, AI)
- * remain for their respective future phases.
+ * Phase 9 adds the media library (media — docs/MEDIA_ARCHITECTURE.md).
+ * Phase 10 adds commercial/billing (contracts, subscriptions, invoices,
+ * payments) and the read-only client portal (portal —
+ * docs/COMMERCIAL_ARCHITECTURE.md, docs/BILLING_ARCHITECTURE.md,
+ * docs/CLIENT_PORTAL_ARCHITECTURE.md).
+ * Other business-domain route groups (AI) remain for their respective
+ * future phases.
  */
 import { Router } from "express";
 import authRoutes from "./authRoutes";
@@ -37,6 +42,11 @@ import categoryRoutes from "./categoryRoutes";
 import tagRoutes from "./tagRoutes";
 import authorRoutes from "./authorRoutes";
 import mediaRoutes from "./mediaRoutes";
+import contractRoutes from "./contractRoutes";
+import subscriptionRoutes from "./subscriptionRoutes";
+import invoiceRoutes from "./invoiceRoutes";
+import paymentRoutes from "./paymentRoutes";
+import portalRoutes from "./portalRoutes";
 
 const v1Router = Router();
 
@@ -64,5 +74,10 @@ v1Router.use("/categories", categoryRoutes);
 v1Router.use("/tags", tagRoutes);
 v1Router.use("/authors", authorRoutes);
 v1Router.use("/media", mediaRoutes);
+v1Router.use("/contracts", contractRoutes);
+v1Router.use("/subscriptions", subscriptionRoutes);
+v1Router.use("/invoices", invoiceRoutes);
+v1Router.use("/payments", paymentRoutes);
+v1Router.use("/portal", portalRoutes);
 
 export default v1Router;

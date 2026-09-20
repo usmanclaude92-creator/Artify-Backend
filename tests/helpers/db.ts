@@ -49,6 +49,9 @@ export async function resetDb(): Promise<void> {
   // deleted (schema-level ON DELETE CASCADE), but are listed explicitly
   // for clarity and to avoid relying on delete order across unrelated
   // cascade paths.
+  // payments RESTRICTs on both invoice_id and organization_id — must go
+  // before invoices and before the organization cascade below (Phase 10).
+  await prisma.payment.deleteMany();
   await prisma.invoiceItem.deleteMany();
   await prisma.invoice.deleteMany();
   await prisma.subscriptionItem.deleteMany();
@@ -59,6 +62,9 @@ export async function resetDb(): Promise<void> {
   // productId/productModuleId respectively).
   await prisma.productModule.deleteMany();
   await prisma.product.deleteMany();
+  // contract_variations CASCADEs on contract_id, but delete explicitly for
+  // clarity (same rationale as the workspace_invitation comment above).
+  await prisma.contractVariation.deleteMany();
   await prisma.contract.deleteMany();
   await prisma.contact.deleteMany();
   // client_onboarding RESTRICTs on both client_id and organization_id —

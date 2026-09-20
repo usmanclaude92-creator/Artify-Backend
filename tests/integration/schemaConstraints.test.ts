@@ -105,6 +105,7 @@ describe("schema constraints (Phase 2 §36/§52)", () => {
       prisma.contract.create({
         data: {
           contractNumber: "CN-NEG-1",
+          title: "Negative Value Contract",
           organizationId: org.id,
           clientId: client.id,
           startDate: new Date("2026-01-01"),
@@ -130,6 +131,7 @@ describe("schema constraints (Phase 2 §36/§52)", () => {
           currency: "OMR",
           subtotal: new Prisma.Decimal("10.000"),
           total: new Prisma.Decimal("10.000"),
+          amountDue: new Prisma.Decimal("10.000"),
         },
       })
     ).rejects.toThrow();
@@ -150,6 +152,7 @@ describe("schema constraints (Phase 2 §36/§52)", () => {
     const contract = await prisma.contract.create({
       data: {
         contractNumber: "CN-PRECISE-1",
+        title: "Precise Value Contract",
         organizationId: org.id,
         clientId: client.id,
         startDate: new Date("2026-01-01"),

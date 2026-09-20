@@ -202,6 +202,51 @@ export const ConfirmDialog: React.FC<{
   </Modal>
 );
 
+/** Like ConfirmDialog, but collects a required free-text reason inside the same modal (Phase 10 — termination/cancellation/void/reversal actions all require one). */
+export const ReasonConfirmDialog: React.FC<{
+  open: boolean;
+  title: string;
+  message: string;
+  reasonLabel?: string;
+  reasonPlaceholder?: string;
+  confirmLabel?: string;
+  onConfirm: (reason: string) => void;
+  onCancel: () => void;
+}> = ({ open, title, message, reasonLabel = "Reason", reasonPlaceholder, confirmLabel = "Confirm", onConfirm, onCancel }) => {
+  const [reason, setReason] = React.useState("");
+
+  React.useEffect(() => {
+    if (open) setReason("");
+  }, [open]);
+
+  return (
+    <Modal open={open} onClose={onCancel} title={title}>
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          onConfirm(reason);
+        }}
+        className="space-y-3"
+      >
+        <p className="text-sm" style={{ color: "var(--text-secondary)" }}>
+          {message}
+        </p>
+        <Field label={reasonLabel}>
+          <Input required value={reason} onChange={(e) => setReason(e.target.value)} placeholder={reasonPlaceholder} />
+        </Field>
+        <div className="pt-3 border-t flex justify-end gap-2" style={{ borderColor: "var(--border)" }}>
+          <Button type="button" variant="secondary" onClick={onCancel}>
+            Cancel
+          </Button>
+          <Button type="submit" variant="danger">
+            {confirmLabel}
+          </Button>
+        </div>
+      </form>
+    </Modal>
+  );
+};
+
 export const Field: React.FC<{ label: string; children: React.ReactNode; hint?: string }> = ({ label, children, hint }) => (
   <label className="block space-y-1">
     <span className="text-xs font-semibold" style={{ color: "var(--text-secondary)" }}>
