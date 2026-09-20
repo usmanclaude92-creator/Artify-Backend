@@ -46,7 +46,7 @@ Scope: a production media metadata + object storage abstraction (database stores
 - **Live Supabase Storage / S3 connectivity: BLOCKED** — the same environmental network limitation documented for Postgres since Phase 2 (no outbound path from this build's sandbox to Supabase or AWS). Both provider implementations are complete and exercised through the deterministic test provider; neither has been verified against a live bucket. See `docs/STORAGE_PROVIDER_ARCHITECTURE.md`.
 
 ## Commit
-`<pending — recorded in a follow-up commit after this report is written>`
+`06e1d29` on `claude/busy-franklin-rdwttk`.
 
 ## Branch
 `claude/busy-franklin-rdwttk`
