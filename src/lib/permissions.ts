@@ -24,6 +24,8 @@ import {
   Hourglass,
   Layers,
   UsersRound,
+  Package,
+  Boxes,
 } from "lucide-react";
 import { DashboardPage } from "../components/modules/DashboardPage";
 import { UsersPage } from "../components/modules/UsersPage";
@@ -39,6 +41,7 @@ import { ClientsPage } from "../components/modules/ClientsPage";
 import { ContactsPage } from "../components/modules/ContactsPage";
 import { OnboardingPage } from "../components/modules/OnboardingPage";
 import { WorkspacesPage } from "../components/modules/WorkspacesPage";
+import { ProductsPage } from "../components/modules/ProductsPage";
 
 export function hasPermission(permissions: readonly string[] | undefined, key: string): boolean {
   return !!permissions?.includes(key);
@@ -53,7 +56,7 @@ export interface NavItem {
   requiresAnyPermission?: string[];
   component: ComponentType;
   /** Groups items under a heading in the sidebar (§22/§31) — purely presentational. */
-  section: "Platform" | "CRM" | "Onboarding" | "Workspaces";
+  section: "Platform" | "CRM" | "Onboarding" | "Workspaces" | "Products";
 }
 
 /**
@@ -190,6 +193,24 @@ export const NAV_ITEMS: NavItem[] = [
     requiresAnyPermission: ["workspaces.read"],
     component: WorkspacesPage,
     section: "Workspaces",
+  },
+  {
+    id: "products-all",
+    label: "All Products",
+    path: "/products",
+    icon: Package,
+    requiresAnyPermission: ["products.read"],
+    component: ProductsPage,
+    section: "Products",
+  },
+  {
+    id: "products-modules",
+    label: "Product Modules",
+    path: "/products/modules",
+    icon: Boxes,
+    requiresAnyPermission: ["product_modules.read"],
+    component: ProductsPage,
+    section: "Products",
   },
 ];
 

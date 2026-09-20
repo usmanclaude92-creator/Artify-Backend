@@ -35,7 +35,8 @@ describe("auth foundation (real Postgres — Phase 1 §17)", () => {
     expect(res.body.data.user).not.toHaveProperty("passwordHash");
     expect(res.body.data.user.role.key).toBe("ADMIN");
     expect(res.body.data.user.role.permissions).toContain("clients.read");
-    expect(res.body.data.user.role.permissions).not.toContain("products.create"); // ADMIN is not the platform-catalog role
+    expect(res.body.data.user.role.permissions).toContain("products.create"); // Phase 7 — ADMIN administers the platform product catalog
+    expect(res.body.data.user.role.permissions).not.toContain("roles.create"); // role management itself remains SUPER_ADMIN-only
 
     const dbUser = await prisma.user.findUniqueOrThrow({ where: { email: testUser.email } });
     expect(dbUser.passwordHash.startsWith("$2")).toBe(true);

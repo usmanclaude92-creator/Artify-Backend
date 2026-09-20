@@ -37,10 +37,10 @@ describe("visibleNavItems", () => {
     expect(items.map((i) => i.id)).toContain("users");
   });
 
-  it("every gated nav item's permission is a real key in the Phase 3 catalog shape (dot-namespaced)", () => {
+  it("every gated nav item's permission is a real key in the Phase 3 catalog shape (dot-namespaced, module segment may be snake_case — e.g. Phase 7's product_modules.*)", () => {
     for (const item of NAV_ITEMS) {
       for (const perm of item.requiresAnyPermission ?? []) {
-        expect(perm).toMatch(/^[a-z]+\.[a-z_]+$/);
+        expect(perm).toMatch(/^[a-z]+(_[a-z]+)*\.[a-z_]+$/);
       }
     }
   });

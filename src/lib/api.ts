@@ -125,7 +125,7 @@ interface EnvelopeMeta {
   pagination?: { page: number; limit: number; total: number; totalPages: number };
 }
 
-async function paginatedGet<T>(path: string, key: string, params: Record<string, string | number | undefined>) {
+async function paginatedGet<T>(path: string, key: string, params: Record<string, string | number | boolean | undefined>) {
   const query = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) {
     if (v !== undefined && v !== "") query.set(k, String(v));
@@ -523,4 +523,101 @@ export const invitationsApi = {
     apiClient.post<{ session: { token: string; expiresAt: string }; user: SanitizedUser }>(`/invitations/${token}/accept`, payload, {
       suppressUnauthorizedHandling: true,
     }),
+};
+
+// ---------------------------------------------------------------------------
+// Phase 7 — Product & Service catalog
+// ---------------------------------------------------------------------------
+
+export type ProductTypeValue = "PRODUCT" | "SERVICE";
+export type ProductStatusValue = "DRAFT" | "ACTIVE" | "INACTIVE" | "ARCHIVED";
+export type ProductModuleStatusValue = "DRAFT" | "ACTIVE" | "INACTIVE";
+
+export interface CatalogProduct {
+  id: string;
+  code: string;
+  name: string;
+  slug: string;
+  type: ProductTypeValue;
+  shortDescription: string | null;
+  description: string | null;
+  status: ProductStatusValue;
+  isFeatured: boolean;
+  displayOrder: number;
+  version: string;
+  createdById: string | null;
+  updatedById: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProductModule {
+  id: string;
+  productId: string;
+  code: string;
+  name: string;
+  slug: string;
+  description: string | null;
+  status: ProductModuleStatusValue;
+  displayOrder: number;
+  isCore: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export const productsApi = {
+  list: (
+    params: {
+      page?: number;
+      limit?: number;
+      search?: string;
+      type?: ProductTypeValue;
+      status?: ProductStatusValue;
+      isFeatured?: boolean;
+      sort?: string;
+      order?: "asc" | "desc";
+    } = {}
+  ) => paginatedGet<CatalogProduct>("/products", "products", params),
+  get: (id: string) => apiClient.get<{ product: CatalogProduct }>(`/products/${id}`),
+  create: (payload: {
+    code: string;
+    name: string;
+    slug?: string;
+    type: ProductTypeValue;
+    shortDescription?: string;
+    description?: string;
+    status?: ProductStatusValue;
+    isFeatured?: boolean;
+    displayOrder?: number;
+  }) => apiClient.post<{ product: CatalogProduct }>("/products", payload),
+  update: (
+    id: string,
+    payload: Partial<{
+      name: string;
+      slug: string;
+      type: ProductTypeValue;
+      shortDescription: string | null;
+      description: string | null;
+      status: ProductStatusValue;
+      isFeatured: boolean;
+      displayOrder: number;
+    }>
+  ) => apiClient.patch<{ product: CatalogProduct }>(`/products/${id}`, payload),
+  archive: (id: string) => apiClient.post<{ product: CatalogProduct }>(`/products/${id}/archive`),
+  modules: (id: string, params: { page?: number; limit?: number; status?: ProductModuleStatusValue } = {}) =>
+    paginatedGet<ProductModule>(`/products/${id}/modules`, "modules", params),
+  addModule: (
+    id: string,
+    payload: { code: string; name: string; slug?: string; description?: string; status?: ProductModuleStatusValue; isCore?: boolean; displayOrder?: number }
+  ) => apiClient.post<{ module: ProductModule }>(`/products/${id}/modules`, payload),
+  reorderModules: (id: string, moduleIds: string[]) => apiClient.post<{ message: string }>(`/products/${id}/modules/reorder`, { moduleIds }),
+};
+
+export const productModulesApi = {
+  get: (id: string) => apiClient.get<{ module: ProductModule }>(`/product-modules/${id}`),
+  update: (
+    id: string,
+    payload: Partial<{ name: string; slug: string; description: string | null; status: ProductModuleStatusValue; isCore: boolean; displayOrder: number }>
+  ) => apiClient.patch<{ module: ProductModule }>(`/product-modules/${id}`, payload),
+  archive: (id: string) => apiClient.post<{ module: ProductModule }>(`/product-modules/${id}/archive`),
 };

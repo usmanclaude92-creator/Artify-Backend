@@ -31,8 +31,11 @@ function buildTestApp() {
     res.json({ userId: req.user?.id, role: req.user?.role.key });
   });
 
-  // Requires a permission the default self-registration (ADMIN role) does NOT grant.
-  app.get("/protected/super-admin-permission-only", authenticateToken, requirePermission("products.create"), (_req, res) => {
+  // Requires a permission the default self-registration (ADMIN role) does NOT grant
+  // (role management itself is SUPER_ADMIN-only — ADMIN has roles.read/roles.assign
+  // but not roles.create; Phase 7 gave ADMIN products.create as part of normal
+  // platform-catalog administration, so that permission no longer fits this case).
+  app.get("/protected/super-admin-permission-only", authenticateToken, requirePermission("roles.create"), (_req, res) => {
     res.json({ ok: true });
   });
 
@@ -107,7 +110,7 @@ describe("authorization middleware foundation (security regression suite)", () =
   });
 
   describe("vertical privilege escalation is blocked", () => {
-    it("rejects an ADMIN calling a route requiring products.create (a SUPER_ADMIN-only platform-catalog permission)", async () => {
+    it("rejects an ADMIN calling a route requiring roles.create (a SUPER_ADMIN-only role-management permission)", async () => {
       const res = await request(app)
         .get("/protected/super-admin-permission-only")
         .set("Authorization", `Bearer ${tenantAToken}`);

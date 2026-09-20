@@ -6,8 +6,10 @@
  * Phase 6 adds client onboarding + workspace provisioning (onboarding,
  * workspaces, invitations — docs/CLIENT_ONBOARDING_ARCHITECTURE.md,
  * docs/WORKSPACE_PROVISIONING.md).
- * Other business-domain route groups (products, subscriptions/billing,
- * CMS, media, AI) remain for their respective future phases.
+ * Phase 7 adds the product/service catalog (products, product-modules —
+ * docs/PRODUCT_CATALOG_ARCHITECTURE.md, docs/PRODUCT_MODULE_ARCHITECTURE.md).
+ * Other business-domain route groups (subscriptions/billing, CMS, media,
+ * AI) remain for their respective future phases.
  */
 import { Router } from "express";
 import authRoutes from "./authRoutes";
@@ -25,6 +27,8 @@ import crmRoutes from "./crmRoutes";
 import onboardingRoutes from "./onboardingRoutes";
 import workspaceRoutes from "./workspaceRoutes";
 import invitationRoutes from "./invitationRoutes";
+import productRoutes from "./productRoutes";
+import productModuleRoutes from "./productModuleRoutes";
 
 const v1Router = Router();
 
@@ -44,5 +48,7 @@ v1Router.use("/crm", crmRoutes);
 v1Router.use("/onboarding", onboardingRoutes);
 v1Router.use("/workspaces", workspaceRoutes);
 v1Router.use("/invitations", invitationRoutes);
+v1Router.use("/products", productRoutes);
+v1Router.use("/product-modules", productModuleRoutes);
 
 export default v1Router;

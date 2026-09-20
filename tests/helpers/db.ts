@@ -47,6 +47,12 @@ export async function resetDb(): Promise<void> {
   await prisma.invoice.deleteMany();
   await prisma.subscriptionItem.deleteMany();
   await prisma.subscription.deleteMany();
+  // products/product_modules are platform-global (no organizationId) — not
+  // covered by the organization cascade below, so wiped explicitly. Must
+  // come after subscription/subscriptionItem (RESTRICT/SetNull on
+  // productId/productModuleId respectively).
+  await prisma.productModule.deleteMany();
+  await prisma.product.deleteMany();
   await prisma.contract.deleteMany();
   await prisma.contact.deleteMany();
   // client_onboarding RESTRICTs on both client_id and organization_id —

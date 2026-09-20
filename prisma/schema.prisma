@@ -150,6 +150,8 @@ model User {
   completedOnboardings    ClientOnboarding[]       @relation("OnboardingCompletedBy")
   sentInvitations         WorkspaceInvitation[]    @relation("InvitationInvitedBy")
   acceptedInvitations     WorkspaceInvitation[]    @relation("InvitationAcceptedUser")
+  createdProducts         Product[]                @relation("ProductCreatedBy")
+  updatedProducts         Product[]                @relation("ProductUpdatedBy")
 
   @@index([organizationId])
   @@map("users")
@@ -603,54 +605,97 @@ model WorkspaceInvitation {
 // logic; they are rows created through this registry (§26/§27).
 // =============================================================================
 
+enum ProductType {
+  PRODUCT
+  SERVICE
+}
+
 enum ProductStatus {
   DRAFT
   ACTIVE
-  DEPRECATED
+  INACTIVE
   ARCHIVED
 }
 
+// Phase 7 — platform-global catalog (docs/PRODUCT_CATALOG_ARCHITECTURE.md).
+// Deliberately no organizationId: unlike Client/Lead/Contact (tenant-owned
+// CRM records) or Workspace (a provisioned Organization), a Product is a
+// single shared catalog entry every future subscription/contract can point
+// at — the doc comment on this model has said so since Phase 2 ("none of
+// these are hardcoded in application logic; they are rows created through
+// this registry"). Catalog administration is permission-gated
+// (products.create/update/archive), not row-scoped. Status lifecycle:
+// DRAFT -> ACTIVE -> INACTIVE <-> ACTIVE, DRAFT|INACTIVE -> ARCHIVED
+// (terminal), validated server-side (server/services/productService.ts) —
+// never a physical delete, so a future Subscription/Contract reference
+// always resolves.
 model Product {
-  id            String        @id @default(uuid())
-  code          String        @unique
-  name          String
-  description   String?
-  status        ProductStatus @default(DRAFT)
-  version       String        @default("1.0.0")
-  configuration Json          @default("{}")
-  createdAt     DateTime      @default(now()) @map("created_at")
-  updatedAt     DateTime      @updatedAt @map("updated_at")
+  id               String        @id @default(uuid())
+  code             String        @unique
+  name             String
+  slug             String        @unique
+  type             ProductType
+  shortDescription String?       @map("short_description")
+  description      String?
+  status           ProductStatus @default(DRAFT)
+  isFeatured       Boolean       @default(false) @map("is_featured")
+  displayOrder     Int           @default(0) @map("display_order")
+  version          String        @default("1.0.0")
+  configuration    Json          @default("{}")
+  createdById      String?       @map("created_by")
+  updatedById      String?       @map("updated_by")
+  createdAt        DateTime      @default(now()) @map("created_at")
+  updatedAt        DateTime      @updatedAt @map("updated_at")
 
+  createdBy     User?           @relation("ProductCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy     User?           @relation("ProductUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
   modules       ProductModule[]
   subscriptions Subscription[]
 
+  @@index([status])
+  @@index([type])
+  @@index([displayOrder])
+  @@index([name])
   @@map("products")
 }
 
 enum ProductModuleStatus {
   DRAFT
   ACTIVE
-  DEPRECATED
+  INACTIVE
 }
 
 // Lets a product register sub-modules (e.g. HCMS -> Employee Management,
 // Attendance, Payroll, Leave, Reports) without a schema redesign per
-// product. Modules themselves are not implemented in Phase 2 — only the
-// registry.
+// product. Phase 7 (docs/PRODUCT_MODULE_ARCHITECTURE.md) builds real
+// CRUD/reordering on this registry; every module belongs to exactly one
+// product (`productId`, RESTRICT-equivalent via the app layer — see the
+// doc comment on `product` below) and never a physical delete once a
+// future SubscriptionItem could reference it — status carries the
+// lifecycle instead.
 model ProductModule {
-  id          String              @id @default(uuid())
-  productId   String              @map("product_id")
-  code        String
-  name        String
-  description String?
-  status      ProductModuleStatus @default(DRAFT)
-  createdAt   DateTime            @default(now()) @map("created_at")
-  updatedAt   DateTime            @updatedAt @map("updated_at")
+  id           String              @id @default(uuid())
+  productId    String              @map("product_id")
+  code         String
+  name         String
+  slug         String
+  description  String?
+  status       ProductModuleStatus @default(DRAFT)
+  displayOrder Int                 @default(0) @map("display_order")
+  isCore       Boolean             @default(false) @map("is_core")
+  createdAt    DateTime            @default(now()) @map("created_at")
+  updatedAt    DateTime            @updatedAt @map("updated_at")
 
+  // onDelete: Cascade is Phase 2's original choice, kept as-is (a product
+  // is never physically deleted post-Phase 7 — see Product's doc comment —
+  // so this path is now theoretical, not a live data-loss risk).
   product           Product            @relation(fields: [productId], references: [id], onDelete: Cascade)
   subscriptionItems SubscriptionItem[]
 
   @@unique([productId, code])
+  @@unique([productId, slug])
+  @@index([status])
+  @@index([displayOrder])
   @@map("product_modules")
 }
 
