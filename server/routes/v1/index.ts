@@ -12,6 +12,8 @@ import systemRoutes from "./systemRoutes";
 import userRoutes from "./userRoutes";
 import roleRoutes, { permissionsRouter } from "./roleRoutes";
 import organizationRoutes from "./organizationRoutes";
+import auditLogRoutes from "./auditLogRoutes";
+import settingsRoutes from "./settingsRoutes";
 
 const v1Router = Router();
 
@@ -22,5 +24,7 @@ v1Router.use("/users", userRoutes);
 v1Router.use("/roles", roleRoutes);
 v1Router.use("/permissions", permissionsRouter);
 v1Router.use("/organizations", organizationRoutes);
+v1Router.use("/audit-logs", auditLogRoutes);
+v1Router.use("/settings", settingsRoutes);
 
 export default v1Router;

@@ -65,4 +65,25 @@ export const sessionRepository = {
       data: { revokedAt: new Date() },
     });
   },
+
+  /** Self-service session list (Phase 4 Security/Sessions UI) — active (unexpired, unrevoked) sessions for one user, safe fields only (never tokenHash). */
+  async listActiveForUser(userId: string): Promise<Session[]> {
+    return prisma.session.findMany({
+      where: { userId, revokedAt: null, expiresAt: { gt: new Date() } },
+      orderBy: { createdAt: "desc" },
+    });
+  },
+
+  /** Revokes a session only if it belongs to `userId` — returns true if a row was actually revoked, so the route can 404 rather than leak whether a foreign session id exists. */
+  async revokeByIdForUser(id: string, userId: string): Promise<boolean> {
+    const result = await prisma.session.updateMany({
+      where: { id, userId, revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
+    return result.count > 0;
+  },
+
+  async countActiveForOrganization(organizationId: string): Promise<number> {
+    return prisma.session.count({ where: { organizationId, revokedAt: null, expiresAt: { gt: new Date() } } });
+  },
 };

@@ -29,7 +29,7 @@ router.get(
   "/:id",
   requirePermission("users.read"),
   asyncHandler(async (req, res) => {
-    const user = await userService.getUser(req.user!.organizationId, req.params.id);
+    const user = await userService.getUser(req.user!.organizationId, req.params.id!);
     sendSuccess(res, { user });
   })
 );
@@ -49,7 +49,7 @@ router.patch(
   requirePermission("users.update"),
   asyncHandler(async (req, res) => {
     const input = updateUserSchema.parse(req.body);
-    const user = await userService.updateUser(req.user!, req.params.id, input, req.user!.role.permissions, {
+    const user = await userService.updateUser(req.user!, req.params.id!, input, req.user!.role.permissions, {
       ip: req.ip,
       userAgent: req.headers["user-agent"],
     });

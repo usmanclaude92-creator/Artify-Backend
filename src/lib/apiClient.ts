@@ -49,10 +49,23 @@ export class ApiClientError extends Error {
   }
 }
 
-/** Injected by the app's auth layer once Phase 4 wires real sessions — absent today by design. */
+/** Injected by AuthContext (Phase 4) so every request carries the current bearer token without each component threading it through. */
 let authTokenGetter: (() => string | null) | null = null;
 export function setAuthTokenGetter(getter: (() => string | null) | null): void {
   authTokenGetter = getter;
+}
+
+/**
+ * Injected by AuthContext — called once, centrally, whenever any request
+ * comes back 401 (Phase 4 §25/§26: "one authoritative frontend
+ * authentication state," never a per-component ad-hoc redirect). Clears
+ * auth state and returns the user to login. Not invoked for 401s from the
+ * login/register endpoints themselves (a failed login is not a session
+ * expiry) — callers pass `suppressUnauthorizedHandling` for those.
+ */
+let unauthorizedHandler: (() => void) | null = null;
+export function setUnauthorizedHandler(handler: (() => void) | null): void {
+  unauthorizedHandler = handler;
 }
 
 export interface ApiRequestOptions {
@@ -60,9 +73,14 @@ export interface ApiRequestOptions {
   body?: unknown;
   timeoutMs?: number;
   signal?: AbortSignal;
+  /** Skip the global 401 → clear-auth-state handler (e.g. the login form's own failed-attempt 401). */
+  suppressUnauthorizedHandling?: boolean;
 }
 
-async function apiRequest<T>(path: string, options: ApiRequestOptions = {}): Promise<T> {
+async function apiRequestEnvelope<T>(
+  path: string,
+  options: ApiRequestOptions = {}
+): Promise<ApiSuccessEnvelope<T>> {
   const baseUrl = resolveBaseUrl();
   const url = `${baseUrl}${path.startsWith("/") ? path : `/${path}`}`;
 
@@ -103,6 +121,9 @@ async function apiRequest<T>(path: string, options: ApiRequestOptions = {}): Pro
 
   if (!response.ok || !payload || payload.success === false) {
     const errorPayload = payload && payload.success === false ? payload.error : undefined;
+    if (response.status === 401 && !options.suppressUnauthorizedHandling) {
+      unauthorizedHandler?.();
+    }
     throw new ApiClientError(errorPayload?.message ?? `Request failed with status ${response.status}`, {
       code: errorPayload?.code ?? "UNKNOWN_ERROR",
       status: response.status,
@@ -111,12 +132,20 @@ async function apiRequest<T>(path: string, options: ApiRequestOptions = {}): Pro
     });
   }
 
-  return payload.data;
+  return payload;
+}
+
+async function apiRequest<T>(path: string, options: ApiRequestOptions = {}): Promise<T> {
+  const envelope = await apiRequestEnvelope<T>(path, options);
+  return envelope.data;
 }
 
 export const apiClient = {
   get: <T>(path: string, options?: Omit<ApiRequestOptions, "method" | "body">) =>
     apiRequest<T>(path, { ...options, method: "GET" }),
+  /** Returns the full envelope (incl. `meta.pagination`) — used by list endpoints; everything else uses the plain data-only helpers below. */
+  getRaw: <T>(path: string, options?: Omit<ApiRequestOptions, "method" | "body">) =>
+    apiRequestEnvelope<T>(path, { ...options, method: "GET" }),
   post: <T>(path: string, body?: unknown, options?: Omit<ApiRequestOptions, "method" | "body">) =>
     apiRequest<T>(path, { ...options, method: "POST", body }),
   put: <T>(path: string, body?: unknown, options?: Omit<ApiRequestOptions, "method" | "body">) =>
