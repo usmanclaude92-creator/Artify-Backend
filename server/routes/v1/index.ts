@@ -8,8 +8,10 @@
  * docs/WORKSPACE_PROVISIONING.md).
  * Phase 7 adds the product/service catalog (products, product-modules —
  * docs/PRODUCT_CATALOG_ARCHITECTURE.md, docs/PRODUCT_MODULE_ARCHITECTURE.md).
- * Other business-domain route groups (subscriptions/billing, CMS, media,
- * AI) remain for their respective future phases.
+ * Phase 8 adds the CMS (pages, posts, categories, tags —
+ * docs/CMS_ARCHITECTURE.md).
+ * Other business-domain route groups (subscriptions/billing, media, AI)
+ * remain for their respective future phases.
  */
 import { Router } from "express";
 import authRoutes from "./authRoutes";
@@ -29,6 +31,11 @@ import workspaceRoutes from "./workspaceRoutes";
 import invitationRoutes from "./invitationRoutes";
 import productRoutes from "./productRoutes";
 import productModuleRoutes from "./productModuleRoutes";
+import pageRoutes from "./pageRoutes";
+import postRoutes from "./postRoutes";
+import categoryRoutes from "./categoryRoutes";
+import tagRoutes from "./tagRoutes";
+import authorRoutes from "./authorRoutes";
 
 const v1Router = Router();
 
@@ -50,5 +57,10 @@ v1Router.use("/workspaces", workspaceRoutes);
 v1Router.use("/invitations", invitationRoutes);
 v1Router.use("/products", productRoutes);
 v1Router.use("/product-modules", productModuleRoutes);
+v1Router.use("/pages", pageRoutes);
+v1Router.use("/posts", postRoutes);
+v1Router.use("/categories", categoryRoutes);
+v1Router.use("/tags", tagRoutes);
+v1Router.use("/authors", authorRoutes);
 
 export default v1Router;

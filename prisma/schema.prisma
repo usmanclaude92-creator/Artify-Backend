@@ -927,6 +927,7 @@ model Page {
   revisions       ContentRevision[] @relation("PageRevisions")
 
   @@unique([organizationId, slug])
+  @@index([organizationId, status])
   @@map("pages")
 }
 
@@ -955,6 +956,9 @@ model Post {
   tags            PostTag[]
 
   @@unique([organizationId, slug])
+  @@index([organizationId, status])
+  @@index([categoryId])
+  @@index([authorId])
   @@map("posts")
 }
 
@@ -966,6 +970,7 @@ model PostTag {
   tag  Tag  @relation(fields: [tagId], references: [id], onDelete: Cascade)
 
   @@id([postId, tagId])
+  @@index([tagId])
   @@map("post_tags")
 }
 

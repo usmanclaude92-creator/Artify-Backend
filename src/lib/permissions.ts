@@ -26,6 +26,10 @@ import {
   UsersRound,
   Package,
   Boxes,
+  FileText,
+  Newspaper,
+  FolderTree,
+  UserSquare2,
 } from "lucide-react";
 import { DashboardPage } from "../components/modules/DashboardPage";
 import { UsersPage } from "../components/modules/UsersPage";
@@ -42,6 +46,10 @@ import { ContactsPage } from "../components/modules/ContactsPage";
 import { OnboardingPage } from "../components/modules/OnboardingPage";
 import { WorkspacesPage } from "../components/modules/WorkspacesPage";
 import { ProductsPage } from "../components/modules/ProductsPage";
+import { PagesPage } from "../components/modules/PagesPage";
+import { PostsPage } from "../components/modules/PostsPage";
+import { CmsTaxonomyPage } from "../components/modules/CmsTaxonomyPage";
+import { AuthorsPage } from "../components/modules/AuthorsPage";
 
 export function hasPermission(permissions: readonly string[] | undefined, key: string): boolean {
   return !!permissions?.includes(key);
@@ -56,7 +64,7 @@ export interface NavItem {
   requiresAnyPermission?: string[];
   component: ComponentType;
   /** Groups items under a heading in the sidebar (§22/§31) — purely presentational. */
-  section: "Platform" | "CRM" | "Onboarding" | "Workspaces" | "Products";
+  section: "Platform" | "CRM" | "Onboarding" | "Workspaces" | "Products" | "CMS";
 }
 
 /**
@@ -211,6 +219,42 @@ export const NAV_ITEMS: NavItem[] = [
     requiresAnyPermission: ["product_modules.read"],
     component: ProductsPage,
     section: "Products",
+  },
+  {
+    id: "cms-pages",
+    label: "Pages",
+    path: "/cms/pages",
+    icon: FileText,
+    requiresAnyPermission: ["content.read"],
+    component: PagesPage,
+    section: "CMS",
+  },
+  {
+    id: "cms-posts",
+    label: "Blog Posts",
+    path: "/cms/posts",
+    icon: Newspaper,
+    requiresAnyPermission: ["content.read"],
+    component: PostsPage,
+    section: "CMS",
+  },
+  {
+    id: "cms-taxonomy",
+    label: "Categories & Tags",
+    path: "/cms/taxonomy",
+    icon: FolderTree,
+    requiresAnyPermission: ["content.read"],
+    component: CmsTaxonomyPage,
+    section: "CMS",
+  },
+  {
+    id: "cms-authors",
+    label: "Authors",
+    path: "/cms/authors",
+    icon: UserSquare2,
+    requiresAnyPermission: ["authors.read"],
+    component: AuthorsPage,
+    section: "CMS",
   },
 ];
 

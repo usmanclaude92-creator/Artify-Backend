@@ -621,3 +621,187 @@ export const productModulesApi = {
   ) => apiClient.patch<{ module: ProductModule }>(`/product-modules/${id}`, payload),
   archive: (id: string) => apiClient.post<{ module: ProductModule }>(`/product-modules/${id}/archive`),
 };
+
+// ---------------------------------------------------------------------------
+// Phase 8 — CMS (pages, posts, categories, tags, authors, revisions)
+// ---------------------------------------------------------------------------
+
+export type ContentStatusValue = "DRAFT" | "IN_REVIEW" | "SCHEDULED" | "PUBLISHED" | "ARCHIVED";
+/** Only status reachable through the generic PATCH — every forward move is a dedicated endpoint (server/schemas/contentSchemas.ts). */
+export type PatchableContentStatus = "DRAFT";
+
+export interface ContentRevision {
+  id: string;
+  pageId: string | null;
+  postId: string | null;
+  version: number;
+  status: ContentStatusValue;
+  title: string;
+  body: string;
+  metadata: Record<string, unknown>;
+  createdById: string | null;
+  createdAt: string;
+  publishedAt: string | null;
+}
+
+export interface CmsPage {
+  id: string;
+  organizationId: string;
+  slug: string;
+  title: string;
+  status: ContentStatusValue;
+  currentRevisionId: string | null;
+  currentRevision: ContentRevision | null;
+  createdById: string | null;
+  publishedAt: string | null;
+  scheduledAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  deletedAt: string | null;
+}
+
+export interface CmsCategory {
+  id: string;
+  organizationId: string;
+  slug: string;
+  name: string;
+  description: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CmsTag {
+  id: string;
+  organizationId: string;
+  slug: string;
+  name: string;
+  createdAt: string;
+}
+
+export interface CmsPost {
+  id: string;
+  organizationId: string;
+  slug: string;
+  title: string;
+  status: ContentStatusValue;
+  categoryId: string | null;
+  authorId: string | null;
+  currentRevisionId: string | null;
+  currentRevision: ContentRevision | null;
+  category: CmsCategory | null;
+  author: { id: string; bio: string | null; avatarUrl: string | null } | null;
+  tags: Array<{ postId: string; tagId: string; tag: CmsTag }>;
+  createdById: string | null;
+  publishedAt: string | null;
+  scheduledAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  deletedAt: string | null;
+}
+
+export interface CmsAuthor {
+  id: string;
+  userId: string;
+  bio: string | null;
+  avatarUrl: string | null;
+  createdAt: string;
+  updatedAt: string;
+  user: { id: string; email: string; firstName: string; lastName: string; displayName: string | null; status: string };
+}
+
+const contentUpdateBody = (payload: {
+  title?: string;
+  slug?: string;
+  body?: string;
+  metadata?: Record<string, unknown>;
+  status?: PatchableContentStatus;
+  expectedUpdatedAt?: string;
+}) => payload;
+
+export const pagesApi = {
+  list: (
+    params: { page?: number; limit?: number; search?: string; status?: ContentStatusValue; sort?: string; order?: "asc" | "desc" } = {}
+  ) => paginatedGet<CmsPage>("/pages", "pages", params),
+  get: (id: string) => apiClient.get<{ page: CmsPage }>(`/pages/${id}`),
+  revisions: (id: string) => apiClient.get<{ revisions: ContentRevision[] }>(`/pages/${id}/revisions`),
+  create: (payload: { title: string; slug?: string; body?: string; metadata?: Record<string, unknown> }) =>
+    apiClient.post<{ page: CmsPage }>("/pages", payload),
+  update: (id: string, payload: Parameters<typeof contentUpdateBody>[0]) => apiClient.patch<{ page: CmsPage }>(`/pages/${id}`, contentUpdateBody(payload)),
+  submitForReview: (id: string) => apiClient.post<{ page: CmsPage }>(`/pages/${id}/submit-review`),
+  publish: (id: string) => apiClient.post<{ page: CmsPage }>(`/pages/${id}/publish`),
+  schedule: (id: string, scheduledAt: string) => apiClient.post<{ page: CmsPage }>(`/pages/${id}/schedule`, { scheduledAt }),
+  archive: (id: string) => apiClient.post<{ page: CmsPage }>(`/pages/${id}/archive`),
+  revert: (id: string, revisionId: string) => apiClient.post<{ page: CmsPage }>(`/pages/${id}/revert`, { revisionId }),
+  remove: (id: string) => apiClient.delete<{ message: string }>(`/pages/${id}`),
+};
+
+export const postsApi = {
+  list: (
+    params: {
+      page?: number;
+      limit?: number;
+      search?: string;
+      status?: ContentStatusValue;
+      categoryId?: string;
+      tagId?: string;
+      sort?: string;
+      order?: "asc" | "desc";
+    } = {}
+  ) => paginatedGet<CmsPost>("/posts", "posts", params),
+  get: (id: string) => apiClient.get<{ post: CmsPost }>(`/posts/${id}`),
+  revisions: (id: string) => apiClient.get<{ revisions: ContentRevision[] }>(`/posts/${id}/revisions`),
+  create: (payload: {
+    title: string;
+    slug?: string;
+    body?: string;
+    metadata?: Record<string, unknown>;
+    categoryId?: string;
+    authorId?: string;
+    tagIds?: string[];
+  }) => apiClient.post<{ post: CmsPost }>("/posts", payload),
+  update: (
+    id: string,
+    payload: {
+      title?: string;
+      slug?: string;
+      body?: string;
+      metadata?: Record<string, unknown>;
+      status?: PatchableContentStatus;
+      categoryId?: string | null;
+      authorId?: string | null;
+      tagIds?: string[];
+      expectedUpdatedAt?: string;
+    }
+  ) => apiClient.patch<{ post: CmsPost }>(`/posts/${id}`, payload),
+  submitForReview: (id: string) => apiClient.post<{ post: CmsPost }>(`/posts/${id}/submit-review`),
+  publish: (id: string) => apiClient.post<{ post: CmsPost }>(`/posts/${id}/publish`),
+  schedule: (id: string, scheduledAt: string) => apiClient.post<{ post: CmsPost }>(`/posts/${id}/schedule`, { scheduledAt }),
+  archive: (id: string) => apiClient.post<{ post: CmsPost }>(`/posts/${id}/archive`),
+  revert: (id: string, revisionId: string) => apiClient.post<{ post: CmsPost }>(`/posts/${id}/revert`, { revisionId }),
+  remove: (id: string) => apiClient.delete<{ message: string }>(`/posts/${id}`),
+};
+
+export const categoriesApi = {
+  list: () => apiClient.get<{ categories: CmsCategory[] }>("/categories"),
+  get: (id: string) => apiClient.get<{ category: CmsCategory }>(`/categories/${id}`),
+  create: (payload: { name: string; slug?: string; description?: string }) => apiClient.post<{ category: CmsCategory }>("/categories", payload),
+  update: (id: string, payload: Partial<{ name: string; slug: string; description: string | null }>) =>
+    apiClient.patch<{ category: CmsCategory }>(`/categories/${id}`, payload),
+  remove: (id: string) => apiClient.delete<{ message: string }>(`/categories/${id}`),
+};
+
+export const tagsApi = {
+  list: () => apiClient.get<{ tags: CmsTag[] }>("/tags"),
+  get: (id: string) => apiClient.get<{ tag: CmsTag }>(`/tags/${id}`),
+  create: (payload: { name: string; slug?: string }) => apiClient.post<{ tag: CmsTag }>("/tags", payload),
+  update: (id: string, payload: Partial<{ name: string; slug: string }>) => apiClient.patch<{ tag: CmsTag }>(`/tags/${id}`, payload),
+  remove: (id: string) => apiClient.delete<{ message: string }>(`/tags/${id}`),
+};
+
+export const authorsApi = {
+  list: () => apiClient.get<{ authors: CmsAuthor[] }>("/authors"),
+  get: (id: string) => apiClient.get<{ author: CmsAuthor }>(`/authors/${id}`),
+  create: (payload: { userId: string; bio?: string; avatarUrl?: string }) => apiClient.post<{ author: CmsAuthor }>("/authors", payload),
+  update: (id: string, payload: Partial<{ bio: string | null; avatarUrl: string | null }>) =>
+    apiClient.patch<{ author: CmsAuthor }>(`/authors/${id}`, payload),
+};
