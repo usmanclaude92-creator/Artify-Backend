@@ -1,12 +1,72 @@
 /** Phase 8 — CMS pages: searchable/filterable/paginated list + master-detail editor with workflow actions and revision history/revert. */
 import React, { useEffect, useState } from "react";
-import { FileText, Plus, Search, Send, Rocket, CalendarClock, Archive, History, RotateCcw } from "lucide-react";
+import { FileText, Plus, Search, Send, Rocket, CalendarClock, Archive, History, RotateCcw, Image as ImageIcon, X } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
-import { pagesApi, type CmsPage, type ContentRevision, type ContentStatusValue } from "../../lib/api";
+import { pagesApi, mediaApi, type CmsPage, type CmsMedia, type ContentRevision, type ContentStatusValue } from "../../lib/api";
 import { ApiClientError } from "../../lib/apiClient";
 import { Card, Button, Input, Select, Badge, LoadingState, ErrorState, EmptyState, Pagination, Modal, Field, ConfirmDialog } from "../ui/ui";
 import { hasPermission } from "../../lib/permissions";
+import { MediaPickerModal } from "../common/MediaPickerModal";
+
+const FeaturedImageField: React.FC<{ mediaId: string | undefined; onChange: (mediaId: string | undefined) => void }> = ({ mediaId, onChange }) => {
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [preview, setPreview] = useState<{ url: string; label: string } | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!mediaId) {
+      setPreview(null);
+      return;
+    }
+    void mediaApi.get(mediaId).then((res) => {
+      if (cancelled) return;
+      void mediaApi.getReadUrl(mediaId).then((urlRes) => {
+        if (!cancelled) setPreview({ url: urlRes.url, label: res.media.displayName ?? res.media.originalFilename });
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [mediaId]);
+
+  return (
+    <Field label="Featured image">
+      <div className="flex items-center gap-3">
+        {preview ? (
+          <div className="w-16 h-16 rounded-lg overflow-hidden border shrink-0" style={{ borderColor: "var(--border)" }}>
+            <img src={preview.url} alt={preview.label} className="w-full h-full object-cover" />
+          </div>
+        ) : (
+          <div
+            className="w-16 h-16 rounded-lg border flex items-center justify-center shrink-0"
+            style={{ borderColor: "var(--border)", color: "var(--text-muted)" }}
+          >
+            <ImageIcon className="w-5 h-5" />
+          </div>
+        )}
+        <div className="flex gap-2">
+          <Button type="button" variant="secondary" onClick={() => setPickerOpen(true)}>
+            {mediaId ? "Change" : "Choose image"}
+          </Button>
+          {mediaId && (
+            <Button type="button" variant="ghost" onClick={() => onChange(undefined)} aria-label="Remove featured image">
+              <X className="w-3.5 h-3.5" />
+            </Button>
+          )}
+        </div>
+      </div>
+      <MediaPickerModal
+        open={pickerOpen}
+        onClose={() => setPickerOpen(false)}
+        onSelect={(m: CmsMedia) => {
+          onChange(m.id);
+          setPickerOpen(false);
+        }}
+      />
+    </Field>
+  );
+};
 
 const STATUS_OPTIONS: ContentStatusValue[] = ["DRAFT", "IN_REVIEW", "SCHEDULED", "PUBLISHED", "ARCHIVED"];
 const STATUS_TONE: Record<ContentStatusValue, "success" | "warning" | "danger" | "info" | "neutral"> = {
@@ -27,6 +87,7 @@ const PageFormModal: React.FC<{ open: boolean; onClose: () => void; onSaved: (pa
   const [title, setTitle] = useState(page?.title ?? "");
   const [slug, setSlug] = useState(page?.slug ?? "");
   const [body, setBody] = useState(page?.currentRevision?.body ?? "");
+  const [featuredMediaId, setFeaturedMediaId] = useState<string | undefined>(page?.featuredMediaId ?? undefined);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -35,6 +96,7 @@ const PageFormModal: React.FC<{ open: boolean; onClose: () => void; onSaved: (pa
       setTitle(page?.title ?? "");
       setSlug(page?.slug ?? "");
       setBody(page?.currentRevision?.body ?? "");
+      setFeaturedMediaId(page?.featuredMediaId ?? undefined);
       setError(null);
     }
   }, [open, page]);
@@ -45,10 +107,16 @@ const PageFormModal: React.FC<{ open: boolean; onClose: () => void; onSaved: (pa
     setSubmitting(true);
     try {
       if (mode === "create") {
-        const res = await pagesApi.create({ title, slug: slug || undefined, body });
+        const res = await pagesApi.create({ title, slug: slug || undefined, body, featuredMediaId });
         onSaved(res.page);
       } else if (page) {
-        const res = await pagesApi.update(page.id, { title, slug, body, expectedUpdatedAt: page.updatedAt });
+        const res = await pagesApi.update(page.id, {
+          title,
+          slug,
+          body,
+          featuredMediaId: featuredMediaId ?? null,
+          expectedUpdatedAt: page.updatedAt,
+        });
         onSaved(res.page);
       }
       onClose();
@@ -69,6 +137,7 @@ const PageFormModal: React.FC<{ open: boolean; onClose: () => void; onSaved: (pa
         <Field label="Slug" hint="Leave blank to auto-generate from the title.">
           <Input value={slug} onChange={(e) => setSlug(e.target.value)} placeholder="auto-generated" />
         </Field>
+        <FeaturedImageField mediaId={featuredMediaId} onChange={setFeaturedMediaId} />
         <Field label="Body">
           <textarea
             className="w-full px-3 py-2 rounded-lg text-sm focus:outline-none font-mono"

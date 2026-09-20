@@ -36,6 +36,7 @@ import postRoutes from "./postRoutes";
 import categoryRoutes from "./categoryRoutes";
 import tagRoutes from "./tagRoutes";
 import authorRoutes from "./authorRoutes";
+import mediaRoutes from "./mediaRoutes";
 
 const v1Router = Router();
 
@@ -62,5 +63,6 @@ v1Router.use("/posts", postRoutes);
 v1Router.use("/categories", categoryRoutes);
 v1Router.use("/tags", tagRoutes);
 v1Router.use("/authors", authorRoutes);
+v1Router.use("/media", mediaRoutes);
 
 export default v1Router;

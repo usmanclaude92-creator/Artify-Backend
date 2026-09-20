@@ -9,6 +9,7 @@ import { postRepository, type PostWithRelations } from "../repositories/postRepo
 import { categoryRepository } from "../repositories/categoryRepository";
 import { tagRepository } from "../repositories/tagRepository";
 import { auditLogRepository } from "../repositories/auditLogRepository";
+import { assertFeaturedMediaUsable } from "./mediaService";
 import { prisma } from "../db/prisma";
 import { ConflictError, NotFoundError, ValidationError } from "../core/errors";
 import type { SanitizedUser } from "../types/domain";
@@ -75,6 +76,7 @@ export const postService = {
 
     await assertCategoryInOrg(input.categoryId, organizationId);
     await assertTagsInOrg(input.tagIds, organizationId);
+    if (input.featuredMediaId) await assertFeaturedMediaUsable(input.featuredMediaId, organizationId);
 
     if (input.slug) {
       const dup = await postRepository.findBySlugInOrg(organizationId, input.slug);
@@ -93,6 +95,7 @@ export const postService = {
             status: "DRAFT",
             categoryId: input.categoryId,
             authorId: input.authorId,
+            featuredMediaId: input.featuredMediaId,
             createdById: caller.id,
           },
         });
@@ -150,6 +153,15 @@ export const postService = {
     if (input.categoryId !== undefined) await assertCategoryInOrg(input.categoryId, organizationId);
     if (input.tagIds !== undefined) await assertTagsInOrg(input.tagIds, organizationId);
 
+    // See pageService.updatePage — the featured image lives on the Post
+    // row and can change independently of content edits, except on
+    // ARCHIVED content.
+    const hasFeaturedMediaEdit = input.featuredMediaId !== undefined;
+    if (hasFeaturedMediaEdit) {
+      if (existing.status === "ARCHIVED") throw new ConflictError("Post content cannot be edited while status is ARCHIVED.");
+      if (input.featuredMediaId) await assertFeaturedMediaUsable(input.featuredMediaId, organizationId);
+    }
+
     const unpublishing = existing.status === "PUBLISHED" && input.status === "DRAFT";
     const currentRevision = existing.currentRevision;
 
@@ -161,6 +173,7 @@ export const postService = {
         if (input.title !== undefined) postPatch.title = input.title;
         if (input.categoryId !== undefined) postPatch.categoryId = input.categoryId;
         if (input.authorId !== undefined) postPatch.authorId = input.authorId;
+        if (hasFeaturedMediaEdit) postPatch.featuredMediaId = input.featuredMediaId;
         if (unpublishing) postPatch.publishedAt = null;
 
         if (currentRevision && (unpublishing || (hasContentEdit && currentRevision.status === "PUBLISHED"))) {
@@ -224,6 +237,21 @@ export const postService = {
       ipAddress: meta.ip,
       userAgent: meta.userAgent,
     });
+
+    if (hasFeaturedMediaEdit && input.featuredMediaId !== existing.featuredMediaId) {
+      await auditLogRepository.record({
+        organizationId,
+        actorUserId: caller.id,
+        actorType: "USER",
+        action: input.featuredMediaId ? "MEDIA_ATTACHED_TO_CONTENT" : "MEDIA_DETACHED_FROM_CONTENT",
+        resourceType: "post",
+        resourceId: id,
+        beforeData: { featuredMediaId: existing.featuredMediaId },
+        afterData: { featuredMediaId: input.featuredMediaId ?? null },
+        ipAddress: meta.ip,
+        userAgent: meta.userAgent,
+      });
+    }
 
     return loadPostOrThrow(id, organizationId);
   },

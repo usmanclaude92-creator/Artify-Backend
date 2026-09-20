@@ -19,6 +19,7 @@
  */
 import { prisma } from "../../server/db/prisma";
 import { config } from "../../server/config/env";
+import { testStorageProvider } from "../../server/storage/testStorageProvider";
 
 function assertTestDatabase(): void {
   if (config.nodeEnv !== "test" || !config.databaseUrl.includes("test")) {
@@ -31,6 +32,11 @@ function assertTestDatabase(): void {
 
 export async function resetDb(): Promise<void> {
   assertTestDatabase();
+
+  // The in-memory test storage provider (Phase 9) is a module-singleton —
+  // wipe it alongside the database so uploaded-object state never leaks
+  // between tests the way stale rows would.
+  testStorageProvider.reset();
 
   // Break the pages/posts <-> content_revisions cycle (Page.currentRevisionId
   // and Post.currentRevisionId each point INTO content_revisions, which in
@@ -72,6 +78,10 @@ export async function resetDb(): Promise<void> {
   await prisma.category.deleteMany();
   await prisma.tag.deleteMany();
 
+  // media_upload_sessions CASCADEs on media_id and organization_id, but
+  // delete explicitly before media_assets for clarity (same rationale as
+  // the workspace_invitation comment above).
+  await prisma.mediaUploadSession.deleteMany();
   await prisma.mediaAsset.deleteMany();
   await prisma.notification.deleteMany();
   await prisma.notificationPreference.deleteMany();

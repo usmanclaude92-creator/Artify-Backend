@@ -652,6 +652,7 @@ export interface CmsPage {
   status: ContentStatusValue;
   currentRevisionId: string | null;
   currentRevision: ContentRevision | null;
+  featuredMediaId: string | null;
   createdById: string | null;
   publishedAt: string | null;
   scheduledAt: string | null;
@@ -688,6 +689,7 @@ export interface CmsPost {
   authorId: string | null;
   currentRevisionId: string | null;
   currentRevision: ContentRevision | null;
+  featuredMediaId: string | null;
   category: CmsCategory | null;
   author: { id: string; bio: string | null; avatarUrl: string | null } | null;
   tags: Array<{ postId: string; tagId: string; tag: CmsTag }>;
@@ -715,6 +717,7 @@ const contentUpdateBody = (payload: {
   body?: string;
   metadata?: Record<string, unknown>;
   status?: PatchableContentStatus;
+  featuredMediaId?: string | null;
   expectedUpdatedAt?: string;
 }) => payload;
 
@@ -724,7 +727,7 @@ export const pagesApi = {
   ) => paginatedGet<CmsPage>("/pages", "pages", params),
   get: (id: string) => apiClient.get<{ page: CmsPage }>(`/pages/${id}`),
   revisions: (id: string) => apiClient.get<{ revisions: ContentRevision[] }>(`/pages/${id}/revisions`),
-  create: (payload: { title: string; slug?: string; body?: string; metadata?: Record<string, unknown> }) =>
+  create: (payload: { title: string; slug?: string; body?: string; metadata?: Record<string, unknown>; featuredMediaId?: string }) =>
     apiClient.post<{ page: CmsPage }>("/pages", payload),
   update: (id: string, payload: Parameters<typeof contentUpdateBody>[0]) => apiClient.patch<{ page: CmsPage }>(`/pages/${id}`, contentUpdateBody(payload)),
   submitForReview: (id: string) => apiClient.post<{ page: CmsPage }>(`/pages/${id}/submit-review`),
@@ -758,6 +761,7 @@ export const postsApi = {
     categoryId?: string;
     authorId?: string;
     tagIds?: string[];
+    featuredMediaId?: string;
   }) => apiClient.post<{ post: CmsPost }>("/posts", payload),
   update: (
     id: string,
@@ -770,6 +774,7 @@ export const postsApi = {
       categoryId?: string | null;
       authorId?: string | null;
       tagIds?: string[];
+      featuredMediaId?: string | null;
       expectedUpdatedAt?: string;
     }
   ) => apiClient.patch<{ post: CmsPost }>(`/posts/${id}`, payload),
@@ -804,4 +809,86 @@ export const authorsApi = {
   create: (payload: { userId: string; bio?: string; avatarUrl?: string }) => apiClient.post<{ author: CmsAuthor }>("/authors", payload),
   update: (id: string, payload: Partial<{ bio: string | null; avatarUrl: string | null }>) =>
     apiClient.patch<{ author: CmsAuthor }>(`/authors/${id}`, payload),
+};
+
+// ---------------------------------------------------------------------------
+// Phase 9 — Media Library & object storage
+// ---------------------------------------------------------------------------
+
+export type MediaStatusValue = "PENDING" | "ACTIVE" | "FAILED" | "ARCHIVED";
+export type MediaVisibilityValue = "PRIVATE" | "PUBLIC";
+export type AllowedMediaMimeType = "image/jpeg" | "image/png" | "image/webp" | "image/gif" | "image/svg+xml" | "application/pdf";
+
+export interface CmsMedia {
+  id: string;
+  organizationId: string;
+  originalFilename: string;
+  displayName: string | null;
+  storageProvider: string;
+  storageBucket: string;
+  storageKey: string;
+  mimeType: string;
+  sizeBytes: number;
+  checksum: string | null;
+  width: number | null;
+  height: number | null;
+  durationSeconds: number | null;
+  altText: string | null;
+  caption: string | null;
+  visibility: MediaVisibilityValue;
+  status: MediaStatusValue;
+  uploadedById: string | null;
+  createdAt: string;
+  updatedAt: string;
+  deletedAt: string | null;
+}
+
+export interface UploadSessionResult {
+  media: CmsMedia;
+  upload: { url: string; method: "PUT" | "POST"; headers?: Record<string, string>; expiresAt: string };
+  uploadToken: string;
+}
+
+export const mediaApi = {
+  list: (
+    params: {
+      page?: number;
+      limit?: number;
+      search?: string;
+      status?: MediaStatusValue;
+      mimeType?: AllowedMediaMimeType;
+      uploadedById?: string;
+      sort?: string;
+      order?: "asc" | "desc";
+    } = {}
+  ) => paginatedGet<CmsMedia>("/media", "media", params),
+  get: (id: string) => apiClient.get<{ media: CmsMedia }>(`/media/${id}`),
+  getReadUrl: (id: string) => apiClient.get<{ url: string; expiresAt: string }>(`/media/${id}/url`),
+  createUploadSession: (payload: { filename: string; mimeType: AllowedMediaMimeType; sizeBytes: number; displayName?: string; altText?: string; caption?: string }) =>
+    apiClient.post<UploadSessionResult>("/media/upload-session", payload),
+  complete: (id: string, token: string) => apiClient.post<{ media: CmsMedia }>(`/media/${id}/complete`, { token }),
+  update: (id: string, payload: Partial<{ displayName: string | null; altText: string | null; caption: string | null; visibility: MediaVisibilityValue }>) =>
+    apiClient.patch<{ media: CmsMedia }>(`/media/${id}`, payload),
+  archive: (id: string) => apiClient.post<{ media: CmsMedia }>(`/media/${id}/archive`),
+  remove: (id: string) => apiClient.delete<{ message: string }>(`/media/${id}`),
+  /**
+   * The one call in this file that doesn't go through `apiClient` — the
+   * browser uploads directly to the signed URL (§12), which is a raw
+   * binary PUT with no Authorization header and no JSON envelope
+   * response, self-authorized by its own signature/token instead.
+   */
+  async uploadToSignedUrl(upload: UploadSessionResult["upload"], file: File): Promise<void> {
+    const res = await fetch(upload.url, { method: upload.method, headers: upload.headers, body: file });
+    if (!res.ok) throw new Error(`Upload failed with status ${res.status}`);
+  },
+  /** Full flow: create the session, upload the bytes, then confirm — the shape every uploader (Media Library, CMS media picker) uses. */
+  async uploadFile(
+    file: File,
+    meta: { mimeType: AllowedMediaMimeType; displayName?: string; altText?: string; caption?: string }
+  ): Promise<CmsMedia> {
+    const session = await mediaApi.createUploadSession({ filename: file.name, mimeType: meta.mimeType, sizeBytes: file.size, ...meta });
+    await mediaApi.uploadToSignedUrl(session.upload, file);
+    const completed = await mediaApi.complete(session.media.id, session.uploadToken);
+    return completed.media;
+  },
 };

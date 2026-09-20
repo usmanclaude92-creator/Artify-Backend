@@ -30,6 +30,7 @@ import {
   Newspaper,
   FolderTree,
   UserSquare2,
+  Image as ImageIcon,
 } from "lucide-react";
 import { DashboardPage } from "../components/modules/DashboardPage";
 import { UsersPage } from "../components/modules/UsersPage";
@@ -50,6 +51,7 @@ import { PagesPage } from "../components/modules/PagesPage";
 import { PostsPage } from "../components/modules/PostsPage";
 import { CmsTaxonomyPage } from "../components/modules/CmsTaxonomyPage";
 import { AuthorsPage } from "../components/modules/AuthorsPage";
+import { MediaLibraryPage } from "../components/modules/MediaLibraryPage";
 
 export function hasPermission(permissions: readonly string[] | undefined, key: string): boolean {
   return !!permissions?.includes(key);
@@ -254,6 +256,15 @@ export const NAV_ITEMS: NavItem[] = [
     icon: UserSquare2,
     requiresAnyPermission: ["authors.read"],
     component: AuthorsPage,
+    section: "CMS",
+  },
+  {
+    id: "cms-media",
+    label: "Media Library",
+    path: "/cms/media",
+    icon: ImageIcon,
+    requiresAnyPermission: ["media.read"],
+    component: MediaLibraryPage,
     section: "CMS",
   },
 ];

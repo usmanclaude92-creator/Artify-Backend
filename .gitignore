@@ -6,3 +6,7 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# Phase 9 — local-filesystem storage provider's dev-only object store
+# (OBJECT_STORAGE_PROVIDER=none). Never used in production.
+.local-storage/

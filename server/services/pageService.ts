@@ -31,6 +31,7 @@
  */
 import { pageRepository, type PageWithRevision } from "../repositories/pageRepository";
 import { auditLogRepository } from "../repositories/auditLogRepository";
+import { assertFeaturedMediaUsable } from "./mediaService";
 import { prisma } from "../db/prisma";
 import { ConflictError, NotFoundError, ValidationError } from "../core/errors";
 import type { SanitizedUser } from "../types/domain";
@@ -85,13 +86,14 @@ export const pageService = {
       const dup = await pageRepository.findBySlugInOrg(organizationId, input.slug);
       if (dup) throw new ConflictError(`A page with slug "${input.slug}" already exists.`, { existingPageId: dup.id });
     }
+    if (input.featuredMediaId) await assertFeaturedMediaUsable(input.featuredMediaId, organizationId);
     const slug = input.slug ?? (await pageRepository.findUniqueSlugInOrg(organizationId, input.title));
 
     let createdId: string;
     try {
       createdId = await prisma.$transaction(async (tx) => {
         const page = await tx.page.create({
-          data: { organizationId, slug, title: input.title, status: "DRAFT", createdById: caller.id },
+          data: { organizationId, slug, title: input.title, status: "DRAFT", createdById: caller.id, featuredMediaId: input.featuredMediaId },
         });
         const revision = await tx.contentRevision.create({
           data: {
@@ -146,6 +148,15 @@ export const pageService = {
       if (dup && dup.id !== id) throw new ConflictError(`A page with slug "${input.slug}" already exists.`, { existingPageId: dup.id });
     }
 
+    // The featured image lives on the Page row, not the revision — it can
+    // be changed independently of content edits (e.g. while PUBLISHED),
+    // except on ARCHIVED content, which stays fully read-only (§24).
+    const hasFeaturedMediaEdit = input.featuredMediaId !== undefined;
+    if (hasFeaturedMediaEdit) {
+      if (existing.status === "ARCHIVED") throw new ConflictError("Page content cannot be edited while status is ARCHIVED.");
+      if (input.featuredMediaId) await assertFeaturedMediaUsable(input.featuredMediaId, organizationId);
+    }
+
     const unpublishing = existing.status === "PUBLISHED" && input.status === "DRAFT";
     const currentRevision = existing.currentRevision;
 
@@ -155,6 +166,7 @@ export const pageService = {
         if (input.status !== undefined) pagePatch.status = input.status;
         if (input.slug !== undefined) pagePatch.slug = input.slug;
         if (input.title !== undefined) pagePatch.title = input.title;
+        if (hasFeaturedMediaEdit) pagePatch.featuredMediaId = input.featuredMediaId;
         if (unpublishing) pagePatch.publishedAt = null;
 
         if (currentRevision && (unpublishing || (hasContentEdit && currentRevision.status === "PUBLISHED"))) {
@@ -215,6 +227,21 @@ export const pageService = {
       ipAddress: meta.ip,
       userAgent: meta.userAgent,
     });
+
+    if (hasFeaturedMediaEdit && input.featuredMediaId !== existing.featuredMediaId) {
+      await auditLogRepository.record({
+        organizationId,
+        actorUserId: caller.id,
+        actorType: "USER",
+        action: input.featuredMediaId ? "MEDIA_ATTACHED_TO_CONTENT" : "MEDIA_DETACHED_FROM_CONTENT",
+        resourceType: "page",
+        resourceId: id,
+        beforeData: { featuredMediaId: existing.featuredMediaId },
+        afterData: { featuredMediaId: input.featuredMediaId ?? null },
+        ipAddress: meta.ip,
+        userAgent: meta.userAgent,
+      });
+    }
 
     return loadPageOrThrow(id, organizationId);
   },

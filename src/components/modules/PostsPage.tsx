@@ -1,12 +1,24 @@
 /** Phase 8 — CMS blog posts: searchable/filterable/paginated list + master-detail editor with category/tag assignment, workflow actions, and revision history/revert. */
 import React, { useEffect, useState } from "react";
-import { Newspaper, Plus, Search, Send, Rocket, CalendarClock, Archive, History, RotateCcw } from "lucide-react";
+import { Newspaper, Plus, Search, Send, Rocket, CalendarClock, Archive, History, RotateCcw, Image as ImageIcon, X } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
-import { postsApi, categoriesApi, tagsApi, type CmsPost, type CmsCategory, type CmsTag, type ContentRevision, type ContentStatusValue } from "../../lib/api";
+import {
+  postsApi,
+  categoriesApi,
+  tagsApi,
+  mediaApi,
+  type CmsPost,
+  type CmsCategory,
+  type CmsTag,
+  type CmsMedia,
+  type ContentRevision,
+  type ContentStatusValue,
+} from "../../lib/api";
 import { ApiClientError } from "../../lib/apiClient";
 import { Card, Button, Input, Select, Badge, LoadingState, ErrorState, EmptyState, Pagination, Modal, Field, ConfirmDialog } from "../ui/ui";
 import { hasPermission } from "../../lib/permissions";
+import { MediaPickerModal } from "../common/MediaPickerModal";
 
 const STATUS_OPTIONS: ContentStatusValue[] = ["DRAFT", "IN_REVIEW", "SCHEDULED", "PUBLISHED", "ARCHIVED"];
 const STATUS_TONE: Record<ContentStatusValue, "success" | "warning" | "danger" | "info" | "neutral"> = {
@@ -15,6 +27,65 @@ const STATUS_TONE: Record<ContentStatusValue, "success" | "warning" | "danger" |
   SCHEDULED: "warning",
   PUBLISHED: "success",
   ARCHIVED: "danger",
+};
+
+const FeaturedImageField: React.FC<{ mediaId: string | undefined; onChange: (mediaId: string | undefined) => void }> = ({ mediaId, onChange }) => {
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [preview, setPreview] = useState<{ url: string; label: string } | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!mediaId) {
+      setPreview(null);
+      return;
+    }
+    void mediaApi.get(mediaId).then((res) => {
+      if (cancelled) return;
+      void mediaApi.getReadUrl(mediaId).then((urlRes) => {
+        if (!cancelled) setPreview({ url: urlRes.url, label: res.media.displayName ?? res.media.originalFilename });
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [mediaId]);
+
+  return (
+    <Field label="Featured image">
+      <div className="flex items-center gap-3">
+        {preview ? (
+          <div className="w-16 h-16 rounded-lg overflow-hidden border shrink-0" style={{ borderColor: "var(--border)" }}>
+            <img src={preview.url} alt={preview.label} className="w-full h-full object-cover" />
+          </div>
+        ) : (
+          <div
+            className="w-16 h-16 rounded-lg border flex items-center justify-center shrink-0"
+            style={{ borderColor: "var(--border)", color: "var(--text-muted)" }}
+          >
+            <ImageIcon className="w-5 h-5" />
+          </div>
+        )}
+        <div className="flex gap-2">
+          <Button type="button" variant="secondary" onClick={() => setPickerOpen(true)}>
+            {mediaId ? "Change" : "Choose image"}
+          </Button>
+          {mediaId && (
+            <Button type="button" variant="ghost" onClick={() => onChange(undefined)} aria-label="Remove featured image">
+              <X className="w-3.5 h-3.5" />
+            </Button>
+          )}
+        </div>
+      </div>
+      <MediaPickerModal
+        open={pickerOpen}
+        onClose={() => setPickerOpen(false)}
+        onSelect={(m: CmsMedia) => {
+          onChange(m.id);
+          setPickerOpen(false);
+        }}
+      />
+    </Field>
+  );
 };
 
 const PostFormModal: React.FC<{
@@ -31,6 +102,7 @@ const PostFormModal: React.FC<{
   const [body, setBody] = useState(post?.currentRevision?.body ?? "");
   const [categoryId, setCategoryId] = useState(post?.categoryId ?? "");
   const [tagIds, setTagIds] = useState<string[]>(post?.tags.map((t) => t.tagId) ?? []);
+  const [featuredMediaId, setFeaturedMediaId] = useState<string | undefined>(post?.featuredMediaId ?? undefined);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -41,6 +113,7 @@ const PostFormModal: React.FC<{
       setBody(post?.currentRevision?.body ?? "");
       setCategoryId(post?.categoryId ?? "");
       setTagIds(post?.tags.map((t) => t.tagId) ?? []);
+      setFeaturedMediaId(post?.featuredMediaId ?? undefined);
       setError(null);
     }
   }, [open, post]);
@@ -53,7 +126,7 @@ const PostFormModal: React.FC<{
     setSubmitting(true);
     try {
       if (mode === "create") {
-        const res = await postsApi.create({ title, slug: slug || undefined, body, categoryId: categoryId || undefined, tagIds });
+        const res = await postsApi.create({ title, slug: slug || undefined, body, categoryId: categoryId || undefined, tagIds, featuredMediaId });
         onSaved(res.post);
       } else if (post) {
         const res = await postsApi.update(post.id, {
@@ -62,6 +135,7 @@ const PostFormModal: React.FC<{
           body,
           categoryId: categoryId || null,
           tagIds,
+          featuredMediaId: featuredMediaId ?? null,
           expectedUpdatedAt: post.updatedAt,
         });
         onSaved(res.post);
@@ -116,6 +190,7 @@ const PostFormModal: React.FC<{
             ))}
           </div>
         </Field>
+        <FeaturedImageField mediaId={featuredMediaId} onChange={setFeaturedMediaId} />
         <Field label="Body">
           <textarea
             className="w-full px-3 py-2 rounded-lg text-sm focus:outline-none font-mono"

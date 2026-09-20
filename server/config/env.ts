@@ -49,8 +49,31 @@ const envSchema = z
     AI_PROVIDER: z.enum(["gemini", "none"]).default("gemini"),
     GEMINI_API_KEY: z.string().optional().default(""),
 
+    // Phase 9 — media/object storage provider abstraction
+    // (docs/STORAGE_PROVIDER_ARCHITECTURE.md). "none" selects the
+    // local-filesystem provider — development/test only, rejected below in
+    // production/staging. "s3"/"r2" share one S3-compatible provider
+    // implementation; "supabase" uses Supabase Storage (the project's
+    // established production target — docs/SUPABASE_DATABASE_SETUP.md).
     OBJECT_STORAGE_PROVIDER: z.enum(["none", "s3", "r2", "supabase"]).default("none"),
     OBJECT_STORAGE_BUCKET: z.string().optional().default(""),
+    OBJECT_STORAGE_REGION: z.string().optional().default(""),
+    OBJECT_STORAGE_ENDPOINT: z.string().optional().default(""),
+    OBJECT_STORAGE_ACCESS_KEY_ID: z.string().optional().default(""),
+    OBJECT_STORAGE_SECRET_ACCESS_KEY: z.string().optional().default(""),
+    OBJECT_STORAGE_FORCE_PATH_STYLE: z
+      .string()
+      .optional()
+      .default("false")
+      .transform((v) => v === "true"),
+    SUPABASE_STORAGE_URL: z.string().optional().default(""),
+    SUPABASE_STORAGE_SERVICE_ROLE_KEY: z.string().optional().default(""),
+    LOCAL_STORAGE_DIR: z.string().optional().default(".local-storage"),
+
+    MEDIA_MAX_IMAGE_SIZE_BYTES: z.coerce.number().int().positive().default(10 * 1024 * 1024),
+    MEDIA_MAX_DOCUMENT_SIZE_BYTES: z.coerce.number().int().positive().default(25 * 1024 * 1024),
+    MEDIA_SIGNED_URL_TTL_SECONDS: z.coerce.number().int().positive().default(900),
+    MEDIA_UPLOAD_SESSION_TTL_MINUTES: z.coerce.number().int().positive().default(15),
 
     // Phase 3 — centralized security tunables (docs/AUTHENTICATION_ARCHITECTURE.md).
     // Never hard-code these values inline in service code; every consumer
@@ -98,6 +121,36 @@ const envSchema = z
           "[config] AI_PROVIDER=gemini but GEMINI_API_KEY is empty — AI endpoints will report unavailable until it is set."
         );
       }
+
+      // The local-filesystem provider ("none") is a development/test
+      // convenience only — it must never silently become the production
+      // storage backend (Phase 9 §31/§46).
+      if (val.OBJECT_STORAGE_PROVIDER === "none") {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["OBJECT_STORAGE_PROVIDER"],
+          message:
+            "OBJECT_STORAGE_PROVIDER must be explicitly configured to a real provider (s3, r2, or supabase) in production/staging — 'none' (local filesystem) is development/test-only.",
+        });
+      }
+    }
+
+    if (val.OBJECT_STORAGE_PROVIDER === "s3" || val.OBJECT_STORAGE_PROVIDER === "r2") {
+      if (!val.OBJECT_STORAGE_BUCKET) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["OBJECT_STORAGE_BUCKET"], message: "required for the s3/r2 storage provider" });
+      if (!val.OBJECT_STORAGE_ACCESS_KEY_ID) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["OBJECT_STORAGE_ACCESS_KEY_ID"], message: "required for the s3/r2 storage provider" });
+      if (!val.OBJECT_STORAGE_SECRET_ACCESS_KEY) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["OBJECT_STORAGE_SECRET_ACCESS_KEY"], message: "required for the s3/r2 storage provider" });
+      if (!val.OBJECT_STORAGE_REGION) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["OBJECT_STORAGE_REGION"], message: "required for the s3/r2 storage provider" });
+      if (val.OBJECT_STORAGE_PROVIDER === "r2" && !val.OBJECT_STORAGE_ENDPOINT) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["OBJECT_STORAGE_ENDPOINT"], message: "required for the r2 storage provider (the account's R2 S3 API endpoint)" });
+      }
+    }
+
+    if (val.OBJECT_STORAGE_PROVIDER === "supabase") {
+      if (!val.OBJECT_STORAGE_BUCKET) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["OBJECT_STORAGE_BUCKET"], message: "required for the supabase storage provider (the Storage bucket name)" });
+      if (!val.SUPABASE_STORAGE_URL) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["SUPABASE_STORAGE_URL"], message: "required for the supabase storage provider" });
+      if (!val.SUPABASE_STORAGE_SERVICE_ROLE_KEY) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["SUPABASE_STORAGE_SERVICE_ROLE_KEY"], message: "required for the supabase storage provider — server-side only, never sent to the browser" });
+      }
     }
   });
 
@@ -115,6 +168,18 @@ export type AppConfig = Readonly<{
   geminiApiKey: string;
   objectStorageProvider: "none" | "s3" | "r2" | "supabase";
   objectStorageBucket: string;
+  objectStorageRegion: string;
+  objectStorageEndpoint: string;
+  objectStorageAccessKeyId: string;
+  objectStorageSecretAccessKey: string;
+  objectStorageForcePathStyle: boolean;
+  supabaseStorageUrl: string;
+  supabaseStorageServiceRoleKey: string;
+  localStorageDir: string;
+  mediaMaxImageSizeBytes: number;
+  mediaMaxDocumentSizeBytes: number;
+  mediaSignedUrlTtlSeconds: number;
+  mediaUploadSessionTtlMinutes: number;
   sessionTtlHours: number;
   accountLockoutThreshold: number;
   accountLockoutDurationMinutes: number;
@@ -161,6 +226,18 @@ export function validateEnv(raw: NodeJS.ProcessEnv | Record<string, string | und
       geminiApiKey: env.GEMINI_API_KEY,
       objectStorageProvider: env.OBJECT_STORAGE_PROVIDER,
       objectStorageBucket: env.OBJECT_STORAGE_BUCKET,
+      objectStorageRegion: env.OBJECT_STORAGE_REGION,
+      objectStorageEndpoint: env.OBJECT_STORAGE_ENDPOINT,
+      objectStorageAccessKeyId: env.OBJECT_STORAGE_ACCESS_KEY_ID,
+      objectStorageSecretAccessKey: env.OBJECT_STORAGE_SECRET_ACCESS_KEY,
+      objectStorageForcePathStyle: env.OBJECT_STORAGE_FORCE_PATH_STYLE,
+      supabaseStorageUrl: env.SUPABASE_STORAGE_URL,
+      supabaseStorageServiceRoleKey: env.SUPABASE_STORAGE_SERVICE_ROLE_KEY,
+      localStorageDir: env.LOCAL_STORAGE_DIR,
+      mediaMaxImageSizeBytes: env.MEDIA_MAX_IMAGE_SIZE_BYTES,
+      mediaMaxDocumentSizeBytes: env.MEDIA_MAX_DOCUMENT_SIZE_BYTES,
+      mediaSignedUrlTtlSeconds: env.MEDIA_SIGNED_URL_TTL_SECONDS,
+      mediaUploadSessionTtlMinutes: env.MEDIA_UPLOAD_SESSION_TTL_MINUTES,
       sessionTtlHours: env.SESSION_TTL_HOURS,
       accountLockoutThreshold: env.ACCOUNT_LOCKOUT_THRESHOLD,
       accountLockoutDurationMinutes: env.ACCOUNT_LOCKOUT_DURATION_MINUTES,

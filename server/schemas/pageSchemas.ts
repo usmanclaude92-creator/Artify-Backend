@@ -13,6 +13,7 @@ export const createPageSchema = z.object({
   slug: slugSchema.optional(),
   body: z.string().trim().max(500000).default(""),
   metadata: z.record(z.unknown()).optional(),
+  featuredMediaId: z.string().trim().uuid().optional(),
 });
 export type CreatePageInput = z.infer<typeof createPageSchema>;
 
@@ -23,6 +24,7 @@ export const updatePageSchema = z
     body: z.string().trim().max(500000).optional(),
     metadata: z.record(z.unknown()).optional(),
     status: patchableContentStatusSchema.optional(),
+    featuredMediaId: z.string().trim().uuid().nullable().optional(),
     expectedUpdatedAt: expectedUpdatedAtSchema,
   })
   .refine((v) => Object.keys(v).filter((k) => k !== "expectedUpdatedAt").length > 0, { message: "At least one field must be provided." });

@@ -16,6 +16,7 @@ export const createPostSchema = z.object({
   categoryId: z.string().trim().uuid().optional(),
   authorId: z.string().trim().uuid().optional(),
   tagIds: z.array(z.string().trim().uuid()).max(50).optional(),
+  featuredMediaId: z.string().trim().uuid().optional(),
 });
 export type CreatePostInput = z.infer<typeof createPostSchema>;
 
@@ -29,6 +30,7 @@ export const updatePostSchema = z
     categoryId: z.string().trim().uuid().nullable().optional(),
     authorId: z.string().trim().uuid().nullable().optional(),
     tagIds: z.array(z.string().trim().uuid()).max(50).optional(),
+    featuredMediaId: z.string().trim().uuid().nullable().optional(),
     expectedUpdatedAt: expectedUpdatedAtSchema,
   })
   .refine((v) => Object.keys(v).filter((k) => k !== "expectedUpdatedAt").length > 0, { message: "At least one field must be provided." });

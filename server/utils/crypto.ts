@@ -36,6 +36,11 @@ export function generateInvitationToken(): string {
   return `art_invite_${randomBytes(32).toString("hex")}`;
 }
 
+/** Same entropy/shape family as the other bearer tokens above (Phase 9 §14) — a media upload-session secret must never be confused with a session/reset/invitation credential. Hashed at rest with `hashToken`, same as the others. */
+export function generateUploadToken(): string {
+  return `art_upload_${randomBytes(32).toString("hex")}`;
+}
+
 export function generateId(prefix: string): string {
   return `${prefix}_${randomBytes(8).toString("hex")}`;
 }

@@ -84,6 +84,7 @@ model Organization {
   categories           Category[]
   tags                 Tag[]
   mediaAssets          MediaAsset[]
+  mediaUploadSessions  MediaUploadSession[]
   notifications        Notification[]
   systemSettings       SystemSetting[]
   onboardings          ClientOnboarding[]
@@ -142,6 +143,7 @@ model User {
   createdPosts            Post[]                   @relation("PostCreatedBy")
   createdRevisions        ContentRevision[]        @relation("RevisionCreatedBy")
   uploadedMedia           MediaAsset[]             @relation("MediaUploadedBy")
+  uploadSessions          MediaUploadSession[]     @relation("UploadSessionUploadedBy")
   notifications           Notification[]
   notificationPreferences NotificationPreference[]
   updatedSystemSettings   SystemSetting[]          @relation("SettingUpdatedBy")
@@ -914,6 +916,7 @@ model Page {
   title             String
   status            ContentStatus @default(DRAFT)
   currentRevisionId String?       @unique @map("current_revision_id")
+  featuredMediaId   String?       @map("featured_media_id")
   createdById       String?       @map("created_by")
   publishedAt       DateTime?     @map("published_at")
   scheduledAt       DateTime?     @map("scheduled_at")
@@ -925,6 +928,7 @@ model Page {
   createdBy       User?             @relation("PageCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
   currentRevision ContentRevision?  @relation("PageCurrentRevision", fields: [currentRevisionId], references: [id], onDelete: SetNull)
   revisions       ContentRevision[] @relation("PageRevisions")
+  featuredMedia   MediaAsset?       @relation("PageFeaturedMedia", fields: [featuredMediaId], references: [id], onDelete: SetNull)
 
   @@unique([organizationId, slug])
   @@index([organizationId, status])
@@ -940,6 +944,7 @@ model Post {
   categoryId        String?       @map("category_id")
   authorId          String?       @map("author_id")
   currentRevisionId String?       @unique @map("current_revision_id")
+  featuredMediaId   String?       @map("featured_media_id")
   createdById       String?       @map("created_by")
   publishedAt       DateTime?     @map("published_at")
   scheduledAt       DateTime?     @map("scheduled_at")
@@ -954,6 +959,7 @@ model Post {
   currentRevision ContentRevision?  @relation("PostCurrentRevision", fields: [currentRevisionId], references: [id], onDelete: SetNull)
   revisions       ContentRevision[] @relation("PostRevisions")
   tags            PostTag[]
+  featuredMedia   MediaAsset?       @relation("PostFeaturedMedia", fields: [featuredMediaId], references: [id], onDelete: SetNull)
 
   @@unique([organizationId, slug])
   @@index([organizationId, status])
@@ -1010,35 +1016,91 @@ model ContentRevision {
 // MEDIA: metadata only — object storage itself is Phase 9 (§33).
 // =============================================================================
 
+/**
+ * Media lifecycle (Phase 9 — docs/MEDIA_ARCHITECTURE.md). PENDING: an
+ * upload session exists but the object hasn't been confirmed in storage
+ * yet (renamed from UPLOADING for the exact wording the upload-session
+ * design uses). ACTIVE: confirmed and usable (renamed from READY). FAILED:
+ * confirmation/validation failed (bad signature, missing object, size
+ * mismatch). ARCHIVED: explicitly archived by a user — hidden from the
+ * default library view but preserved and still resolvable, the same
+ * status-vs-deletedAt dual mechanism used for Client (Phase 5) and
+ * Page/Post (Phase 8); a genuine soft-delete is the separate `deletedAt`
+ * column below, never a physical row delete. (Renamed from DELETED, which
+ * conflated "hidden" with "gone" — 0 rows existed under the old names, so
+ * this rename is non-breaking.)
+ */
 enum MediaStatus {
-  UPLOADING
-  READY
+  PENDING
+  ACTIVE
   FAILED
-  DELETED
+  ARCHIVED
+}
+
+enum MediaVisibility {
+  PRIVATE
+  PUBLIC
 }
 
 model MediaAsset {
-  id             String      @id @default(uuid())
-  organizationId String      @map("organization_id")
-  filename       String
-  storageKey     String      @unique @map("storage_key")
-  mimeType       String      @map("mime_type")
-  sizeBytes      BigInt      @map("size_bytes")
-  width          Int?
-  height         Int?
-  altText        String?     @map("alt_text")
-  caption        String?
-  status         MediaStatus @default(UPLOADING)
-  uploadedById   String?     @map("uploaded_by")
-  createdAt      DateTime    @default(now()) @map("created_at")
-  updatedAt      DateTime    @updatedAt @map("updated_at")
-  deletedAt      DateTime?   @map("deleted_at")
+  id               String          @id @default(uuid())
+  organizationId   String          @map("organization_id")
+  originalFilename String          @map("original_filename")
+  displayName      String?         @map("display_name")
+  storageProvider  String          @map("storage_provider")
+  storageBucket    String          @map("storage_bucket")
+  storageKey       String          @unique @map("storage_key")
+  mimeType         String          @map("mime_type")
+  sizeBytes        BigInt          @map("size_bytes")
+  checksum         String?
+  width            Int?
+  height           Int?
+  durationSeconds  Int?            @map("duration_seconds")
+  altText          String?         @map("alt_text")
+  caption          String?
+  visibility       MediaVisibility @default(PRIVATE)
+  status           MediaStatus     @default(PENDING)
+  uploadedById     String?         @map("uploaded_by")
+  createdAt        DateTime        @default(now()) @map("created_at")
+  updatedAt        DateTime        @updatedAt @map("updated_at")
+  deletedAt        DateTime?       @map("deleted_at")
 
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  uploadedBy   User?        @relation("MediaUploadedBy", fields: [uploadedById], references: [id], onDelete: SetNull)
+  organization     Organization        @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  uploadedBy       User?               @relation("MediaUploadedBy", fields: [uploadedById], references: [id], onDelete: SetNull)
+  uploadSession    MediaUploadSession?
+  featuredForPages Page[]              @relation("PageFeaturedMedia")
+  featuredForPosts Post[]              @relation("PostFeaturedMedia")
+
+  @@index([organizationId, status])
+  @@map("media_assets")
+}
+
+/**
+ * Bearer-secret-backed authorization for a single presigned/direct upload
+ * (Phase 9 §14 — docs/MEDIA_ARCHITECTURE.md). One row per MediaAsset
+ * (1:1 — a fresh upload always gets a fresh MediaAsset, never a reused
+ * session). `tokenHash` is the only persisted form of the upload secret,
+ * hashed the same way as every other bearer credential in this codebase
+ * (server/utils/crypto.ts `hashToken` — see invitation/session tokens);
+ * the raw token is returned to the caller exactly once, at creation.
+ */
+model MediaUploadSession {
+  id             String    @id @default(uuid())
+  mediaId        String    @unique @map("media_id")
+  organizationId String    @map("organization_id")
+  uploadedById   String?   @map("uploaded_by")
+  storageKey     String    @map("storage_key")
+  tokenHash      String    @map("token_hash")
+  expiresAt      DateTime  @map("expires_at")
+  completedAt    DateTime? @map("completed_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  media        MediaAsset   @relation(fields: [mediaId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  uploadedBy   User?        @relation("UploadSessionUploadedBy", fields: [uploadedById], references: [id], onDelete: SetNull)
 
   @@index([organizationId])
-  @@map("media_assets")
+  @@map("media_upload_sessions")
 }
 
 // =============================================================================
