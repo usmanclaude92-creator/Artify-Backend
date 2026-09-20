@@ -47,7 +47,7 @@ async function assertClientInOrg(clientId: string, organizationId: string): Prom
 export const contractService = {
   async listContracts(organizationId: string, filters: ContractFilters, page: number, limit: number, sort: string, order: "asc" | "desc") {
     const { rows, total } = await contractRepository.list(organizationId, filters, page, limit, sort, order);
-    return { rows, total };
+    return { rows: rows.map(withCurrentValue), total };
   },
 
   async getContract(organizationId: string, id: string): Promise<ContractWithCurrentValue> {

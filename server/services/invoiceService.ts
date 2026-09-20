@@ -71,7 +71,13 @@ async function buildLineItems(items: InvoiceItemInput[], productId: string | und
 
 export const invoiceService = {
   async listInvoices(organizationId: string, filters: InvoiceFilters, page: number, limit: number, sort: string, order: "asc" | "desc") {
-    return invoiceRepository.list(organizationId, filters, page, limit, sort, order);
+    const { rows, total } = await invoiceRepository.list(organizationId, filters, page, limit, sort, order);
+    // The list row shape has no items/payments (a full InvoiceWithDetails
+    // fetch per row would be an N+1 query) — but effectiveStatus only needs
+    // status + dueDate, both already present, so it's still computed here
+    // rather than leaving list rows without it (§19 — OVERDUE must never
+    // require a separate detail fetch to see).
+    return { rows: rows.map((row) => ({ ...row, effectiveStatus: effectiveInvoiceStatus(row) })), total };
   },
 
   async getInvoice(organizationId: string, id: string): Promise<InvoiceWithEffectiveStatus> {

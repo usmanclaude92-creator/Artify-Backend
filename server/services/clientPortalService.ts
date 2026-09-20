@@ -53,7 +53,7 @@ export const clientPortalService = {
   async listContracts(caller: SanitizedUser, page: number, limit: number) {
     const client = await resolveClientForCaller(caller);
     const { rows, total } = await contractRepository.list(client.organizationId, { clientId: client.id }, page, limit, "createdAt", "desc");
-    return { rows: rows.map((c) => ({ ...c, currentValue: c.contractValue })), total };
+    return { rows: rows.map((c) => ({ ...c, currentValue: calculateContractCurrentValue(c.contractValue, c.variations.map((v) => v.amount)) })), total };
   },
 
   async getContract(caller: SanitizedUser, id: string) {

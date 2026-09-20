@@ -1,5 +1,5 @@
 /** Phase 10 — subscriptions list/detail, lifecycle actions, create form, permission-gated controls, empty/error states, no fabricated data. */
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { SubscriptionsPage } from "./SubscriptionsPage";
 
@@ -67,6 +67,14 @@ afterEach(() => {
   mockPermissions = ["subscriptions.read", "subscriptions.create", "subscriptions.update", "subscriptions.activate", "subscriptions.pause", "subscriptions.cancel"];
 });
 
+// The detail pane always fetches its own full record by id (the list
+// response has no items — see subscriptionRepository.list) — every test
+// gets a sensible default so the detail pane renders; tests needing a
+// different shape override it explicitly.
+beforeEach(() => {
+  getMock.mockResolvedValue({ subscription });
+});
+
 describe("SubscriptionsPage", () => {
   it("renders the real subscription list and detail pane", async () => {
     listMock.mockResolvedValue({ items: [subscription], page: 1, limit: 20, total: 1, totalPages: 1 });
@@ -116,6 +124,7 @@ describe("SubscriptionsPage", () => {
   it("cancels a subscription only after confirming, with a reason", async () => {
     const active = { ...subscription, status: "ACTIVE" as const };
     listMock.mockResolvedValue({ items: [active], page: 1, limit: 20, total: 1, totalPages: 1 });
+    getMock.mockResolvedValue({ subscription: active });
     cancelMock.mockResolvedValue({ subscription: { ...active, status: "CANCELLED" } });
     render(<SubscriptionsPage />);
 

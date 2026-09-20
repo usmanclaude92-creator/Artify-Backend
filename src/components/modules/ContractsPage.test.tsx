@@ -1,5 +1,5 @@
 /** Phase 10 — contracts list/detail, lifecycle actions, variation history, create form, permission-gated controls, empty/error states, no fabricated data. */
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { ContractsPage } from "./ContractsPage";
 
@@ -64,12 +64,20 @@ afterEach(() => {
   mockPermissions = ["contracts.read", "contracts.create", "contracts.update", "contracts.activate", "contracts.suspend", "contracts.terminate", "contracts.variations.create"];
 });
 
+// The detail pane always fetches its own full record by id (the list
+// response has no variations/currentValue — see contractRepository.list) —
+// every test gets a sensible default so the detail pane renders; tests
+// needing a different shape override it explicitly.
+beforeEach(() => {
+  getMock.mockResolvedValue({ contract });
+});
+
 describe("ContractsPage", () => {
   it("renders the real contract list and detail pane, including its current value", async () => {
     listMock.mockResolvedValue({ items: [contract], page: 1, limit: 20, total: 1, totalPages: 1 });
     render(<ContractsPage />);
     expect(await screen.findAllByText("Managed Services")).not.toHaveLength(0);
-    expect(screen.getByText("CTR-000001", { exact: false })).toBeInTheDocument();
+    expect(await screen.findByText("CTR-000001", { exact: false })).toBeInTheDocument();
   });
 
   it("shows an empty state when there are no contracts", async () => {
@@ -87,6 +95,7 @@ describe("ContractsPage", () => {
   it("shows 'no variations yet' for a contract with none, and renders variation history when present", async () => {
     const withVariation = { ...contract, currentValue: "10500", variations: [{ id: "v1", contractId: "contract-1", variationNumber: 1, amount: "500", effectiveDate: "2026-02-01", reason: "Scope increase", createdById: null, createdAt: "2026-02-01T00:00:00.000Z" }] };
     listMock.mockResolvedValue({ items: [withVariation], page: 1, limit: 20, total: 1, totalPages: 1 });
+    getMock.mockResolvedValue({ contract: withVariation });
     render(<ContractsPage />);
     expect(await screen.findByText(/scope increase/i)).toBeInTheDocument();
   });
@@ -120,6 +129,7 @@ describe("ContractsPage", () => {
   it("terminates a contract only after confirming, with a reason", async () => {
     const active = { ...contract, status: "ACTIVE" as const };
     listMock.mockResolvedValue({ items: [active], page: 1, limit: 20, total: 1, totalPages: 1 });
+    getMock.mockResolvedValue({ contract: active });
     terminateMock.mockResolvedValue({ contract: { ...active, status: "TERMINATED" } });
     render(<ContractsPage />);
 

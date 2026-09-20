@@ -282,17 +282,26 @@ export const SubscriptionsPage: React.FC = () => {
     void load();
   }, [load]);
 
-  const selected = subscriptions.find((s) => s.id === selectedId) ?? null;
-
-  const refreshSelected = React.useCallback(async () => {
-    if (!selectedId) return;
-    try {
-      const res = await subscriptionsApi.get(selectedId);
-      setSubscriptions((prev) => prev.map((s) => (s.id === selectedId ? res.subscription : s)));
-    } catch {
-      void load();
+  // The list response doesn't include items (see subscriptionRepository.list)
+  // — the detail pane always fetches its own full record by id rather than
+  // assuming the list row is complete.
+  const [selectedDetail, setSelectedDetail] = useState<Subscription | null>(null);
+  const loadDetail = React.useCallback(async (id: string | null) => {
+    if (!id) {
+      setSelectedDetail(null);
+      return;
     }
-  }, [selectedId, load]);
+    try {
+      const res = await subscriptionsApi.get(id);
+      setSelectedDetail(res.subscription);
+    } catch {
+      setSelectedDetail(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadDetail(selectedId);
+  }, [selectedId, loadDetail]);
 
   return (
     <div className="space-y-4">
@@ -352,7 +361,15 @@ export const SubscriptionsPage: React.FC = () => {
             <Pagination page={page} totalPages={totalPages} onChange={setPage} />
           </Card>
 
-          {selected && <SubscriptionDetail subscription={selected} onChanged={() => void refreshSelected()} />}
+          {selectedDetail && (
+            <SubscriptionDetail
+              subscription={selectedDetail}
+              onChanged={() => {
+                void load();
+                void loadDetail(selectedId);
+              }}
+            />
+          )}
         </div>
       )}
 

@@ -439,17 +439,27 @@ export const InvoicesPage: React.FC = () => {
     void load();
   }, [load]);
 
-  const selected = invoices.find((i) => i.id === selectedId) ?? null;
-
-  const refreshSelected = React.useCallback(async () => {
-    if (!selectedId) return;
-    try {
-      const res = await invoicesApi.get(selectedId);
-      setInvoices((prev) => prev.map((i) => (i.id === selectedId ? res.invoice : i)));
-    } catch {
-      void load();
+  // The list response doesn't include items/payments/effectiveStatus (see
+  // invoiceRepository.list / invoiceService.listInvoices) — the detail pane
+  // always fetches its own full record by id rather than assuming the list
+  // row is complete.
+  const [selectedDetail, setSelectedDetail] = useState<Invoice | null>(null);
+  const loadDetail = React.useCallback(async (id: string | null) => {
+    if (!id) {
+      setSelectedDetail(null);
+      return;
     }
-  }, [selectedId, load]);
+    try {
+      const res = await invoicesApi.get(id);
+      setSelectedDetail(res.invoice);
+    } catch {
+      setSelectedDetail(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadDetail(selectedId);
+  }, [selectedId, loadDetail]);
 
   return (
     <div className="space-y-4">
@@ -509,7 +519,15 @@ export const InvoicesPage: React.FC = () => {
             <Pagination page={page} totalPages={totalPages} onChange={setPage} />
           </Card>
 
-          {selected && <InvoiceDetail invoice={selected} onChanged={() => void refreshSelected()} />}
+          {selectedDetail && (
+            <InvoiceDetail
+              invoice={selectedDetail}
+              onChanged={() => {
+                void load();
+                void loadDetail(selectedId);
+              }}
+            />
+          )}
         </div>
       )}
 

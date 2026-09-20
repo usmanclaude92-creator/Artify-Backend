@@ -337,17 +337,26 @@ export const ContractsPage: React.FC = () => {
     void load();
   }, [load]);
 
-  const selected = contracts.find((c) => c.id === selectedId) ?? null;
-
-  const refreshSelected = React.useCallback(async () => {
-    if (!selectedId) return;
-    try {
-      const res = await contractsApi.get(selectedId);
-      setContracts((prev) => prev.map((c) => (c.id === selectedId ? res.contract : c)));
-    } catch {
-      void load();
+  // The list response doesn't include variations/currentValue (see
+  // contractRepository.list) — the detail pane always fetches its own full
+  // record by id rather than assuming the list row is complete.
+  const [selectedDetail, setSelectedDetail] = useState<Contract | null>(null);
+  const loadDetail = React.useCallback(async (id: string | null) => {
+    if (!id) {
+      setSelectedDetail(null);
+      return;
     }
-  }, [selectedId, load]);
+    try {
+      const res = await contractsApi.get(id);
+      setSelectedDetail(res.contract);
+    } catch {
+      setSelectedDetail(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadDetail(selectedId);
+  }, [selectedId, loadDetail]);
 
   return (
     <div className="space-y-4">
@@ -407,7 +416,15 @@ export const ContractsPage: React.FC = () => {
             <Pagination page={page} totalPages={totalPages} onChange={setPage} />
           </Card>
 
-          {selected && <ContractDetail contract={selected} onChanged={() => void refreshSelected()} />}
+          {selectedDetail && (
+            <ContractDetail
+              contract={selectedDetail}
+              onChanged={() => {
+                void load();
+                void loadDetail(selectedId);
+              }}
+            />
+          )}
         </div>
       )}
 

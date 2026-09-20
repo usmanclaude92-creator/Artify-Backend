@@ -1,5 +1,5 @@
 /** Phase 10 — invoices list/detail (line items, payments), create form, issue/void, payment recording, permission-gated controls, empty/error states, no fabricated data. */
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { InvoicesPage } from "./InvoicesPage";
 
@@ -68,12 +68,21 @@ afterEach(() => {
   mockPermissions = ["invoices.read", "invoices.create", "invoices.update", "invoices.issue", "invoices.void", "payments.create"];
 });
 
+// The detail pane always fetches its own full record by id (the list
+// response has no items/payments/effectiveStatus — see
+// invoiceRepository.list) — every test gets a sensible default so the
+// detail pane renders; tests needing a different shape override it
+// explicitly.
+beforeEach(() => {
+  getMock.mockResolvedValue({ invoice });
+});
+
 describe("InvoicesPage", () => {
   it("renders the real invoice list, detail pane, and line items", async () => {
     listMock.mockResolvedValue({ items: [invoice], page: 1, limit: 20, total: 1, totalPages: 1 });
     render(<InvoicesPage />);
     expect(await screen.findAllByText("INV-000001")).not.toHaveLength(0);
-    expect(screen.getByText("Consulting")).toBeInTheDocument();
+    expect(await screen.findByText("Consulting")).toBeInTheDocument();
   });
 
   it("shows an empty state when there are no invoices", async () => {
@@ -91,6 +100,7 @@ describe("InvoicesPage", () => {
   it("shows 'no payments recorded yet' for an invoice with none, and lists payments when present", async () => {
     const paid = { ...invoice, payments: [{ id: "pay-1", invoiceId: "inv-1", organizationId: "org-1", amount: "400", currency: "OMR", paymentDate: "2026-01-10", method: "CARD" as const, reference: "TXN-1", status: "COMPLETED" as const, notes: null, reversalReason: null, reversedAt: null, reversedById: null, createdById: null, createdAt: "2026-01-10T00:00:00.000Z" }] };
     listMock.mockResolvedValue({ items: [paid], page: 1, limit: 20, total: 1, totalPages: 1 });
+    getMock.mockResolvedValue({ invoice: paid });
     render(<InvoicesPage />);
     expect(await screen.findByText("TXN-1")).toBeInTheDocument();
   });
@@ -129,6 +139,7 @@ describe("InvoicesPage", () => {
   it("voids an ISSUED invoice only after confirming, with a reason", async () => {
     const issued = { ...invoice, status: "ISSUED" as const, effectiveStatus: "ISSUED" as const };
     listMock.mockResolvedValue({ items: [issued], page: 1, limit: 20, total: 1, totalPages: 1 });
+    getMock.mockResolvedValue({ invoice: issued });
     voidMock.mockResolvedValue({ invoice: { ...issued, status: "VOID", effectiveStatus: "VOID" } });
     render(<InvoicesPage />);
 
@@ -145,6 +156,7 @@ describe("InvoicesPage", () => {
   it("records a payment against an ISSUED invoice through the real API", async () => {
     const issued = { ...invoice, status: "ISSUED" as const, effectiveStatus: "ISSUED" as const };
     listMock.mockResolvedValue({ items: [issued], page: 1, limit: 20, total: 1, totalPages: 1 });
+    getMock.mockResolvedValue({ invoice: issued });
     recordPaymentMock.mockResolvedValue({ payment: { id: "pay-1" } });
     render(<InvoicesPage />);
 
@@ -161,6 +173,7 @@ describe("InvoicesPage", () => {
     mockPermissions = ["invoices.read"];
     const issued = { ...invoice, status: "ISSUED" as const, effectiveStatus: "ISSUED" as const };
     listMock.mockResolvedValue({ items: [issued], page: 1, limit: 20, total: 1, totalPages: 1 });
+    getMock.mockResolvedValue({ invoice: issued });
     render(<InvoicesPage />);
 
     await screen.findAllByText("INV-000001");

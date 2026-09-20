@@ -34,7 +34,7 @@ export const contractRepository = {
   async list(organizationId: string, filters: ContractFilters, page: number, limit: number, sort: string, order: "asc" | "desc") {
     const where = buildWhere(organizationId, filters);
     const [rows, total] = await Promise.all([
-      prisma.contract.findMany({ where, orderBy: { [sort]: order }, skip: (page - 1) * limit, take: limit }),
+      prisma.contract.findMany({ where, orderBy: { [sort]: order }, skip: (page - 1) * limit, take: limit, ...withVariations }),
       prisma.contract.count({ where }),
     ]);
     return { rows, total };
