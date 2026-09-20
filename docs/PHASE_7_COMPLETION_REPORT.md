@@ -36,7 +36,7 @@ Scope: a production-ready, platform-global Product/Service catalog with module m
 None outstanding except the pre-existing, environmental Supabase connectivity gap noted above.
 
 ## Commit
-See `git log` on `claude/busy-franklin-rdwttk` for the Phase 7 commit hash.
+`b3615b2` on `claude/busy-franklin-rdwttk`.
 
 ## Branch
 `claude/busy-franklin-rdwttk`
