@@ -1,5 +1,7 @@
 # API Design
 
+> **Phase 2 update**: `/api/v1/auth/*` now runs against the real Prisma/Postgres schema (`organizations`, `role_permissions` — `ADR-010`/`ADR-011`), and a new `GET /api/v1/system/database` endpoint (SUPER_ADMIN-only) reports migration status and table counts without exposing connection details — see `docs/DATABASE_SCHEMA.md` and `docs/PHASE_2_COMPLETION_REPORT.md`. The other endpoint groups in §3 below (`/organizations`, `/users`, `/roles`, `/leads`, `/products`, `/subscriptions`, `/cms`, `/ai/*`, `/notifications`, `/api-keys`) remain **not implemented** — Phase 2 built their database schema only (`docs/DATABASE_SCHEMA.md`), not their routes/services. `companyId` is renamed `organizationId` throughout wherever it appears below.
+
 ## 1. Reuse baseline
 `artifysolscom/server/core/apiResponse.ts` already defines a solid envelope — keep it as-is when the router layer moves into `Artify-Backend`:
 ```ts
@@ -25,7 +27,7 @@ Keep the existing `/api/v1` prefix convention (`server/routes/v1/index.ts`). Add
 | AI Control Center | `/api/v1/ai/coworkers/*`, `/api/v1/ai/tasks/*`, `/api/v1/ai/consultant` | `aiRoutes.ts` (reused), `artify-backend`'s `/api/ai/generate` (removed), legacy `/api/ai-consultant` + `/api/v1/ai/consultant` duplication (merged into one) |
 | Notifications & webhooks | `/api/v1/notifications/*`, `/api/v1/webhooks/*` | `notificationRoutes.ts` (reused), `artify-backend/server.ts` webhook handling (migrated in, signature fixed) |
 | Audit | `/api/v1/audit/*` | `auditRouter` (reused) |
-| System | `/api/v1/system/health`, `/api/v1/system/status` | `systemRoutes.ts` (reused, health check corrected to test real DB connectivity instead of always reporting healthy) |
+| System | `/api/v1/system/health`, `/api/v1/system/status`, `/api/v1/system/database` (Phase 2, SUPER_ADMIN-only) | `systemRoutes.ts` (reused, health check corrected to test real DB connectivity instead of always reporting healthy; `/database` added Phase 2 for migration-status verification) |
 
 ## 4. Standards applied to every route (gap in the prototype — see `CURRENT_STATE.md` API tables)
 1. Every mutating route: `authenticateToken` → `requirePermission(...)` → **ownership/tenant check on the specific record**, not just "caller has the permission somewhere" (fixes the gaps found in `PUT /cms/articles/:id`, `POST/DELETE /api-keys`, `POST /notifications/:id/read`, `PUT /ai/coworkers/:id`).

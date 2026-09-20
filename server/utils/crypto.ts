@@ -5,10 +5,23 @@
  * to "verified" when the header was simply absent) must not recur anywhere
  * that compares a secret-derived value.
  */
-import { randomBytes, createHmac, timingSafeEqual } from "node:crypto";
+import { randomBytes, createHash, createHmac, timingSafeEqual } from "node:crypto";
 
 export function generateSessionToken(): string {
   return `art_sess_${randomBytes(32).toString("hex")}`;
+}
+
+/**
+ * Hashes a session token for at-rest storage (Phase 2 §18). Deliberately a
+ * plain, fast SHA-256 — the input is already a 256-bit cryptographically
+ * random value (from generateSessionToken above), not a low-entropy secret
+ * like a password, so there is nothing for a fast hash to make
+ * brute-forceable. This is the same reasoning GitHub/Auth0 apply to API
+ * token storage; do not reuse this function for passwords — see
+ * server/utils/password.ts for that.
+ */
+export function hashToken(token: string): string {
+  return createHash("sha256").update(token).digest("hex");
 }
 
 export function generateId(prefix: string): string {

@@ -1,5 +1,7 @@
 # Security Audit & Target Security Architecture
 
+> **Phase 2 update**: S5 (unsalted SHA-256 passwords) was fixed in Phase 1 (bcrypt) and remains so. Phase 2 added one further Identity-layer hardening beyond this doc's original scope: session tokens are now stored as `sessions.token_hash` (SHA-256 of the token — a deliberately different, faster hash than password hashing since the input is already 256-bit random, see `ADR-011`'s session addendum), never the raw token, so a leaked `sessions` table row no longer yields a usable bearer token. S7 (horizontal privilege escalation) is fixed for the Identity domain via `enforceRecordOwnership`/tenant-scoped repository queries (`AUTHORIZATION_MODEL.md`'s Phase 2 update, `tests/security/rbacAndAudit.test.ts`); CRM/CMS/Commercial routes referenced in the original S7 finding still don't exist (schema only), so that specific finding is not yet re-testable end-to-end. New Phase 2 principle not in the original findings list: every tenant-owned table has a NOT NULL `organization_id` with `RESTRICT` (not `CASCADE`) on delete by default, so a user deletion can never cascade-destroy audit/financial history (`docs/DATABASE_SCHEMA.md`'s deletion-policy table, `ADR-010`). Row Level Security was evaluated and deliberately not enabled — the backend-authorization-boundary model above is the sole enforcement layer (`ADR-015`). See `docs/PHASE_2_COMPLETION_REPORT.md`.
+
 ## 1. Findings (current state, classified by severity)
 
 | # | Finding | File / evidence | Impact | Blocks production? |

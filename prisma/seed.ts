@@ -1,17 +1,42 @@
 /**
- * Minimal local-dev seed: one company + one Super Administrator, so a
- * freshly migrated database has something to log in as. Intentionally
- * does NOT seed products/leads/articles/subscriptions/etc. — that's
- * business data belonging to Phase 2+ once those tables exist; seeding it
- * here would just be re-creating the Phase 0 prototype's hardcoded
- * seedData.ts problem one layer down.
+ * Deterministic development/test seed (Phase 2 §40/§41). NOT run against
+ * production automatically — there is no cron/deploy hook that calls this;
+ * it is a manual `npm run db:seed` a developer runs locally. Seeds:
+ *  - Artify's own internal organization (type=INTERNAL)
+ *  - the 5 system roles + full permission catalog + role_permissions
+ *  - one Super Administrator user (bootstrap admin — §41: password comes
+ *    from SEED_ADMIN_PASSWORD, never hardcoded, never defaulted)
+ *
+ * Does NOT seed leads/clients/products/content/fake business records —
+ * that would just recreate the Phase 0 prototype's seedData.ts problem one
+ * layer down. Business data seeding, if ever needed, belongs to whichever
+ * phase implements that domain, as its own explicit, reviewed fixture set.
  */
 import { PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
+import { seedRolesAndPermissions } from "./rolePermissionSeed";
 
 const prisma = new PrismaClient();
 
 async function main(): Promise<void> {
+  const roleIds = await seedRolesAndPermissions(prisma);
+  console.log("Seeded system roles and permission catalog.");
+
+  const internalOrg = await prisma.organization.upsert({
+    where: { slug: "artify-solutions" },
+    update: {},
+    create: {
+      name: "Artify Solutions",
+      legalName: "Artify Solutions HQ",
+      slug: "artify-solutions",
+      type: "INTERNAL",
+      tier: "ENTERPRISE",
+      status: "ACTIVE",
+      country: "OM",
+      currency: "OMR",
+    },
+  });
+
   const email = process.env.SEED_ADMIN_EMAIL ?? "admin@artifysols.local";
   const password = process.env.SEED_ADMIN_PASSWORD;
 
@@ -28,60 +53,32 @@ async function main(): Promise<void> {
     return;
   }
 
-  const company = await prisma.company.create({
-    data: {
-      name: "Artify Solutions HQ",
-      slug: "artify-solutions",
-      industry: "Enterprise AI & Automation Software",
-      tier: "ENTERPRISE",
-      status: "ACTIVE",
-      domain: "artifysols.com",
-    },
-  });
-
   const passwordHash = await bcrypt.hash(password, 12);
 
-  const allPermissions = [
-    "users.read",
-    "users.create",
-    "users.update",
-    "users.delete",
-    "clients.read",
-    "clients.create",
-    "clients.update",
-    "content.read",
-    "content.create",
-    "content.publish",
-    "products.read",
-    "products.manage",
-    "billing.read",
-    "billing.manage",
-    "leads.read",
-    "leads.manage",
-    "ai.agents.read",
-    "ai.agents.execute",
-    "ai.agents.configure",
-    "ai.tasks.read",
-    "ai.tasks.approve",
-    "notifications.send",
-    "audit.read",
-    "settings.manage",
-    "company.manage",
-  ];
-
-  await prisma.user.create({
+  const user = await prisma.user.create({
     data: {
-      companyId: company.id,
+      organizationId: internalOrg.id,
       email,
       passwordHash,
-      fullName: "Super Administrator",
-      title: "Super Administrator",
-      role: "SUPER_ADMINISTRATOR",
-      permissions: allPermissions,
+      firstName: "Super",
+      lastName: "Administrator",
+      displayName: "Super Administrator",
+      title: "Platform Operator",
+      roleId: roleIds.SUPER_ADMIN,
     },
   });
 
-  console.log(`Seeded ${email} as Super Administrator of "${company.name}".`);
+  await prisma.organizationMembership.create({
+    data: {
+      userId: user.id,
+      organizationId: internalOrg.id,
+      roleId: roleIds.SUPER_ADMIN,
+      status: "ACTIVE",
+      isPrimary: true,
+    },
+  });
+
+  console.log(`Seeded ${email} as Super Administrator of "${internalOrg.name}".`);
 }
 
 main()

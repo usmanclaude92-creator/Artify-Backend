@@ -1,43 +1,28 @@
 /**
  * Authentication service. Ported from the Phase 0 audit's
- * artifysolscom/server/services/authService.ts design (docs/MIGRATION_PLAN.md
- * — REUSE the session/RBAC middleware shape) and hardened per
- * docs/ADR/ADR-003-authentication.md:
- *  - bcrypt (via bcryptjs) replaces unsalted SHA-256 (fixes S5/R5)
- *  - real Postgres-backed sessions replace the in-memory Map
- *  - account lockout after repeated failures (new — Phase 1 §17)
- *  - registration is a single DB transaction (fixes the unguarded
- *    sequential multi-write flagged in docs/CURRENT_STATE.md §2.4)
+ * artifysolscom/server/services/authService.ts design and hardened across
+ * Phase 1 (bcrypt, real sessions, transactional registration) and Phase 2
+ * (docs/ADR/ADR-011-permission-based-rbac-schema.md — role/permission
+ * resolution via the roles/permissions/role_permissions tables instead of
+ * a flat per-user array; docs/ADR/ADR-010-multi-tenant-organization-model.md
+ * — organizationId replaces companyId; session tokens are hashed at rest).
  */
 import { prisma } from "../db/prisma";
 import { userRepository } from "../repositories/userRepository";
 import { sessionRepository } from "../repositories/sessionRepository";
 import { auditLogRepository } from "../repositories/auditLogRepository";
+import { roleRepository } from "../repositories/roleRepository";
 import { hashPassword, verifyPassword } from "../utils/password";
 import { generateSessionToken } from "../utils/crypto";
-import { AuthenticationError, ConflictError } from "../core/errors";
+import { AuthenticationError, ConflictError, InternalError } from "../core/errors";
 import { sanitizeUser, type SanitizedUser } from "../types/domain";
 import type { RegisterInput } from "../schemas/authSchemas";
 import { logger } from "../core/logger";
 
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 
-const DEFAULT_ADMIN_PERMISSIONS = [
-  "users.read",
-  "clients.read",
-  "clients.create",
-  "clients.update",
-  "content.read",
-  "content.create",
-  "products.read",
-  "billing.read",
-  "billing.manage",
-  "leads.read",
-  "leads.manage",
-  "notifications.send",
-  "audit.read",
-  "company.manage",
-];
+/** Self-registration always creates the organization's ADMIN (not SUPER_ADMIN — that role is reserved for Artify's own platform operators, granted only via the seed/bootstrap procedure, never through the public register endpoint). */
+const SELF_REGISTRATION_ROLE_KEY = "ADMIN";
 
 export interface RequestMeta {
   ip?: string;
@@ -49,14 +34,24 @@ export interface LoginResult {
   user: SanitizedUser;
 }
 
+async function loadSanitizedUser(user: NonNullable<Awaited<ReturnType<typeof userRepository.findById>>>): Promise<SanitizedUser> {
+  const role = await roleRepository.resolveById(user.roleId);
+  if (!role) {
+    // A user with no resolvable role is a data-integrity bug, not a normal
+    // auth failure — the roleId FK is NOT NULL + RESTRICT, so this should
+    // be unreachable outside a corrupted database.
+    throw new InternalError("User role could not be resolved.");
+  }
+  return sanitizeUser(user, role);
+}
+
 export const authService = {
   async login(email: string, password: string, meta: RequestMeta = {}): Promise<LoginResult> {
     const user = await userRepository.findByEmail(email);
 
     // Same generic error whether the email doesn't exist or the password is
     // wrong — do not let a caller distinguish "no such account" from
-    // "wrong password" (user-enumeration hardening; not present in the
-    // Phase 0 prototype, added here).
+    // "wrong password" (user-enumeration hardening).
     const genericFailure = () => new AuthenticationError("Invalid email or password credentials.");
 
     if (!user) throw genericFailure();
@@ -87,25 +82,27 @@ export const authService = {
     await sessionRepository.create({
       token,
       userId: user.id,
-      companyId: user.companyId,
+      organizationId: user.organizationId,
       expiresAt,
       ipAddress: meta.ip,
       userAgent: meta.userAgent,
     });
 
+    const sanitized = await loadSanitizedUser(user);
+
     await auditLogRepository.record({
-      companyId: user.companyId,
-      actorId: user.id,
-      actorName: user.fullName,
+      organizationId: user.organizationId,
+      actorUserId: user.id,
+      actorName: sanitized.displayName ?? `${user.firstName} ${user.lastName}`,
       actorType: "USER",
-      action: "USER_LOGIN",
-      resource: "auth",
+      action: "AUTH_LOGIN",
+      resourceType: "session",
       resourceId: user.id,
       ipAddress: meta.ip,
       userAgent: meta.userAgent,
     });
 
-    return { session: { token, expiresAt }, user: sanitizeUser(user) };
+    return { session: { token, expiresAt }, user: sanitized };
   },
 
   async register(payload: RegisterInput): Promise<LoginResult> {
@@ -114,50 +111,68 @@ export const authService = {
       throw new ConflictError("An account with this email address already exists.");
     }
 
+    const adminRole = await roleRepository.findByKey(SELF_REGISTRATION_ROLE_KEY);
+    if (!adminRole) {
+      // The ADMIN system role must exist (seeded) before self-registration
+      // can work at all — a missing seed is an operational error, not a
+      // normal user-facing failure.
+      throw new InternalError("Registration is not available: required role configuration is missing.");
+    }
+
     const passwordHash = await hashPassword(payload.password);
 
-    // Single atomic transaction: company + admin user are created together
-    // or not at all (fixes the Phase 0 finding: the prototype's equivalent
-    // flow performed these as unguarded sequential writes).
+    // Single atomic transaction: organization + admin user are created
+    // together or not at all (Phase 1 hardening, unchanged in Phase 2).
     await prisma.$transaction(async (tx) => {
-      const baseSlug = payload.companyName
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, "-")
-        .replace(/(^-|-$)/g, "")
-        .slice(0, 80) || "organization";
+      const baseSlug =
+        payload.organizationName
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, "-")
+          .replace(/(^-|-$)/g, "")
+          .slice(0, 80) || "organization";
 
       let slug = baseSlug;
       let suffix = 1;
-      // Bounded collision retry inside the transaction.
-      while (await tx.company.findUnique({ where: { slug } })) {
+      while (await tx.organization.findUnique({ where: { slug } })) {
         suffix += 1;
         slug = `${baseSlug}-${suffix}`;
         if (suffix > 50) break;
       }
 
-      const company = await tx.company.create({
+      const organization = await tx.organization.create({
         data: {
-          name: payload.companyName,
+          name: payload.organizationName,
           slug,
-          industry: payload.industry,
+          type: "CLIENT",
           tier: "GROWTH",
           status: "TRIAL",
         },
       });
 
-      const createdUser = await tx.user.create({
+      const user = await tx.user.create({
         data: {
-          companyId: company.id,
+          organizationId: organization.id,
           email: payload.email.trim().toLowerCase(),
           passwordHash,
-          fullName: payload.fullName,
-          title: "Company Administrator",
-          role: "COMPANY_ADMINISTRATOR",
-          permissions: DEFAULT_ADMIN_PERMISSIONS,
+          firstName: payload.firstName,
+          lastName: payload.lastName,
+          displayName: `${payload.firstName} ${payload.lastName}`.trim(),
+          title: "Organization Administrator",
+          roleId: adminRole.id,
         },
       });
 
-      return { company, user: createdUser };
+      await tx.organizationMembership.create({
+        data: {
+          userId: user.id,
+          organizationId: organization.id,
+          roleId: adminRole.id,
+          status: "ACTIVE",
+          isPrimary: true,
+        },
+      });
+
+      return { organization, user };
     });
 
     return this.login(payload.email, payload.password);
@@ -170,7 +185,9 @@ export const authService = {
     const user = await userRepository.findById(session.userId);
     if (!user || user.status !== "ACTIVE") return null;
 
-    return sanitizeUser(user);
+    void sessionRepository.touchLastUsed(session.id); // fire-and-forget, not on the request's critical path
+
+    return loadSanitizedUser(user);
   },
 
   async logout(token: string): Promise<void> {

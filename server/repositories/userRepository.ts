@@ -1,6 +1,6 @@
 /**
  * User data access. Route → service → repository → Prisma (Phase 1 §27
- * layering) — no Prisma import belongs in a route or service file.
+ * layering, unchanged in Phase 2).
  */
 import type { User } from "@prisma/client";
 import { prisma } from "../db/prisma";
@@ -18,23 +18,24 @@ export const userRepository = {
   },
 
   async create(data: {
-    companyId: string;
+    organizationId: string;
     email: string;
     passwordHash: string;
-    fullName: string;
+    firstName: string;
+    lastName: string;
     title?: string;
-    role: User["role"];
-    permissions: string[];
+    roleId: string;
   }): Promise<User> {
     return prisma.user.create({
       data: {
-        companyId: data.companyId,
+        organizationId: data.organizationId,
         email: data.email.trim().toLowerCase(),
         passwordHash: data.passwordHash,
-        fullName: data.fullName,
+        firstName: data.firstName,
+        lastName: data.lastName,
+        displayName: `${data.firstName} ${data.lastName}`.trim(),
         title: data.title,
-        role: data.role,
-        permissions: data.permissions,
+        roleId: data.roleId,
       },
     });
   },
@@ -42,7 +43,7 @@ export const userRepository = {
   async recordSuccessfulLogin(userId: string): Promise<void> {
     await prisma.user.update({
       where: { id: userId },
-      data: { lastLoginAt: new Date(), failedLoginCount: 0, lockedUntil: null },
+      data: { lastLoginAt: new Date(), failedLoginAttempts: 0, lockedUntil: null },
     });
   },
 
@@ -50,10 +51,10 @@ export const userRepository = {
   async recordFailedLogin(userId: string): Promise<boolean> {
     const user = await prisma.user.update({
       where: { id: userId },
-      data: { failedLoginCount: { increment: 1 } },
+      data: { failedLoginAttempts: { increment: 1 } },
     });
 
-    if (user.failedLoginCount >= MAX_FAILED_LOGIN_ATTEMPTS) {
+    if (user.failedLoginAttempts >= MAX_FAILED_LOGIN_ATTEMPTS) {
       await prisma.user.update({
         where: { id: userId },
         data: { lockedUntil: new Date(Date.now() + LOCKOUT_DURATION_MS) },

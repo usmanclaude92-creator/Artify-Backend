@@ -18,7 +18,7 @@ export const webhookEventRepository = {
     signatureValid: boolean;
     status: WebhookEventStatus;
     payload: unknown;
-    companyId?: string;
+    organizationId?: string;
   }): Promise<{ duplicate: boolean }> {
     try {
       await prisma.webhookEvent.create({
@@ -29,7 +29,7 @@ export const webhookEventRepository = {
           signatureValid: entry.signatureValid,
           status: entry.status,
           payload: entry.payload as Prisma.InputJsonValue,
-          companyId: entry.companyId,
+          organizationId: entry.organizationId,
         },
       });
       return { duplicate: false };

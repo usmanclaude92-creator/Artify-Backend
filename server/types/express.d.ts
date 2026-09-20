@@ -14,7 +14,7 @@ declare global {
       rawBody?: Buffer;
       user?: SanitizedUser;
       sessionToken?: string;
-      companyId?: string;
+      organizationId?: string;
     }
   }
 }

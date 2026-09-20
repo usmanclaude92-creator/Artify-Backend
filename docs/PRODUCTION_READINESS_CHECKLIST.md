@@ -2,17 +2,19 @@
 
 Not to be signed off until every box is genuinely true — this audit found that existing documentation (`ARCHITECTURE.md`, `metadata.json`'s "production-ready" framing) had asserted readiness the code does not back up. This checklist exists to prevent that recurring.
 
+> **Phase 2 update**: checkboxes below are updated to reflect what's now real. Unchanged boxes are still genuinely open — see `docs/PHASE_2_COMPLETION_REPORT.md` "Remaining Risks" for the honest current gap list, most notably: Supabase connectivity itself is unverified from this build environment (BLOCKED, not failed — `docs/SUPABASE_DATABASE_SETUP.md`), backups are unconfirmed, and CRM/CMS/Commercial/Products only have schema, not services/routes, so their mutation routes don't exist yet to test.
+
 ## Data
-- [ ] Every entity has a real, migrated Postgres table (no `localStorage`, no in-memory array, no `seedData.ts` as a runtime source).
-- [ ] Backups enabled and a restore has been tested at least once.
-- [ ] Migrations are version-controlled and run automatically pre-deploy.
+- [x] Every entity has a real, migrated Postgres table (no `localStorage`, no in-memory array, no `seedData.ts` as a runtime source) — 30 application tables across 9 domains, `prisma/migrations/`, verified against a clean local Postgres (`docs/DATABASE_SCHEMA.md`). Migration against the actual designated Supabase project itself is unverified — network egress to it was unavailable from this build's execution sandbox (`docs/SUPABASE_DATABASE_SETUP.md`).
+- [ ] Backups enabled and a restore has been tested at least once — not yet confirmed against the real Supabase project (no verified connectivity to check or configure this).
+- [x] Migrations are version-controlled and run automatically pre-deploy — `prisma/migrations/`, applied via `prisma migrate deploy` in CI/deploy, never `db push` (`ADR-013`). "Automatically pre-deploy" against the real Supabase target itself is unverified for the same connectivity reason above.
 
 ## Authentication & Authorization
-- [ ] No client-side-only authentication path exists in any shipped build.
-- [ ] Passwords hashed with bcrypt/argon2, never a fast unsalted hash.
-- [ ] Every mutation route enforces both a permission check and a per-record tenant/ownership check.
-- [ ] Login is rate-limited; password reset exists and is tested.
-- [ ] Automated tests cover horizontal and vertical privilege escalation attempts and all pass (reject).
+- [x] No client-side-only authentication path exists in any shipped build — unchanged since Phase 1, still true.
+- [x] Passwords hashed with bcrypt/argon2, never a fast unsalted hash — bcrypt, Phase 1, unchanged.
+- [ ] Every mutation route enforces both a permission check and a per-record tenant/ownership check — true for the Identity domain's implemented routes (`enforceRecordOwnership`, `AUTHORIZATION_MODEL.md`); CRM/CMS/Commercial mutation routes don't exist yet (schema only), so this can't yet be claimed platform-wide.
+- [ ] Login is rate-limited; password reset exists and is tested — rate limiting is Phase 1 (unchanged); password reset still does not exist.
+- [x] Automated tests cover horizontal and vertical privilege escalation attempts and all pass (reject) — `tests/security/authz.test.ts`, `tests/security/rbacAndAudit.test.ts` (tenant-isolation query test, role-permission mapping tests), for the domains that have routes/repositories today.
 
 ## API & Web security
 - [ ] CORS allow-list configured (no wildcard `*` in production).

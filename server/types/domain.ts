@@ -1,64 +1,88 @@
 /**
- * Identity domain types. Ported from the Phase 0 audit's
- * artifysolscom/server/types/index.ts (docs/MIGRATION_PLAN.md — REUSE),
- * adapted to the Prisma-backed RoleName enum (SCREAMING_SNAKE in the DB,
- * human-readable label in the UI via ROLE_LABELS below).
- *
- * Scope note: PermissionKey stays a flat string union for Phase 1 — see
- * prisma/schema.prisma's User.permissions comment for why the full
- * role_permissions join table is deferred to Phase 3.
+ * Identity domain types — Phase 2. Roles and permissions are now real
+ * database rows (`roles`, `permissions`, `role_permissions` — see
+ * docs/ADR/ADR-011-permission-based-rbac-schema.md), not the Phase 1
+ * Prisma enum + flat array. `RoleKey`/`PermissionKey` remain TypeScript
+ * literal unions purely for compile-time safety at route-decoration call
+ * sites (`requirePermission("users.read")`); the runtime source of truth
+ * is always the database.
  */
-import type { RoleName as PrismaRoleName, User as PrismaUser } from "@prisma/client";
+import type { User as PrismaUser } from "@prisma/client";
 
-export type RoleName = PrismaRoleName;
+/** The 5 built-in system roles seeded by prisma/seed.ts. Custom roles (not built in Phase 2) would extend this at runtime without a corresponding TS literal. */
+export const SYSTEM_ROLE_KEYS = ["SUPER_ADMIN", "ADMIN", "MANAGER", "USER", "VIEWER"] as const;
+export type RoleKey = (typeof SYSTEM_ROLE_KEYS)[number];
 
-export const ROLE_LABELS: Readonly<Record<RoleName, string>> = {
-  SUPER_ADMINISTRATOR: "Super Administrator",
-  SYSTEM_ADMINISTRATOR: "System Administrator",
-  COMPANY_ADMINISTRATOR: "Company Administrator",
-  MANAGER: "Manager",
-  CONTENT_MANAGER: "Content Manager",
-  MARKETING_MANAGER: "Marketing Manager",
-  SALES_MANAGER: "Sales Manager",
-  FINANCE_MANAGER: "Finance Manager",
-  AI_MANAGER: "AI Manager",
-  SUPPORT_USER: "Support User",
-  EMPLOYEE: "Employee",
-  CUSTOMER: "Customer",
-  READ_ONLY: "Read Only",
+export const ROLE_DEFINITIONS: Readonly<Record<RoleKey, { name: string; description: string }>> = {
+  SUPER_ADMIN: {
+    name: "Super Administrator",
+    description: "Full platform access across all organizations. Reserved for Artify's own platform operators.",
+  },
+  ADMIN: {
+    name: "Administrator",
+    description: "Full access within the administrator's own organization.",
+  },
+  MANAGER: {
+    name: "Manager",
+    description: "Manages day-to-day operations (CRM, content, products) within the organization.",
+  },
+  USER: {
+    name: "User",
+    description: "Standard operational access within the organization.",
+  },
+  VIEWER: {
+    name: "Viewer",
+    description: "Read-only access within the organization.",
+  },
 };
 
 /**
- * Permission catalog. Mirrors the Phase 0 prototype's PermissionKey union
- * plus the additional groups Phase 1 §18 asks the foundation to support
- * (users.*, clients.*, content.*, billing.*, settings.manage, audit.read).
+ * Permission catalog (docs/ADR-011). Namespaced `<module>.<action>` —
+ * seeded into the `permissions` table by prisma/seed.ts and mapped to
+ * roles via `role_permissions`. This union exists for compile-time safety
+ * only; adding a permission means updating both this list and the seed.
  */
 export const PERMISSION_KEYS = [
   "users.read",
   "users.create",
   "users.update",
   "users.delete",
+  "organizations.read",
+  "organizations.create",
+  "organizations.update",
+  "organizations.delete",
   "clients.read",
   "clients.create",
   "clients.update",
+  "clients.delete",
+  "leads.read",
+  "leads.create",
+  "leads.update",
+  "leads.delete",
+  "products.read",
+  "products.create",
+  "products.update",
+  "products.delete",
   "content.read",
   "content.create",
+  "content.update",
   "content.publish",
-  "products.read",
-  "products.manage",
+  "content.delete",
+  "media.read",
+  "media.upload",
+  "media.update",
+  "media.delete",
+  "subscriptions.read",
+  "subscriptions.manage",
   "billing.read",
   "billing.manage",
-  "leads.read",
-  "leads.manage",
-  "ai.agents.read",
-  "ai.agents.execute",
-  "ai.agents.configure",
-  "ai.tasks.read",
-  "ai.tasks.approve",
-  "notifications.send",
-  "audit.read",
+  "reports.read",
+  "reports.export",
+  "settings.read",
   "settings.manage",
-  "company.manage",
+  "audit.read",
+  "ai.use",
+  "ai.manage",
 ] as const;
 
 export type PermissionKey = (typeof PERMISSION_KEYS)[number];
@@ -67,19 +91,20 @@ export function isPermissionKey(value: string): value is PermissionKey {
   return (PERMISSION_KEYS as readonly string[]).includes(value);
 }
 
-/** A User row with the password hash stripped — the only shape allowed to leave the service layer. */
-export type SanitizedUser = Omit<PrismaUser, "passwordHash">;
-
-export function sanitizeUser(user: PrismaUser): SanitizedUser {
-  const { passwordHash: _passwordHash, ...rest } = user;
-  return rest;
+/** A resolved role + its permission set, attached to a session on verification (never stored redundantly per-user). */
+export interface ResolvedRole {
+  id: string;
+  key: string;
+  name: string;
+  permissions: string[];
 }
 
-export interface AuthenticatedSession {
-  token: string;
-  userId: string;
-  companyId: string;
-  role: RoleName;
-  permissions: PermissionKey[];
-  expiresAt: Date;
+/** A User row with the password hash stripped — the only shape allowed to leave the service layer — plus the resolved role/permissions. */
+export type SanitizedUser = Omit<PrismaUser, "passwordHash"> & {
+  role: ResolvedRole;
+};
+
+export function sanitizeUser(user: PrismaUser, role: ResolvedRole): SanitizedUser {
+  const { passwordHash: _passwordHash, ...rest } = user;
+  return { ...rest, role };
 }

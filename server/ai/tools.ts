@@ -33,7 +33,7 @@ export interface AiToolDefinition {
 }
 
 export interface AiToolExecutionContext {
-  companyId: string;
+  organizationId: string;
   agentId: string;
   agentName: string;
   taskId?: string;
@@ -63,14 +63,16 @@ export class AiToolExecutor {
     const definition = AI_TOOL_REGISTRY[toolName];
 
     await auditLogRepository.record({
-      companyId: context.companyId,
-      actorId: context.agentId,
+      organizationId: context.organizationId,
+      // actorUserId is FK'd to users.id — an AI coworker is not a user
+      // row, so its identity goes in actorName/metadata instead, never in
+      // actorUserId (that FK must only ever reference a real human user).
       actorName: context.agentName,
       actorType: "AI_COWORKER",
       action: "AI_TOOL_EXECUTION_ATTEMPT",
-      resource: "ai_tool",
+      resourceType: "ai_tool",
       resourceId: toolName,
-      details: { taskId: context.taskId, found: !!definition },
+      metadata: { agentId: context.agentId, taskId: context.taskId, found: !!definition },
       requestId: context.requestId,
     });
 

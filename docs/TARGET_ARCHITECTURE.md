@@ -1,5 +1,9 @@
 # Target Production Architecture
 
+> **Phase 2 update**: the `repositories/*` layer described as "new" in §4 below is now real (Prisma against PostgreSQL/Supabase — `ADR-008`, `ADR-009`), and `companies` is now `organizations` with a real `organization_memberships` join table (§6's "same `companies`/`users`/`audit_logs` tables" line is superseded — read `organizations`; `ADR-010`). Schema for CRM/Products/Commercial/CMS/Media/Notifications/Configuration now exists (`docs/DATABASE_SCHEMA.md`), but most of those domains still have no `services/*`/`routes/v1/*` layer yet — only Identity + system health are wired end-to-end. See `docs/PHASE_2_COMPLETION_REPORT.md`.
+>
+> **Phase 1 update**: the identity + webhook slice of §2's target flow is implemented — see `docs/PHASE_1_COMPLETION_REPORT.md`.
+
 ## 1. Principle
 
 **One authoritative Platform API. Two consuming frontends.** Neither frontend maintains its own data source ever again.
@@ -40,7 +44,7 @@ flowchart LR
     Gateway["/api/v1 Router<br/>(versioned, CORS-scoped)"]
     AuthMW["Auth + RBAC + Tenant<br/>middleware"]
     Services["Domain services<br/>(identity, CRM, products,<br/>subscriptions, CMS, AI)"]
-    DB[("PostgreSQL<br/>(single source of truth)")]
+    DB[("PostgreSQL on Supabase<br/>(single source of truth, via Prisma)")]
     Storage[("Object storage<br/>(media/uploads)")]
   end
   AIProvider["Gemini (server-side only)"]
@@ -61,15 +65,15 @@ See `ADR/ADR-001-platform-boundary.md`. Summary: the brief itself designates `Ar
 ```
 routes/v1/*        → HTTP concerns only: parse, call service, format envelope
 services/*          → business rules, validation, orchestration, audit-log writes
-repositories/*       → SQL / ORM queries only (new layer — today services talk directly to the in-memory db.ts)
-db (PostgreSQL)      → source of truth
+repositories/*       → Prisma queries only (implemented Phase 1-2 for Identity; other domains have schema but no repository/service yet)
+db (PostgreSQL on Supabase, via Prisma)      → source of truth
 ```
 
-Introducing an explicit repository layer (currently absent — `server/core/db.ts` is both store and query API) is the one structural change beyond a lift-and-shift: it's what makes swapping the in-memory `Map`s for real SQL tractable without rewriting every service.
+The explicit repository layer is now real for the Identity domain (`server/repositories/*` — `userRepository`, `organizationRepository`, `roleRepository`, `sessionRepository`, `auditLogRepository`, `webhookEventRepository`) — it's what made swapping the in-memory `Map`s for real SQL tractable without rewriting every service. CRM/Products/Commercial/CMS/Media/Notifications/Configuration have Prisma models (`docs/DATABASE_SCHEMA.md`) but no repository/service/route layer yet — building those out is future-phase work, not done speculatively now (Phase 2 brief §64 "do not overbuild").
 
 ## 5. Cross-cutting concerns every route must get (none exist today)
 CORS allow-list (Control Center origin + artifysolscom origin only), rate limiting, request-size limits, structured request logging with the existing `requestId` (already generated in `apiResponse.ts`, just never logged), centralized Express error-handler middleware, Helmet-equivalent security headers (a subset already exists in `artifysolscom/server.ts:27-32` — reuse and extend it), input validation (zod) at the route boundary before it reaches services.
 
 ## 6. Multi-product extensibility
 
-Future Artify products (HCMS, Payroll, Accounting, CRM, ERP) reuse the platform's identity, organization, billing, and audit primitives rather than re-implementing them — each new product is a new set of `services/` + `routes/v1/<product>` modules against the same `companies`/`users`/`audit_logs` tables, not a new backend. This is why identity/org/billing/audit are modeled first (Phase 2-3) before any product-specific schema.
+Future Artify products (HCMS, Payroll, Accounting, CRM, ERP) reuse the platform's identity, organization, billing, and audit primitives rather than re-implementing them — each new product is a new set of `services/` + `routes/v1/<product>` modules against the same `organizations`/`users`/`audit_logs` tables (`ADR-010`), plus a `products`/`product_modules` registry row identifying it (`docs/DATABASE_SCHEMA.md`), not a new backend. This is why identity/org/billing/audit are modeled first (Phase 1-2, now implemented) before any product-specific service logic.

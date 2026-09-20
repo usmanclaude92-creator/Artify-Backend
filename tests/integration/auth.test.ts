@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import request from "supertest";
 import { createApp, finalizeApp } from "../../server/app/app";
 import { disconnectPrisma, prisma } from "../../server/db/prisma";
+import { hashToken } from "../../server/utils/crypto";
 import { resetDb } from "../helpers/db";
 
 describe("auth foundation (real Postgres — Phase 1 §17)", () => {
@@ -20,21 +21,31 @@ describe("auth foundation (real Postgres — Phase 1 §17)", () => {
   const testUser = {
     email: "integration-test-user@example.com",
     password: "CorrectHorseBatteryStaple123",
-    fullName: "Integration Test User",
-    companyName: "Integration Test Co",
+    firstName: "Integration",
+    lastName: "Test User",
+    organizationName: "Integration Test Co",
   };
 
-  it("registers a new tenant + admin user atomically and stores a bcrypt hash, not plaintext or SHA-256", async () => {
+  it("registers a new organization + admin user atomically, stores a bcrypt hash (not plaintext or SHA-256), and grants the ADMIN role", async () => {
     const res = await request(app).post("/api/v1/auth/register").send(testUser);
 
     expect(res.status).toBe(201);
     expect(res.body.data.session.token).toMatch(/^art_sess_/);
     expect(res.body.data.user.email).toBe(testUser.email);
     expect(res.body.data.user).not.toHaveProperty("passwordHash");
+    expect(res.body.data.user.role.key).toBe("ADMIN");
+    expect(res.body.data.user.role.permissions).toContain("clients.read");
+    expect(res.body.data.user.role.permissions).not.toContain("products.create"); // ADMIN is not the platform-catalog role
 
     const dbUser = await prisma.user.findUniqueOrThrow({ where: { email: testUser.email } });
     expect(dbUser.passwordHash.startsWith("$2")).toBe(true);
     expect(dbUser.passwordHash).not.toBe(testUser.password);
+
+    const membership = await prisma.organizationMembership.findUniqueOrThrow({
+      where: { userId_organizationId: { userId: dbUser.id, organizationId: dbUser.organizationId } },
+    });
+    expect(membership.status).toBe("ACTIVE");
+    expect(membership.isPrimary).toBe(true);
   });
 
   it("rejects registering the same email twice", async () => {
@@ -66,7 +77,12 @@ describe("auth foundation (real Postgres — Phase 1 §17)", () => {
     expect(res.status).toBe(200);
     expect(res.body.data.session.token).toMatch(/^art_sess_/);
 
-    const dbSession = await prisma.session.findUnique({ where: { token: res.body.data.session.token } });
+    // Sessions are stored hashed (Phase 2 §18) — look up by re-hashing the
+    // raw token the same way the app does, proving the raw token itself
+    // is never persisted anywhere queryable.
+    const dbSession = await prisma.session.findUnique({
+      where: { tokenHash: hashToken(res.body.data.session.token) },
+    });
     expect(dbSession).not.toBeNull();
     expect(dbSession?.revokedAt).toBeNull();
   });
@@ -131,8 +147,9 @@ describe("auth input validation", () => {
     const res = await request(app).post("/api/v1/auth/register").send({
       email: "short-pw@example.com",
       password: "short",
-      fullName: "Someone",
-      companyName: "Some Co",
+      firstName: "Someone",
+      lastName: "Test",
+      organizationName: "Some Co",
     });
     expect(res.status).toBe(400);
     expect(res.body.error.code).toBe("VALIDATION_ERROR");
@@ -142,8 +159,9 @@ describe("auth input validation", () => {
     const res = await request(app).post("/api/v1/auth/register").send({
       email: "not-an-email",
       password: "SomeValidPassword123",
-      fullName: "Someone",
-      companyName: "Some Co",
+      firstName: "Someone",
+      lastName: "Test",
+      organizationName: "Some Co",
     });
     expect(res.status).toBe(400);
   });

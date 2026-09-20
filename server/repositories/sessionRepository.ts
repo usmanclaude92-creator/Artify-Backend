@@ -1,29 +1,51 @@
+/**
+ * Session data access. Tokens are hashed at rest (Phase 2 §18 — see
+ * prisma/schema.prisma's Session doc comment for why a fast SHA-256 hash
+ * is appropriate here, unlike password hashing). Callers pass the raw
+ * bearer token; this module hashes it before every read/write.
+ */
 import type { Session } from "@prisma/client";
 import { prisma } from "../db/prisma";
+import { hashToken } from "../utils/crypto";
 
 export const sessionRepository = {
   async create(data: {
     token: string;
     userId: string;
-    companyId: string;
+    organizationId: string;
     expiresAt: Date;
     ipAddress?: string;
     userAgent?: string;
   }): Promise<Session> {
-    return prisma.session.create({ data });
+    return prisma.session.create({
+      data: {
+        tokenHash: hashToken(data.token),
+        userId: data.userId,
+        organizationId: data.organizationId,
+        expiresAt: data.expiresAt,
+        ipAddress: data.ipAddress,
+        userAgent: data.userAgent,
+      },
+    });
   },
 
   async findValidByToken(token: string): Promise<Session | null> {
-    const session = await prisma.session.findUnique({ where: { token } });
+    const session = await prisma.session.findUnique({ where: { tokenHash: hashToken(token) } });
     if (!session) return null;
     if (session.revokedAt) return null;
     if (session.expiresAt.getTime() <= Date.now()) return null;
     return session;
   },
 
+  async touchLastUsed(id: string): Promise<void> {
+    await prisma.session.update({ where: { id }, data: { lastUsedAt: new Date() } }).catch(() => {
+      // Best-effort — a race with revocation/expiry here is not a correctness issue.
+    });
+  },
+
   async revoke(token: string): Promise<void> {
     await prisma.session
-      .update({ where: { token }, data: { revokedAt: new Date() } })
+      .update({ where: { tokenHash: hashToken(token) }, data: { revokedAt: new Date() } })
       .catch(() => {
         // Token didn't exist — logout is idempotent, nothing to do.
       });

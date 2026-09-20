@@ -17,7 +17,7 @@ export const requestLogger = pinoHttp({
   },
   customProps: (req: Request) => ({
     actorId: req.user?.id,
-    organizationId: req.companyId,
+    organizationId: req.organizationId,
   }),
   serializers: {
     req: (req) => ({ method: req.method, url: req.url }),

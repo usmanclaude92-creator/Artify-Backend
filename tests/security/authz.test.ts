@@ -28,25 +28,20 @@ function buildTestApp() {
 
   // A protected resource-list route: any authenticated user may call it.
   app.get("/protected/whoami", authenticateToken, (req, res) => {
-    res.json({ userId: req.user?.id, role: req.user?.role });
+    res.json({ userId: req.user?.id, role: req.user?.role.key });
   });
 
-  // Requires a permission the default registration flow does NOT grant.
-  app.get("/protected/admin-only", authenticateToken, requirePermission("settings.manage"), (_req, res) => {
+  // Requires a permission the default self-registration (ADMIN role) does NOT grant.
+  app.get("/protected/super-admin-permission-only", authenticateToken, requirePermission("products.create"), (_req, res) => {
     res.json({ ok: true });
   });
 
   // Requires a specific role.
-  app.get(
-    "/protected/super-admin-only",
-    authenticateToken,
-    requireRole(["SUPER_ADMINISTRATOR"]),
-    (_req, res) => {
-      res.json({ ok: true });
-    }
-  );
+  app.get("/protected/super-admin-role-only", authenticateToken, requireRole(["SUPER_ADMIN"]), (_req, res) => {
+    res.json({ ok: true });
+  });
 
-  // Simulates a single-record route scoped by companyId query param.
+  // Simulates a single-record route scoped by organizationId query param.
   app.get("/protected/tenant-scoped", authenticateToken, enforceTenantIsolation, (_req, res) => {
     res.json({ ok: true });
   });
@@ -60,9 +55,9 @@ describe("authorization middleware foundation (security regression suite)", () =
   const app = buildTestApp();
 
   let tenantAToken: string;
-  let tenantACompanyId: string;
+  let tenantAOrganizationId: string;
   let tenantBToken: string;
-  let tenantBCompanyId: string;
+  let tenantBOrganizationId: string;
 
   beforeAll(async () => {
     await resetDb();
@@ -70,20 +65,22 @@ describe("authorization middleware foundation (security regression suite)", () =
     const a = await authService.register({
       email: "tenant-a-admin@example.com",
       password: "CorrectHorseBatteryStaple123",
-      fullName: "Tenant A Admin",
-      companyName: "Tenant A Corp",
+      firstName: "Tenant",
+      lastName: "A Admin",
+      organizationName: "Tenant A Corp",
     });
     tenantAToken = a.session.token;
-    tenantACompanyId = a.user.companyId;
+    tenantAOrganizationId = a.user.organizationId;
 
     const b = await authService.register({
       email: "tenant-b-admin@example.com",
       password: "CorrectHorseBatteryStaple123",
-      fullName: "Tenant B Admin",
-      companyName: "Tenant B Corp",
+      firstName: "Tenant",
+      lastName: "B Admin",
+      organizationName: "Tenant B Corp",
     });
     tenantBToken = b.session.token;
-    tenantBCompanyId = b.user.companyId;
+    tenantBOrganizationId = b.user.organizationId;
   });
 
   afterAll(async () => {
@@ -105,47 +102,50 @@ describe("authorization middleware foundation (security regression suite)", () =
     it("accepts a request with a valid session token", async () => {
       const res = await request(app).get("/protected/whoami").set("Authorization", `Bearer ${tenantAToken}`);
       expect(res.status).toBe(200);
+      expect(res.body.role).toBe("ADMIN");
     });
   });
 
   describe("vertical privilege escalation is blocked", () => {
-    it("rejects a Company Administrator calling a route requiring settings.manage (not in the default grant)", async () => {
-      const res = await request(app).get("/protected/admin-only").set("Authorization", `Bearer ${tenantAToken}`);
+    it("rejects an ADMIN calling a route requiring products.create (a SUPER_ADMIN-only platform-catalog permission)", async () => {
+      const res = await request(app)
+        .get("/protected/super-admin-permission-only")
+        .set("Authorization", `Bearer ${tenantAToken}`);
       expect(res.status).toBe(403);
     });
 
-    it("rejects a Company Administrator calling a Super-Administrator-only route", async () => {
+    it("rejects an ADMIN calling a SUPER_ADMIN-role-only route", async () => {
       const res = await request(app)
-        .get("/protected/super-admin-only")
+        .get("/protected/super-admin-role-only")
         .set("Authorization", `Bearer ${tenantAToken}`);
       expect(res.status).toBe(403);
     });
   });
 
   describe("horizontal privilege escalation / tenant isolation is blocked", () => {
-    it("allows a user to access a resource scoped to their own companyId", async () => {
+    it("allows a user to access a resource scoped to their own organizationId", async () => {
       const res = await request(app)
-        .get(`/protected/tenant-scoped?companyId=${tenantACompanyId}`)
+        .get(`/protected/tenant-scoped?organizationId=${tenantAOrganizationId}`)
         .set("Authorization", `Bearer ${tenantAToken}`);
       expect(res.status).toBe(200);
     });
 
-    it("rejects tenant A's user requesting a resource scoped to tenant B's companyId", async () => {
+    it("rejects tenant A's user requesting a resource scoped to tenant B's organizationId", async () => {
       const res = await request(app)
-        .get(`/protected/tenant-scoped?companyId=${tenantBCompanyId}`)
+        .get(`/protected/tenant-scoped?organizationId=${tenantBOrganizationId}`)
         .set("Authorization", `Bearer ${tenantAToken}`);
       expect(res.status).toBe(403);
       expect(res.body.error.code).toBe("TENANT_ISOLATION_ERROR");
     });
 
-    it("rejects tenant B's user requesting a resource scoped to tenant A's companyId (symmetric check)", async () => {
+    it("rejects tenant B's user requesting a resource scoped to tenant A's organizationId (symmetric check)", async () => {
       const res = await request(app)
-        .get(`/protected/tenant-scoped?companyId=${tenantACompanyId}`)
+        .get(`/protected/tenant-scoped?organizationId=${tenantAOrganizationId}`)
         .set("Authorization", `Bearer ${tenantBToken}`);
       expect(res.status).toBe(403);
     });
 
-    it("allows a request with no companyId filter at all (list-your-own-scope pattern)", async () => {
+    it("allows a request with no organizationId filter at all (list-your-own-scope pattern)", async () => {
       const res = await request(app).get("/protected/tenant-scoped").set("Authorization", `Bearer ${tenantAToken}`);
       expect(res.status).toBe(200);
     });

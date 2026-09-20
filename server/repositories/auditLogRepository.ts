@@ -1,36 +1,42 @@
-import type { AuditActorType, Prisma } from "@prisma/client";
+import type { AuditActorType, AuditResult, Prisma } from "@prisma/client";
 import { prisma } from "../db/prisma";
 
 export interface AuditLogInput {
-  companyId?: string;
-  actorId?: string;
+  organizationId?: string;
+  actorUserId?: string;
   actorName?: string;
   actorType: AuditActorType;
   action: string;
-  resource: string;
+  resourceType?: string;
   resourceId?: string;
-  details?: Record<string, unknown>;
+  requestId?: string;
+  result?: AuditResult;
   ipAddress?: string;
   userAgent?: string;
-  requestId?: string;
+  beforeData?: Record<string, unknown>;
+  afterData?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
 }
 
 export const auditLogRepository = {
-  /** Append-only by convention — no update/delete method exists on this repository. */
+  /** Append-only by convention — no update/delete method exists on this repository (tests/security/audit.test.ts asserts this). */
   async record(entry: AuditLogInput): Promise<void> {
     await prisma.auditLog.create({
       data: {
-        companyId: entry.companyId,
-        actorId: entry.actorId,
+        organizationId: entry.organizationId,
+        actorUserId: entry.actorUserId,
         actorName: entry.actorName,
         actorType: entry.actorType,
         action: entry.action,
-        resource: entry.resource,
+        resourceType: entry.resourceType,
         resourceId: entry.resourceId,
-        details: entry.details as Prisma.InputJsonValue | undefined,
+        requestId: entry.requestId,
+        result: entry.result ?? "SUCCESS",
         ipAddress: entry.ipAddress,
         userAgent: entry.userAgent,
-        requestId: entry.requestId,
+        beforeData: entry.beforeData as Prisma.InputJsonValue | undefined,
+        afterData: entry.afterData as Prisma.InputJsonValue | undefined,
+        metadata: entry.metadata as Prisma.InputJsonValue | undefined,
       },
     });
   },
