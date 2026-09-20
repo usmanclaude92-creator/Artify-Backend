@@ -40,7 +40,7 @@ Scope: production CRUD + publishing workflow for Pages, Blog Posts, Categories, 
 None outstanding except the pre-existing, environmental Supabase connectivity gap noted above.
 
 ## Commit
-`<pending — recorded in a follow-up commit after this report is written>`
+`6a04a3b` on `claude/busy-franklin-rdwttk`.
 
 ## Branch
 `claude/busy-franklin-rdwttk`
