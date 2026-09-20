@@ -3,6 +3,9 @@
  * Phase 3 adds the identity/RBAC management surface (users, roles,
  * permissions, organizations/memberships — docs/RBAC_IMPLEMENTATION.md).
  * Phase 5 adds CRM (leads, clients, contacts — docs/CRM_ARCHITECTURE.md).
+ * Phase 6 adds client onboarding + workspace provisioning (onboarding,
+ * workspaces, invitations — docs/CLIENT_ONBOARDING_ARCHITECTURE.md,
+ * docs/WORKSPACE_PROVISIONING.md).
  * Other business-domain route groups (products, subscriptions/billing,
  * CMS, media, AI) remain for their respective future phases.
  */
@@ -19,6 +22,9 @@ import leadRoutes from "./leadRoutes";
 import clientRoutes from "./clientRoutes";
 import contactRoutes from "./contactRoutes";
 import crmRoutes from "./crmRoutes";
+import onboardingRoutes from "./onboardingRoutes";
+import workspaceRoutes from "./workspaceRoutes";
+import invitationRoutes from "./invitationRoutes";
 
 const v1Router = Router();
 
@@ -35,5 +41,8 @@ v1Router.use("/leads", leadRoutes);
 v1Router.use("/clients", clientRoutes);
 v1Router.use("/contacts", contactRoutes);
 v1Router.use("/crm", crmRoutes);
+v1Router.use("/onboarding", onboardingRoutes);
+v1Router.use("/workspaces", workspaceRoutes);
+v1Router.use("/invitations", invitationRoutes);
 
 export default v1Router;

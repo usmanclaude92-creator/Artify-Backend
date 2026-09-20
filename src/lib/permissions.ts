@@ -20,6 +20,10 @@ import {
   TrendingUp,
   Contact2,
   Briefcase,
+  ClipboardCheck,
+  Hourglass,
+  Layers,
+  UsersRound,
 } from "lucide-react";
 import { DashboardPage } from "../components/modules/DashboardPage";
 import { UsersPage } from "../components/modules/UsersPage";
@@ -33,6 +37,8 @@ import { CrmDashboardPage } from "../components/modules/CrmDashboardPage";
 import { LeadsPage } from "../components/modules/LeadsPage";
 import { ClientsPage } from "../components/modules/ClientsPage";
 import { ContactsPage } from "../components/modules/ContactsPage";
+import { OnboardingPage } from "../components/modules/OnboardingPage";
+import { WorkspacesPage } from "../components/modules/WorkspacesPage";
 
 export function hasPermission(permissions: readonly string[] | undefined, key: string): boolean {
   return !!permissions?.includes(key);
@@ -46,8 +52,8 @@ export interface NavItem {
   /** Any one of these permissions is enough to show the item; empty means always visible to an authenticated user. */
   requiresAnyPermission?: string[];
   component: ComponentType;
-  /** Groups items under a heading in the sidebar (§22) — purely presentational. */
-  section: "Platform" | "CRM";
+  /** Groups items under a heading in the sidebar (§22/§31) — purely presentational. */
+  section: "Platform" | "CRM" | "Onboarding" | "Workspaces";
 }
 
 /**
@@ -148,6 +154,42 @@ export const NAV_ITEMS: NavItem[] = [
     requiresAnyPermission: ["contacts.read"],
     component: ContactsPage,
     section: "CRM",
+  },
+  {
+    id: "onboarding-overview",
+    label: "Overview",
+    path: "/onboarding",
+    icon: ClipboardCheck,
+    requiresAnyPermission: ["onboarding.read"],
+    component: OnboardingPage,
+    section: "Onboarding",
+  },
+  {
+    id: "onboarding-pending",
+    label: "Pending Onboarding",
+    path: "/onboarding/pending",
+    icon: Hourglass,
+    requiresAnyPermission: ["onboarding.read"],
+    component: OnboardingPage,
+    section: "Onboarding",
+  },
+  {
+    id: "workspaces-all",
+    label: "All Workspaces",
+    path: "/workspaces",
+    icon: Layers,
+    requiresAnyPermission: ["workspaces.read"],
+    component: WorkspacesPage,
+    section: "Workspaces",
+  },
+  {
+    id: "workspaces-members",
+    label: "Members",
+    path: "/workspaces/members",
+    icon: UsersRound,
+    requiresAnyPermission: ["workspaces.read"],
+    component: WorkspacesPage,
+    section: "Workspaces",
   },
 ];
 

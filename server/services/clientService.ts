@@ -1,25 +1,47 @@
 /** Client management (Phase 5 — docs/CRM_ARCHITECTURE.md). Every method is scoped to the caller's own session organization. */
-import { clientRepository, type ClientFilters } from "../repositories/clientRepository";
+import { clientRepository, type ClientFilters, type ClientWithWorkspace } from "../repositories/clientRepository";
 import { auditLogRepository } from "../repositories/auditLogRepository";
 import { ConflictError, NotFoundError } from "../core/errors";
 import type { SanitizedUser } from "../types/domain";
 import type { CreateClientInput, UpdateClientInput } from "../schemas/clientSchemas";
 import type { RequestMeta } from "./authService";
-import type { Client } from "@prisma/client";
+import type { Client, Organization } from "@prisma/client";
 
-async function loadClientInOrgOrThrow(id: string, organizationId: string): Promise<Client> {
+async function loadClientInOrgOrThrow(id: string, organizationId: string): Promise<ClientWithWorkspace> {
   const client = await clientRepository.findByIdInOrg(id, organizationId);
   if (!client) throw new NotFoundError("Client not found.");
   return client;
 }
 
+/**
+ * Phase 6 §32 — a computed, backend-derived provisioning indicator, never
+ * inferred client-side. Workspace status and onboarding status are
+ * deliberately independent (§7); this reflects only workspace status.
+ * ARCHIVED (deactivated) collapses into SUSPENDED for this 4-value display
+ * indicator — both mean "not currently usable."
+ */
+export type ProvisioningStatus = "NOT_PROVISIONED" | "PROVISIONING" | "PROVISIONED" | "SUSPENDED";
+
+export function computeProvisioningStatus(workspace: Pick<Organization, "status"> | null | undefined): ProvisioningStatus {
+  if (!workspace) return "NOT_PROVISIONED";
+  if (workspace.status === "ACTIVE") return "PROVISIONED";
+  if (workspace.status === "TRIAL") return "PROVISIONING";
+  return "SUSPENDED"; // SUSPENDED or ARCHIVED
+}
+
+function withProvisioningStatus<T extends { workspaceOrganization?: Organization | null }>(client: T) {
+  return { ...client, provisioningStatus: computeProvisioningStatus(client.workspaceOrganization) };
+}
+
 export const clientService = {
   async listClients(organizationId: string, filters: ClientFilters, page: number, limit: number, sort: string, order: "asc" | "desc") {
-    return clientRepository.list(organizationId, filters, page, limit, sort, order);
+    const { rows, total } = await clientRepository.list(organizationId, filters, page, limit, sort, order);
+    return { rows: rows.map(withProvisioningStatus), total };
   },
 
-  async getClient(organizationId: string, id: string): Promise<Client> {
-    return loadClientInOrgOrThrow(id, organizationId);
+  async getClient(organizationId: string, id: string) {
+    const client = await loadClientInOrgOrThrow(id, organizationId);
+    return withProvisioningStatus(client);
   },
 
   async createClient(caller: SanitizedUser, input: CreateClientInput, meta: RequestMeta = {}): Promise<Client> {

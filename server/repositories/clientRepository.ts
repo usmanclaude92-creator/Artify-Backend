@@ -2,6 +2,9 @@
 import type { Client, Prisma } from "@prisma/client";
 import { prisma } from "../db/prisma";
 
+const clientWithWorkspace = { include: { workspaceOrganization: true } } as const;
+export type ClientWithWorkspace = Prisma.ClientGetPayload<typeof clientWithWorkspace>;
+
 export interface ClientFilters {
   search?: string;
   status?: string;
@@ -30,11 +33,12 @@ export const clientRepository = {
     limit: number,
     sort: string,
     order: "asc" | "desc"
-  ): Promise<{ rows: Client[]; total: number }> {
+  ): Promise<{ rows: ClientWithWorkspace[]; total: number }> {
     const where = buildWhere(organizationId, filters);
     const [rows, total] = await Promise.all([
       prisma.client.findMany({
         where,
+        ...clientWithWorkspace,
         orderBy: { [sort]: order },
         skip: (page - 1) * limit,
         take: limit,
@@ -44,8 +48,8 @@ export const clientRepository = {
     return { rows, total };
   },
 
-  async findByIdInOrg(id: string, organizationId: string): Promise<Client | null> {
-    return prisma.client.findFirst({ where: { id, organizationId, deletedAt: null } });
+  async findByIdInOrg(id: string, organizationId: string): Promise<ClientWithWorkspace | null> {
+    return prisma.client.findFirst({ where: { id, organizationId, deletedAt: null }, ...clientWithWorkspace });
   },
 
   /** Case-insensitive duplicate-name check within a tenant (§19) — soft, service-level, not a DB unique constraint (see schema.prisma's Client doc comment for why). */

@@ -1,12 +1,35 @@
-/** Phase 5 §24-26 — Clients: list/search/filter/pagination + master-detail with embedded contact management. */
+/** Phase 5 §24-26 — Clients: list/search/filter/pagination + master-detail with embedded contact management. Phase 6 §28 adds onboarding/workspace provisioning. */
 import React, { useEffect, useState } from "react";
-import { Building2, Plus, Search, UserPlus, Star, Trash2 } from "lucide-react";
+import { Building2, Plus, Search, UserPlus, Star, Trash2, Rocket, ClipboardCheck, Ban } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
-import { clientsApi, contactsApi, type CrmClient, type CrmContact, type ClientStatusValue } from "../../lib/api";
+import {
+  clientsApi,
+  contactsApi,
+  workspacesApi,
+  onboardingApi,
+  type CrmClient,
+  type CrmContact,
+  type ClientStatusValue,
+  type Onboarding,
+} from "../../lib/api";
 import { ApiClientError } from "../../lib/apiClient";
 import { Card, Button, Input, Select, Badge, LoadingState, ErrorState, EmptyState, Pagination, Modal, Field, ConfirmDialog } from "../ui/ui";
 import { hasPermission } from "../../lib/permissions";
+
+const PROVISIONING_TONE: Record<string, "success" | "warning" | "danger" | "info" | "neutral"> = {
+  NOT_PROVISIONED: "neutral",
+  PROVISIONING: "info",
+  PROVISIONED: "success",
+  SUSPENDED: "danger",
+};
+const ONBOARDING_TONE: Record<string, "success" | "warning" | "danger" | "info" | "neutral"> = {
+  NOT_STARTED: "neutral",
+  IN_PROGRESS: "warning",
+  READY: "info",
+  COMPLETED: "success",
+  CANCELLED: "danger",
+};
 
 const STATUS_OPTIONS: ClientStatusValue[] = ["PROSPECT", "ACTIVE", "INACTIVE", "SUSPENDED", "ARCHIVED"];
 const STATUS_TONE: Record<ClientStatusValue, "success" | "warning" | "danger" | "info" | "neutral"> = {
@@ -220,6 +243,231 @@ const ContactFormModal: React.FC<{ open: boolean; onClose: () => void; onSaved: 
   );
 };
 
+const InviteAdminModal: React.FC<{ open: boolean; onClose: () => void; workspaceId: string; onSent: () => void }> = ({
+  open,
+  onClose,
+  workspaceId,
+  onSent,
+}) => {
+  const { notify } = useToast();
+  const [email, setEmail] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [devToken, setDevToken] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (open) {
+      setEmail("");
+      setError(null);
+      setDevToken(null);
+    }
+  }, [open]);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    setSubmitting(true);
+    try {
+      const res = await workspacesApi.invite(workspaceId, email);
+      notify("Invitation sent.", "success");
+      if (res.devToken) setDevToken(res.devToken);
+      onSent();
+    } catch (err) {
+      setError(err instanceof ApiClientError ? err.message : "Could not send invitation.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <Modal open={open} onClose={onClose} title="Invite workspace administrator">
+      {devToken ? (
+        <div className="space-y-3">
+          <div className="text-xs rounded-lg px-3 py-2 bg-emerald-500/10 text-emerald-500 border border-emerald-500/30">
+            Invitation created. No email provider is configured yet (Phase 13) — share this acceptance link directly for now.
+          </div>
+          <Input readOnly value={`${window.location.origin}/accept-invitation?token=${devToken}`} onFocus={(e) => e.target.select()} />
+          <div className="pt-2 border-t flex justify-end" style={{ borderColor: "var(--border)" }}>
+            <Button variant="primary" onClick={onClose}>
+              Done
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <form onSubmit={handleSubmit} className="space-y-3">
+          {error && <div className="text-xs rounded-lg px-3 py-2 bg-rose-500/10 text-rose-500 border border-rose-500/30">{error}</div>}
+          <Field label="Email">
+            <Input type="email" required value={email} onChange={(e) => setEmail(e.target.value)} />
+          </Field>
+          <div className="pt-2 border-t flex justify-end gap-2" style={{ borderColor: "var(--border)" }}>
+            <Button type="button" variant="secondary" onClick={onClose}>
+              Cancel
+            </Button>
+            <Button type="submit" variant="primary" disabled={submitting}>
+              Send invitation
+            </Button>
+          </div>
+        </form>
+      )}
+    </Modal>
+  );
+};
+
+const OnboardingWorkspaceSection: React.FC<{ client: CrmClient; onClientChanged: () => void }> = ({ client, onClientChanged }) => {
+  const { user } = useAuth();
+  const { notify } = useToast();
+  const canStartOnboarding = hasPermission(user?.role.permissions, "onboarding.create");
+  const canCompleteOnboarding = hasPermission(user?.role.permissions, "onboarding.complete");
+  const canProvision = hasPermission(user?.role.permissions, "workspaces.create");
+  const canSuspend = hasPermission(user?.role.permissions, "workspaces.suspend");
+  const canInvite = hasPermission(user?.role.permissions, "invitations.create");
+
+  const [onboarding, setOnboarding] = useState<Onboarding | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [inviteOpen, setInviteOpen] = useState(false);
+  const [suspendConfirm, setSuspendConfirm] = useState(false);
+
+  const load = React.useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await clientsApi.getOnboarding(client.id);
+      setOnboarding(res.onboarding);
+    } catch {
+      setOnboarding(null);
+    } finally {
+      setLoading(false);
+    }
+  }, [client.id]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const handleStart = async () => {
+    try {
+      await clientsApi.startOnboarding(client.id);
+      notify("Onboarding started.", "success");
+      void load();
+    } catch (err) {
+      notify(err instanceof ApiClientError ? err.message : "Could not start onboarding.", "error");
+    }
+  };
+
+  const handleProvision = async () => {
+    try {
+      await clientsApi.provisionWorkspace(client.id);
+      notify("Workspace provisioned.", "success");
+      onClientChanged();
+      void load();
+    } catch (err) {
+      notify(err instanceof ApiClientError ? err.message : "Could not provision workspace.", "error");
+    }
+  };
+
+  const handleComplete = async () => {
+    if (!onboarding) return;
+    try {
+      await onboardingApi.complete(onboarding.id);
+      notify("Onboarding completed.", "success");
+      void load();
+    } catch (err) {
+      notify(err instanceof ApiClientError ? err.message : "Could not complete onboarding.", "error");
+    }
+  };
+
+  const handleSuspend = async () => {
+    if (!client.workspaceOrganizationId) return;
+    try {
+      await workspacesApi.update(client.workspaceOrganizationId, { status: "SUSPENDED" });
+      notify("Workspace suspended.", "success");
+      onClientChanged();
+    } catch (err) {
+      notify(err instanceof ApiClientError ? err.message : "Could not suspend workspace.", "error");
+    } finally {
+      setSuspendConfirm(false);
+    }
+  };
+
+  return (
+    <div className="px-4 py-3 border-b" style={{ borderColor: "var(--border)" }}>
+      <div className="flex items-center justify-between mb-2">
+        <h3 className="text-xs font-bold uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>
+          Onboarding &amp; Workspace
+        </h3>
+        <Badge tone={PROVISIONING_TONE[client.provisioningStatus]}>{client.provisioningStatus.replace("_", " ")}</Badge>
+      </div>
+
+      {loading ? (
+        <LoadingState />
+      ) : (
+        <div className="space-y-3">
+          {onboarding ? (
+            <div className="space-y-2">
+              <div className="flex items-center gap-2 text-xs">
+                <span style={{ color: "var(--text-muted)" }}>Onboarding:</span>
+                <Badge tone={ONBOARDING_TONE[onboarding.status]}>{onboarding.status}</Badge>
+                {onboarding.currentStep && <span style={{ color: "var(--text-muted)" }}>· current step: {onboarding.currentStep}</span>}
+              </div>
+              <ul className="grid sm:grid-cols-2 gap-1">
+                {onboarding.checklist.map((item) => (
+                  <li key={item.key} className="text-[11px] flex items-center gap-1.5" style={{ color: item.completed ? "var(--text-primary)" : "var(--text-muted)" }}>
+                    <span>{item.completed ? "✓" : "○"}</span> {item.label}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : (
+            <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+              Onboarding has not been started for this client.
+            </p>
+          )}
+
+          <div className="flex flex-wrap gap-2 pt-1">
+            {canStartOnboarding && !onboarding && (
+              <Button variant="secondary" onClick={handleStart}>
+                <ClipboardCheck className="w-3.5 h-3.5" /> Start onboarding
+              </Button>
+            )}
+            {canProvision && client.provisioningStatus === "NOT_PROVISIONED" && (
+              <Button variant="primary" onClick={handleProvision}>
+                <Rocket className="w-3.5 h-3.5" /> Provision workspace
+              </Button>
+            )}
+            {canInvite && client.workspaceOrganizationId && (
+              <Button variant="secondary" onClick={() => setInviteOpen(true)}>
+                <UserPlus className="w-3.5 h-3.5" /> Invite administrator
+              </Button>
+            )}
+            {canCompleteOnboarding && onboarding?.status === "READY" && (
+              <Button variant="primary" onClick={handleComplete}>
+                Complete onboarding
+              </Button>
+            )}
+            {canSuspend && client.provisioningStatus === "PROVISIONED" && (
+              <Button variant="danger" onClick={() => setSuspendConfirm(true)}>
+                <Ban className="w-3.5 h-3.5" /> Suspend workspace
+              </Button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {client.workspaceOrganizationId && (
+        <InviteAdminModal open={inviteOpen} onClose={() => setInviteOpen(false)} workspaceId={client.workspaceOrganizationId} onSent={load} />
+      )}
+      <ConfirmDialog
+        open={suspendConfirm}
+        title="Suspend workspace"
+        message={`Suspend the workspace for "${client.name}"? Its users will lose access until reactivated.`}
+        confirmLabel="Suspend"
+        destructive
+        onConfirm={handleSuspend}
+        onCancel={() => setSuspendConfirm(false)}
+      />
+    </div>
+  );
+};
+
 const ClientDetail: React.FC<{ client: CrmClient; onChanged: (c?: CrmClient) => void }> = ({ client, onChanged }) => {
   const { user } = useAuth();
   const { notify } = useToast();
@@ -337,6 +585,8 @@ const ClientDetail: React.FC<{ client: CrmClient; onChanged: (c?: CrmClient) => 
           </div>
         )}
       </div>
+
+      <OnboardingWorkspaceSection client={client} onClientChanged={() => onChanged()} />
 
       <div className="px-4 py-3 border-b flex items-center justify-between" style={{ borderColor: "var(--border)" }}>
         <h3 className="text-xs font-bold uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>

@@ -34,6 +34,8 @@ interface AuthContextValue {
   logoutAll: () => Promise<void>;
   switchOrganization: (organizationId: string) => Promise<void>;
   refreshMe: () => Promise<void>;
+  /** Phase 6 — applies the session a client-admin invitation acceptance already returned, without a second round-trip login. */
+  setSessionFromAcceptedInvitation: (token: string, user: SanitizedUser) => void;
   hasPermission: (key: string) => boolean;
   dismissSessionExpired: () => void;
 }
@@ -143,6 +145,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const hasPermissionFn = useCallback((key: string) => !!user?.role.permissions.includes(key), [user]);
 
+  const setSessionFromAcceptedInvitation = useCallback(
+    (nextToken: string, nextUser: SanitizedUser) => {
+      sessionStorage.setItem(TOKEN_STORAGE_KEY, nextToken);
+      updateToken(nextToken);
+      setUser(nextUser);
+      setSessionExpiredMessage(null);
+      setStatus("authenticated");
+      authApi
+        .me()
+        .then((me) => setOrganizations(me.organizations))
+        .catch(() => setOrganizations([]));
+    },
+    [updateToken]
+  );
+
   const value = useMemo<AuthContextValue>(
     () => ({
       status,
@@ -154,10 +171,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       logoutAll,
       switchOrganization,
       refreshMe,
+      setSessionFromAcceptedInvitation,
       hasPermission: hasPermissionFn,
       dismissSessionExpired: () => setSessionExpiredMessage(null),
     }),
-    [status, user, organizations, sessionExpiredMessage, login, logout, logoutAll, switchOrganization, refreshMe, hasPermissionFn]
+    [
+      status,
+      user,
+      organizations,
+      sessionExpiredMessage,
+      login,
+      logout,
+      logoutAll,
+      switchOrganization,
+      refreshMe,
+      setSessionFromAcceptedInvitation,
+      hasPermissionFn,
+    ]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

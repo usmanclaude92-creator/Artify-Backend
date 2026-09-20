@@ -274,6 +274,9 @@ export interface CrmClient {
   address: string | null;
   accountManager: string | null;
   notes: string | null;
+  workspaceOrganizationId: string | null;
+  /** Backend-computed (Phase 6 §32) — never inferred client-side. */
+  provisioningStatus: "NOT_PROVISIONED" | "PROVISIONING" | "PROVISIONED" | "SUSPENDED";
   createdAt: string;
   updatedAt: string;
 }
@@ -370,6 +373,11 @@ export const clientsApi = {
     paginatedGet<CrmContact>(`/clients/${clientId}/contacts`, "contacts", params),
   addContact: (clientId: string, payload: { firstName: string; lastName: string; email?: string; phone?: string; jobTitle?: string; isPrimary?: boolean }) =>
     apiClient.post<{ contact: CrmContact }>(`/clients/${clientId}/contacts`, payload),
+  // Phase 6 — onboarding/workspace provisioning, nested under the owning client (docs/CLIENT_ONBOARDING_ARCHITECTURE.md).
+  startOnboarding: (clientId: string) => apiClient.post<{ onboarding: Onboarding }>(`/clients/${clientId}/onboarding/start`),
+  getOnboarding: (clientId: string) => apiClient.get<{ onboarding: Onboarding | null }>(`/clients/${clientId}/onboarding`),
+  provisionWorkspace: (clientId: string, payload: { name?: string; timezone?: string; currency?: string; locale?: string } = {}) =>
+    apiClient.post<{ workspace: Workspace }>(`/clients/${clientId}/workspace/provision`, payload),
 };
 
 export const contactsApi = {
@@ -383,4 +391,136 @@ export const contactsApi = {
 
 export const crmApi = {
   summary: () => apiClient.get<CrmSummary>("/crm/summary"),
+};
+
+// ---------------------------------------------------------------------------
+// Phase 6 — Client onboarding & workspace provisioning
+// ---------------------------------------------------------------------------
+
+export type OnboardingStatusValue = "NOT_STARTED" | "IN_PROGRESS" | "READY" | "COMPLETED" | "CANCELLED";
+export type WorkspaceStatusValue = "TRIAL" | "ACTIVE" | "SUSPENDED" | "ARCHIVED";
+
+export interface OnboardingChecklistItem {
+  key: string;
+  label: string;
+  completed: boolean;
+  completedAt: string | null;
+  completedById: string | null;
+}
+
+export interface Onboarding {
+  id: string;
+  organizationId: string;
+  clientId: string;
+  status: OnboardingStatusValue;
+  currentStep: string | null;
+  checklist: OnboardingChecklistItem[];
+  startedAt: string | null;
+  completedAt: string | null;
+  cancelledAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  client?: { id: string; name: string; clientCode: string; workspaceOrganization?: Workspace | null };
+}
+
+export interface Workspace {
+  id: string;
+  name: string;
+  legalName: string | null;
+  slug: string;
+  type: "INTERNAL" | "CLIENT" | "PARTNER";
+  tier: "GROWTH" | "ENTERPRISE" | "CUSTOM";
+  status: WorkspaceStatusValue;
+  email: string | null;
+  phone: string | null;
+  website: string | null;
+  address: string | null;
+  country: string | null;
+  timezone: string;
+  currency: string;
+  locale: string;
+  createdAt: string;
+  updatedAt: string;
+  provisionedForClient?: { id: string; name: string; clientCode: string } | null;
+}
+
+export interface WorkspaceMember {
+  userId: string;
+  email: string;
+  firstName: string;
+  lastName: string;
+  displayName: string | null;
+  status: "ACTIVE" | "INVITED" | "SUSPENDED";
+  isPrimary: boolean;
+  roleKey: string;
+  roleName: string;
+  joinedAt: string;
+}
+
+export type InvitationStatusValue = "PENDING" | "ACCEPTED" | "REVOKED" | "EXPIRED";
+
+export interface WorkspaceInvitation {
+  id: string;
+  organizationId: string;
+  email: string;
+  expiresAt: string;
+  acceptedAt: string | null;
+  revokedAt: string | null;
+  createdAt: string;
+  status: InvitationStatusValue;
+  role: { key: string; name: string };
+  invitedBy: { id: string; email: string; firstName: string; lastName: string; displayName: string | null } | null;
+}
+
+export interface InvitationPreview {
+  email: string;
+  workspaceName: string;
+  roleName: string;
+  expiresAt: string;
+  requiresPassword: boolean;
+}
+
+export const onboardingApi = {
+  list: (params: { page?: number; limit?: number; status?: OnboardingStatusValue; search?: string } = {}) =>
+    paginatedGet<Onboarding>("/onboarding", "onboarding", params),
+  get: (id: string) => apiClient.get<{ onboarding: Onboarding }>(`/onboarding/${id}`),
+  completeStep: (id: string, step: string) => apiClient.patch<{ onboarding: Onboarding }>(`/onboarding/${id}`, { completeStep: step }),
+  cancel: (id: string) => apiClient.patch<{ onboarding: Onboarding }>(`/onboarding/${id}`, { status: "CANCELLED" }),
+  complete: (id: string) => apiClient.post<{ onboarding: Onboarding }>(`/onboarding/${id}/complete`),
+};
+
+export const workspacesApi = {
+  list: (params: { page?: number; limit?: number; status?: WorkspaceStatusValue; search?: string } = {}) =>
+    paginatedGet<Workspace>("/workspaces", "workspaces", params),
+  get: (id: string) => apiClient.get<{ workspace: Workspace }>(`/workspaces/${id}`),
+  update: (
+    id: string,
+    payload: Partial<{
+      name: string;
+      email: string | null;
+      phone: string | null;
+      website: string | null;
+      address: string | null;
+      timezone: string;
+      currency: string;
+      locale: string;
+      status: WorkspaceStatusValue;
+    }>
+  ) => apiClient.patch<{ workspace: Workspace }>(`/workspaces/${id}`, payload),
+  members: (id: string, params: { page?: number; limit?: number } = {}) =>
+    paginatedGet<WorkspaceMember>(`/workspaces/${id}/members`, "members", params),
+  invitations: (id: string, params: { page?: number; limit?: number } = {}) =>
+    paginatedGet<WorkspaceInvitation>(`/workspaces/${id}/invitations`, "invitations", params),
+  invite: (id: string, email: string) =>
+    apiClient.post<{ invitation: WorkspaceInvitation; devToken?: string }>(`/workspaces/${id}/invitations`, { email }),
+};
+
+export const invitationsApi = {
+  revoke: (id: string) => apiClient.post<{ message: string }>(`/invitations/${id}/revoke`),
+  /** Public — no session required (an invitee has no account/token yet). */
+  preview: (token: string) => apiClient.get<InvitationPreview>(`/invitations/${token}`, { suppressUnauthorizedHandling: true }),
+  accept: (token: string, payload: { firstName?: string; lastName?: string; password?: string }) =>
+    apiClient.post<{ session: { token: string; expiresAt: string }; user: SanitizedUser }>(`/invitations/${token}/accept`, payload, {
+      suppressUnauthorizedHandling: true,
+    }),
 };

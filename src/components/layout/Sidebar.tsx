@@ -8,7 +8,7 @@ export const Sidebar: React.FC<{ mobileOpen: boolean; onCloseMobile: () => void 
   const { user } = useAuth();
   const { path, navigate } = useRouter();
   const items = visibleNavItems(user?.role.permissions);
-  const sections: Array<"Platform" | "CRM"> = ["Platform", "CRM"];
+  const sections: Array<"Platform" | "CRM" | "Onboarding" | "Workspaces"> = ["Platform", "CRM", "Onboarding", "Workspaces"];
 
   const content = (
     <>

@@ -94,6 +94,17 @@ export const PERMISSION_KEYS = [
   "audit.read",
   "ai.use",
   "ai.manage",
+  "onboarding.read",
+  "onboarding.create",
+  "onboarding.update",
+  "onboarding.complete",
+  "workspaces.read",
+  "workspaces.create",
+  "workspaces.update",
+  "workspaces.suspend",
+  "invitations.read",
+  "invitations.create",
+  "invitations.revoke",
 ] as const;
 
 export type PermissionKey = (typeof PERMISSION_KEYS)[number];

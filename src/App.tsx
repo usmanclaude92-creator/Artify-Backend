@@ -11,15 +11,22 @@ import { AppShell } from "./components/layout/AppShell";
 import { LoginPage } from "./components/auth/LoginPage";
 import { ForgotPasswordPage } from "./components/auth/ForgotPasswordPage";
 import { ResetPasswordPage } from "./components/auth/ResetPasswordPage";
+import { AcceptInvitationPage } from "./components/auth/AcceptInvitationPage";
 import { Spinner } from "./components/ui/ui";
 
 const AUTH_PATHS = ["/login", "/forgot-password", "/reset-password"];
+// Reachable regardless of auth status (Phase 6 §21/§30) — an invitee
+// typically has no session yet, but an already-authenticated user (e.g.
+// accepting a second workspace) must also be able to open the link without
+// being redirected away from it.
+const PUBLIC_PATHS = ["/accept-invitation"];
 
 const AppContent: React.FC = () => {
   const { status, sessionExpiredMessage, dismissSessionExpired } = useAuth();
   const { path, navigate } = useRouter();
 
   React.useEffect(() => {
+    if (PUBLIC_PATHS.includes(path)) return;
     if (status === "unauthenticated" && !AUTH_PATHS.includes(path)) {
       navigate("/login");
     }
@@ -27,6 +34,10 @@ const AppContent: React.FC = () => {
       navigate("/dashboard");
     }
   }, [status, path, navigate]);
+
+  if (PUBLIC_PATHS.includes(path)) {
+    return <AcceptInvitationPage />;
+  }
 
   if (status === "loading") {
     return (

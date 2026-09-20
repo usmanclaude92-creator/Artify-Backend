@@ -60,6 +60,9 @@ const envSchema = z
     ACCOUNT_LOCKOUT_DURATION_MINUTES: z.coerce.number().int().positive().default(15),
     PASSWORD_RESET_TOKEN_TTL_MINUTES: z.coerce.number().int().positive().default(30),
     PASSWORD_MIN_LENGTH: z.coerce.number().int().min(8).default(10),
+
+    // Phase 6 — client-admin workspace invitations (docs/WORKSPACE_PROVISIONING.md).
+    INVITATION_TOKEN_TTL_HOURS: z.coerce.number().int().positive().default(72),
   })
   .superRefine((val, ctx) => {
     const isProdLike = val.NODE_ENV === "production" || val.NODE_ENV === "staging";
@@ -117,6 +120,7 @@ export type AppConfig = Readonly<{
   accountLockoutDurationMinutes: number;
   passwordResetTokenTtlMinutes: number;
   passwordMinLength: number;
+  invitationTokenTtlHours: number;
 }>;
 
 export type EnvValidationResult =
@@ -162,6 +166,7 @@ export function validateEnv(raw: NodeJS.ProcessEnv | Record<string, string | und
       accountLockoutDurationMinutes: env.ACCOUNT_LOCKOUT_DURATION_MINUTES,
       passwordResetTokenTtlMinutes: env.PASSWORD_RESET_TOKEN_TTL_MINUTES,
       passwordMinLength: env.PASSWORD_MIN_LENGTH,
+      invitationTokenTtlHours: env.INVITATION_TOKEN_TTL_HOURS,
     }),
   };
 }

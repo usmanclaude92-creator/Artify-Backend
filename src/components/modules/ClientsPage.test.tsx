@@ -2,7 +2,7 @@
  * Phase 5 §34 — clients list/master-detail, embedded contact management
  * (add/mark primary/remove), create form, empty state, API error state.
  */
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { ClientsPage } from "./ClientsPage";
 
@@ -14,6 +14,12 @@ const contactsMock = vi.fn();
 const addContactMock = vi.fn();
 const contactUpdateMock = vi.fn();
 const contactRemoveMock = vi.fn();
+const getOnboardingMock = vi.fn();
+const startOnboardingMock = vi.fn();
+const provisionWorkspaceMock = vi.fn();
+const onboardingCompleteMock = vi.fn();
+const workspaceInviteMock = vi.fn();
+const workspaceUpdateMock = vi.fn();
 const notifyMock = vi.fn();
 
 vi.mock("../../lib/api", () => ({
@@ -25,12 +31,22 @@ vi.mock("../../lib/api", () => ({
     remove: (...args: unknown[]) => removeMock(...args),
     contacts: (...args: unknown[]) => contactsMock(...args),
     addContact: (...args: unknown[]) => addContactMock(...args),
+    getOnboarding: (...args: unknown[]) => getOnboardingMock(...args),
+    startOnboarding: (...args: unknown[]) => startOnboardingMock(...args),
+    provisionWorkspace: (...args: unknown[]) => provisionWorkspaceMock(...args),
   },
   contactsApi: {
     list: vi.fn(),
     get: vi.fn(),
     update: (...args: unknown[]) => contactUpdateMock(...args),
     remove: (...args: unknown[]) => contactRemoveMock(...args),
+  },
+  onboardingApi: {
+    complete: (...args: unknown[]) => onboardingCompleteMock(...args),
+  },
+  workspacesApi: {
+    invite: (...args: unknown[]) => workspaceInviteMock(...args),
+    update: (...args: unknown[]) => workspaceUpdateMock(...args),
   },
 }));
 
@@ -62,6 +78,8 @@ const client = {
   address: null,
   accountManager: null,
   notes: null,
+  workspaceOrganizationId: null,
+  provisioningStatus: "NOT_PROVISIONED" as const,
   createdAt: "2026-01-01T00:00:00.000Z",
   updatedAt: "2026-01-01T00:00:00.000Z",
 };
@@ -81,6 +99,10 @@ const contact = {
   updatedAt: "2026-01-01T00:00:00.000Z",
 };
 
+beforeEach(() => {
+  getOnboardingMock.mockResolvedValue({ onboarding: null });
+});
+
 afterEach(() => {
   cleanup();
   listMock.mockReset();
@@ -91,6 +113,12 @@ afterEach(() => {
   addContactMock.mockReset();
   contactUpdateMock.mockReset();
   contactRemoveMock.mockReset();
+  getOnboardingMock.mockReset();
+  startOnboardingMock.mockReset();
+  provisionWorkspaceMock.mockReset();
+  onboardingCompleteMock.mockReset();
+  workspaceInviteMock.mockReset();
+  workspaceUpdateMock.mockReset();
   notifyMock.mockReset();
   mockPermissions = [
     "clients.read",
@@ -169,5 +197,59 @@ describe("ClientsPage", () => {
     expect(screen.queryByRole("button", { name: /^edit$/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^archive$/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /add contact/i })).not.toBeInTheDocument();
+  });
+
+  describe("onboarding & workspace section (Phase 6 §28)", () => {
+    beforeEach(() => {
+      mockPermissions = [...mockPermissions, "onboarding.read", "onboarding.create", "onboarding.complete", "workspaces.create", "workspaces.suspend", "invitations.create"];
+    });
+
+    it("shows the client's real backend-computed provisioning status, never a fabricated value", async () => {
+      listMock.mockResolvedValue({ items: [client], page: 1, limit: 20, total: 1, totalPages: 1 });
+      contactsMock.mockResolvedValue({ items: [], page: 1, limit: 50, total: 0, totalPages: 1 });
+      render(<ClientsPage />);
+      expect(await screen.findByText("NOT PROVISIONED")).toBeInTheDocument();
+    });
+
+    it("starts onboarding through the real API when no onboarding record exists yet", async () => {
+      listMock.mockResolvedValue({ items: [client], page: 1, limit: 20, total: 1, totalPages: 1 });
+      contactsMock.mockResolvedValue({ items: [], page: 1, limit: 50, total: 0, totalPages: 1 });
+      startOnboardingMock.mockResolvedValue({ onboarding: {} });
+      render(<ClientsPage />);
+
+      fireEvent.click(await screen.findByRole("button", { name: /start onboarding/i }));
+      await vi.waitFor(() => expect(startOnboardingMock).toHaveBeenCalledWith("client-1"));
+    });
+
+    it("provisions a workspace through the real API when the client is not yet provisioned", async () => {
+      listMock.mockResolvedValue({ items: [client], page: 1, limit: 20, total: 1, totalPages: 1 });
+      contactsMock.mockResolvedValue({ items: [], page: 1, limit: 50, total: 0, totalPages: 1 });
+      provisionWorkspaceMock.mockResolvedValue({ workspace: { id: "ws-1" } });
+      render(<ClientsPage />);
+
+      fireEvent.click(await screen.findByRole("button", { name: /provision workspace/i }));
+      await vi.waitFor(() => expect(provisionWorkspaceMock).toHaveBeenCalledWith("client-1"));
+    });
+
+    it("hides onboarding/provisioning actions when the caller lacks the relevant permission", async () => {
+      mockPermissions = ["clients.read", "contacts.read"];
+      listMock.mockResolvedValue({ items: [client], page: 1, limit: 20, total: 1, totalPages: 1 });
+      contactsMock.mockResolvedValue({ items: [], page: 1, limit: 50, total: 0, totalPages: 1 });
+      render(<ClientsPage />);
+
+      await screen.findByText("NOT PROVISIONED");
+      expect(screen.queryByRole("button", { name: /start onboarding/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /provision workspace/i })).not.toBeInTheDocument();
+    });
+
+    it("shows an Invite administrator action once a workspace is provisioned", async () => {
+      const provisionedClient = { ...client, workspaceOrganizationId: "ws-1", provisioningStatus: "PROVISIONING" as const };
+      listMock.mockResolvedValue({ items: [provisionedClient], page: 1, limit: 20, total: 1, totalPages: 1 });
+      contactsMock.mockResolvedValue({ items: [], page: 1, limit: 50, total: 0, totalPages: 1 });
+      render(<ClientsPage />);
+
+      expect(await screen.findByRole("button", { name: /invite administrator/i })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /provision workspace/i })).not.toBeInTheDocument();
+    });
   });
 });

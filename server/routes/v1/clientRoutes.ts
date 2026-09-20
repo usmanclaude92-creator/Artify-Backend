@@ -1,11 +1,14 @@
 import { Router } from "express";
 import { clientService } from "../../services/clientService";
 import { contactService } from "../../services/contactService";
+import { onboardingService } from "../../services/onboardingService";
+import { workspaceService } from "../../services/workspaceService";
 import { authenticateToken, requirePermission } from "../../middleware/auth";
 import { asyncHandler } from "../../utils/asyncHandler";
 import { sendSuccess } from "../../core/apiResponse";
 import { createClientSchema, listClientsQuerySchema, updateClientSchema } from "../../schemas/clientSchemas";
 import { createContactSchema, listContactsQuerySchema } from "../../schemas/contactSchemas";
+import { provisionWorkspaceSchema } from "../../schemas/workspaceSchemas";
 
 const router = Router();
 
@@ -90,6 +93,36 @@ router.post(
     const input = createContactSchema.parse(req.body);
     const contact = await contactService.createForClient(req.user!, req.params.clientId!, input, requestMeta(req));
     sendSuccess(res, { contact }, 201);
+  })
+);
+
+// Onboarding + workspace provisioning (Phase 6 — nested under the owning
+// CRM client, same convention as /contacts above).
+router.post(
+  "/:clientId/onboarding/start",
+  requirePermission("onboarding.create"),
+  asyncHandler(async (req, res) => {
+    const record = await onboardingService.startOnboarding(req.user!, req.params.clientId!, requestMeta(req));
+    sendSuccess(res, { onboarding: record }, 201);
+  })
+);
+
+router.get(
+  "/:clientId/onboarding",
+  requirePermission("onboarding.read"),
+  asyncHandler(async (req, res) => {
+    const record = await onboardingService.getOnboardingForClient(req.user!.organizationId, req.params.clientId!);
+    sendSuccess(res, { onboarding: record });
+  })
+);
+
+router.post(
+  "/:clientId/workspace/provision",
+  requirePermission("workspaces.create"),
+  asyncHandler(async (req, res) => {
+    const input = provisionWorkspaceSchema.parse(req.body);
+    const workspace = await workspaceService.provisionWorkspace(req.user!, req.params.clientId!, input, requestMeta(req));
+    sendSuccess(res, { workspace }, 201);
   })
 );
 

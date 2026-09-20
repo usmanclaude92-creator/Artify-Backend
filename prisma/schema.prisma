@@ -62,29 +62,35 @@ model Organization {
   country   String?
   timezone  String             @default("UTC")
   currency  String             @default("USD") @db.Char(3)
+  locale    String             @default("en")
   metadata  Json               @default("{}")
   createdAt DateTime           @default(now()) @map("created_at")
   updatedAt DateTime           @updatedAt @map("updated_at")
   deletedAt DateTime?          @map("deleted_at")
 
-  memberships    OrganizationMembership[]
-  users          User[] // legacy/home-organization pointer — see OrganizationMembership doc comment
-  sessions       Session[]
-  auditLogs      AuditLog[]
-  webhookEvents  WebhookEvent[]
-  leads          Lead[]
-  clients        Client[]
-  contacts       Contact[]
-  contracts      Contract[]
-  subscriptions  Subscription[]
-  invoices       Invoice[]
-  pages          Page[]
-  posts          Post[]
-  categories     Category[]
-  tags           Tag[]
-  mediaAssets    MediaAsset[]
-  notifications  Notification[]
-  systemSettings SystemSetting[]
+  memberships          OrganizationMembership[]
+  users                User[] // legacy/home-organization pointer — see OrganizationMembership doc comment
+  sessions             Session[]
+  auditLogs            AuditLog[]
+  webhookEvents        WebhookEvent[]
+  leads                Lead[]
+  clients              Client[]
+  contacts             Contact[]
+  contracts            Contract[]
+  subscriptions        Subscription[]
+  invoices             Invoice[]
+  pages                Page[]
+  posts                Post[]
+  categories           Category[]
+  tags                 Tag[]
+  mediaAssets          MediaAsset[]
+  notifications        Notification[]
+  systemSettings       SystemSetting[]
+  onboardings          ClientOnboarding[]
+  invitations          WorkspaceInvitation[]
+  // The operational tenant a CRM Client was provisioned into (Phase 6 —
+  // docs/WORKSPACE_PROVISIONING.md). Reverse side of Client.workspaceOrganizationId.
+  provisionedForClient Client?                  @relation("ClientWorkspace")
 
   @@map("organizations")
 }
@@ -140,6 +146,10 @@ model User {
   notificationPreferences NotificationPreference[]
   updatedSystemSettings   SystemSetting[]          @relation("SettingUpdatedBy")
   auditLogs               AuditLog[]               @relation("AuditActor")
+  createdOnboardings      ClientOnboarding[]       @relation("OnboardingCreatedBy")
+  completedOnboardings    ClientOnboarding[]       @relation("OnboardingCompletedBy")
+  sentInvitations         WorkspaceInvitation[]    @relation("InvitationInvitedBy")
+  acceptedInvitations     WorkspaceInvitation[]    @relation("InvitationAcceptedUser")
 
   @@index([organizationId])
   @@map("users")
@@ -194,6 +204,7 @@ model Role {
   users           User[]
   memberships     OrganizationMembership[]
   rolePermissions RolePermission[]
+  invitations     WorkspaceInvitation[]
 
   @@map("roles")
 }
@@ -424,30 +435,39 @@ enum ClientStatus {
 // fine (tenant-scoped), and even within one organization a hard unique
 // constraint would incorrectly reject legitimate near-duplicates a human
 // operator should be allowed to create (e.g. two divisions of one firm).
+// Phase 6: workspaceOrganizationId is the CRM Client's provisioned
+// operational tenant (docs/WORKSPACE_PROVISIONING.md) — a distinct
+// Organization row (type=CLIENT) from the `organizationId` above (which is
+// the CRM-owning tenant, effectively always Artify HQ). Nullable until
+// provisioned; @unique enforces at most one workspace per client (§5) at
+// the database level, not just in application code.
 model Client {
-  id             String       @id @default(uuid())
-  organizationId String       @map("organization_id")
-  clientCode     String       @map("client_code")
-  name           String
-  legalName      String?      @map("legal_name")
-  status         ClientStatus @default(PROSPECT)
-  email          String?
-  phone          String?
-  website        String?
-  address        String?
-  accountManager String?      @map("account_manager")
-  notes          String?
-  createdAt      DateTime     @default(now()) @map("created_at")
-  updatedAt      DateTime     @updatedAt @map("updated_at")
-  deletedAt      DateTime?    @map("deleted_at")
+  id                      String       @id @default(uuid())
+  organizationId          String       @map("organization_id")
+  clientCode              String       @map("client_code")
+  name                    String
+  legalName               String?      @map("legal_name")
+  status                  ClientStatus @default(PROSPECT)
+  email                   String?
+  phone                   String?
+  website                 String?
+  address                 String?
+  accountManager          String?      @map("account_manager")
+  notes                   String?
+  workspaceOrganizationId String?      @unique @map("workspace_organization_id")
+  createdAt               DateTime     @default(now()) @map("created_at")
+  updatedAt               DateTime     @updatedAt @map("updated_at")
+  deletedAt               DateTime?    @map("deleted_at")
 
-  organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  manager        User?          @relation("ClientAccountManager", fields: [accountManager], references: [id], onDelete: SetNull)
-  contacts       Contact[]
-  convertedLeads Lead[]         @relation("LeadConvertedClient")
-  contracts      Contract[]
-  subscriptions  Subscription[]
-  invoices       Invoice[]
+  organization          Organization      @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  manager               User?             @relation("ClientAccountManager", fields: [accountManager], references: [id], onDelete: SetNull)
+  workspaceOrganization Organization?     @relation("ClientWorkspace", fields: [workspaceOrganizationId], references: [id], onDelete: SetNull)
+  contacts              Contact[]
+  convertedLeads        Lead[]            @relation("LeadConvertedClient")
+  contracts             Contract[]
+  subscriptions         Subscription[]
+  invoices              Invoice[]
+  onboarding            ClientOnboarding?
 
   @@unique([organizationId, clientCode])
   @@index([organizationId])
@@ -490,6 +510,91 @@ model Contact {
   @@index([organizationId])
   @@index([clientId])
   @@map("contacts")
+}
+
+// =============================================================================
+// ONBOARDING & WORKSPACE PROVISIONING (Phase 6 —
+// docs/CLIENT_ONBOARDING_ARCHITECTURE.md, docs/WORKSPACE_PROVISIONING.md).
+// The workspace itself is NOT a new tenant model — it is a normal
+// Organization row (type=CLIENT), reusing OrganizationStatus for its
+// lifecycle: TRIAL=PENDING (just provisioned), ACTIVE=ACTIVE,
+// SUSPENDED=SUSPENDED, ARCHIVED=DEACTIVATED. See Client.workspaceOrganizationId.
+// =============================================================================
+
+enum OnboardingStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  READY
+  COMPLETED
+  CANCELLED
+}
+
+// One onboarding record per Client (1:1 — @unique clientId), independent
+// of workspace status (a workspace can be ACTIVE while onboarding is still
+// IN_PROGRESS, or vice versa — §7). `checklist` is a JSON array of
+// {key, label, completed, completedAt, completedById} so new stages can be
+// added later without a migration (§8's "extensible" requirement);
+// `currentStep` mirrors the first incomplete checklist item for cheap
+// querying/display without re-parsing the JSON on every list row.
+model ClientOnboarding {
+  id             String           @id @default(uuid())
+  organizationId String           @map("organization_id")
+  clientId       String           @unique @map("client_id")
+  status         OnboardingStatus @default(NOT_STARTED)
+  currentStep    String?          @map("current_step")
+  checklist      Json             @default("[]")
+  startedAt      DateTime?        @map("started_at")
+  completedAt    DateTime?        @map("completed_at")
+  cancelledAt    DateTime?        @map("cancelled_at")
+  createdById    String?          @map("created_by")
+  completedById  String?          @map("completed_by")
+  createdAt      DateTime         @default(now()) @map("created_at")
+  updatedAt      DateTime         @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  client       Client       @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  createdBy    User?        @relation("OnboardingCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  completedBy  User?        @relation("OnboardingCompletedBy", fields: [completedById], references: [id], onDelete: SetNull)
+
+  @@index([organizationId])
+  @@index([status])
+  @@map("client_onboarding")
+}
+
+// Secure client-administrator invitation into a provisioned workspace
+// (§18). Same at-rest hashing convention as Session.tokenHash/
+// PasswordResetToken.tokenHash: the raw `art_invite_...` token is
+// high-entropy random data, never persisted or logged in full, only its
+// SHA-256 hash. No stored status enum — PENDING/ACCEPTED/REVOKED/EXPIRED
+// is derived from acceptedAt/revokedAt/expiresAt at read time (same
+// convention as PasswordResetToken.usedAt) so there is no second source of
+// truth to fall out of sync. A hand-added partial unique index
+// (workspace_invitations_one_pending_per_email, see the migration SQL)
+// prevents two concurrently-outstanding invitations to the same email in
+// the same workspace — Prisma's schema DSL cannot express a filtered
+// unique constraint.
+model WorkspaceInvitation {
+  id             String    @id @default(uuid())
+  organizationId String    @map("organization_id")
+  email          String
+  roleId         String    @map("role_id")
+  tokenHash      String    @unique @map("token_hash")
+  invitedById    String?   @map("invited_by")
+  expiresAt      DateTime  @map("expires_at")
+  acceptedAt     DateTime? @map("accepted_at")
+  acceptedUserId String?   @map("accepted_user_id")
+  revokedAt      DateTime? @map("revoked_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  role         Role         @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  invitedBy    User?        @relation("InvitationInvitedBy", fields: [invitedById], references: [id], onDelete: SetNull)
+  acceptedUser User?        @relation("InvitationAcceptedUser", fields: [acceptedUserId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId])
+  @@index([email])
+  @@index([expiresAt])
+  @@map("workspace_invitations")
 }
 
 // =============================================================================

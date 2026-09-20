@@ -49,6 +49,13 @@ export async function resetDb(): Promise<void> {
   await prisma.subscription.deleteMany();
   await prisma.contract.deleteMany();
   await prisma.contact.deleteMany();
+  // client_onboarding RESTRICTs on both client_id and organization_id —
+  // must go before both clients and organizations are deleted below.
+  await prisma.clientOnboarding.deleteMany();
+  // workspace_invitations CASCADEs on organization_id, but delete
+  // explicitly for clarity rather than relying on the later organization
+  // cascade (same rationale as the comment above this function).
+  await prisma.workspaceInvitation.deleteMany();
   await prisma.client.deleteMany();
   await prisma.lead.deleteMany();
 

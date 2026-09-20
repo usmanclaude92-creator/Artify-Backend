@@ -31,6 +31,11 @@ export function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
 
+/** Same entropy/shape family as generateSessionToken/generateResetToken, distinct prefix (Phase 6 §18) — a client-admin invitation token must never be confused with a session or password-reset credential. */
+export function generateInvitationToken(): string {
+  return `art_invite_${randomBytes(32).toString("hex")}`;
+}
+
 export function generateId(prefix: string): string {
   return `${prefix}_${randomBytes(8).toString("hex")}`;
 }
