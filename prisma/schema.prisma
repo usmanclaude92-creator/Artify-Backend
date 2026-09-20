@@ -371,58 +371,88 @@ enum LeadStatus {
 // properly so a future reseller/enterprise tenant could run its own CRM
 // instance without a schema change). The prospect's own company is NOT
 // yet a row in `organizations` — it's inline text until conversion.
+// Phase 5: convertedClientId/convertedAt record the outcome of a
+// successful lead→client conversion (server/services/leadService.ts) —
+// nullable because most leads never convert; both set together, inside
+// the same transaction that flips status to CONVERTED, so a lead can
+// never be "CONVERTED" without a client to point to.
 model Lead {
-  id             String     @id @default(uuid())
-  organizationId String     @map("organization_id")
-  companyName    String     @map("company_name")
-  contactName    String?    @map("contact_name")
-  email          String?
-  phone          String?
-  source         String?
-  status         LeadStatus @default(NEW)
-  notes          String?
-  assignedTo     String?    @map("assigned_to")
-  createdAt      DateTime   @default(now()) @map("created_at")
-  updatedAt      DateTime   @updatedAt @map("updated_at")
-  deletedAt      DateTime?  @map("deleted_at")
+  id                String     @id @default(uuid())
+  organizationId    String     @map("organization_id")
+  companyName       String     @map("company_name")
+  contactName       String?    @map("contact_name")
+  email             String?
+  phone             String?
+  source            String?
+  status            LeadStatus @default(NEW)
+  notes             String?
+  assignedTo        String?    @map("assigned_to")
+  convertedClientId String?    @map("converted_client_id")
+  convertedAt       DateTime?  @map("converted_at")
+  createdAt         DateTime   @default(now()) @map("created_at")
+  updatedAt         DateTime   @updatedAt @map("updated_at")
+  deletedAt         DateTime?  @map("deleted_at")
 
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  assignee     User?        @relation("LeadAssignee", fields: [assignedTo], references: [id], onDelete: SetNull)
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  assignee        User?        @relation("LeadAssignee", fields: [assignedTo], references: [id], onDelete: SetNull)
+  convertedClient Client?      @relation("LeadConvertedClient", fields: [convertedClientId], references: [id], onDelete: SetNull)
 
   @@index([organizationId])
   @@index([status])
+  @@index([assignedTo])
+  @@index([createdAt])
   @@map("leads")
 }
 
 enum ClientStatus {
+  PROSPECT
   ACTIVE
   INACTIVE
-  CHURNED
+  SUSPENDED
+  ARCHIVED
 }
 
 // organizationId = owning tenant scope (see Lead's doc comment — same
 // convention). `clientCode` is unique per tenant, not globally, since two
 // different Artify-platform tenants could reasonably reuse a code.
+// Phase 5: added name/legalName/email/phone/website/address — Phase 2's
+// Client had no name field at all (clientCode is an internal reference,
+// not a display name), which made it unusable as a real CRM record. Name
+// uniqueness is enforced at the service layer (a soft, case-insensitive
+// per-organization check — docs/CRM_ARCHITECTURE.md), not a DB
+// constraint: two organizations legitimately sharing a client name is
+// fine (tenant-scoped), and even within one organization a hard unique
+// constraint would incorrectly reject legitimate near-duplicates a human
+// operator should be allowed to create (e.g. two divisions of one firm).
 model Client {
   id             String       @id @default(uuid())
   organizationId String       @map("organization_id")
   clientCode     String       @map("client_code")
-  status         ClientStatus @default(ACTIVE)
+  name           String
+  legalName      String?      @map("legal_name")
+  status         ClientStatus @default(PROSPECT)
+  email          String?
+  phone          String?
+  website        String?
+  address        String?
   accountManager String?      @map("account_manager")
   notes          String?
   createdAt      DateTime     @default(now()) @map("created_at")
   updatedAt      DateTime     @updatedAt @map("updated_at")
   deletedAt      DateTime?    @map("deleted_at")
 
-  organization  Organization   @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  manager       User?          @relation("ClientAccountManager", fields: [accountManager], references: [id], onDelete: SetNull)
-  contacts      Contact[]
-  contracts     Contract[]
-  subscriptions Subscription[]
-  invoices      Invoice[]
+  organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  manager        User?          @relation("ClientAccountManager", fields: [accountManager], references: [id], onDelete: SetNull)
+  contacts       Contact[]
+  convertedLeads Lead[]         @relation("LeadConvertedClient")
+  contracts      Contract[]
+  subscriptions  Subscription[]
+  invoices       Invoice[]
 
   @@unique([organizationId, clientCode])
   @@index([organizationId])
+  @@index([status])
+  @@index([createdAt])
   @@map("clients")
 }
 
@@ -434,7 +464,11 @@ enum ContactStatus {
 // A contact is a person, kept separate from Client so one client can have
 // several contacts without duplicating contact data into every client
 // record (§25). `clientId` is nullable — a contact can exist before a
-// formal client relationship does.
+// formal client relationship does. Phase 5: added isPrimary — exactly the
+// "mark primary" affordance the Control Center UI needs; enforced as
+// at-most-one-primary-per-client at the service layer (a partial unique
+// index would need `WHERE is_primary` which Prisma's schema DSL cannot
+// express — see the hand-added migration SQL).
 model Contact {
   id             String        @id @default(uuid())
   organizationId String        @map("organization_id")
@@ -444,6 +478,7 @@ model Contact {
   email          String?
   phone          String?
   jobTitle       String?       @map("job_title")
+  isPrimary      Boolean       @default(false) @map("is_primary")
   status         ContactStatus @default(ACTIVE)
   createdAt      DateTime      @default(now()) @map("created_at")
   updatedAt      DateTime      @updatedAt @map("updated_at")

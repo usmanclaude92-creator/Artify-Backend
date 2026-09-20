@@ -8,6 +8,7 @@ export const Sidebar: React.FC<{ mobileOpen: boolean; onCloseMobile: () => void 
   const { user } = useAuth();
   const { path, navigate } = useRouter();
   const items = visibleNavItems(user?.role.permissions);
+  const sections: Array<"Platform" | "CRM"> = ["Platform", "CRM"];
 
   const content = (
     <>
@@ -22,28 +23,42 @@ export const Sidebar: React.FC<{ mobileOpen: boolean; onCloseMobile: () => void 
           <X className="w-4 h-4" />
         </button>
       </div>
-      <nav className="p-2 space-y-0.5" aria-label="Primary">
-        {items.map((item) => {
-          const active = path === item.path;
-          const Icon = item.icon;
+      <nav className="p-2 space-y-3" aria-label="Primary">
+        {sections.map((section) => {
+          const sectionItems = items.filter((item) => item.section === section);
+          if (sectionItems.length === 0) return null;
           return (
-            <button
-              key={item.id}
-              onClick={() => {
-                navigate(item.path);
-                onCloseMobile();
-              }}
-              aria-current={active ? "page" : undefined}
-              className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-semibold transition text-left"
-              style={
-                active
-                  ? { background: "var(--accent-soft)", color: "var(--accent)" }
-                  : { color: "var(--text-secondary)" }
-              }
-            >
-              <Icon className="w-4 h-4" />
-              {item.label}
-            </button>
+            <div key={section} className="space-y-0.5">
+              <p
+                className="px-3 pt-1 pb-1 text-[10px] font-bold uppercase tracking-wide"
+                style={{ color: "var(--text-muted)" }}
+              >
+                {section}
+              </p>
+              {sectionItems.map((item) => {
+                const active = path === item.path;
+                const Icon = item.icon;
+                return (
+                  <button
+                    key={item.id}
+                    onClick={() => {
+                      navigate(item.path);
+                      onCloseMobile();
+                    }}
+                    aria-current={active ? "page" : undefined}
+                    className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-semibold transition text-left"
+                    style={
+                      active
+                        ? { background: "var(--accent-soft)", color: "var(--accent)" }
+                        : { color: "var(--text-secondary)" }
+                    }
+                  >
+                    <Icon className="w-4 h-4" />
+                    {item.label}
+                  </button>
+                );
+              })}
+            </div>
           );
         })}
       </nav>

@@ -65,8 +65,8 @@ export class NotFoundError extends AppError {
 export class ConflictError extends AppError {
   readonly statusCode = 409;
   readonly code = ApiErrorCode.RESOURCE_CONFLICT;
-  constructor(message = "Resource conflict") {
-    super(message);
+  constructor(message = "Resource conflict", details?: unknown) {
+    super(message, details);
   }
 }
 

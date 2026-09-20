@@ -99,7 +99,7 @@ describe("schema constraints (Phase 2 §36/§52)", () => {
 
   it("rejects a negative contract value at the database level (CHECK constraint, not just app validation)", async () => {
     const org = await prisma.organization.create({ data: { name: "Org D", slug: "org-d" } });
-    const client = await prisma.client.create({ data: { organizationId: org.id, clientCode: "C-1" } });
+    const client = await prisma.client.create({ data: { organizationId: org.id, clientCode: "C-1", name: "Client One" } });
 
     await expect(
       prisma.contract.create({
@@ -117,7 +117,7 @@ describe("schema constraints (Phase 2 §36/§52)", () => {
 
   it("rejects an invoice due_date before its issue_date at the database level", async () => {
     const org = await prisma.organization.create({ data: { name: "Org E", slug: "org-e" } });
-    const client = await prisma.client.create({ data: { organizationId: org.id, clientCode: "C-2" } });
+    const client = await prisma.client.create({ data: { organizationId: org.id, clientCode: "C-2", name: "Client Two" } });
 
     await expect(
       prisma.invoice.create({
@@ -145,7 +145,7 @@ describe("schema constraints (Phase 2 §36/§52)", () => {
 
   it("preserves exact decimal precision for a 3-decimal-place currency (OMR) value — no floating-point drift", async () => {
     const org = await prisma.organization.create({ data: { name: "Org F", slug: "org-f" } });
-    const client = await prisma.client.create({ data: { organizationId: org.id, clientCode: "C-3" } });
+    const client = await prisma.client.create({ data: { organizationId: org.id, clientCode: "C-3", name: "Client Three" } });
 
     const contract = await prisma.contract.create({
       data: {

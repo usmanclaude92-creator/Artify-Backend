@@ -236,3 +236,151 @@ export const settingsApi = {
   update: (key: string, value: unknown, type: SystemSetting["type"] = "STRING", description?: string) =>
     apiClient.patch<{ setting: SystemSetting }>(`/settings/${key}`, { value, type, description }),
 };
+
+// ---------------------------------------------------------------------------
+// Phase 5 — CRM (leads, clients, contacts)
+// ---------------------------------------------------------------------------
+
+export type LeadStatus = "NEW" | "CONTACTED" | "QUALIFIED" | "CONVERTED" | "LOST";
+export type ClientStatusValue = "PROSPECT" | "ACTIVE" | "INACTIVE" | "SUSPENDED" | "ARCHIVED";
+
+export interface Lead {
+  id: string;
+  organizationId: string;
+  companyName: string;
+  contactName: string | null;
+  email: string | null;
+  phone: string | null;
+  source: string | null;
+  status: LeadStatus;
+  notes: string | null;
+  assignedTo: string | null;
+  convertedClientId: string | null;
+  convertedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CrmClient {
+  id: string;
+  organizationId: string;
+  clientCode: string;
+  name: string;
+  legalName: string | null;
+  status: ClientStatusValue;
+  email: string | null;
+  phone: string | null;
+  website: string | null;
+  address: string | null;
+  accountManager: string | null;
+  notes: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CrmContact {
+  id: string;
+  organizationId: string;
+  clientId: string | null;
+  firstName: string;
+  lastName: string;
+  email: string | null;
+  phone: string | null;
+  jobTitle: string | null;
+  isPrimary: boolean;
+  status: "ACTIVE" | "INACTIVE";
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CrmSummary {
+  leads: {
+    total: number;
+    new: number;
+    contacted: number;
+    qualified: number;
+    converted: number;
+    lost: number;
+    recent: Lead[];
+  } | null;
+  clients: {
+    total: number;
+    prospect: number;
+    active: number;
+    inactive: number;
+    suspended: number;
+    archived: number;
+    recent: CrmClient[];
+  } | null;
+}
+
+export const leadsApi = {
+  list: (
+    params: {
+      page?: number;
+      limit?: number;
+      search?: string;
+      status?: LeadStatus;
+      source?: string;
+      assignedTo?: string;
+      sort?: string;
+      order?: "asc" | "desc";
+    } = {}
+  ) => paginatedGet<Lead>("/leads", "leads", params),
+  get: (id: string) => apiClient.get<{ lead: Lead }>(`/leads/${id}`),
+  create: (payload: {
+    companyName: string;
+    contactName?: string;
+    email?: string;
+    phone?: string;
+    source?: string;
+    status?: LeadStatus;
+    notes?: string;
+    assignedTo?: string;
+  }) => apiClient.post<{ lead: Lead }>("/leads", payload),
+  update: (id: string, payload: Partial<Omit<Lead, "id" | "organizationId" | "createdAt" | "updatedAt" | "convertedClientId" | "convertedAt">>) =>
+    apiClient.patch<{ lead: Lead }>(`/leads/${id}`, payload),
+  remove: (id: string) => apiClient.delete<{ message: string }>(`/leads/${id}`),
+  convert: (
+    id: string,
+    payload: { clientCode: string; name?: string; email?: string; phone?: string; website?: string; address?: string; createContact?: boolean }
+  ) => apiClient.post<{ client: CrmClient; contactId: string | null }>(`/leads/${id}/convert`, payload),
+};
+
+export const clientsApi = {
+  list: (params: { page?: number; limit?: number; search?: string; status?: ClientStatusValue; sort?: string; order?: "asc" | "desc" } = {}) =>
+    paginatedGet<CrmClient>("/clients", "clients", params),
+  get: (id: string) => apiClient.get<{ client: CrmClient }>(`/clients/${id}`),
+  create: (payload: {
+    clientCode: string;
+    name: string;
+    legalName?: string;
+    status?: ClientStatusValue;
+    email?: string;
+    phone?: string;
+    website?: string;
+    address?: string;
+    accountManager?: string;
+    notes?: string;
+  }) => apiClient.post<{ client: CrmClient }>("/clients", payload),
+  update: (id: string, payload: Partial<Omit<CrmClient, "id" | "organizationId" | "clientCode" | "createdAt" | "updatedAt">>) =>
+    apiClient.patch<{ client: CrmClient }>(`/clients/${id}`, payload),
+  remove: (id: string) => apiClient.delete<{ message: string }>(`/clients/${id}`),
+  contacts: (clientId: string, params: { page?: number; limit?: number } = {}) =>
+    paginatedGet<CrmContact>(`/clients/${clientId}/contacts`, "contacts", params),
+  addContact: (clientId: string, payload: { firstName: string; lastName: string; email?: string; phone?: string; jobTitle?: string; isPrimary?: boolean }) =>
+    apiClient.post<{ contact: CrmContact }>(`/clients/${clientId}/contacts`, payload),
+};
+
+export const contactsApi = {
+  list: (params: { page?: number; limit?: number; search?: string; clientId?: string } = {}) =>
+    paginatedGet<CrmContact>("/contacts", "contacts", params),
+  get: (id: string) => apiClient.get<{ contact: CrmContact }>(`/contacts/${id}`),
+  update: (id: string, payload: Partial<Pick<CrmContact, "firstName" | "lastName" | "email" | "phone" | "jobTitle" | "isPrimary" | "status">>) =>
+    apiClient.patch<{ contact: CrmContact }>(`/contacts/${id}`, payload),
+  remove: (id: string) => apiClient.delete<{ message: string }>(`/contacts/${id}`),
+};
+
+export const crmApi = {
+  summary: () => apiClient.get<CrmSummary>("/crm/summary"),
+};

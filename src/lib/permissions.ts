@@ -17,6 +17,9 @@ import {
   ScrollText,
   MonitorSmartphone,
   Settings,
+  TrendingUp,
+  Contact2,
+  Briefcase,
 } from "lucide-react";
 import { DashboardPage } from "../components/modules/DashboardPage";
 import { UsersPage } from "../components/modules/UsersPage";
@@ -26,6 +29,10 @@ import { OrganizationsPage } from "../components/modules/OrganizationsPage";
 import { AuditLogPage } from "../components/modules/AuditLogPage";
 import { SecurityPage } from "../components/modules/SecurityPage";
 import { SettingsPage } from "../components/modules/SettingsPage";
+import { CrmDashboardPage } from "../components/modules/CrmDashboardPage";
+import { LeadsPage } from "../components/modules/LeadsPage";
+import { ClientsPage } from "../components/modules/ClientsPage";
+import { ContactsPage } from "../components/modules/ContactsPage";
 
 export function hasPermission(permissions: readonly string[] | undefined, key: string): boolean {
   return !!permissions?.includes(key);
@@ -39,16 +46,19 @@ export interface NavItem {
   /** Any one of these permissions is enough to show the item; empty means always visible to an authenticated user. */
   requiresAnyPermission?: string[];
   component: ComponentType;
+  /** Groups items under a heading in the sidebar (§22) — purely presentational. */
+  section: "Platform" | "CRM";
 }
 
 /**
- * Extensible by design (§6): future product modules (CRM, Products, CMS,
- * Media, Subscriptions, Billing, Reports, AI) register here the same way —
- * a nav entry + a permission gate + a lazily-mounted page — none of them
- * built yet, since Phase 4 is Control Center/System Administration only.
+ * Extensible by design (§6): future product modules (Products, CMS, Media,
+ * Subscriptions, Billing, Reports, AI) register here the same way — a nav
+ * entry + a permission gate + a lazily-mounted page. Phase 5 adds the CRM
+ * section (docs/CRM_ARCHITECTURE.md); none of the still-future modules are
+ * built yet.
  */
 export const NAV_ITEMS: NavItem[] = [
-  { id: "dashboard", label: "Dashboard", path: "/dashboard", icon: LayoutDashboard, component: DashboardPage },
+  { id: "dashboard", label: "Dashboard", path: "/dashboard", icon: LayoutDashboard, component: DashboardPage, section: "Platform" },
   {
     id: "users",
     label: "Users",
@@ -56,6 +66,7 @@ export const NAV_ITEMS: NavItem[] = [
     icon: Users,
     requiresAnyPermission: ["users.read"],
     component: UsersPage,
+    section: "Platform",
   },
   {
     id: "roles",
@@ -64,6 +75,7 @@ export const NAV_ITEMS: NavItem[] = [
     icon: ShieldCheck,
     requiresAnyPermission: ["roles.read"],
     component: RolesPage,
+    section: "Platform",
   },
   {
     id: "permissions",
@@ -72,6 +84,7 @@ export const NAV_ITEMS: NavItem[] = [
     icon: KeyRound,
     requiresAnyPermission: ["roles.read"],
     component: PermissionsPage,
+    section: "Platform",
   },
   {
     id: "organizations",
@@ -80,6 +93,7 @@ export const NAV_ITEMS: NavItem[] = [
     icon: Building2,
     requiresAnyPermission: ["organizations.read"],
     component: OrganizationsPage,
+    section: "Platform",
   },
   {
     id: "audit-log",
@@ -88,8 +102,9 @@ export const NAV_ITEMS: NavItem[] = [
     icon: ScrollText,
     requiresAnyPermission: ["audit.read"],
     component: AuditLogPage,
+    section: "Platform",
   },
-  { id: "security", label: "Security", path: "/security", icon: MonitorSmartphone, component: SecurityPage },
+  { id: "security", label: "Security", path: "/security", icon: MonitorSmartphone, component: SecurityPage, section: "Platform" },
   {
     id: "settings",
     label: "Settings",
@@ -97,6 +112,42 @@ export const NAV_ITEMS: NavItem[] = [
     icon: Settings,
     requiresAnyPermission: ["settings.read"],
     component: SettingsPage,
+    section: "Platform",
+  },
+  {
+    id: "crm-dashboard",
+    label: "CRM Dashboard",
+    path: "/crm",
+    icon: TrendingUp,
+    component: CrmDashboardPage,
+    section: "CRM",
+  },
+  {
+    id: "crm-leads",
+    label: "Leads",
+    path: "/crm/leads",
+    icon: Briefcase,
+    requiresAnyPermission: ["leads.read"],
+    component: LeadsPage,
+    section: "CRM",
+  },
+  {
+    id: "crm-clients",
+    label: "Clients",
+    path: "/crm/clients",
+    icon: Building2,
+    requiresAnyPermission: ["clients.read"],
+    component: ClientsPage,
+    section: "CRM",
+  },
+  {
+    id: "crm-contacts",
+    label: "Contacts",
+    path: "/crm/contacts",
+    icon: Contact2,
+    requiresAnyPermission: ["contacts.read"],
+    component: ContactsPage,
+    section: "CRM",
   },
 ];
 
