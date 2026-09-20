@@ -56,7 +56,7 @@ No live payment gateway integration exists or was added — payments are recorde
 No live Supabase connectivity was available in this build's sandbox (the same environmental network limitation documented for Postgres/object storage since Phase 2/9 — no outbound path to Supabase from here). All work was verified against local PostgreSQL; no Supabase credentials were invented, referenced, or committed. This limitation is unchanged from every prior phase and does not block Phase 10's completion, which does not require live Supabase access.
 
 ## Commit
-See the commit on `claude/busy-franklin-rdwttk` immediately following this report's addition to the repository.
+`d848174` on `claude/busy-franklin-rdwttk`.
 
 ## Branch
 `claude/busy-franklin-rdwttk`
