@@ -34,7 +34,7 @@ Scope: Lead/Client/Contact management, Lead→Client conversion, CRM dashboard, 
 None outstanding except the pre-existing, environmental Supabase connectivity gap noted above.
 
 ## Commit
-See `git log` on `claude/busy-franklin-rdwttk` for the Phase 5 commit hash.
+`a503ae0` on `claude/busy-franklin-rdwttk`.
 
 ## Branch
 `claude/busy-franklin-rdwttk`
