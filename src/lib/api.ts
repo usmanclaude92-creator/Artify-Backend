@@ -125,7 +125,8 @@ interface EnvelopeMeta {
   pagination?: { page: number; limit: number; total: number; totalPages: number };
 }
 
-async function paginatedGet<T>(path: string, key: string, params: Record<string, string | number | boolean | undefined>) {
+/** Exported for src/lib/aiApi.ts (Phase 12) — same list-envelope parsing every paginated module here already shares. */
+export async function paginatedGet<T>(path: string, key: string, params: Record<string, string | number | boolean | undefined>) {
   const query = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) {
     if (v !== undefined && v !== "") query.set(k, String(v));

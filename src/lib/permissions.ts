@@ -36,6 +36,14 @@ import {
   Receipt,
   Wallet,
   UserCircle,
+  Sparkles,
+  Cpu,
+  Wrench,
+  MessageSquareText,
+  Workflow,
+  History,
+  Gauge,
+  ShieldAlert,
 } from "lucide-react";
 import { DashboardPage } from "../components/modules/DashboardPage";
 import { UsersPage } from "../components/modules/UsersPage";
@@ -62,6 +70,14 @@ import { SubscriptionsPage } from "../components/modules/SubscriptionsPage";
 import { InvoicesPage } from "../components/modules/InvoicesPage";
 import { PaymentsPage } from "../components/modules/PaymentsPage";
 import { ClientPortalPage } from "../components/modules/ClientPortalPage";
+import { AiOverviewPage } from "../components/modules/ai/AiOverviewPage";
+import { AiProvidersPage } from "../components/modules/ai/AiProvidersPage";
+import { AiToolsPage } from "../components/modules/ai/AiToolsPage";
+import { AiPromptsPage } from "../components/modules/ai/AiPromptsPage";
+import { AiWorkflowsPage } from "../components/modules/ai/AiWorkflowsPage";
+import { AiExecutionsPage } from "../components/modules/ai/AiExecutionsPage";
+import { AiUsagePage } from "../components/modules/ai/AiUsagePage";
+import { AiApprovalsPage } from "../components/modules/ai/AiApprovalsPage";
 
 export function hasPermission(permissions: readonly string[] | undefined, key: string): boolean {
   return !!permissions?.includes(key);
@@ -76,7 +92,7 @@ export interface NavItem {
   requiresAnyPermission?: string[];
   component: ComponentType;
   /** Groups items under a heading in the sidebar (§22/§31) — purely presentational. */
-  section: "Platform" | "CRM" | "Onboarding" | "Workspaces" | "Products" | "CMS" | "Commercial" | "Client Portal";
+  section: "Platform" | "CRM" | "Onboarding" | "Workspaces" | "Products" | "CMS" | "Commercial" | "AI" | "Client Portal";
 }
 
 /**
@@ -312,6 +328,78 @@ export const NAV_ITEMS: NavItem[] = [
     requiresAnyPermission: ["payments.read"],
     component: PaymentsPage,
     section: "Commercial",
+  },
+  {
+    id: "ai-overview",
+    label: "Overview",
+    path: "/ai",
+    icon: Sparkles,
+    requiresAnyPermission: ["ai.executions.read", "ai.approvals.read", "ai.usage.read"],
+    component: AiOverviewPage,
+    section: "AI",
+  },
+  {
+    id: "ai-providers",
+    label: "Providers & Models",
+    path: "/ai/providers",
+    icon: Cpu,
+    requiresAnyPermission: ["ai.providers.read"],
+    component: AiProvidersPage,
+    section: "AI",
+  },
+  {
+    id: "ai-tools",
+    label: "Tools",
+    path: "/ai/tools",
+    icon: Wrench,
+    requiresAnyPermission: ["ai.tools.read"],
+    component: AiToolsPage,
+    section: "AI",
+  },
+  {
+    id: "ai-prompts",
+    label: "Prompt Templates",
+    path: "/ai/prompts",
+    icon: MessageSquareText,
+    requiresAnyPermission: ["ai.prompts.read"],
+    component: AiPromptsPage,
+    section: "AI",
+  },
+  {
+    id: "ai-workflows",
+    label: "Workflows",
+    path: "/ai/workflows",
+    icon: Workflow,
+    requiresAnyPermission: ["ai.workflows.read"],
+    component: AiWorkflowsPage,
+    section: "AI",
+  },
+  {
+    id: "ai-executions",
+    label: "Executions",
+    path: "/ai/executions",
+    icon: History,
+    requiresAnyPermission: ["ai.executions.read"],
+    component: AiExecutionsPage,
+    section: "AI",
+  },
+  {
+    id: "ai-usage",
+    label: "Usage & Costs",
+    path: "/ai/usage",
+    icon: Gauge,
+    requiresAnyPermission: ["ai.usage.read"],
+    component: AiUsagePage,
+    section: "AI",
+  },
+  {
+    id: "ai-approvals",
+    label: "Approvals",
+    path: "/ai/approvals",
+    icon: ShieldAlert,
+    requiresAnyPermission: ["ai.approvals.read"],
+    component: AiApprovalsPage,
+    section: "AI",
   },
   {
     id: "client-portal",
