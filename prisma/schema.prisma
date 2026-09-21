@@ -98,6 +98,12 @@ model Organization {
   // The operational tenant a CRM Client was provisioned into (Phase 6 —
   // docs/WORKSPACE_PROVISIONING.md). Reverse side of Client.workspaceOrganizationId.
   provisionedForClient Client?                  @relation("ClientWorkspace")
+  aiOrgToolSettings    AIOrgToolSetting[]
+  aiPromptTemplates    AIPromptTemplate[]
+  aiWorkflows          AIWorkflow[]
+  aiExecutions         AIExecution[]
+  aiUsageRecords       AIUsageRecord[]
+  aiApprovalRequests   AIApprovalRequest[]
 
   @@map("organizations")
 }
@@ -167,6 +173,14 @@ model User {
   createdInvoices           Invoice[]                @relation("InvoiceCreatedBy")
   createdPayments           Payment[]                @relation("PaymentCreatedBy")
   reversedPayments          Payment[]                @relation("PaymentReversedBy")
+  createdAIPromptTemplates  AIPromptTemplate[]       @relation("AIPromptTemplateCreatedBy")
+  updatedAIPromptTemplates  AIPromptTemplate[]       @relation("AIPromptTemplateUpdatedBy")
+  createdAIPromptVersions   AIPromptVersion[]        @relation("AIPromptVersionCreatedBy")
+  createdAIWorkflows        AIWorkflow[]             @relation("AIWorkflowCreatedBy")
+  updatedAIWorkflows        AIWorkflow[]             @relation("AIWorkflowUpdatedBy")
+  aiExecutions              AIExecution[]            @relation("AIExecutionUser")
+  requestedAIApprovals      AIApprovalRequest[]      @relation("AIApprovalRequestedBy")
+  approvedAIApprovals       AIApprovalRequest[]      @relation("AIApprovalApprovedBy")
 
   @@index([organizationId])
   @@map("users")
@@ -1345,4 +1359,388 @@ model SystemSetting {
 
   @@unique([organizationId, key])
   @@map("system_settings")
+}
+
+// =============================================================================
+// AI GOVERNANCE — Phase 12 (docs/AI_ARCHITECTURE.md, docs/AI_GOVERNANCE.md)
+//
+// The AI layer sits ABOVE existing business services, never below them:
+//   User → Authenticated API → RBAC → AI Governance Layer → Governed AI Tool
+//   → Existing Business Service → Repository → Prisma → PostgreSQL
+// AITool rows are a governance/audit catalog, never executable code — the
+// actual tool implementations live in server/ai/tools/*.ts and call the
+// SAME services (contractService, invoiceService, leadService, ...) a
+// human user would, with the SAME SanitizedUser as caller, so every AI
+// action passes through identical RBAC/tenant/Decimal-financial checks. No
+// AI code path ever touches Prisma or Postgres directly.
+//
+// Provider API keys are never stored in this schema — they stay in
+// server-side env config (server/ai/provider.ts, unchanged from Phase 1),
+// which is already server-only/never logged/never sent to a browser. Rows
+// here are administrative metadata (is this provider on, which models are
+// offered, their pricing) — see docs/AI_ARCHITECTURE.md §"Why no secret
+// storage table" for the full reasoning.
+// =============================================================================
+
+enum AIProviderStatus {
+  ACTIVE
+  INACTIVE
+}
+
+/**
+ * Platform-level catalog — one row per integrated AI vendor (e.g. "gemini"). Never organization-scoped; see docs/AI_ARCHITECTURE.md §6.
+ */
+model AIProvider {
+  id        String           @id @default(uuid())
+  code      String           @unique
+  name      String
+  status    AIProviderStatus @default(INACTIVE)
+  isDefault Boolean          @default(false)
+  createdAt DateTime         @default(now()) @map("created_at")
+  updatedAt DateTime         @updatedAt @map("updated_at")
+
+  models     AIModel[]
+  executions AIExecution[]
+  usage      AIUsageRecord[]
+
+  @@map("ai_providers")
+}
+
+/**
+ * Platform-level model catalog. Pricing is explicit, auditable, admin-editable metadata — never treated as authoritative billing data (that stays Phase 10's invoice/payment Decimal engine).
+ */
+model AIModel {
+  id                          String   @id @default(uuid())
+  providerId                  String   @map("provider_id")
+  modelId                     String   @map("model_id")
+  displayName                 String   @map("display_name")
+  contextWindow               Int?     @map("context_window")
+  supportsStructuredOutput    Boolean  @default(false) @map("supports_structured_output")
+  supportsToolCalling         Boolean  @default(false) @map("supports_tool_calling")
+  inputPricePerMillionTokens  Decimal? @map("input_price_per_million_tokens") @db.Decimal(18, 6)
+  outputPricePerMillionTokens Decimal? @map("output_price_per_million_tokens") @db.Decimal(18, 6)
+  isActive                    Boolean  @default(true) @map("is_active")
+  isDefault                   Boolean  @default(false) @map("is_default")
+  createdAt                   DateTime @default(now()) @map("created_at")
+  updatedAt                   DateTime @updatedAt @map("updated_at")
+
+  provider   AIProvider      @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  executions AIExecution[]
+  usage      AIUsageRecord[]
+
+  @@unique([providerId, modelId])
+  @@map("ai_models")
+}
+
+enum AIRiskLevel {
+  READ_ONLY
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum AIToolStatus {
+  ENABLED
+  DISABLED
+}
+
+/**
+ * Governance/audit catalog for AI tools — code-defined behavior
+ * (server/ai/tools/*.ts), DB row is metadata only: is it enabled, what
+ * permission and risk tier it carries, whether it requires human approval.
+ * Seeded from the static registry (prisma/aiToolSeed.ts), the same pattern
+ * PERMISSION_KEYS seeds the permissions table — see docs/AI_TOOL_SECURITY.md.
+ */
+model AITool {
+  id                 String       @id @default(uuid())
+  code               String       @unique
+  name               String
+  description        String
+  requiredPermission String       @map("required_permission")
+  riskLevel          AIRiskLevel  @map("risk_level")
+  isMutating         Boolean      @default(false) @map("is_mutating")
+  requiresApproval   Boolean      @default(false) @map("requires_approval")
+  status             AIToolStatus @default(ENABLED)
+  createdAt          DateTime     @default(now()) @map("created_at")
+  updatedAt          DateTime     @updatedAt @map("updated_at")
+
+  orgSettings    AIOrgToolSetting[]
+  toolExecutions AIToolExecution[]
+
+  @@map("ai_tools")
+}
+
+/**
+ * Organization-level override of a platform tool's availability — §6 "tool permissions" is org-scoped, the tool's own definition is not.
+ */
+model AIOrgToolSetting {
+  id                      String   @id @default(uuid())
+  organizationId          String   @map("organization_id")
+  toolCode                String   @map("tool_code")
+  enabled                 Boolean  @default(true)
+  requireApprovalOverride Boolean? @map("require_approval_override")
+  createdAt               DateTime @default(now()) @map("created_at")
+  updatedAt               DateTime @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  tool         AITool       @relation(fields: [toolCode], references: [code], onDelete: Cascade)
+
+  @@unique([organizationId, toolCode])
+  @@map("ai_org_tool_settings")
+}
+
+enum AIPromptStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
+}
+
+/**
+ * Organization-scoped (same "global = Artify's own internal org" convention
+ * as SystemSetting — avoids the nullable-organizationId uniqueness edge
+ * case). A template's `currentVersionId` is the only mutable pointer;
+ * AIPromptVersion rows themselves are immutable once created (§14/§15 —
+ * "prefer immutable versions once used by production executions").
+ */
+model AIPromptTemplate {
+  id               String         @id @default(uuid())
+  organizationId   String         @map("organization_id")
+  key              String
+  name             String
+  purpose          String?
+  status           AIPromptStatus @default(DRAFT)
+  currentVersionId String?        @unique @map("current_version_id")
+  createdById      String?        @map("created_by")
+  updatedById      String?        @map("updated_by")
+  createdAt        DateTime       @default(now()) @map("created_at")
+  updatedAt        DateTime       @updatedAt @map("updated_at")
+
+  organization   Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdBy      User?             @relation("AIPromptTemplateCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy      User?             @relation("AIPromptTemplateUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  versions       AIPromptVersion[] @relation("PromptTemplateVersions")
+  currentVersion AIPromptVersion?  @relation("PromptTemplateCurrentVersion", fields: [currentVersionId], references: [id], onDelete: SetNull)
+
+  @@unique([organizationId, key])
+  @@map("ai_prompt_templates")
+}
+
+/**
+ * Immutable once created — see AIPromptTemplate's doc comment. The
+ * system/user/untrusted-content boundary (§15) is enforced at execution
+ * time (server/ai/promptAssembly.ts), never by letting retrieved content
+ * merge into these fields.
+ */
+model AIPromptVersion {
+  id                 String   @id @default(uuid())
+  templateId         String   @map("template_id")
+  version            Int
+  systemInstructions String   @map("system_instructions")
+  userTemplate       String   @map("user_template")
+  variablesSchema    Json?    @map("variables_schema")
+  createdById        String?  @map("created_by")
+  createdAt          DateTime @default(now()) @map("created_at")
+
+  template           AIPromptTemplate  @relation("PromptTemplateVersions", fields: [templateId], references: [id], onDelete: Cascade)
+  createdBy          User?             @relation("AIPromptVersionCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  currentForTemplate AIPromptTemplate? @relation("PromptTemplateCurrentVersion")
+  executions         AIExecution[]
+
+  @@unique([templateId, version])
+  @@map("ai_prompt_versions")
+}
+
+enum AIWorkflowStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
+}
+
+/**
+ * Foundation only (§16/§28) — deliberately NOT a general job/orchestration
+ * platform. `steps` is a small, bounded, deterministic JSON array
+ * (`{order, toolCode, description}[]`), validated against `maxSteps` at
+ * execution time; there is no dynamic branching, no autonomous planning,
+ * no unbounded loop. Full background-job infrastructure is Phase 13.
+ */
+model AIWorkflow {
+  id             String           @id @default(uuid())
+  organizationId String           @map("organization_id")
+  key            String
+  name           String
+  description    String?
+  status         AIWorkflowStatus @default(DRAFT)
+  version        Int              @default(1)
+  steps          Json
+  maxSteps       Int              @default(10) @map("max_steps")
+  timeoutMs      Int              @default(30000) @map("timeout_ms")
+  createdById    String?          @map("created_by")
+  updatedById    String?          @map("updated_by")
+  createdAt      DateTime         @default(now()) @map("created_at")
+  updatedAt      DateTime         @updatedAt @map("updated_at")
+
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdBy    User?         @relation("AIWorkflowCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy    User?         @relation("AIWorkflowUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  executions   AIExecution[]
+
+  @@unique([organizationId, key])
+  @@map("ai_workflows")
+}
+
+enum AIExecutionKind {
+  TOOL_CALL
+  WORKFLOW
+}
+
+enum AIExecutionStatus {
+  PENDING
+  RUNNING
+  AWAITING_APPROVAL
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+/**
+ * One row per AI invocation (a single governed tool call OR a bounded
+ * workflow run) — the execution-history/audit backbone (§19). `input`/
+ * `output` are minimized/redacted JSON (never raw secrets — see
+ * docs/AI_USAGE_AND_COSTS.md and §30), not a full conversation transcript.
+ */
+model AIExecution {
+  id              String            @id @default(uuid())
+  organizationId  String            @map("organization_id")
+  userId          String?           @map("user_id")
+  kind            AIExecutionKind
+  workflowId      String?           @map("workflow_id")
+  toolCode        String?           @map("tool_code")
+  providerId      String?           @map("provider_id")
+  modelId         String?           @map("model_id")
+  promptVersionId String?           @map("prompt_version_id")
+  status          AIExecutionStatus @default(PENDING)
+  requestId       String?           @map("request_id")
+  input           Json?
+  output          Json?
+  errorCategory   String?           @map("error_category")
+  errorMessage    String?           @map("error_message")
+  startedAt       DateTime          @default(now()) @map("started_at")
+  completedAt     DateTime?         @map("completed_at")
+  durationMs      Int?              @map("duration_ms")
+  createdAt       DateTime          @default(now()) @map("created_at")
+
+  organization   Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user           User?               @relation("AIExecutionUser", fields: [userId], references: [id], onDelete: SetNull)
+  workflow       AIWorkflow?         @relation(fields: [workflowId], references: [id], onDelete: SetNull)
+  provider       AIProvider?         @relation(fields: [providerId], references: [id], onDelete: SetNull)
+  model          AIModel?            @relation(fields: [modelId], references: [id], onDelete: SetNull)
+  promptVersion  AIPromptVersion?    @relation(fields: [promptVersionId], references: [id], onDelete: SetNull)
+  toolExecutions AIToolExecution[]
+  usageRecords   AIUsageRecord[]
+  approvals      AIApprovalRequest[]
+
+  @@index([organizationId])
+  @@index([userId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("ai_executions")
+}
+
+/**
+ * One row per tool call within an AIExecution (a plain tool-call execution has exactly one; a workflow execution has one per step actually invoked).
+ */
+model AIToolExecution {
+  id               String            @id @default(uuid())
+  executionId      String            @map("execution_id")
+  toolCode         String            @map("tool_code")
+  stepOrder        Int?              @map("step_order")
+  status           AIExecutionStatus @default(PENDING)
+  input            Json?
+  output           Json?
+  riskLevel        AIRiskLevel       @map("risk_level")
+  requiresApproval Boolean           @default(false) @map("requires_approval")
+  errorCategory    String?           @map("error_category")
+  errorMessage     String?           @map("error_message")
+  startedAt        DateTime          @default(now()) @map("started_at")
+  completedAt      DateTime?         @map("completed_at")
+  durationMs       Int?              @map("duration_ms")
+  createdAt        DateTime          @default(now()) @map("created_at")
+
+  execution AIExecution         @relation(fields: [executionId], references: [id], onDelete: Cascade)
+  tool      AITool              @relation(fields: [toolCode], references: [code], onDelete: Restrict)
+  approvals AIApprovalRequest[]
+
+  @@index([executionId])
+  @@map("ai_tool_executions")
+}
+
+/**
+ * Operational usage metric, not Phase 10 billing data (§20) — Decimal for cost, matching the platform's one financial-math rule (never a JS float).
+ */
+model AIUsageRecord {
+  id             String   @id @default(uuid())
+  organizationId String   @map("organization_id")
+  executionId    String   @map("execution_id")
+  providerId     String?  @map("provider_id")
+  modelId        String?  @map("model_id")
+  inputTokens    Int?     @map("input_tokens")
+  outputTokens   Int?     @map("output_tokens")
+  totalTokens    Int?     @map("total_tokens")
+  estimatedCost  Decimal? @map("estimated_cost") @db.Decimal(18, 6)
+  currency       String   @default("USD")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  execution    AIExecution  @relation(fields: [executionId], references: [id], onDelete: Cascade)
+  provider     AIProvider?  @relation(fields: [providerId], references: [id], onDelete: SetNull)
+  model        AIModel?     @relation(fields: [modelId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId])
+  @@index([executionId])
+  @@index([createdAt])
+  @@map("ai_usage_records")
+}
+
+enum AIApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  EXPIRED
+}
+
+/**
+ * §17 human-approval gate for high-risk tool calls. `payloadHash` (sha256
+ * of the exact action+resourceId+payload the approval was requested for)
+ * is checked again at approval time — a payload that changed since the
+ * request, or a request replayed after `expiresAt`, is rejected outright
+ * rather than silently re-using a stale approval (§17 "prevent replay").
+ */
+model AIApprovalRequest {
+  id              String           @id @default(uuid())
+  organizationId  String           @map("organization_id")
+  executionId     String?          @map("execution_id")
+  toolExecutionId String?          @map("tool_execution_id")
+  requestedById   String           @map("requested_by")
+  action          String
+  resourceType    String?          @map("resource_type")
+  resourceId      String?          @map("resource_id")
+  payload         Json
+  payloadHash     String           @map("payload_hash")
+  status          AIApprovalStatus @default(PENDING)
+  approvedById    String?          @map("approved_by")
+  approvedAt      DateTime?        @map("approved_at")
+  rejectionReason String?          @map("rejection_reason")
+  expiresAt       DateTime         @map("expires_at")
+  createdAt       DateTime         @default(now()) @map("created_at")
+
+  organization  Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  execution     AIExecution?     @relation(fields: [executionId], references: [id], onDelete: SetNull)
+  toolExecution AIToolExecution? @relation(fields: [toolExecutionId], references: [id], onDelete: SetNull)
+  requestedBy   User             @relation("AIApprovalRequestedBy", fields: [requestedById], references: [id], onDelete: Restrict)
+  approvedBy    User?            @relation("AIApprovalApprovedBy", fields: [approvedById], references: [id], onDelete: SetNull)
+
+  @@index([organizationId])
+  @@index([status])
+  @@index([expiresAt])
+  @@map("ai_approval_requests")
 }
