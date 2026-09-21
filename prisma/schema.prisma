@@ -11,7 +11,12 @@
 // for event timestamps — see docs/DATABASE_SCHEMA.md §"Date vs Timestamp".
 
 generator client {
-  provider = "prisma-client-js"
+  provider      = "prisma-client-js"
+  // Vercel's Node.js serverless runtime is RHEL-based, distinct from the
+  // build container's own platform ("native") — without this, the query
+  // engine binary generated at build time can be missing/mismatched at
+  // runtime, crashing every request with a bare 500 (no error body).
+  binaryTargets = ["native", "rhel-openssl-3.0.x"]
 }
 
 datasource db {
