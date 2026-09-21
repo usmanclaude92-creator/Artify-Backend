@@ -21,5 +21,5 @@
     "forceConsistentCasingInFileNames": true,
     "types": ["node"]
   },
-  "include": ["server/**/*.ts", "server.ts", "prisma/seed.ts", "tests/**/*.ts"]
+  "include": ["server/**/*.ts", "server.ts", "api/**/*.ts", "prisma/seed.ts", "tests/**/*.ts"]
 }
