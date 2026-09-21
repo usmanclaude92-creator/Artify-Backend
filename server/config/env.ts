@@ -86,6 +86,15 @@ const envSchema = z
 
     // Phase 6 — client-admin workspace invitations (docs/WORKSPACE_PROVISIONING.md).
     INVITATION_TOKEN_TTL_HOURS: z.coerce.number().int().positive().default(72),
+
+    // Phase 11 — public website integration (docs/PUBLIC_API_ARCHITECTURE.md).
+    // The public website (artifysolscom) has no tenant/session context of
+    // its own — every public CMS page/post/lead belongs to exactly one
+    // agency organization, resolved here rather than guessed from a
+    // caller-supplied value. Left unset, the public CMS/lead endpoints
+    // report "not configured" (empty content, lead intake disabled) rather
+    // than fabricating or guessing an organization.
+    PUBLIC_WEBSITE_ORGANIZATION_ID: z.string().optional().default(""),
   })
   .superRefine((val, ctx) => {
     const isProdLike = val.NODE_ENV === "production" || val.NODE_ENV === "staging";
@@ -119,6 +128,15 @@ const envSchema = z
         // eslint-disable-next-line no-console
         console.warn(
           "[config] AI_PROVIDER=gemini but GEMINI_API_KEY is empty — AI endpoints will report unavailable until it is set."
+        );
+      }
+      if (!val.PUBLIC_WEBSITE_ORGANIZATION_ID) {
+        // Not fatal: the public website degrades to empty CMS/product
+        // listings and disabled lead intake rather than fail boot or guess
+        // a tenant.
+        // eslint-disable-next-line no-console
+        console.warn(
+          "[config] PUBLIC_WEBSITE_ORGANIZATION_ID is empty — public CMS/product content will report empty and public lead intake will be disabled until it is set."
         );
       }
 
@@ -186,6 +204,7 @@ export type AppConfig = Readonly<{
   passwordResetTokenTtlMinutes: number;
   passwordMinLength: number;
   invitationTokenTtlHours: number;
+  publicWebsiteOrganizationId: string;
 }>;
 
 export type EnvValidationResult =
@@ -244,6 +263,7 @@ export function validateEnv(raw: NodeJS.ProcessEnv | Record<string, string | und
       passwordResetTokenTtlMinutes: env.PASSWORD_RESET_TOKEN_TTL_MINUTES,
       passwordMinLength: env.PASSWORD_MIN_LENGTH,
       invitationTokenTtlHours: env.INVITATION_TOKEN_TTL_HOURS,
+      publicWebsiteOrganizationId: env.PUBLIC_WEBSITE_ORGANIZATION_ID,
     }),
   };
 }

@@ -61,6 +61,16 @@ export const passwordResetLimiter = rateLimit({
   },
 });
 
+/** Public website lead intake (Phase 11 §8) — anonymous, so keyed by IP only; tight enough to blunt spam/scraping without blocking a genuine visitor who submits more than once. */
+export const publicLeadLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: rateLimitHandler,
+  keyGenerator: (req: Request) => req.ip ?? "unknown-ip",
+});
+
 /** Authenticated sensitive actions (change-password, organization switch) — lower volume than general API traffic, keyed per-caller. */
 export const sensitiveActionLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,

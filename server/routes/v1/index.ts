@@ -47,6 +47,7 @@ import subscriptionRoutes from "./subscriptionRoutes";
 import invoiceRoutes from "./invoiceRoutes";
 import paymentRoutes from "./paymentRoutes";
 import portalRoutes from "./portalRoutes";
+import publicRoutes from "./publicRoutes";
 
 const v1Router = Router();
 
@@ -79,5 +80,6 @@ v1Router.use("/subscriptions", subscriptionRoutes);
 v1Router.use("/invoices", invoiceRoutes);
 v1Router.use("/payments", paymentRoutes);
 v1Router.use("/portal", portalRoutes);
+v1Router.use("/public", publicRoutes);
 
 export default v1Router;

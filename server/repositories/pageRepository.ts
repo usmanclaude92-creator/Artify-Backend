@@ -18,6 +18,9 @@ function slugify(input: string): string {
 const withCurrentRevision = { include: { currentRevision: true } } as const;
 export type PageWithRevision = Prisma.PageGetPayload<typeof withCurrentRevision>;
 
+const withPublicRelations = { include: { currentRevision: true, featuredMedia: true } } as const;
+export type PageWithPublicRelations = Prisma.PageGetPayload<typeof withPublicRelations>;
+
 function buildWhere(organizationId: string, filters: PageFilters): Prisma.PageWhereInput {
   const where: Prisma.PageWhereInput = { organizationId, deletedAt: null };
   if (filters.status) where.status = filters.status as Prisma.EnumContentStatusFilter["equals"];
@@ -43,6 +46,11 @@ export const pageRepository = {
 
   async findBySlugInOrg(organizationId: string, slug: string): Promise<Page | null> {
     return prisma.page.findFirst({ where: { organizationId, slug, deletedAt: null } });
+  },
+
+  /** Phase 11 public projection — PUBLISHED only, with the revision content and featured media needed to render the page (docs/PUBLIC_API_ARCHITECTURE.md). Never returns DRAFT/IN_REVIEW/SCHEDULED/ARCHIVED. */
+  async findPublishedBySlugWithMedia(organizationId: string, slug: string): Promise<PageWithPublicRelations | null> {
+    return prisma.page.findFirst({ where: { organizationId, slug, status: "PUBLISHED", deletedAt: null }, ...withPublicRelations });
   },
 
   async findUniqueSlugInOrg(organizationId: string, base: string): Promise<string> {

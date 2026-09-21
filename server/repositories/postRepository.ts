@@ -20,6 +20,17 @@ function slugify(input: string): string {
 const withRelations = { include: { currentRevision: true, category: true, author: true, tags: { include: { tag: true } } } } as const;
 export type PostWithRelations = Prisma.PostGetPayload<typeof withRelations>;
 
+const withPublicRelations = {
+  include: {
+    currentRevision: true,
+    category: true,
+    author: { include: { user: { select: { firstName: true, lastName: true } } } },
+    tags: { include: { tag: true } },
+    featuredMedia: true,
+  },
+} as const;
+export type PostWithPublicRelations = Prisma.PostGetPayload<typeof withPublicRelations>;
+
 function buildWhere(organizationId: string, filters: PostFilters): Prisma.PostWhereInput {
   const where: Prisma.PostWhereInput = { organizationId, deletedAt: null };
   if (filters.status) where.status = filters.status as Prisma.EnumContentStatusFilter["equals"];
@@ -47,6 +58,28 @@ export const postRepository = {
 
   async findBySlugInOrg(organizationId: string, slug: string): Promise<Post | null> {
     return prisma.post.findFirst({ where: { organizationId, slug, deletedAt: null } });
+  },
+
+  /** Phase 11 public projection — PUBLISHED only, with category/author/tags/featured media/revision content (docs/PUBLIC_API_ARCHITECTURE.md). Never returns DRAFT/IN_REVIEW/SCHEDULED/ARCHIVED. */
+  async findPublishedBySlugWithMedia(organizationId: string, slug: string): Promise<PostWithPublicRelations | null> {
+    return prisma.post.findFirst({ where: { organizationId, slug, status: "PUBLISHED", deletedAt: null }, ...withPublicRelations });
+  },
+
+  /** Phase 11 public projection — PUBLISHED only, paginated, with the same relations as findPublishedBySlugWithMedia. */
+  async listPublished(
+    organizationId: string,
+    filters: Omit<PostFilters, "status">,
+    page: number,
+    limit: number,
+    sort: string,
+    order: "asc" | "desc"
+  ): Promise<{ rows: PostWithPublicRelations[]; total: number }> {
+    const where = buildWhere(organizationId, { ...filters, status: "PUBLISHED" });
+    const [rows, total] = await Promise.all([
+      prisma.post.findMany({ where, orderBy: { [sort]: order }, skip: (page - 1) * limit, take: limit, ...withPublicRelations }),
+      prisma.post.count({ where }),
+    ]);
+    return { rows, total };
   },
 
   async findUniqueSlugInOrg(organizationId: string, base: string): Promise<string> {
