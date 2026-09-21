@@ -96,8 +96,35 @@ export const PERMISSION_KEYS = [
   "settings.read",
   "settings.manage",
   "audit.read",
-  "ai.use",
-  "ai.manage",
+  // Phase 12 — AI Control Center governance keys (docs/AI_GOVERNANCE.md).
+  // Deliberately granular: provider/model catalog and tool enablement are
+  // admin-only; prompt/workflow authoring is separate from execution;
+  // approval decisions are separate from viewing what's pending; usage/cost
+  // and AI-specific audit are separate read surfaces from generic
+  // reports.read/audit.read so they can be granted independently.
+  "ai.providers.read",
+  "ai.providers.manage",
+  "ai.models.read",
+  "ai.models.manage",
+  "ai.tools.read",
+  "ai.tools.manage",
+  "ai.prompts.read",
+  "ai.prompts.create",
+  "ai.prompts.update",
+  "ai.prompts.publish",
+  "ai.prompts.delete",
+  "ai.workflows.read",
+  "ai.workflows.create",
+  "ai.workflows.update",
+  "ai.workflows.publish",
+  "ai.workflows.delete",
+  "ai.workflows.execute",
+  "ai.executions.read",
+  "ai.executions.cancel",
+  "ai.usage.read",
+  "ai.approvals.read",
+  "ai.approvals.decide",
+  "ai.audit.read",
   "onboarding.read",
   "onboarding.create",
   "onboarding.update",

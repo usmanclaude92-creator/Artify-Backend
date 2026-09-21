@@ -80,3 +80,13 @@ export const sensitiveActionLimiter = rateLimit({
   handler: rateLimitHandler,
   keyGenerator: (req: Request) => req.user?.id ?? req.ip ?? "unknown",
 });
+
+/** Phase 12 — AI tool-call/workflow execution (docs/AI_GOVERNANCE.md). Tighter than general API traffic: each call can reach an external AI provider or mutate real data, keyed per-caller so one noisy user can't exhaust another's budget. */
+export const aiExecutionLimiter = rateLimit({
+  windowMs: 5 * 60 * 1000,
+  limit: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: rateLimitHandler,
+  keyGenerator: (req: Request) => req.user?.id ?? req.ip ?? "unknown",
+});

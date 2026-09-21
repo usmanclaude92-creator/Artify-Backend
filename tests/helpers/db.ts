@@ -62,6 +62,13 @@ export async function resetDb(): Promise<void> {
   // productId/productModuleId respectively).
   await prisma.productModule.deleteMany();
   await prisma.product.deleteMany();
+  // ai_providers is platform-global (no organizationId), same as products
+  // above — wiped explicitly. Cascades to ai_models (onDelete: Cascade) and
+  // nulls out any ai_executions/ai_usage_records provider/model references
+  // (onDelete: SetNull) automatically. ai_tools is NOT wiped here — it is
+  // reference/configuration data seeded once by tests/setup.ts
+  // (seedAiTools), same treatment as roles/permissions above.
+  await prisma.aIProvider.deleteMany();
   // contract_variations CASCADEs on contract_id, but delete explicitly for
   // clarity (same rationale as the workspace_invitation comment above).
   await prisma.contractVariation.deleteMany();
@@ -92,6 +99,11 @@ export async function resetDb(): Promise<void> {
   await prisma.notification.deleteMany();
   await prisma.notificationPreference.deleteMany();
   await prisma.systemSetting.deleteMany();
+
+  // ai_approval_requests.requested_by RESTRICTs on user_id — must go before
+  // the user deleteMany below (every other AI table's user FKs are SetNull
+  // or cascade from organization, so only this one is order-sensitive).
+  await prisma.aIApprovalRequest.deleteMany();
 
   await prisma.webhookEvent.deleteMany();
   await prisma.auditLog.deleteMany();

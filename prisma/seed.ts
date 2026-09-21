@@ -15,12 +15,16 @@
 import { PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
 import { seedRolesAndPermissions } from "./rolePermissionSeed";
+import { seedAiTools } from "./aiToolSeed";
 
 const prisma = new PrismaClient();
 
 async function main(): Promise<void> {
   const roleIds = await seedRolesAndPermissions(prisma);
   console.log("Seeded system roles and permission catalog.");
+
+  await seedAiTools(prisma);
+  console.log("Seeded AI tool governance catalog.");
 
   const internalOrg = await prisma.organization.upsert({
     where: { slug: "artify-solutions" },

@@ -13,5 +13,7 @@
  */
 import { prisma } from "../server/db/prisma";
 import { seedRolesAndPermissions } from "../prisma/rolePermissionSeed";
+import { seedAiTools } from "../prisma/aiToolSeed";
 
 await seedRolesAndPermissions(prisma);
+await seedAiTools(prisma);

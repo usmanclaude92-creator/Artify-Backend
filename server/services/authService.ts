@@ -31,6 +31,7 @@ const SELF_REGISTRATION_ROLE_KEY = "ADMIN";
 export interface RequestMeta {
   ip?: string;
   userAgent?: string;
+  requestId?: string;
 }
 
 export interface LoginResult {
@@ -50,7 +51,8 @@ function sessionExpiry(): Date {
  * treat as "this session/request is no longer valid" (e.g. an admin
  * removed the membership after the session was issued).
  */
-async function resolveSanitizedUserForOrganization(user: User, organizationId: string): Promise<SanitizedUser | null> {
+/** Exported for callers outside login/session flows that need to re-resolve a SanitizedUser for a known organization (e.g. server/services/aiApprovalService.ts re-establishing the original requester as the caller when an approved AI action finally executes). */
+export async function resolveSanitizedUserForOrganization(user: User, organizationId: string): Promise<SanitizedUser | null> {
   const membership = await organizationMembershipRepository.findActiveMembership(user.id, organizationId);
   if (!membership) return null;
 

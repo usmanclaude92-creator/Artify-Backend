@@ -15,8 +15,9 @@
  * payments) and the read-only client portal (portal —
  * docs/COMMERCIAL_ARCHITECTURE.md, docs/BILLING_ARCHITECTURE.md,
  * docs/CLIENT_PORTAL_ARCHITECTURE.md).
- * Other business-domain route groups (AI) remain for their respective
- * future phases.
+ * Phase 12 adds the AI Control Center (ai/providers, ai/tools, ai/prompts,
+ * ai/workflows, ai/executions, ai/usage, ai/approvals —
+ * docs/AI_ARCHITECTURE.md, docs/AI_GOVERNANCE.md).
  */
 import { Router } from "express";
 import authRoutes from "./authRoutes";
@@ -48,6 +49,13 @@ import invoiceRoutes from "./invoiceRoutes";
 import paymentRoutes from "./paymentRoutes";
 import portalRoutes from "./portalRoutes";
 import publicRoutes from "./publicRoutes";
+import aiProviderRoutes from "./aiProviderRoutes";
+import aiToolRoutes from "./aiToolRoutes";
+import aiPromptRoutes from "./aiPromptRoutes";
+import aiWorkflowRoutes from "./aiWorkflowRoutes";
+import aiExecutionRoutes from "./aiExecutionRoutes";
+import aiUsageRoutes from "./aiUsageRoutes";
+import aiApprovalRoutes from "./aiApprovalRoutes";
 
 const v1Router = Router();
 
@@ -81,5 +89,12 @@ v1Router.use("/invoices", invoiceRoutes);
 v1Router.use("/payments", paymentRoutes);
 v1Router.use("/portal", portalRoutes);
 v1Router.use("/public", publicRoutes);
+v1Router.use("/ai/providers", aiProviderRoutes);
+v1Router.use("/ai/tools", aiToolRoutes);
+v1Router.use("/ai/prompts", aiPromptRoutes);
+v1Router.use("/ai/workflows", aiWorkflowRoutes);
+v1Router.use("/ai/executions", aiExecutionRoutes);
+v1Router.use("/ai/usage", aiUsageRoutes);
+v1Router.use("/ai/approvals", aiApprovalRoutes);
 
 export default v1Router;
