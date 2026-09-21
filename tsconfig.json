@@ -23,5 +23,5 @@
     "allowImportingTsExtensions": true,
     "noEmit": true
   },
-  "exclude": ["node_modules", "dist", "server", "server.ts", "tests", "prisma"]
+  "exclude": ["node_modules", "dist", "server", "server.ts", "tests", "prisma", "api"]
 }
