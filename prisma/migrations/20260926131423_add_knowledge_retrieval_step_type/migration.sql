@@ -1,0 +1,2 @@
+-- AlterEnum
+ALTER TYPE "AutomationStepType" ADD VALUE 'KNOWLEDGE_RETRIEVAL';

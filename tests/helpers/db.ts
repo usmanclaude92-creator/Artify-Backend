@@ -105,6 +105,36 @@ export async function resetDb(): Promise<void> {
   // or cascade from organization, so only this one is order-sensitive).
   await prisma.aIApprovalRequest.deleteMany();
 
+  // Phase 13/14/15 (imported from the Google AI Studio lineage) — unlike
+  // the Phase 12 AI tables above, every one of these RESTRICTs on
+  // organization_id (their own convention, preserved as imported) rather
+  // than cascading, so each must be deleted explicitly before
+  // organization.deleteMany() below. Listed leaves-first; several of these
+  // cascade their own children automatically (workflow -> versions,
+  // execution -> step executions, document -> versions/chunks/embeddings/
+  // ingestion jobs, workspace -> conversations -> messages/action
+  // previews), so deleting them here first makes the later deletes no-ops
+  // rather than duplicating cleanup logic.
+  await prisma.automationActionExecution.deleteMany();
+  await prisma.automationNotification.deleteMany();
+  await prisma.automationTask.deleteMany();
+  await prisma.automationApproval.deleteMany();
+  await prisma.automationEvent.deleteMany();
+  await prisma.automationSchedule.deleteMany();
+  await prisma.automationExecution.deleteMany();
+  await prisma.automationWorkflow.deleteMany();
+
+  await prisma.knowledgeSearchLog.deleteMany();
+  await prisma.knowledgeIngestionJob.deleteMany();
+  await prisma.knowledgeDocument.deleteMany();
+  await prisma.knowledgeSource.deleteMany();
+  await prisma.knowledgeCollection.deleteMany();
+
+  await prisma.copilotUsage.deleteMany();
+  await prisma.copilotActionPreview.deleteMany();
+  await prisma.copilotConversation.deleteMany();
+  await prisma.copilotWorkspace.deleteMany();
+
   await prisma.webhookEvent.deleteMany();
   await prisma.auditLog.deleteMany();
   await prisma.session.deleteMany();

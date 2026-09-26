@@ -125,6 +125,30 @@ export const PERMISSION_KEYS = [
   "ai.approvals.read",
   "ai.approvals.decide",
   "ai.audit.read",
+  // Phase 13/14/15 — Automation, Knowledge/RAG, and Copilot (imported from
+  // usmanclaude92-creator/Artify-Backend---Google-AI-Studio-, commit
+  // 4a1d7cd). Separate namespace from ai.* above — that's this repo's own
+  // governed AI-tool/workflow layer (docs/AI_GOVERNANCE.md); these three
+  // are net-new subsystems that didn't exist here before this import.
+  "automation.read",
+  "automation.create",
+  "automation.edit",
+  "automation.publish",
+  "automation.execute",
+  "automation.approve",
+  "automation.manage",
+  "knowledge.read",
+  "knowledge.search",
+  "knowledge.create",
+  "knowledge.upload",
+  "knowledge.edit",
+  "knowledge.archive",
+  "knowledge.reindex",
+  "knowledge.manage",
+  "copilot.read",
+  "copilot.use",
+  "copilot.manage",
+  "copilot.admin",
   "onboarding.read",
   "onboarding.create",
   "onboarding.update",

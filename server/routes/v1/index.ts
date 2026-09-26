@@ -56,6 +56,9 @@ import aiWorkflowRoutes from "./aiWorkflowRoutes";
 import aiExecutionRoutes from "./aiExecutionRoutes";
 import aiUsageRoutes from "./aiUsageRoutes";
 import aiApprovalRoutes from "./aiApprovalRoutes";
+import automationRoutes from "./automationRoutes";
+import knowledgeRoutes from "./knowledgeRoutes";
+import copilotRoutes from "./copilotRoutes";
 
 const v1Router = Router();
 
@@ -96,5 +99,8 @@ v1Router.use("/ai/workflows", aiWorkflowRoutes);
 v1Router.use("/ai/executions", aiExecutionRoutes);
 v1Router.use("/ai/usage", aiUsageRoutes);
 v1Router.use("/ai/approvals", aiApprovalRoutes);
+v1Router.use("/automation", automationRoutes);
+v1Router.use("/knowledge", knowledgeRoutes);
+v1Router.use("/copilot", copilotRoutes);
 
 export default v1Router;
