@@ -1,6 +1,6 @@
 /** Phase 4 §16/§17 — organization directory + membership management, all through the Phase 3 org/member APIs. */
 import React, { useEffect, useState } from "react";
-import { Building2, UserPlus, Trash2 } from "lucide-react";
+import { Building2, UserPlus, Trash2, Copy } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
 import { organizationsApi, type Organization, type OrganizationMember } from "../../lib/api";
@@ -181,6 +181,17 @@ export const OrganizationsPage: React.FC = () => {
                 <p className="text-[11px]" style={{ color: "var(--text-muted)" }}>
                   {selected.slug} · {selected.currency}
                 </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    void navigator.clipboard.writeText(selected.id);
+                    notify("Organization ID copied.", "success");
+                  }}
+                  className="mt-1 inline-flex items-center gap-1 text-[11px] font-mono"
+                  style={{ color: "var(--text-muted)" }}
+                >
+                  <Copy className="w-3 h-3" /> {selected.id}
+                </button>
               </div>
               {canManageMembers && (
                 <Button variant="primary" onClick={() => setAddOpen(true)}>
