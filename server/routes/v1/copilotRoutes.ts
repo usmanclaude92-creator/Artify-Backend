@@ -11,7 +11,12 @@ import { CopilotService } from "../../services/copilot/CopilotService";
 import { authenticateToken, requirePermission } from "../../middleware/auth";
 import { asyncHandler } from "../../utils/asyncHandler";
 import { sendSuccess } from "../../core/apiResponse";
-import { ValidationError } from "../../core/errors";
+import {
+  createWorkspaceSchema,
+  createConversationSchema,
+  listConversationsQuerySchema,
+  sendMessageSchema,
+} from "../../schemas/copilotSchemas";
 
 const router = Router();
 
@@ -39,11 +44,8 @@ router.post(
   "/workspaces",
   requirePermission("copilot.manage"),
   asyncHandler(async (req, res) => {
-    if (!req.body.name || !req.body.name.trim()) {
-      throw new ValidationError("Workspace name is required.");
-    }
-
-    const workspace = await CopilotService.createWorkspace(req.user!.organizationId, req.user!.id, req.body);
+    const input = createWorkspaceSchema.parse(req.body);
+    const workspace = await CopilotService.createWorkspace(req.user!.organizationId, req.user!.id, input);
     sendSuccess(res, { workspace }, 201);
   })
 );
@@ -68,12 +70,13 @@ router.get(
   "/conversations",
   requirePermission("copilot.read"),
   asyncHandler(async (req, res) => {
+    const query = listConversationsQuerySchema.parse(req.query);
     const result = await CopilotService.listConversations(req.user!.organizationId, req.user!.id, {
-      workspaceId: req.query.workspaceId ? String(req.query.workspaceId) : undefined,
-      status: req.query.status ? String(req.query.status) : undefined,
-      search: req.query.search ? String(req.query.search) : undefined,
-      limit: req.query.limit ? parseInt(String(req.query.limit), 10) : 20,
-      offset: req.query.offset ? parseInt(String(req.query.offset), 10) : 0,
+      workspaceId: query.workspaceId,
+      status: query.status,
+      search: query.search,
+      limit: query.limit ?? 20,
+      offset: query.offset ?? 0,
     });
     sendSuccess(res, result);
   })
@@ -87,7 +90,8 @@ router.post(
   "/conversations",
   requirePermission("copilot.use"),
   asyncHandler(async (req, res) => {
-    const conversation = await CopilotService.createConversation(req.user!.organizationId, req.user!.id, req.body);
+    const input = createConversationSchema.parse(req.body);
+    const conversation = await CopilotService.createConversation(req.user!.organizationId, req.user!.id, input);
     sendSuccess(res, { conversation }, 201);
   })
 );
@@ -138,10 +142,7 @@ router.post(
   requirePermission("copilot.use"),
   asyncHandler(async (req, res) => {
     const permissions = req.user!.role.permissions || [];
-
-    if (!req.body.content || !req.body.content.trim()) {
-      throw new ValidationError("Message content is required.");
-    }
+    const input = sendMessageSchema.parse(req.body);
 
     const result = await CopilotService.sendMessage(
       {
@@ -150,13 +151,7 @@ router.post(
         userPermissions: permissions,
         displayName: req.user!.email?.split("@")[0] || "User",
       },
-      {
-        conversationId: req.body.conversationId,
-        workspaceId: req.body.workspaceId,
-        content: req.body.content,
-        mode: req.body.mode,
-        contextMetadata: req.body.contextMetadata,
-      }
+      input
     );
 
     sendSuccess(res, result);
@@ -172,10 +167,7 @@ router.post(
   requirePermission("copilot.use"),
   asyncHandler(async (req, res) => {
     const permissions = req.user!.role.permissions || [];
-
-    if (!req.body.content || !req.body.content.trim()) {
-      throw new ValidationError("Message content is required.");
-    }
+    const input = sendMessageSchema.parse(req.body);
 
     // Set SSE headers
     res.setHeader("Content-Type", "text/event-stream");
@@ -196,13 +188,7 @@ router.post(
           userPermissions: permissions,
           displayName: req.user!.email?.split("@")[0] || "User",
         },
-        {
-          conversationId: req.body.conversationId,
-          workspaceId: req.body.workspaceId,
-          content: req.body.content,
-          mode: req.body.mode,
-          contextMetadata: req.body.contextMetadata,
-        }
+        input
       );
 
       if (result.citations && result.citations.length > 0) {

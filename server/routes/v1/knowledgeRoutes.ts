@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 /**
  * Phase 14: Enterprise Knowledge, Document Intelligence & RAG — API Routes
  * (imported from usmanclaude92-creator/Artify-Backend---Google-AI-Studio-,
@@ -15,6 +14,13 @@ import { sendSuccess } from "../../core/apiResponse";
 import { KnowledgeService } from "../../services/knowledge/KnowledgeService";
 import { prisma } from "../../db/prisma";
 import { NotFoundError, ValidationError } from "../../core/errors";
+import {
+  createCollectionSchema,
+  registerSourceSchema,
+  listDocumentsQuerySchema,
+  uploadDocumentSchema,
+  searchKnowledgeSchema,
+} from "../../schemas/knowledgeSchemas";
 
 const router = Router();
 
@@ -36,14 +42,11 @@ router.post(
   "/collections",
   requirePermission("knowledge.create"),
   asyncHandler(async (req, res) => {
+    const input = createCollectionSchema.parse(req.body);
     const collection = await KnowledgeService.createCollection({
       organizationId: req.user!.organizationId,
       userId: req.user!.id,
-      name: req.body.name,
-      description: req.body.description,
-      accessPolicy: req.body.accessPolicy,
-      allowedRoles: req.body.allowedRoles,
-      metadata: req.body.metadata,
+      ...input,
     });
     sendSuccess(res, { collection }, 201);
   })
@@ -65,14 +68,10 @@ router.post(
   "/sources",
   requirePermission("knowledge.create"),
   asyncHandler(async (req, res) => {
+    const input = registerSourceSchema.parse(req.body);
     const source = await KnowledgeService.registerSource({
       organizationId: req.user!.organizationId,
-      collectionId: req.body.collectionId,
-      name: req.body.name,
-      sourceType: req.body.sourceType,
-      entityType: req.body.entityType,
-      entityId: req.body.entityId,
-      config: req.body.config,
+      ...input,
     });
     sendSuccess(res, { source }, 201);
   })
@@ -100,14 +99,14 @@ router.get(
   "/documents",
   requirePermission("knowledge.read"),
   asyncHandler(async (req, res) => {
-    const { collectionId, sourceId, status } = req.query;
+    const { collectionId, sourceId, status } = listDocumentsQuerySchema.parse(req.query);
 
     const documents = await prisma.knowledgeDocument.findMany({
       where: {
         organizationId: req.user!.organizationId,
-        ...(collectionId ? { collectionId: String(collectionId) } : {}),
-        ...(sourceId ? { sourceId: String(sourceId) } : {}),
-        ...(status ? { status: status as any } : {}),
+        ...(collectionId ? { collectionId } : {}),
+        ...(sourceId ? { sourceId } : {}),
+        ...(status ? { status } : {}),
       },
       include: {
         collection: true,
@@ -146,7 +145,8 @@ router.post(
   requirePermission("knowledge.upload"),
   express.json({ limit: "25mb" }),
   asyncHandler(async (req, res) => {
-    const { text, contentBase64, mimeType, filename, title, description, collectionId, sourceId, securityScope, requiredRole, metadata } = req.body;
+    const { text, contentBase64, mimeType, filename, title, description, collectionId, sourceId, securityScope, requiredRole, metadata } =
+      uploadDocumentSchema.parse(req.body);
 
     let buffer: Buffer;
     const finalMime = mimeType || "text/plain";
@@ -194,14 +194,14 @@ router.post(
   "/search",
   requirePermission("knowledge.search"),
   asyncHandler(async (req, res) => {
-    const { query, mode, limit, minScore, filter } = req.body;
+    const { query, mode, limit, minScore, filter } = searchKnowledgeSchema.parse(req.body);
 
     const results = await KnowledgeService.search(
       {
-        query: String(query || ""),
+        query,
         mode: mode || "HYBRID",
-        limit: limit ? parseInt(String(limit), 10) : 10,
-        minScore: minScore !== undefined ? parseFloat(String(minScore)) : 0.15,
+        limit: limit ?? 10,
+        minScore: minScore ?? 0.15,
         filter,
       },
       {
