@@ -39,6 +39,10 @@ jobs:
       AI_PROVIDER: none
       GEMINI_API_KEY: ""
       OBJECT_STORAGE_PROVIDER: none
+      # tests/integration/publicApi.test.ts requires this to be set (asserts
+      # it's truthy in beforeAll) — .env.test carries it for local runs but
+      # is gitignored, so CI needs its own copy or every run fails here.
+      PUBLIC_WEBSITE_ORGANIZATION_ID: 00000000-0000-0000-0000-00000000ac1e
 
     steps:
       - uses: actions/checkout@v4
