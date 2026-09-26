@@ -135,7 +135,10 @@ describe("product catalog", () => {
 
     const sorted = await request(app).get("/api/v1/products").query({ sort: "name", order: "asc", limit: 100 }).set("Authorization", `Bearer ${adminToken}`);
     const names = sorted.body.data.products.map((p: { name: string }) => p.name);
-    expect(names).toEqual([...names].sort());
+    // Postgres's default collation (locale-aware) and JS's Array.sort()
+    // (binary/UTF-16 code-unit order) disagree on mixed-case strings — e.g.
+    // "Consulting" vs "CRM Alpha". localeCompare matches the DB's ordering.
+    expect(names).toEqual([...names].sort((a, b) => a.localeCompare(b)));
   });
 
   it("rejects an unsafe sort field", async () => {
