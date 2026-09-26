@@ -11,12 +11,21 @@ const SECTIONS: Section[] = ["Platform", "CRM", "Onboarding", "Workspaces", "Pro
 /** Presentation state only, like the theme preference — safe to persist client-side. */
 const COLLAPSED_STORAGE_KEY = "artify_cc_sidebar_collapsed";
 
+/** Every section starts collapsed; the active item's section overrides this via `hasActiveItem`. */
+function defaultCollapsed(): Record<string, boolean> {
+  return SECTIONS.reduce((acc, section) => {
+    acc[section] = true;
+    return acc;
+  }, {} as Record<string, boolean>);
+}
+
 function loadCollapsed(): Record<string, boolean> {
+  const defaults = defaultCollapsed();
   try {
     const raw = localStorage.getItem(COLLAPSED_STORAGE_KEY);
-    return raw ? (JSON.parse(raw) as Record<string, boolean>) : {};
+    return raw ? { ...defaults, ...(JSON.parse(raw) as Record<string, boolean>) } : defaults;
   } catch {
-    return {};
+    return defaults;
   }
 }
 
