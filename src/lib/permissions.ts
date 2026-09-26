@@ -44,6 +44,7 @@ import {
   History,
   Gauge,
   ShieldAlert,
+  Bot,
 } from "lucide-react";
 import { DashboardPage } from "../components/modules/DashboardPage";
 import { UsersPage } from "../components/modules/UsersPage";
@@ -78,6 +79,7 @@ import { AiWorkflowsPage } from "../components/modules/ai/AiWorkflowsPage";
 import { AiExecutionsPage } from "../components/modules/ai/AiExecutionsPage";
 import { AiUsagePage } from "../components/modules/ai/AiUsagePage";
 import { AiApprovalsPage } from "../components/modules/ai/AiApprovalsPage";
+import { AiCopilotPage } from "../components/modules/ai/AiCopilotPage";
 
 export function hasPermission(permissions: readonly string[] | undefined, key: string): boolean {
   return !!permissions?.includes(key);
@@ -399,6 +401,15 @@ export const NAV_ITEMS: NavItem[] = [
     icon: ShieldAlert,
     requiresAnyPermission: ["ai.approvals.read"],
     component: AiApprovalsPage,
+    section: "AI",
+  },
+  {
+    id: "ai-copilot",
+    label: "Copilot",
+    path: "/ai/copilot",
+    icon: Bot,
+    requiresAnyPermission: ["copilot.read", "copilot.use"],
+    component: AiCopilotPage,
     section: "AI",
   },
   {
