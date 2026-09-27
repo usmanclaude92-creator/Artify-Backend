@@ -92,6 +92,8 @@ model Organization {
   mediaAssets                MediaAsset[]
   redirects                  Redirect[]
   opportunities              Opportunity[]
+  forms                      Form[]
+  formSubmissions            FormSubmission[]
   mediaUploadSessions        MediaUploadSession[]
   notifications              Notification[]
   systemSettings             SystemSetting[]
@@ -175,6 +177,7 @@ model User {
   managedClients              Client[]                    @relation("ClientAccountManager")
   assignedOpportunities       Opportunity[]               @relation("OpportunityAssignee")
   createdOpportunities        Opportunity[]               @relation("OpportunityCreatedBy")
+  createdForms                Form[]                      @relation("FormCreatedBy")
   createdPages                Page[]                      @relation("PageCreatedBy")
   createdPosts                Post[]                      @relation("PostCreatedBy")
   createdRedirects            Redirect[]                  @relation("RedirectCreatedBy")
@@ -477,10 +480,11 @@ model Lead {
   updatedAt         DateTime   @updatedAt @map("updated_at")
   deletedAt         DateTime?  @map("deleted_at")
 
-  organization    Organization  @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  assignee        User?         @relation("LeadAssignee", fields: [assignedTo], references: [id], onDelete: SetNull)
-  convertedClient Client?       @relation("LeadConvertedClient", fields: [convertedClientId], references: [id], onDelete: SetNull)
-  opportunities   Opportunity[] @relation("LeadOpportunities")
+  organization    Organization     @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  assignee        User?            @relation("LeadAssignee", fields: [assignedTo], references: [id], onDelete: SetNull)
+  convertedClient Client?          @relation("LeadConvertedClient", fields: [convertedClientId], references: [id], onDelete: SetNull)
+  opportunities   Opportunity[]    @relation("LeadOpportunities")
+  formSubmissions FormSubmission[] @relation("FormSubmissionLead")
 
   @@index([organizationId])
   @@index([status])
@@ -548,6 +552,76 @@ model Opportunity {
   @@index([assignedTo])
   @@index([createdAt])
   @@map("opportunities")
+}
+
+enum FormStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+// Phase 9 (MVP slice, docs/FORMS_ARCHITECTURE.md). A Form is a named,
+// organization-authored field definition (`fields`: JSON array of
+// {key,label,type,required}) — deliberately not a normalized FormField
+// table, since this is UI config with no independent lifecycle of its
+// own, the same reasoning ContentRevision.metadata already uses. There is
+// no dynamic-form-builder UI or public-site renderer in this slice —
+// see FormSubmission below for how a submission reuses the existing Lead
+// intake pattern instead of being a parallel, CRM-disconnected record.
+model Form {
+  id             String     @id @default(uuid())
+  organizationId String     @map("organization_id")
+  name           String
+  slug           String
+  status         FormStatus @default(ACTIVE)
+  fields         Json
+  successMessage String?    @map("success_message")
+  createdById    String?    @map("created_by")
+  createdAt      DateTime   @default(now()) @map("created_at")
+  updatedAt      DateTime   @updatedAt @map("updated_at")
+  deletedAt      DateTime?  @map("deleted_at")
+
+  organization Organization     @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  createdBy    User?            @relation("FormCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  submissions  FormSubmission[]
+
+  @@unique([organizationId, slug])
+  @@index([organizationId])
+  @@index([status])
+  @@map("forms")
+}
+
+// A raw submission plus UTM capture (the roadmap's "UTM capture on the
+// existing lead source field" — Lead itself gets no new UTM columns;
+// they're captured here, on the submission, and folded into the created
+// Lead's source/notes the same way publicLeadService already encodes
+// subject/productInterest). `leadId` is set once publicFormService
+// creates the Lead from this submission's data — nullable because the
+// Lead creation happens in the same request but the submission row is
+// still the honest record even in the (should-never-happen) case that
+// step fails after this one committed.
+model FormSubmission {
+  id             String   @id @default(uuid())
+  formId         String   @map("form_id")
+  organizationId String   @map("organization_id")
+  data           Json
+  utmSource      String?  @map("utm_source")
+  utmMedium      String?  @map("utm_medium")
+  utmCampaign    String?  @map("utm_campaign")
+  utmTerm        String?  @map("utm_term")
+  utmContent     String?  @map("utm_content")
+  leadId         String?  @map("lead_id")
+  ipAddress      String?  @map("ip_address")
+  userAgent      String?  @map("user_agent")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  form         Form         @relation(fields: [formId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  lead         Lead?        @relation("FormSubmissionLead", fields: [leadId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId])
+  @@index([formId])
+  @@index([createdAt])
+  @@map("form_submissions")
 }
 
 // organizationId = owning tenant scope (see Lead's doc comment — same

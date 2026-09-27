@@ -493,6 +493,58 @@ export const notificationsApi = {
 };
 
 // ---------------------------------------------------------------------------
+// Phase 9 (MVP slice) — Marketing forms. A submission reuses the existing
+// Lead-intake pattern (publicFormService.ts in the backend) rather than
+// being a parallel, CRM-disconnected record — see docs/FORMS_ARCHITECTURE.md.
+// ---------------------------------------------------------------------------
+export type FormStatusValue = "ACTIVE" | "ARCHIVED";
+export type FormFieldTypeValue = "text" | "email" | "tel" | "textarea";
+export interface FormFieldDef {
+  key: string;
+  label: string;
+  type: FormFieldTypeValue;
+  required: boolean;
+}
+export interface MarketingForm {
+  id: string;
+  organizationId: string;
+  name: string;
+  slug: string;
+  status: FormStatusValue;
+  fields: FormFieldDef[];
+  successMessage: string | null;
+  createdById: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+export interface FormSubmission {
+  id: string;
+  formId: string;
+  organizationId: string;
+  data: Record<string, string>;
+  utmSource: string | null;
+  utmMedium: string | null;
+  utmCampaign: string | null;
+  utmTerm: string | null;
+  utmContent: string | null;
+  leadId: string | null;
+  createdAt: string;
+}
+
+export const formsApi = {
+  list: (params: { page?: number; limit?: number; search?: string; status?: FormStatusValue; sort?: string; order?: "asc" | "desc" } = {}) =>
+    paginatedGet<MarketingForm>("/forms", "forms", params),
+  get: (id: string) => apiClient.get<{ form: MarketingForm }>(`/forms/${id}`),
+  create: (payload: { name: string; slug?: string; fields: FormFieldDef[]; successMessage?: string }) =>
+    apiClient.post<{ form: MarketingForm }>("/forms", payload),
+  update: (id: string, payload: Partial<{ name: string; slug: string; fields: FormFieldDef[]; successMessage: string | null; status: FormStatusValue }>) =>
+    apiClient.patch<{ form: MarketingForm }>(`/forms/${id}`, payload),
+  remove: (id: string) => apiClient.delete<{ message: string }>(`/forms/${id}`),
+  listSubmissions: (id: string, params: { page?: number; limit?: number } = {}) =>
+    paginatedGet<FormSubmission>(`/forms/${id}/submissions`, "submissions", params),
+};
+
+// ---------------------------------------------------------------------------
 // Phase 6 — Client onboarding & workspace provisioning
 // ---------------------------------------------------------------------------
 

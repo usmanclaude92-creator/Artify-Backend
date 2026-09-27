@@ -216,6 +216,15 @@ export const PERMISSION_KEYS = [
   "seo.redirects.update",
   "seo.redirects.delete",
   "seo.audit.read",
+  // Phase 9 (MVP slice) — Marketing forms (docs/FORMS_ARCHITECTURE.md).
+  // "read" covers both the form definition list and viewing its
+  // submissions — a submission has no independent lifecycle of its own to
+  // gate separately from the form it belongs to, unlike opportunities'
+  // separate "close" key for a real distinct action.
+  "forms.read",
+  "forms.create",
+  "forms.update",
+  "forms.delete",
 ] as const;
 
 export type PermissionKey = (typeof PERMISSION_KEYS)[number];

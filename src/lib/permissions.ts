@@ -48,6 +48,7 @@ import {
   Search,
   ArrowRightLeft,
   Target,
+  ClipboardList,
 } from "lucide-react";
 import { DashboardPage } from "../components/modules/DashboardPage";
 import { UsersPage } from "../components/modules/UsersPage";
@@ -77,6 +78,7 @@ import { ClientPortalPage } from "../components/modules/ClientPortalPage";
 import { SeoIssuesPage } from "../components/modules/SeoIssuesPage";
 import { RedirectsPage } from "../components/modules/RedirectsPage";
 import { OpportunitiesPage } from "../components/modules/OpportunitiesPage";
+import { FormsPage } from "../components/modules/FormsPage";
 import { AiOverviewPage } from "../components/modules/ai/AiOverviewPage";
 import { AiProvidersPage } from "../components/modules/ai/AiProvidersPage";
 import { AiToolsPage } from "../components/modules/ai/AiToolsPage";
@@ -100,7 +102,7 @@ export interface NavItem {
   requiresAnyPermission?: string[];
   component: ComponentType;
   /** Groups items under a heading in the sidebar (§22/§31) — purely presentational. */
-  section: "Platform" | "CRM" | "Onboarding" | "Workspaces" | "Products" | "CMS" | "SEO" | "Commercial" | "AI" | "Client Portal";
+  section: "Platform" | "CRM" | "Onboarding" | "Workspaces" | "Products" | "CMS" | "SEO" | "Marketing" | "Commercial" | "AI" | "Client Portal";
 }
 
 /**
@@ -327,6 +329,15 @@ export const NAV_ITEMS: NavItem[] = [
     requiresAnyPermission: ["seo.redirects.read"],
     component: RedirectsPage,
     section: "SEO",
+  },
+  {
+    id: "marketing-forms",
+    label: "Forms",
+    path: "/marketing/forms",
+    icon: ClipboardList,
+    requiresAnyPermission: ["forms.read"],
+    component: FormsPage,
+    section: "Marketing",
   },
   {
     id: "commercial-contracts",

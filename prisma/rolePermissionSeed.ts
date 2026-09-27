@@ -170,6 +170,11 @@ const ROLE_PERMISSION_SETS: Record<RoleKey, readonly string[] | "*"> = {
     "seo.redirects.update",
     "seo.redirects.delete",
     "seo.audit.read",
+    // Phase 9 — ADMIN gets full form management.
+    "forms.read",
+    "forms.create",
+    "forms.update",
+    "forms.delete",
   ],
   MANAGER: [
     "users.read",
@@ -273,6 +278,10 @@ const ROLE_PERMISSION_SETS: Record<RoleKey, readonly string[] | "*"> = {
     "seo.redirects.create",
     "seo.redirects.update",
     "seo.audit.read",
+    // Phase 9 — MANAGER can manage forms day-to-day but not delete them (ADMIN-only, same pattern).
+    "forms.read",
+    "forms.create",
+    "forms.update",
   ],
   USER: [
     "clients.read",
@@ -325,6 +334,8 @@ const ROLE_PERMISSION_SETS: Record<RoleKey, readonly string[] | "*"> = {
     // Phase 5 — USER is read-only for SEO, same as most other modules.
     "seo.redirects.read",
     "seo.audit.read",
+    // Phase 9 — USER is read-only for forms, same convention.
+    "forms.read",
   ],
   VIEWER: [
     "users.read",
@@ -375,6 +386,8 @@ const ROLE_PERMISSION_SETS: Record<RoleKey, readonly string[] | "*"> = {
     // Phase 5 — VIEWER is read-only for SEO, same convention as everywhere else.
     "seo.redirects.read",
     "seo.audit.read",
+    // Phase 9 — VIEWER is read-only for forms, same convention.
+    "forms.read",
   ],
 };
 

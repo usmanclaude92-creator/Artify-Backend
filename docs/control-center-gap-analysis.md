@@ -14,7 +14,7 @@ gap remains. MISSING = confirmed absent by grep, not just "not seen yet."
 | CRM | **Opportunity/pipeline done (Phase 7)** | `Lead` (status pipeline NEW→CONTACTED→QUALIFIED→CONVERTED/LOST) converts to `Client`; `Contact` belongs to `Client`, not a generic Company. `Opportunity` model + CRUD + win/lose lifecycle + CRM-dashboard pipeline stats now exist — see `docs/CRM_ARCHITECTURE.md`'s "Phase 7" section. `Organization` remains a tenant construct, not a CRM company record — still a gap if a future need for a generic "Company" entity distinct from both `Organization` and `Client` emerges. |
 | Client management/onboarding | EXISTS | `clientService`, `onboardingService` (`ClientOnboarding` model, checklist + currentStep), `workspaceService`, `invitationService`, `portalRoutes`/`clientPortalService` (read-only portal). Fully wired. |
 | Commerce (Contracts/Subscriptions/Invoices/Payments/Products) | EXISTS | Full CRUD + lifecycle actions (activate/suspend/void/reverse), RBAC per domain. |
-| Marketing (forms/landing pages/campaigns/UTM) | MISSING | `grep -rliE "form.?builder|landingpage|campaign|utm"` across `server/`+`prisma/` returns nothing. |
+| Marketing (forms/landing pages/campaigns/UTM) | **Forms MVP slice done (Phase 9)** | `Form`/`FormSubmission` model + CRUD + a public submission endpoint that reuses the Lead-intake pattern (creates a real CRM Lead, UTM captured per-submission and folded into the Lead's source/notes) — see `docs/FORMS_ARCHITECTURE.md`. Landing pages and campaign/attribution reporting remain MISSING, explicitly deferred (landing pages need Phase 4's section-driven renderer; attribution reporting is Phase 10/Analytics territory). |
 | Analytics (traffic/SEO/CRM/business) | MISSING | No pageview/traffic/analytics service, route, or model. `publicLeadService.ts` captures only a static `source` string — no referrer/UTM capture. |
 | Notifications (user-facing) | **Done (Phase 11)** | `notificationService.ts`/`notificationRoutes.ts` wired, self-scoped (no permission key needed, same convention as `/auth/me`), emitted from 5 real events (lead assignment, opportunity assignment/win/loss, content publish) — see `docs/NOTIFICATIONS_ARCHITECTURE.md`. IN_APP only — no email/SMS transport exists in this codebase. `AutomationNotification` (internal to the automation engine) remains separate, unchanged. |
 | Audit logging | EXISTS | `auditLogRepository` called from 34 of 35 service files (only `webhookService.ts` doesn't). Broad, consistent. |
@@ -30,7 +30,7 @@ avoid drift.
 
 | Area | Status | Evidence |
 |---|---|---|
-| Nav structure | EXISTS | `NAV_ITEMS` config (`src/lib/permissions.ts:107-424`) → `Sidebar.tsx`. 8 sections today: Platform, CRM, Onboarding, Workspaces, Products, CMS, Commercial, AI, Client Portal. No SEO/Marketing/Analytics sections (nothing to point them at yet). |
+| Nav structure | EXISTS | `NAV_ITEMS` config (`src/lib/permissions.ts`) → `Sidebar.tsx`. 11 sections today: Platform, CRM, Onboarding, Workspaces, Products, CMS, SEO, Marketing, Commercial, AI, Client Portal. No Analytics section (nothing to point it at yet — Phase 10 blocked on a product decision). |
 | Persistent shell | EXISTS | `AppShell.tsx` renders Sidebar + Header + `<main>` across all routes. |
 | Breadcrumbs | **Added this phase** | Was MISSING; `Breadcrumbs.tsx` now derives section + page from the matched `NavItem`. |
 | Command palette / global search | **Added this phase** | Was MISSING (zero matches for "CommandPalette"/"cmdk"/"Ctrl+K" before this phase); `CommandPalette.tsx` now provides quick actions + live entity search. |
@@ -44,8 +44,15 @@ avoid drift.
 
 ## Net gap summary
 
-Four domains have essentially zero backend presence: **SEO** (dedicated), **Marketing** (forms/landing
-pages/campaigns), **Analytics**, and user-facing **Notifications**. CRM lacks an Opportunity/pipeline-stage
-concept and a true Company entity. Settings is unstructured. On the frontend, breadcrumbs and a command
-palette were the two concrete, backend-independent foundation gaps — both closed this phase. Code-splitting
-and a shared DataTable remain open, lower-risk frontend-only gaps for a later pass.
+Original audit finding (superseded below): four domains had essentially zero backend presence — SEO,
+Marketing, Analytics, and user-facing Notifications — plus CRM lacked an Opportunity/pipeline concept, and
+the frontend had no breadcrumbs or command palette.
+
+**Current state**: SEO (Phase 5), CRM pipeline (Phase 7), user-facing Notifications (Phase 11), the rich-text
+editor (Phase 3), a real public route for CMS Pages (Phase 4, scoped), and a Forms MVP slice (Phase 9) are all
+done — see each domain's row above and its linked architecture doc. Breadcrumbs and the command palette
+closed in the original Phase 1 foundation pass. Only two real gaps remain: **Analytics** (MISSING, blocked on
+a product decision — self-built pageview pipeline vs. integrating an existing provider) and a true Company
+entity distinct from `Organization`/`Client` (not a confirmed need). Settings stays a flat key/value store
+with no category taxonomy. On the frontend, code-splitting (the Control Center is a single ~1.6 MB bundle)
+and a shared `DataTable` remain open, lower-risk frontend-only gaps — both tracked as Phase 13.

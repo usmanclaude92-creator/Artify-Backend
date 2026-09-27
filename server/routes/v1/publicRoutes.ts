@@ -12,6 +12,7 @@ import { Router } from "express";
 import { publicSiteService } from "../../services/publicSiteService";
 import { publicProductService } from "../../services/publicProductService";
 import { publicLeadService } from "../../services/publicLeadService";
+import { publicFormService } from "../../services/publicFormService";
 import { publicLeadLimiter } from "../../middleware/rateLimiter";
 import { asyncHandler } from "../../utils/asyncHandler";
 import { sendSuccess } from "../../core/apiResponse";
@@ -21,6 +22,7 @@ import {
   listPublicProductsQuerySchema,
   publicRedirectLookupQuerySchema,
 } from "../../schemas/publicSchemas";
+import { publicFormSubmitSchema } from "../../schemas/formSchemas";
 
 const router = Router();
 
@@ -126,6 +128,19 @@ router.post(
     // silently discarded as a honeypot hit (§8) — a bot must not be able
     // to distinguish the two from the response alone.
     sendSuccess(res, { message: "Thank you — your message has been received. We'll be in touch shortly." }, 201);
+  })
+);
+
+// Phase 9 (MVP slice, docs/FORMS_ARCHITECTURE.md) — same rate limiter as
+// /leads: both are anonymous, IP-keyed write endpoints in the same abuse
+// class, so they share one budget rather than each getting a near-duplicate.
+router.post(
+  "/forms/:slug/submit",
+  publicLeadLimiter,
+  asyncHandler(async (req, res) => {
+    const input = publicFormSubmitSchema.parse(req.body);
+    const { successMessage } = await publicFormService.submit(req.params.slug!, input, requestMeta(req));
+    sendSuccess(res, { message: successMessage }, 201);
   })
 );
 

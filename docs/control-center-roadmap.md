@@ -14,7 +14,7 @@ shippable units — it does not restate what's already built.
 | 6 | **Products & Services** — catalog, relationships, SEO, content integration | **Mostly complete** (Product/ProductModule exist with full CRUD). Gap: no Industries/Solutions/Case-Study relationship model — defer until a real content need names one, rather than pre-building relations nothing populates. |
 | 7 | **CRM** — leads, contacts, organizations, opportunities, pipeline | **Done.** `Opportunity` model (stage enum, `Decimal` value/currency, close dates, linked Client + optional Lead) + full CRUD + win/lose lifecycle + RBAC + pipeline stats on the CRM dashboard + a stage-filterable "Opportunities" Control Center page — see `docs/CRM_ARCHITECTURE.md`'s "Phase 7" section. Remaining, explicitly out of scope: no generic "Company" entity distinct from `Organization`/`Client` (not a confirmed need yet), and the Client/Lead pickers in the create form don't scale past ~100 records (noted in the doc). |
 | 8 | **Client Management** — clients, onboarding, documents, portal | **Already complete.** No new work. |
-| 9 | **Marketing** — forms, campaigns, landing pages, attribution | **Real gap, zero backend today.** Minimum viable slice: a `Form`/`FormSubmission` model reusing the existing Lead-intake pattern (`publicLeadService.ts`) instead of a parallel one, UTM capture on the existing lead source field, and a Forms list in Control Center. Landing-page authoring depends on Phase 4's section-driven renderer — sequence after it, not before. |
+| 9 | **Marketing** — forms, campaigns, landing pages, attribution | **MVP slice done.** `Form`/`FormSubmission` model + CRUD + a public submission endpoint (`POST /public/forms/:slug/submit`) that reuses the existing Lead-intake pattern exactly as scoped — every real submission creates a CRM Lead, with UTM params captured per-submission and folded into the Lead's source/notes — plus a "Marketing" Forms page in the Control Center. See `docs/FORMS_ARCHITECTURE.md`. Explicitly out of scope, as originally sequenced: no public-facing dynamic form renderer on `artifysolscom` (landing-page-authoring territory, still depends on Phase 4's not-yet-built section-driven renderer), no campaign/attribution dashboard (Phase 10/Analytics territory). |
 | 10 | **Analytics** — website, SEO, content, CRM, business | **Real gap.** Per spec's own instruction ("avoid building redundant analytics infrastructure if an existing provider already supplies the underlying data") — first confirm whether Artify already has (or intends) a hosted analytics provider (e.g. Plausible/GA4) before building a first-party pageview pipeline. If yes, this phase is an *integration* (pull via provider API into CRM/content dashboards), not new tracking infrastructure. If no provider is decided, this phase is blocked on that product decision, not an engineering one. |
 | 11 | **Automation / Notifications** — user-facing notification center, scheduled publishing | **Done.** Scheduled publishing already shipped (existing Vercel Cron tick). `Notification`/`NotificationPreference` now wired: self-scoped `notificationRoutes.ts` + a bell in `Header.tsx`, emitted from 5 real events (lead/opportunity assignment, opportunity win/loss, content publish) — see `docs/NOTIFICATIONS_ARCHITECTURE.md`. Remaining, explicitly out of scope: no fan-out-by-permission notifications (e.g. "submitted for review" notifying every publisher), no deep link from a notification back to its record (the model has no resourceType/resourceId column). |
 | 12 | **AI Control Center** | **Already complete** (Phase 12 of the prior CMS/SEO work). No new work. |
@@ -22,8 +22,11 @@ shippable units — it does not restate what's already built.
 
 ## Immediate next phase recommendation
 
-With Phases 3, 4 (scoped), 5, 7, and 11 done, next up is the **Phase 9** Forms MVP slice (reusing the
-Lead-intake pattern) and **Phase 13** (route-level code-splitting for the Control Center's ~1.6 MB bundle +
-a shared `DataTable`), both tracked and ready to pick up. Phase 10 (Analytics) stays explicitly blocked on a
-product decision (self-built pageview pipeline vs. integrating an existing provider like Plausible/GA4)
-rather than guessed at.
+With Phases 3, 4 (scoped), 5, 7, 9, and 11 done, **Phase 13** (route-level code-splitting for the Control
+Center's ~1.6 MB bundle + a shared `DataTable`, six-plus pages currently hand-rolling their own `<table>`) is
+the last fully-scoped, ready-to-pick-up item — genuinely higher priority now than "nice to have," since every
+phase since 3 has kept growing that one bundle. Phase 6's Industries/Solutions/Case-Study relationship model
+and Phase 9's public-facing form renderer are real but deliberately deferred until a concrete content need or
+Phase 4's section-driven renderer respectively exists to justify them — not guessed at ahead of time. Phase 10
+(Analytics) stays explicitly blocked on a product decision (self-built pageview pipeline vs. integrating an
+existing provider like Plausible/GA4) rather than guessed at.

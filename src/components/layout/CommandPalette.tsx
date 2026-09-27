@@ -30,11 +30,12 @@ import {
   Image as ImageIcon,
   UploadCloud,
   Target,
+  ClipboardList,
 } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
 import { useRouter } from "../../lib/router";
 import { hasPermission, visibleNavItems } from "../../lib/permissions";
-import { postsApi, pagesApi, leadsApi, clientsApi, productsApi, mediaApi, opportunitiesApi } from "../../lib/api";
+import { postsApi, pagesApi, leadsApi, clientsApi, productsApi, mediaApi, opportunitiesApi, formsApi } from "../../lib/api";
 
 interface CommandPaletteProps {
   open: boolean;
@@ -64,6 +65,7 @@ const QUICK_ACTIONS: QuickAction[] = [
   { id: "new-lead", label: "New Lead", permission: "leads.create", path: "/crm/leads?new=1", icon: Briefcase },
   { id: "new-client", label: "New Client", permission: "clients.create", path: "/crm/clients?new=1", icon: Building2 },
   { id: "new-opportunity", label: "New Opportunity", permission: "opportunities.create", path: "/crm/opportunities?new=1", icon: Target },
+  { id: "new-form", label: "New Form", permission: "forms.create", path: "/marketing/forms?new=1", icon: ClipboardList },
   { id: "upload-media", label: "Upload Media", permission: "media.upload", path: "/cms/media?new=1", icon: UploadCloud },
 ];
 
@@ -150,6 +152,17 @@ const ENTITY_SEARCHERS: {
     search: async (query) => {
       const { items } = await opportunitiesApi.list({ search: query, limit: 5 });
       return items.map((o) => ({ id: o.id, label: o.name, sublabel: o.stage }));
+    },
+  },
+  {
+    id: "forms",
+    group: "Forms",
+    permission: "forms.read",
+    icon: ClipboardList,
+    navPath: "/marketing/forms",
+    search: async (query) => {
+      const { items } = await formsApi.list({ search: query, limit: 5 });
+      return items.map((f) => ({ id: f.id, label: f.name, sublabel: f.status }));
     },
   },
 ];
