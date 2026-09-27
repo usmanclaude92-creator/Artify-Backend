@@ -1,8 +1,9 @@
 /** Phase 6 §29/§30 — workspace directory + detail (status/client/config/members/invitations). Provisioning itself happens from the CRM Client detail page. */
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Layers, Search, UserPlus, Ban } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
+import { useRouter } from "../../lib/router";
 import {
   workspacesApi,
   invitationsApi,
@@ -99,7 +100,11 @@ const InviteModal: React.FC<{ open: boolean; onClose: () => void; onSaved: () =>
   );
 };
 
-const WorkspaceDetail: React.FC<{ workspace: Workspace; onChanged: (w?: Workspace) => void }> = ({ workspace, onChanged }) => {
+const WorkspaceDetail: React.FC<{ workspace: Workspace; onChanged: (w?: Workspace) => void; focusMembers?: boolean }> = ({
+  workspace,
+  onChanged,
+  focusMembers,
+}) => {
   const { user } = useAuth();
   const { notify } = useToast();
   const canUpdate = hasPermission(user?.role.permissions, "workspaces.update");
@@ -113,6 +118,15 @@ const WorkspaceDetail: React.FC<{ workspace: Workspace; onChanged: (w?: Workspac
   const [inviteOpen, setInviteOpen] = useState(false);
   const [revokeTarget, setRevokeTarget] = useState<WorkspaceInvitation | null>(null);
   const [statusConfirm, setStatusConfirm] = useState<WorkspaceStatusValue | null>(null);
+  const membersSectionRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (focusMembers && !loadingExtra) {
+      membersSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+    // Only on workspace change / once loaded — not on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusMembers, workspace.id, loadingExtra]);
 
   const loadExtra = React.useCallback(async () => {
     setLoadingExtra(true);
@@ -208,7 +222,7 @@ const WorkspaceDetail: React.FC<{ workspace: Workspace; onChanged: (w?: Workspac
         </div>
       </div>
 
-      <div className="px-4 py-3 border-b" style={{ borderColor: "var(--border)" }}>
+      <div ref={membersSectionRef} className="px-4 py-3 border-b" style={{ borderColor: "var(--border)" }}>
         <h3 className="text-xs font-bold uppercase tracking-wide mb-2" style={{ color: "var(--text-muted)" }}>
           Members
         </h3>
@@ -291,6 +305,8 @@ const WorkspaceDetail: React.FC<{ workspace: Workspace; onChanged: (w?: Workspac
 };
 
 export const WorkspacesPage: React.FC = () => {
+  const { path } = useRouter();
+  const isMembersView = path === "/workspaces/members";
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
@@ -333,10 +349,12 @@ export const WorkspacesPage: React.FC = () => {
     <div className="space-y-4">
       <div>
         <h1 className="text-lg font-bold flex items-center gap-2" style={{ color: "var(--text-primary)" }}>
-          <Layers className="w-5 h-5" /> Workspaces
+          <Layers className="w-5 h-5" /> {isMembersView ? "Workspace Members" : "Workspaces"}
         </h1>
         <p className="text-xs" style={{ color: "var(--text-muted)" }}>
-          Operational tenants provisioned from CRM clients.
+          {isMembersView
+            ? "Select a workspace to jump straight to its members and pending invitations."
+            : "Operational tenants provisioned from CRM clients."}
         </p>
       </div>
 
@@ -380,7 +398,13 @@ export const WorkspacesPage: React.FC = () => {
             <Pagination page={page} totalPages={totalPages} onChange={setPage} />
           </Card>
 
-          {selected && <WorkspaceDetail workspace={selected} onChanged={(updated) => (updated ? setSelected(updated) : void load())} />}
+          {selected && (
+            <WorkspaceDetail
+              workspace={selected}
+              onChanged={(updated) => (updated ? setSelected(updated) : void load())}
+              focusMembers={isMembersView}
+            />
+          )}
         </div>
       )}
     </div>

@@ -1,8 +1,9 @@
 /** Phase 7 §31-36 — Product catalog: searchable/filterable/paginated list + master-detail with embedded module management (add/edit/activate-deactivate/archive/reorder). */
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Package, Plus, Search, Star, ArrowUp, ArrowDown, Archive } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
+import { useRouter } from "../../lib/router";
 import {
   productsApi,
   productModulesApi,
@@ -222,7 +223,11 @@ const ModuleFormModal: React.FC<{ open: boolean; onClose: () => void; onSaved: (
   );
 };
 
-const ProductDetail: React.FC<{ product: CatalogProduct; onChanged: (p?: CatalogProduct) => void }> = ({ product, onChanged }) => {
+const ProductDetail: React.FC<{ product: CatalogProduct; onChanged: (p?: CatalogProduct) => void; focusModules?: boolean }> = ({
+  product,
+  onChanged,
+  focusModules,
+}) => {
   const { user } = useAuth();
   const { notify } = useToast();
   const canUpdate = hasPermission(user?.role.permissions, "products.update");
@@ -238,6 +243,7 @@ const ProductDetail: React.FC<{ product: CatalogProduct; onChanged: (p?: Catalog
   const [addModuleOpen, setAddModuleOpen] = useState(false);
   const [archiveOpen, setArchiveOpen] = useState(false);
   const [reordering, setReordering] = useState(false);
+  const modulesSectionRef = useRef<HTMLDivElement>(null);
 
   const loadModules = React.useCallback(async () => {
     setModulesLoading(true);
@@ -254,6 +260,14 @@ const ProductDetail: React.FC<{ product: CatalogProduct; onChanged: (p?: Catalog
   useEffect(() => {
     void loadModules();
   }, [loadModules]);
+
+  useEffect(() => {
+    if (focusModules && !modulesLoading) {
+      modulesSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+    // Only on product change / once loaded — not on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusModules, product.id, modulesLoading]);
 
   const handleToggleModuleStatus = async (module_: ProductModule) => {
     try {
@@ -352,7 +366,7 @@ const ProductDetail: React.FC<{ product: CatalogProduct; onChanged: (p?: Catalog
         )}
       </div>
 
-      <div className="px-4 py-3 border-b flex items-center justify-between" style={{ borderColor: "var(--border)" }}>
+      <div ref={modulesSectionRef} className="px-4 py-3 border-b flex items-center justify-between" style={{ borderColor: "var(--border)" }}>
         <h3 className="text-xs font-bold uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>
           Modules
         </h3>
@@ -433,6 +447,8 @@ const ProductDetail: React.FC<{ product: CatalogProduct; onChanged: (p?: Catalog
 
 export const ProductsPage: React.FC = () => {
   const { user } = useAuth();
+  const { path } = useRouter();
+  const isModulesView = path === "/products/modules";
   const canCreate = hasPermission(user?.role.permissions, "products.create");
 
   const [page, setPage] = useState(1);
@@ -488,10 +504,12 @@ export const ProductsPage: React.FC = () => {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
           <h1 className="text-lg font-bold flex items-center gap-2" style={{ color: "var(--text-primary)" }}>
-            <Package className="w-5 h-5" /> Products
+            <Package className="w-5 h-5" /> {isModulesView ? "Product Modules" : "Products"}
           </h1>
           <p className="text-xs" style={{ color: "var(--text-muted)" }}>
-            The platform product & service catalog.
+            {isModulesView
+              ? "Select a product to jump straight to its module configuration."
+              : "The platform product & service catalog."}
           </p>
         </div>
         {canCreate && (
@@ -556,7 +574,13 @@ export const ProductsPage: React.FC = () => {
             <Pagination page={page} totalPages={totalPages} onChange={setPage} />
           </Card>
 
-          {selected && <ProductDetail product={selected} onChanged={(updated) => (updated ? setSelected(updated) : void load())} />}
+          {selected && (
+            <ProductDetail
+              product={selected}
+              onChanged={(updated) => (updated ? setSelected(updated) : void load())}
+              focusModules={isModulesView}
+            />
+          )}
         </div>
       )}
 
