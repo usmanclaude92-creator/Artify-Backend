@@ -468,6 +468,31 @@ export const opportunitiesApi = {
 };
 
 // ---------------------------------------------------------------------------
+// Phase 11 — Notifications. IN_APP only (no email/SMS transport exists in
+// this codebase) — never claim a delivery channel that isn't real.
+// ---------------------------------------------------------------------------
+export type NotificationStatusValue = "UNREAD" | "READ" | "ARCHIVED";
+export interface AppNotification {
+  id: string;
+  organizationId: string | null;
+  userId: string;
+  type: string;
+  title: string;
+  message: string;
+  status: NotificationStatusValue;
+  readAt: string | null;
+  createdAt: string;
+}
+
+export const notificationsApi = {
+  list: (params: { page?: number; limit?: number; status?: NotificationStatusValue } = {}) =>
+    paginatedGet<AppNotification>("/notifications", "notifications", params),
+  unreadCount: () => apiClient.get<{ count: number }>("/notifications/unread-count"),
+  markRead: (id: string) => apiClient.post<{ notification: AppNotification }>(`/notifications/${id}/read`),
+  markAllRead: () => apiClient.post<{ count: number }>("/notifications/read-all"),
+};
+
+// ---------------------------------------------------------------------------
 // Phase 6 — Client onboarding & workspace provisioning
 // ---------------------------------------------------------------------------
 

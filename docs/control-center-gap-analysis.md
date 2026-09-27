@@ -16,7 +16,7 @@ gap remains. MISSING = confirmed absent by grep, not just "not seen yet."
 | Commerce (Contracts/Subscriptions/Invoices/Payments/Products) | EXISTS | Full CRUD + lifecycle actions (activate/suspend/void/reverse), RBAC per domain. |
 | Marketing (forms/landing pages/campaigns/UTM) | MISSING | `grep -rliE "form.?builder|landingpage|campaign|utm"` across `server/`+`prisma/` returns nothing. |
 | Analytics (traffic/SEO/CRM/business) | MISSING | No pageview/traffic/analytics service, route, or model. `publicLeadService.ts` captures only a static `source` string — no referrer/UTM capture. |
-| Notifications (user-facing) | PARTIAL | `Notification`/`NotificationPreference` Prisma models exist (schema.prisma:1325-1385) but **zero** service/route/repository calls `prisma.notification` anywhere. Only `AutomationNotification`, internal to the automation engine (`NotificationEngine.ts`), is live. |
+| Notifications (user-facing) | **Done (Phase 11)** | `notificationService.ts`/`notificationRoutes.ts` wired, self-scoped (no permission key needed, same convention as `/auth/me`), emitted from 5 real events (lead assignment, opportunity assignment/win/loss, content publish) — see `docs/NOTIFICATIONS_ARCHITECTURE.md`. IN_APP only — no email/SMS transport exists in this codebase. `AutomationNotification` (internal to the automation engine) remains separate, unchanged. |
 | Audit logging | EXISTS | `auditLogRepository` called from 34 of 35 service files (only `webhookService.ts` doesn't). Broad, consistent. |
 | Users & Security / RBAC | EXISTS | Full permission-key enumeration in `domain.ts:46-201`. No keys exist for SEO/Marketing/Analytics/user-facing Notifications — confirming those domains are structurally absent from RBAC too. |
 | Settings | PARTIAL | `systemSettingRepository` is a flat key/value/type store per org, no category taxonomy (branding, SEO defaults, email, etc.). |
@@ -34,7 +34,7 @@ avoid drift.
 | Persistent shell | EXISTS | `AppShell.tsx` renders Sidebar + Header + `<main>` across all routes. |
 | Breadcrumbs | **Added this phase** | Was MISSING; `Breadcrumbs.tsx` now derives section + page from the matched `NavItem`. |
 | Command palette / global search | **Added this phase** | Was MISSING (zero matches for "CommandPalette"/"cmdk"/"Ctrl+K" before this phase); `CommandPalette.tsx` now provides quick actions + live entity search. |
-| Notification bell | MISSING | No user-facing notification UI — consistent with the backend gap above; nothing to wire it to yet. |
+| Notification bell | **Done (Phase 11)** | `NotificationBell.tsx` in the Control Center header — unread badge (polled every 60s), dropdown list, mark-read/mark-all-read. |
 | Design system / DataTable | PARTIAL | Real shared primitives exist (`ui/ui.tsx`); no shared `DataTable` — Leads/Contacts/Posts/etc. each hand-roll their own `<table>`. |
 | Theme | EXISTS | `.dark` class on `<html>`, CSS variables, `ThemeContext`. |
 | CRM UI | **Opportunity/pipeline UI done (Phase 7)** | Leads/Clients/Contacts/CRM-dashboard pages exist; new "Opportunities" page (search/filter/stage/win-lose) added under the existing CRM nav section, plus pipeline stats on the CRM dashboard. |

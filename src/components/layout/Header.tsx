@@ -5,6 +5,7 @@ import { useTheme } from "../../context/ThemeContext";
 import { useToast } from "../../context/ToastContext";
 import { useRouter } from "../../lib/router";
 import { ChangePasswordModal } from "../modules/ChangePasswordModal";
+import { NotificationBell } from "./NotificationBell";
 
 export const Header: React.FC<{ onOpenMobileMenu: () => void; onOpenCommandPalette: () => void }> = ({
   onOpenMobileMenu,
@@ -95,6 +96,7 @@ export const Header: React.FC<{ onOpenMobileMenu: () => void; onOpenCommandPalet
         >
           <Search className="w-4 h-4" />
         </button>
+        <NotificationBell />
         <button
           onClick={toggleTheme}
           aria-label="Toggle theme"

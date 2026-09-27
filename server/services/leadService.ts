@@ -7,6 +7,7 @@ import { prisma } from "../db/prisma";
 import { leadRepository, type LeadFilters } from "../repositories/leadRepository";
 import { clientRepository } from "../repositories/clientRepository";
 import { auditLogRepository } from "../repositories/auditLogRepository";
+import { notificationService } from "./notificationService";
 import { ConflictError, NotFoundError, ValidationError } from "../core/errors";
 import type { SanitizedUser } from "../types/domain";
 import type { CreateLeadInput, UpdateLeadInput, ConvertLeadInput } from "../schemas/leadSchemas";
@@ -83,6 +84,16 @@ export const leadService = {
       userAgent: meta.userAgent,
     });
 
+    if (lead.assignedTo && lead.assignedTo !== caller.id) {
+      await notificationService.notify({
+        organizationId: caller.organizationId,
+        userId: lead.assignedTo,
+        type: "lead_assigned",
+        title: "New lead assigned to you",
+        message: `${lead.companyName} was assigned to you.`,
+      });
+    }
+
     return lead;
   },
 
@@ -119,6 +130,16 @@ export const leadService = {
       ipAddress: meta.ip,
       userAgent: meta.userAgent,
     });
+
+    if (input.assignedTo !== undefined && input.assignedTo !== existing.assignedTo && input.assignedTo !== caller.id) {
+      await notificationService.notify({
+        organizationId: caller.organizationId,
+        userId: input.assignedTo,
+        type: "lead_assigned",
+        title: "New lead assigned to you",
+        message: `${updated.companyName} was assigned to you.`,
+      });
+    }
 
     return updated;
   },

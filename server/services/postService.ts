@@ -12,6 +12,7 @@ import { auditLogRepository } from "../repositories/auditLogRepository";
 import { assertFeaturedMediaUsable } from "./mediaService";
 import { sanitizeContentHtml } from "../utils/sanitizeHtml";
 import { redirectService } from "./redirectService";
+import { notificationService } from "./notificationService";
 import { prisma } from "../db/prisma";
 import { ConflictError, NotFoundError, ValidationError } from "../core/errors";
 import type { SanitizedUser } from "../types/domain";
@@ -354,6 +355,16 @@ export const postService = {
       ipAddress: meta.ip,
       userAgent: meta.userAgent,
     });
+
+    if (existing.createdById && existing.createdById !== caller.id) {
+      await notificationService.notify({
+        organizationId,
+        userId: existing.createdById,
+        type: "content_published",
+        title: "Your post was published",
+        message: `"${existing.title}" is now live.`,
+      });
+    }
 
     return loadPostOrThrow(id, organizationId);
   },

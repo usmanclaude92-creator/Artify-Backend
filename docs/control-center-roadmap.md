@@ -16,18 +16,17 @@ shippable units — it does not restate what's already built.
 | 8 | **Client Management** — clients, onboarding, documents, portal | **Already complete.** No new work. |
 | 9 | **Marketing** — forms, campaigns, landing pages, attribution | **Real gap, zero backend today.** Minimum viable slice: a `Form`/`FormSubmission` model reusing the existing Lead-intake pattern (`publicLeadService.ts`) instead of a parallel one, UTM capture on the existing lead source field, and a Forms list in Control Center. Landing-page authoring depends on Phase 4's section-driven renderer — sequence after it, not before. |
 | 10 | **Analytics** — website, SEO, content, CRM, business | **Real gap.** Per spec's own instruction ("avoid building redundant analytics infrastructure if an existing provider already supplies the underlying data") — first confirm whether Artify already has (or intends) a hosted analytics provider (e.g. Plausible/GA4) before building a first-party pageview pipeline. If yes, this phase is an *integration* (pull via provider API into CRM/content dashboards), not new tracking infrastructure. If no provider is decided, this phase is blocked on that product decision, not an engineering one. |
-| 11 | **Automation / Notifications** — user-facing notification center, scheduled publishing | **Partial.** Scheduled publishing already ships (existing Vercel Cron tick). Real gap: wire the already-modeled `Notification`/`NotificationPreference` tables to a real service + `notificationRoutes.ts` + a bell in `Header.tsx`, and decide which existing events (lead created, content published, AI approval pending) should emit one — reusing `AutomationNotification`'s pattern rather than inventing a second one. |
+| 11 | **Automation / Notifications** — user-facing notification center, scheduled publishing | **Done.** Scheduled publishing already shipped (existing Vercel Cron tick). `Notification`/`NotificationPreference` now wired: self-scoped `notificationRoutes.ts` + a bell in `Header.tsx`, emitted from 5 real events (lead/opportunity assignment, opportunity win/loss, content publish) — see `docs/NOTIFICATIONS_ARCHITECTURE.md`. Remaining, explicitly out of scope: no fan-out-by-permission notifications (e.g. "submitted for review" notifying every publisher), no deep link from a notification back to its record (the model has no resourceType/resourceId column). |
 | 12 | **AI Control Center** | **Already complete** (Phase 12 of the prior CMS/SEO work). No new work. |
 | 13 | **Enterprise Hardening** — code-splitting, shared DataTable, performance, disaster recovery | **Deferred, tracked.** Route-level `React.lazy` per nav section (currently one ~1.07 MB bundle) and a shared `DataTable` component (six pages currently hand-roll their own `<table>`) are the two concrete, low-risk frontend-only items ready to pick up whenever a phase touches those files anyway — no need for a dedicated pass first. |
 
 ## Immediate next phase recommendation
 
-With Phases 5 and 7 done, **Phase 11 (user-facing Notifications)** is the next highest-leverage step by the
-same criteria: a real, confirmed gap with no architectural prerequisite and no external product decision
-blocking it (unlike Phase 9/Marketing's design-pass dependency on Phase 4, or Phase 10/Analytics' dependency
-on choosing an analytics provider). The `Notification`/`NotificationPreference` tables already exist in the
-schema from an earlier phase but have zero service/route/repository wired to them — this phase is "finish
-wiring something that's already half-built," not "start a new domain." Concretely: a `notificationService.ts`
-+ `notificationRoutes.ts` reusing the existing `AutomationNotification` pattern's shape, a bell icon in
-`Header.tsx`, and deciding which existing events (lead created, content published, AI approval pending,
-opportunity won/lost) should emit one.
+With Phases 5, 7, and 11 done, **Phase 3 (Professional Editor — TipTap)** is next: a plain `<textarea>` is
+still the entire Post/Page composer despite the storage/rendering layer being real, sanitized HTML
+end-to-end since Phase 5 — the editor is the one remaining piece of the original spec's most-requested
+feature with zero backend dependency. Phases 13 (code-splitting + shared DataTable), the scoped Phase 4
+(giving CMS Pages an actual public route — currently authored but unreachable), and the Phase 9 Forms MVP
+slice are tracked and ready to pick up after. Phase 10 (Analytics) stays explicitly blocked on a product
+decision (self-built pageview pipeline vs. integrating an existing provider like Plausible/GA4) rather than
+guessed at.

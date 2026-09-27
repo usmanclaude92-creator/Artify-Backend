@@ -7,6 +7,7 @@ import { opportunityRepository, type OpportunityFilters, type OpportunityWithRel
 import { clientRepository } from "../repositories/clientRepository";
 import { leadRepository } from "../repositories/leadRepository";
 import { auditLogRepository } from "../repositories/auditLogRepository";
+import { notificationService } from "./notificationService";
 import { toMoney, DEFAULT_CURRENCY } from "../utils/money";
 import { ConflictError, NotFoundError, ValidationError } from "../core/errors";
 import type { SanitizedUser } from "../types/domain";
@@ -38,6 +39,22 @@ async function loadOpportunityOrThrow(id: string, organizationId: string): Promi
   const opportunity = await opportunityRepository.findByIdInOrg(id, organizationId);
   if (!opportunity) throw new NotFoundError("Opportunity not found.");
   return opportunity;
+}
+
+/** Notifies the assignee and creator (deduped, excluding whoever just performed the close) that a deal closed. */
+async function notifyClose(params: {
+  organizationId: string;
+  actorId: string;
+  assignedTo: string | null;
+  createdById: string | null;
+  title: string;
+  message: string;
+  type: string;
+}): Promise<void> {
+  const recipients = new Set([params.assignedTo, params.createdById].filter((id): id is string => !!id && id !== params.actorId));
+  await Promise.all(
+    [...recipients].map((userId) => notificationService.notify({ organizationId: params.organizationId, userId, type: params.type, title: params.title, message: params.message }))
+  );
 }
 
 export const opportunityService = {
@@ -85,6 +102,16 @@ export const opportunityService = {
       ipAddress: meta.ip,
       userAgent: meta.userAgent,
     });
+
+    if (opportunity.assignedTo && opportunity.assignedTo !== caller.id) {
+      await notificationService.notify({
+        organizationId,
+        userId: opportunity.assignedTo,
+        type: "opportunity_assigned",
+        title: "New opportunity assigned to you",
+        message: `${opportunity.name} was assigned to you.`,
+      });
+    }
 
     return opportunity;
   },
@@ -165,6 +192,16 @@ export const opportunityService = {
       userAgent: meta.userAgent,
     });
 
+    await notifyClose({
+      organizationId,
+      actorId: caller.id,
+      assignedTo: existing.assignedTo,
+      createdById: existing.createdById,
+      type: "opportunity_won",
+      title: "Opportunity won",
+      message: `${existing.name} was marked as won.`,
+    });
+
     return updated;
   },
 
@@ -192,6 +229,16 @@ export const opportunityService = {
       afterData: { stage: "CLOSED_LOST", lostReason: input.lostReason ?? null },
       ipAddress: meta.ip,
       userAgent: meta.userAgent,
+    });
+
+    await notifyClose({
+      organizationId,
+      actorId: caller.id,
+      assignedTo: existing.assignedTo,
+      createdById: existing.createdById,
+      type: "opportunity_lost",
+      title: "Opportunity lost",
+      message: `${existing.name} was marked as lost.`,
     });
 
     return updated;
