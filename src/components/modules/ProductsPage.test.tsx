@@ -6,6 +6,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { ProductsPage } from "./ProductsPage";
+import { RouterProvider } from "../../lib/router";
+
+const renderProductsPage = () =>
+  render(
+    <RouterProvider>
+      <ProductsPage />
+    </RouterProvider>
+  );
 
 const listMock = vi.fn();
 const createMock = vi.fn();
@@ -118,7 +126,7 @@ beforeEach(() => {
 describe("ProductsPage", () => {
   it("renders the product list and detail pane with real modules, not fabricated data", async () => {
     listMock.mockResolvedValue({ items: [product], page: 1, limit: 20, total: 1, totalPages: 1 });
-    render(<ProductsPage />);
+    renderProductsPage();
 
     expect(await screen.findAllByText("Artify HCMS")).not.toHaveLength(0);
     expect(await screen.findByText("Employee Management")).toBeInTheDocument();
@@ -127,27 +135,27 @@ describe("ProductsPage", () => {
 
   it("shows an empty state when there are no products", async () => {
     listMock.mockResolvedValue({ items: [], page: 1, limit: 20, total: 0, totalPages: 1 });
-    render(<ProductsPage />);
+    renderProductsPage();
     expect(await screen.findByText(/no products found/i)).toBeInTheDocument();
   });
 
   it("shows an error state when the API call fails", async () => {
     listMock.mockRejectedValue(new Error("Catalog unavailable"));
-    render(<ProductsPage />);
+    renderProductsPage();
     expect(await screen.findByText(/catalog unavailable/i)).toBeInTheDocument();
   });
 
   it("shows an empty modules state for a product with no modules configured", async () => {
     listMock.mockResolvedValue({ items: [product], page: 1, limit: 20, total: 1, totalPages: 1 });
     modulesMock.mockResolvedValue({ items: [], page: 1, limit: 100, total: 0, totalPages: 1 });
-    render(<ProductsPage />);
+    renderProductsPage();
     expect(await screen.findByText(/no modules configured/i)).toBeInTheDocument();
   });
 
   it("creates a product through the real API", async () => {
     listMock.mockResolvedValue({ items: [], page: 1, limit: 20, total: 0, totalPages: 1 });
     createMock.mockResolvedValue({ product });
-    render(<ProductsPage />);
+    renderProductsPage();
 
     fireEvent.click(await screen.findByRole("button", { name: /new product/i }));
     const dialog = await screen.findByRole("dialog");
@@ -161,7 +169,7 @@ describe("ProductsPage", () => {
   it("adds a module to the selected product through the real API", async () => {
     listMock.mockResolvedValue({ items: [product], page: 1, limit: 20, total: 1, totalPages: 1 });
     addModuleMock.mockResolvedValue({ module: moduleA });
-    render(<ProductsPage />);
+    renderProductsPage();
 
     fireEvent.click(await screen.findByRole("button", { name: /add module/i }));
     const dialog = await screen.findByRole("dialog");
@@ -175,7 +183,7 @@ describe("ProductsPage", () => {
   it("deactivates an active module through the real API", async () => {
     listMock.mockResolvedValue({ items: [product], page: 1, limit: 20, total: 1, totalPages: 1 });
     moduleUpdateMock.mockResolvedValue({ module: { ...moduleA, status: "INACTIVE" } });
-    render(<ProductsPage />);
+    renderProductsPage();
 
     await screen.findByText("Employee Management");
     fireEvent.click(screen.getAllByRole("button", { name: /^deactivate$/i })[0]!);
@@ -186,7 +194,7 @@ describe("ProductsPage", () => {
   it("reorders modules by moving one down, calling the real reorder API with the full new order", async () => {
     listMock.mockResolvedValue({ items: [product], page: 1, limit: 20, total: 1, totalPages: 1 });
     reorderModulesMock.mockResolvedValue({ message: "ok" });
-    render(<ProductsPage />);
+    renderProductsPage();
 
     await screen.findByText("Employee Management");
     const moveDownButtons = screen.getAllByLabelText(/move down/i);
@@ -198,7 +206,7 @@ describe("ProductsPage", () => {
   it("archives a module through the real API", async () => {
     listMock.mockResolvedValue({ items: [product], page: 1, limit: 20, total: 1, totalPages: 1 });
     moduleArchiveMock.mockResolvedValue({ module: { ...moduleA, status: "INACTIVE" } });
-    render(<ProductsPage />);
+    renderProductsPage();
 
     await screen.findByText("Employee Management");
     fireEvent.click(screen.getAllByRole("button", { name: /^archive$/i })[1]!); // [0] is the product's own archive button
@@ -209,7 +217,7 @@ describe("ProductsPage", () => {
   it("archives a product only after confirming the destructive dialog", async () => {
     listMock.mockResolvedValue({ items: [product], page: 1, limit: 20, total: 1, totalPages: 1 });
     archiveMock.mockResolvedValue({ product: { ...product, status: "ARCHIVED" } });
-    render(<ProductsPage />);
+    renderProductsPage();
 
     fireEvent.click(await screen.findByRole("button", { name: /^archive$/i }));
     expect(archiveMock).not.toHaveBeenCalled();
@@ -222,7 +230,7 @@ describe("ProductsPage", () => {
   it("hides create/edit/archive/module actions when the caller lacks the relevant permission", async () => {
     mockPermissions = ["products.read", "product_modules.read"];
     listMock.mockResolvedValue({ items: [product], page: 1, limit: 20, total: 1, totalPages: 1 });
-    render(<ProductsPage />);
+    renderProductsPage();
 
     await screen.findByText("Employee Management");
     expect(screen.queryByRole("button", { name: /new product/i })).not.toBeInTheDocument();
@@ -235,7 +243,7 @@ describe("ProductsPage", () => {
 
   it("filters by type and status, sending the filters to the real API", async () => {
     listMock.mockResolvedValue({ items: [product], page: 1, limit: 20, total: 1, totalPages: 1 });
-    render(<ProductsPage />);
+    renderProductsPage();
     await screen.findByText("Employee Management");
 
     const selects = screen.getAllByRole("combobox");

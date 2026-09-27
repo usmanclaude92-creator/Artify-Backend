@@ -2,6 +2,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { WorkspacesPage } from "./WorkspacesPage";
+import { RouterProvider } from "../../lib/router";
+
+const renderWorkspacesPage = () =>
+  render(
+    <RouterProvider>
+      <WorkspacesPage />
+    </RouterProvider>
+  );
 
 const listMock = vi.fn();
 const updateMock = vi.fn();
@@ -98,7 +106,7 @@ beforeEach(() => {
 describe("WorkspacesPage", () => {
   it("renders the workspace list/detail with real members and invitations", async () => {
     listMock.mockResolvedValue({ items: [workspace], page: 1, limit: 20, total: 1, totalPages: 1 });
-    render(<WorkspacesPage />);
+    renderWorkspacesPage();
 
     expect(await screen.findAllByText("Acme Workspace")).not.toHaveLength(0);
     expect(await screen.findByText("Ada Min")).toBeInTheDocument();
@@ -107,20 +115,20 @@ describe("WorkspacesPage", () => {
 
   it("shows an empty state when there are no workspaces", async () => {
     listMock.mockResolvedValue({ items: [], page: 1, limit: 20, total: 0, totalPages: 1 });
-    render(<WorkspacesPage />);
+    renderWorkspacesPage();
     expect(await screen.findByText(/no workspaces found/i)).toBeInTheDocument();
   });
 
   it("shows an error state when the API call fails", async () => {
     listMock.mockRejectedValue(new Error("Directory down"));
-    render(<WorkspacesPage />);
+    renderWorkspacesPage();
     expect(await screen.findByText(/directory down/i)).toBeInTheDocument();
   });
 
   it("suspends an active workspace only after confirming, calling workspaces.update with SUSPENDED", async () => {
     listMock.mockResolvedValue({ items: [workspace], page: 1, limit: 20, total: 1, totalPages: 1 });
     updateMock.mockResolvedValue({ workspace: { ...workspace, status: "SUSPENDED" } });
-    render(<WorkspacesPage />);
+    renderWorkspacesPage();
 
     fireEvent.click(await screen.findByRole("button", { name: /^suspend$/i }));
     expect(updateMock).not.toHaveBeenCalled();
@@ -133,7 +141,7 @@ describe("WorkspacesPage", () => {
   it("invites a workspace administrator through the real API", async () => {
     listMock.mockResolvedValue({ items: [workspace], page: 1, limit: 20, total: 1, totalPages: 1 });
     inviteMock.mockResolvedValue({ invitation, devToken: "art_invite_test" });
-    render(<WorkspacesPage />);
+    renderWorkspacesPage();
 
     fireEvent.click(await screen.findByRole("button", { name: /invite administrator/i }));
     const dialog = await screen.findByRole("dialog");
@@ -146,7 +154,7 @@ describe("WorkspacesPage", () => {
 
   it("revokes a pending invitation only after confirming", async () => {
     listMock.mockResolvedValue({ items: [workspace], page: 1, limit: 20, total: 1, totalPages: 1 });
-    render(<WorkspacesPage />);
+    renderWorkspacesPage();
 
     fireEvent.click(await screen.findByRole("button", { name: /^revoke$/i }));
     const dialog = await screen.findByRole("dialog");
@@ -157,7 +165,7 @@ describe("WorkspacesPage", () => {
   it("hides suspend/invite/revoke actions when the caller lacks the relevant permission", async () => {
     mockPermissions = ["workspaces.read", "invitations.read"];
     listMock.mockResolvedValue({ items: [workspace], page: 1, limit: 20, total: 1, totalPages: 1 });
-    render(<WorkspacesPage />);
+    renderWorkspacesPage();
 
     await screen.findByText("Ada Min");
     expect(screen.queryByRole("button", { name: /^suspend$/i })).not.toBeInTheDocument();
