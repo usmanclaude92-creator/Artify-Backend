@@ -15,6 +15,7 @@ import {
 import { ApiClientError } from "../../lib/apiClient";
 import { Card, Button, Input, Select, Badge, LoadingState, ErrorState, EmptyState, Pagination, Modal, Field, ConfirmDialog } from "../ui/ui";
 import { hasPermission } from "../../lib/permissions";
+import { initialSearchFromQuery } from "../../lib/deepLink";
 
 const TYPE_OPTIONS: ProductTypeValue[] = ["PRODUCT", "SERVICE"];
 const STATUS_OPTIONS: ProductStatusValue[] = ["DRAFT", "ACTIVE", "INACTIVE", "ARCHIVED"];
@@ -452,8 +453,8 @@ export const ProductsPage: React.FC = () => {
   const canCreate = hasPermission(user?.role.permissions, "products.create");
 
   const [page, setPage] = useState(1);
-  const [search, setSearch] = useState("");
-  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [search, setSearch] = useState(initialSearchFromQuery);
+  const [debouncedSearch, setDebouncedSearch] = useState(search);
   const [type, setType] = useState<ProductTypeValue | "">("");
   const [status, setStatus] = useState<ProductStatusValue | "">("");
   const [featuredOnly, setFeaturedOnly] = useState(false);

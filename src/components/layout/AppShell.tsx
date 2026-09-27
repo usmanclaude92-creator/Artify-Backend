@@ -1,6 +1,8 @@
 import React, { useState } from "react";
 import { Sidebar } from "./Sidebar";
 import { Header } from "./Header";
+import { Breadcrumbs } from "./Breadcrumbs";
+import { CommandPalette, useCommandPaletteShortcut } from "./CommandPalette";
 import { AccessDenied } from "../common/AccessDenied";
 import { useAuth } from "../../context/AuthContext";
 import { useRouter } from "../../lib/router";
@@ -10,6 +12,8 @@ export const AppShell: React.FC = () => {
   const { user } = useAuth();
   const { path, navigate } = useRouter();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  useCommandPaletteShortcut(() => setPaletteOpen(true));
 
   const item = NAV_ITEMS.find((i) => i.path === path);
 
@@ -43,9 +47,11 @@ export const AppShell: React.FC = () => {
     <div className="flex min-h-screen" style={{ background: "var(--bg-app)" }}>
       <Sidebar mobileOpen={mobileOpen} onCloseMobile={() => setMobileOpen(false)} />
       <div className="flex-1 flex flex-col min-w-0">
-        <Header onOpenMobileMenu={() => setMobileOpen(true)} />
+        <Header onOpenMobileMenu={() => setMobileOpen(true)} onOpenCommandPalette={() => setPaletteOpen(true)} />
+        <Breadcrumbs item={item} />
         <main className="flex-1 p-4 sm:p-6 max-w-[1400px] w-full mx-auto">{content}</main>
       </div>
+      <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
     </div>
   );
 };

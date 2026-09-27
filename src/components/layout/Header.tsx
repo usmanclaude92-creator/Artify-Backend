@@ -1,12 +1,15 @@
 import React, { useState } from "react";
-import { Menu, Sun, Moon, ChevronDown, LogOut, LogOutIcon, KeyRound, Building2, Check } from "lucide-react";
+import { Menu, Sun, Moon, ChevronDown, LogOut, LogOutIcon, KeyRound, Building2, Check, Search } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
 import { useTheme } from "../../context/ThemeContext";
 import { useToast } from "../../context/ToastContext";
 import { useRouter } from "../../lib/router";
 import { ChangePasswordModal } from "../modules/ChangePasswordModal";
 
-export const Header: React.FC<{ onOpenMobileMenu: () => void }> = ({ onOpenMobileMenu }) => {
+export const Header: React.FC<{ onOpenMobileMenu: () => void; onOpenCommandPalette: () => void }> = ({
+  onOpenMobileMenu,
+  onOpenCommandPalette,
+}) => {
   const { user, organizations, logout, logoutAll, switchOrganization } = useAuth();
   const { theme, toggleTheme } = useTheme();
   const { notify } = useToast();
@@ -71,7 +74,27 @@ export const Header: React.FC<{ onOpenMobileMenu: () => void }> = ({ onOpenMobil
         )}
       </div>
 
+      <button
+        onClick={onOpenCommandPalette}
+        className="hidden sm:flex items-center gap-2 text-xs px-3 py-1.5 rounded-lg w-64 max-w-xs"
+        style={{ color: "var(--text-muted)", background: "var(--bg-hover)" }}
+      >
+        <Search className="w-3.5 h-3.5 shrink-0" />
+        <span className="flex-1 text-left">Search…</span>
+        <span className="text-[10px] px-1.5 py-0.5 rounded border shrink-0" style={{ borderColor: "var(--border)" }}>
+          {navigator.platform.toLowerCase().includes("mac") ? "⌘K" : "Ctrl K"}
+        </span>
+      </button>
+
       <div className="ml-auto flex items-center gap-2">
+        <button
+          onClick={onOpenCommandPalette}
+          aria-label="Search"
+          className="sm:hidden p-2 rounded-lg"
+          style={{ color: "var(--text-secondary)" }}
+        >
+          <Search className="w-4 h-4" />
+        </button>
         <button
           onClick={toggleTheme}
           aria-label="Toggle theme"

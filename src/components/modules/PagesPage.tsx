@@ -7,6 +7,7 @@ import { pagesApi, mediaApi, type CmsPage, type CmsMedia, type ContentRevision, 
 import { ApiClientError } from "../../lib/apiClient";
 import { Card, Button, Input, Select, Badge, LoadingState, ErrorState, EmptyState, Pagination, Modal, Field, ConfirmDialog } from "../ui/ui";
 import { hasPermission } from "../../lib/permissions";
+import { initialSearchFromQuery, consumeNewFlag } from "../../lib/deepLink";
 import { MediaPickerModal } from "../common/MediaPickerModal";
 
 const FeaturedImageField: React.FC<{ mediaId: string | undefined; onChange: (mediaId: string | undefined) => void }> = ({ mediaId, onChange }) => {
@@ -381,8 +382,8 @@ export const PagesPage: React.FC = () => {
   const canCreate = hasPermission(user?.role.permissions, "content.create");
 
   const [pageNum, setPageNum] = useState(1);
-  const [search, setSearch] = useState("");
-  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [search, setSearch] = useState(initialSearchFromQuery);
+  const [debouncedSearch, setDebouncedSearch] = useState(search);
   const [status, setStatus] = useState<ContentStatusValue | "">("");
   const [pages, setPages] = useState<CmsPage[]>([]);
   const [selected, setSelected] = useState<CmsPage | null>(null);
@@ -390,6 +391,11 @@ export const PagesPage: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
+
+  // Command Center "New Page" deep link (?new=1)
+  useEffect(() => {
+    if (consumeNewFlag()) setCreateOpen(true);
+  }, []);
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedSearch(search), 300);

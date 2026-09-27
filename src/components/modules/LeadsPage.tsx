@@ -7,6 +7,7 @@ import { leadsApi, type Lead, type LeadStatus } from "../../lib/api";
 import { ApiClientError } from "../../lib/apiClient";
 import { Card, Button, Input, Select, Badge, LoadingState, ErrorState, EmptyState, Pagination, Modal, Field, ConfirmDialog } from "../ui/ui";
 import { hasPermission } from "../../lib/permissions";
+import { initialSearchFromQuery, consumeNewFlag } from "../../lib/deepLink";
 
 const STATUS_OPTIONS: LeadStatus[] = ["NEW", "CONTACTED", "QUALIFIED", "LOST"];
 const STATUS_TONE: Record<LeadStatus, "success" | "warning" | "danger" | "info" | "neutral"> = {
@@ -198,8 +199,8 @@ export const LeadsPage: React.FC = () => {
   const canConvert = hasPermission(user?.role.permissions, "leads.convert");
 
   const [page, setPage] = useState(1);
-  const [search, setSearch] = useState("");
-  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [search, setSearch] = useState(initialSearchFromQuery);
+  const [debouncedSearch, setDebouncedSearch] = useState(search);
   const [status, setStatus] = useState<LeadStatus | "">("");
   const [leads, setLeads] = useState<Lead[]>([]);
   const [totalPages, setTotalPages] = useState(1);
@@ -208,6 +209,11 @@ export const LeadsPage: React.FC = () => {
   const [modal, setModal] = useState<{ mode: "create" | "edit"; lead?: Lead } | null>(null);
   const [convertTarget, setConvertTarget] = useState<Lead | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Lead | null>(null);
+
+  // Command Center "New Lead" deep link (?new=1)
+  useEffect(() => {
+    if (consumeNewFlag()) setModal({ mode: "create" });
+  }, []);
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedSearch(search), 300);

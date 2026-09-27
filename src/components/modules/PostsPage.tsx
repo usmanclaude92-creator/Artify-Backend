@@ -18,6 +18,7 @@ import {
 import { ApiClientError } from "../../lib/apiClient";
 import { Card, Button, Input, Select, Badge, LoadingState, ErrorState, EmptyState, Pagination, Modal, Field, ConfirmDialog } from "../ui/ui";
 import { hasPermission } from "../../lib/permissions";
+import { initialSearchFromQuery, consumeNewFlag } from "../../lib/deepLink";
 import { MediaPickerModal } from "../common/MediaPickerModal";
 
 const STATUS_OPTIONS: ContentStatusValue[] = ["DRAFT", "IN_REVIEW", "SCHEDULED", "PUBLISHED", "ARCHIVED"];
@@ -457,8 +458,8 @@ export const PostsPage: React.FC = () => {
   const canCreate = hasPermission(user?.role.permissions, "content.create");
 
   const [pageNum, setPageNum] = useState(1);
-  const [search, setSearch] = useState("");
-  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [search, setSearch] = useState(initialSearchFromQuery);
+  const [debouncedSearch, setDebouncedSearch] = useState(search);
   const [status, setStatus] = useState<ContentStatusValue | "">("");
   const [categoryFilter, setCategoryFilter] = useState("");
   const [posts, setPosts] = useState<CmsPost[]>([]);
@@ -469,6 +470,11 @@ export const PostsPage: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
+
+  // Command Center "New Post" deep link (?new=1)
+  useEffect(() => {
+    if (consumeNewFlag()) setCreateOpen(true);
+  }, []);
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedSearch(search), 300);

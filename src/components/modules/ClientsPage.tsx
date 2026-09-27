@@ -16,6 +16,7 @@ import {
 import { ApiClientError } from "../../lib/apiClient";
 import { Card, Button, Input, Select, Badge, LoadingState, ErrorState, EmptyState, Pagination, Modal, Field, ConfirmDialog } from "../ui/ui";
 import { hasPermission } from "../../lib/permissions";
+import { initialSearchFromQuery, consumeNewFlag } from "../../lib/deepLink";
 
 const PROVISIONING_TONE: Record<string, "success" | "warning" | "danger" | "info" | "neutral"> = {
   NOT_PROVISIONED: "neutral",
@@ -668,8 +669,8 @@ export const ClientsPage: React.FC = () => {
   const canCreate = hasPermission(user?.role.permissions, "clients.create");
 
   const [page, setPage] = useState(1);
-  const [search, setSearch] = useState("");
-  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [search, setSearch] = useState(initialSearchFromQuery);
+  const [debouncedSearch, setDebouncedSearch] = useState(search);
   const [status, setStatus] = useState<ClientStatusValue | "">("");
   const [clients, setClients] = useState<CrmClient[]>([]);
   const [selected, setSelected] = useState<CrmClient | null>(null);
@@ -677,6 +678,11 @@ export const ClientsPage: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
+
+  // Command Center "New Client" deep link (?new=1)
+  useEffect(() => {
+    if (consumeNewFlag()) setCreateOpen(true);
+  }, []);
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedSearch(search), 300);

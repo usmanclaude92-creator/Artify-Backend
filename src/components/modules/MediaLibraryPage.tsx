@@ -7,6 +7,7 @@ import { mediaApi, type CmsMedia, type MediaStatusValue, type MediaVisibilityVal
 import { ApiClientError } from "../../lib/apiClient";
 import { Card, Button, Input, Select, Badge, LoadingState, ErrorState, EmptyState, Pagination, Modal, Field, ConfirmDialog } from "../ui/ui";
 import { hasPermission } from "../../lib/permissions";
+import { initialSearchFromQuery, consumeNewFlag } from "../../lib/deepLink";
 
 const STATUS_OPTIONS: MediaStatusValue[] = ["PENDING", "ACTIVE", "FAILED", "ARCHIVED"];
 const STATUS_TONE: Record<MediaStatusValue, "success" | "warning" | "danger" | "info" | "neutral"> = {
@@ -202,8 +203,8 @@ export const MediaLibraryPage: React.FC = () => {
   const canDelete = hasPermission(user?.role.permissions, "media.delete");
 
   const [page, setPage] = useState(1);
-  const [search, setSearch] = useState("");
-  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [search, setSearch] = useState(initialSearchFromQuery);
+  const [debouncedSearch, setDebouncedSearch] = useState(search);
   const [status, setStatus] = useState<MediaStatusValue | "">("");
   const [mimeType, setMimeType] = useState<AllowedMediaMimeType | "">("");
   const [items, setItems] = useState<CmsMedia[]>([]);
@@ -214,6 +215,11 @@ export const MediaLibraryPage: React.FC = () => {
   const [editTarget, setEditTarget] = useState<CmsMedia | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<CmsMedia | null>(null);
   const [archiveTarget, setArchiveTarget] = useState<CmsMedia | null>(null);
+
+  // Command Center "Upload Media" deep link (?new=1)
+  useEffect(() => {
+    if (consumeNewFlag()) setUploadOpen(true);
+  }, []);
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedSearch(search), 300);
