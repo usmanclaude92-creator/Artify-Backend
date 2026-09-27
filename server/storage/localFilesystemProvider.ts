@@ -62,6 +62,11 @@ export class LocalFilesystemStorageProvider implements StorageProvider {
     return `/api/v1/media/local-object?key=${encodeURIComponent(params.key)}&exp=${expiresAt.getTime()}&sig=${sig}`;
   }
 
+  /** Dev-only provider — there is no public web server for local files, so a stable public URL is never computable. Callers fall back to a (longer-TTL) signed URL, which is fine here since this provider never runs in production/staging (server/config/env.ts rejects OBJECT_STORAGE_PROVIDER=none there). */
+  getPublicUrl(_key: string): string | null {
+    return null;
+  }
+
   async headObject(key: string): Promise<HeadObjectResult> {
     try {
       const s = await stat(resolvePath(key));

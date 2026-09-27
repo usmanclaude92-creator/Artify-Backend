@@ -28,6 +28,7 @@ export class TestStorageProvider implements StorageProvider {
   reset(): void {
     this.objects.clear();
     this.missingKeys.clear();
+    this.publicKeys.clear();
   }
 
   async createSignedUploadUrl(params: { key: string; contentType: string; maxSizeBytes: number }): Promise<SignedUpload> {
@@ -41,6 +42,14 @@ export class TestStorageProvider implements StorageProvider {
 
   async createSignedReadUrl(params: { key: string; expiresInSeconds: number }): Promise<string> {
     return `https://test-storage.invalid/read/${encodeURIComponent(params.key)}?exp=${Date.now() + params.expiresInSeconds * 1000}`;
+  }
+
+  /** Test-only hook: keys in this set report a computable public URL, exercising the getPublicUrl-preferred path; every other key returns null, exercising the signed-URL fallback path. */
+  readonly publicKeys = new Set<string>();
+
+  getPublicUrl(key: string): string | null {
+    if (!this.publicKeys.has(key)) return null;
+    return `https://test-storage.invalid/public/${encodeURIComponent(key)}`;
   }
 
   async headObject(key: string): Promise<HeadObjectResult> {

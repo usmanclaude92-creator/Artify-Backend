@@ -28,6 +28,17 @@ export interface StorageProvider {
   /** A short-lived, scoped URL for reading a private object — never a permanent public link. */
   createSignedReadUrl(params: { key: string; expiresInSeconds: number }): Promise<string>;
 
+  /**
+   * A stable, non-expiring URL for an object the provider/bucket is
+   * configured to serve publicly — or `null` if this provider/config
+   * can't compute one (e.g. no public base URL configured, or a
+   * provider — local filesystem — that has no concept of public serving).
+   * Callers must fall back to a signed URL when this returns `null`; never
+   * used for anything that isn't already known to be public (callers gate
+   * this on `MediaVisibility.PUBLIC` before calling).
+   */
+  getPublicUrl(key: string): string | null;
+
   /** Server-side existence + size/type check — the only source of truth for "did the upload really happen," never the client's own claim. */
   headObject(key: string): Promise<HeadObjectResult>;
 

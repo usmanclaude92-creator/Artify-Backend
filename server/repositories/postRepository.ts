@@ -82,6 +82,22 @@ export const postRepository = {
     return { rows, total };
   },
 
+  /**
+   * Cross-organization by design (docs/AUTOMATION_ARCHITECTURE.md's
+   * scheduler tick uses the same pattern) — this backs the system cron
+   * job that promotes SCHEDULED posts to PUBLISHED, which has no single
+   * caller organization to scope to. Never used by an organization-scoped
+   * request handler.
+   */
+  async findDueScheduled(now: Date, limit = 20): Promise<PostWithRelations[]> {
+    return prisma.post.findMany({
+      where: { status: "SCHEDULED", scheduledAt: { lte: now }, deletedAt: null },
+      take: limit,
+      orderBy: { scheduledAt: "asc" },
+      ...withRelations,
+    });
+  },
+
   async findUniqueSlugInOrg(organizationId: string, base: string): Promise<string> {
     const baseSlug = slugify(base) || "post";
     let slug = baseSlug;

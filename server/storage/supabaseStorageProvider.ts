@@ -48,6 +48,20 @@ export class SupabaseStorageProvider implements StorageProvider {
     return data.signedUrl;
   }
 
+  /**
+   * Synchronous by the Supabase JS SDK's own design — `getPublicUrl` just
+   * string-templates `${SUPABASE_STORAGE_URL}/storage/v1/object/public/
+   * {bucket}/{key}`, it makes no network call. That URL only actually
+   * serves the object if the bucket itself is configured public in
+   * Supabase; if it isn't, the object 404s/403s at that URL regardless of
+   * what this method returns — this is a stable computed URL, not proof
+   * the bucket is public.
+   */
+  getPublicUrl(key: string): string | null {
+    const { data } = getClient().storage.from(config.objectStorageBucket).getPublicUrl(key);
+    return data?.publicUrl ?? null;
+  }
+
   async headObject(key: string): Promise<HeadObjectResult> {
     const dir = key.includes("/") ? key.slice(0, key.lastIndexOf("/")) : "";
     const name = key.includes("/") ? key.slice(key.lastIndexOf("/") + 1) : key;

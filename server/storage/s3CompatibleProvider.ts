@@ -45,6 +45,11 @@ export class S3CompatibleStorageProvider implements StorageProvider {
     return getSignedUrl(getClient(), command, { expiresIn: params.expiresInSeconds });
   }
 
+  getPublicUrl(key: string): string | null {
+    if (!config.objectStoragePublicBaseUrl) return null;
+    return `${config.objectStoragePublicBaseUrl.replace(/\/+$/, "")}/${key.replace(/^\/+/, "")}`;
+  }
+
   async headObject(key: string): Promise<HeadObjectResult> {
     try {
       const res = await getClient().send(new HeadObjectCommand({ Bucket: config.objectStorageBucket, Key: key }));

@@ -35,7 +35,14 @@ export interface PublicMedia {
 async function projectPublicMedia(media: MediaAsset | null): Promise<PublicMedia | null> {
   if (!media || media.status !== "ACTIVE" || media.visibility !== "PUBLIC") return null;
   const provider = getStorageProvider();
-  const url = await provider.createSignedReadUrl({ key: media.storageKey, expiresInSeconds: config.mediaSignedUrlTtlSeconds });
+  // Prefer a stable, non-expiring URL. This matters specifically here (as
+  // opposed to the Control Center's own interactive media previews, which
+  // legitimately want a short-lived signed URL): this URL is embedded in
+  // og:image, JSON-LD, and the sitemap, none of which get refreshed on any
+  // schedule a 15-minute (or even 24-hour) signed URL could keep up with —
+  // a social crawler or search engine can fetch it hours or days later.
+  const url = provider.getPublicUrl(media.storageKey) ??
+    (await provider.createSignedReadUrl({ key: media.storageKey, expiresInSeconds: config.mediaPublicSignedUrlTtlSeconds }));
   return { url, altText: media.altText, caption: media.caption, width: media.width, height: media.height };
 }
 

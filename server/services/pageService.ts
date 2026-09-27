@@ -15,9 +15,13 @@
  * edit mutates the current revision in place unless that revision's own
  * status is PUBLISHED (checked on the revision, not the page, so a page
  * restored from ARCHIVED with a still-PUBLISHED current revision is still
- * handled correctly) or the edit accompanies an unpublish, in which case
- * editing clones a new DRAFT revision instead. revertPage always clones a
- * new revision from history — it never mutates or deletes a past one.
+ * handled correctly), in which case editing clones a new revision instead —
+ * PUBLISHED immediately (a "live edit", content.update's job) if the page
+ * itself is staying PUBLISHED, or DRAFT if the edit accompanies an explicit
+ * unpublish (PATCH status:"DRAFT"). Either way the page is never forced
+ * offline just to fix a typo. revertPage always clones a new revision from
+ * history — it never mutates or deletes a past one — and republishes
+ * immediately (PUBLISHED) if the page was live, for the same reason.
  *
  * Optimistic concurrency (§12): Page.updatedAt doubles as the page's
  * version. Every content edit touches the Page row (even one that only
@@ -40,7 +44,18 @@ import type { ScheduleContentInput, RevertContentInput } from "../schemas/conten
 import type { RequestMeta } from "./authService";
 import type { Prisma } from "@prisma/client";
 
-const CONTENT_EDIT_BLOCKED_STATUSES = new Set(["PUBLISHED", "ARCHIVED"]);
+/**
+ * ARCHIVED content is fully read-only until restored (PATCH status:"DRAFT")
+ * — restoring and editing in the same request is fine (the target status
+ * is DRAFT, not ARCHIVED, so the block below never fires for it). PUBLISHED
+ * is deliberately NOT in this set: a live edit of already-published content
+ * is content.update's job (see the `liveEditOfPublished` branch below),
+ * distinct from content.publish's job of taking new content live for the
+ * first time. This closes the earlier bug where the only way to fix a typo
+ * on a published page was to unpublish it (PATCH status:"DRAFT"), taking it
+ * offline until republished.
+ */
+const CONTENT_EDIT_BLOCKED_STATUSES = new Set(["ARCHIVED"]);
 
 function isUniqueConstraintError(err: unknown): boolean {
   return !!err && typeof err === "object" && "code" in err && (err as { code?: string }).code === "P2002";
@@ -136,11 +151,12 @@ export const pageService = {
     // dedicated-endpoint-only (submitForReview/schedulePage/publishPage/
     // archivePage). Moving to DRAFT is always a legal "reopen" from any
     // other status.
-    const effectiveStatus = input.status ?? existing.status;
-
     const hasContentEdit = input.title !== undefined || input.body !== undefined || input.metadata !== undefined || input.slug !== undefined;
-    if (hasContentEdit && CONTENT_EDIT_BLOCKED_STATUSES.has(effectiveStatus)) {
-      throw new ConflictError(`Page content cannot be edited while status is ${effectiveStatus}.`);
+    // Blocked only when the page STAYS archived — target status is always
+    // existing.status unless input.status ("DRAFT" only, restoring it) is
+    // supplied, so this never blocks a combined restore+edit.
+    if (hasContentEdit && input.status === undefined && CONTENT_EDIT_BLOCKED_STATUSES.has(existing.status)) {
+      throw new ConflictError(`Page content cannot be edited while status is ${existing.status}. Restore it to draft first.`);
     }
 
     if (input.slug !== undefined && input.slug !== existing.slug) {
@@ -158,6 +174,12 @@ export const pageService = {
     }
 
     const unpublishing = existing.status === "PUBLISHED" && input.status === "DRAFT";
+    // A live edit: the page stays PUBLISHED (no status field in the
+    // request), so the new content should go live immediately as a new
+    // PUBLISHED revision rather than forking into an unseen DRAFT — that
+    // DRAFT-fork behavior is reserved for `unpublishing`, an explicit,
+    // deliberate status change.
+    const liveEditOfPublished = hasContentEdit && input.status === undefined && existing.status === "PUBLISHED";
     const currentRevision = existing.currentRevision;
 
     try {
@@ -169,19 +191,21 @@ export const pageService = {
         if (hasFeaturedMediaEdit) pagePatch.featuredMediaId = input.featuredMediaId;
         if (unpublishing) pagePatch.publishedAt = null;
 
-        if (currentRevision && (unpublishing || (hasContentEdit && currentRevision.status === "PUBLISHED"))) {
+        if (currentRevision && (unpublishing || liveEditOfPublished || (hasContentEdit && currentRevision.status === "PUBLISHED"))) {
           // The current revision has actually gone live — never mutate it
-          // (immutability invariant). Clone it into a fresh DRAFT revision,
-          // applying this request's content edits (if any) on top.
+          // (immutability invariant). Clone it into a fresh revision,
+          // applying this request's content edits (if any) on top; PUBLISHED
+          // immediately for a live edit, DRAFT for an explicit unpublish.
           const newRevision = await tx.contentRevision.create({
             data: {
               pageId: id,
               version: currentRevision.version + 1,
-              status: "DRAFT",
+              status: liveEditOfPublished ? "PUBLISHED" : "DRAFT",
               title: input.title ?? currentRevision.title,
               body: input.body ?? currentRevision.body,
               metadata: (input.metadata ?? currentRevision.metadata) as Prisma.InputJsonValue,
               createdById: caller.id,
+              publishedAt: liveEditOfPublished ? new Date() : null,
             },
           });
           pagePatch.currentRevisionId = newRevision.id;
@@ -368,6 +392,10 @@ export const pageService = {
 
     const current = existing.currentRevision;
     const nextVersion = (current?.version ?? 0) + 1;
+    // Reverting a live page restores the old content as the new live
+    // content immediately, the same as any other edit to published content
+    // (see updatePage's `liveEditOfPublished`) — it must not take the page
+    // offline just because the source of the new content was history.
     const wasPublished = existing.status === "PUBLISHED";
 
     await prisma.$transaction(async (tx) => {
@@ -378,19 +406,17 @@ export const pageService = {
         data: {
           pageId: id,
           version: nextVersion,
-          status: "DRAFT",
+          status: wasPublished ? "PUBLISHED" : "DRAFT",
           title: target.title,
           body: target.body,
           metadata: target.metadata as Prisma.InputJsonValue,
           createdById: caller.id,
+          publishedAt: wasPublished ? new Date() : null,
         },
       });
       await tx.page.update({
         where: { id },
-        data: {
-          currentRevisionId: newRevision.id,
-          ...(wasPublished ? { status: "DRAFT", publishedAt: null } : {}),
-        },
+        data: { currentRevisionId: newRevision.id },
       });
     });
 

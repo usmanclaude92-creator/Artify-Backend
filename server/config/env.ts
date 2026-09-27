@@ -69,10 +69,26 @@ const envSchema = z
     SUPABASE_STORAGE_URL: z.string().optional().default(""),
     SUPABASE_STORAGE_SERVICE_ROLE_KEY: z.string().optional().default(""),
     LOCAL_STORAGE_DIR: z.string().optional().default(".local-storage"),
+    // s3/r2 only — the bucket's public base URL (a CDN domain, or
+    // `https://<bucket>.s3.<region>.amazonaws.com`/an R2 public bucket
+    // domain), used to compute a stable, non-expiring URL for PUBLIC
+    // media instead of a signed one. Supabase Storage never needs this —
+    // its client SDK computes a public URL from SUPABASE_STORAGE_URL
+    // directly. Left unset, s3/r2 public media falls back to a signed URL
+    // with MEDIA_PUBLIC_SIGNED_URL_TTL_SECONDS instead of failing.
+    OBJECT_STORAGE_PUBLIC_BASE_URL: z.string().optional().default(""),
 
     MEDIA_MAX_IMAGE_SIZE_BYTES: z.coerce.number().int().positive().default(10 * 1024 * 1024),
     MEDIA_MAX_DOCUMENT_SIZE_BYTES: z.coerce.number().int().positive().default(25 * 1024 * 1024),
     MEDIA_SIGNED_URL_TTL_SECONDS: z.coerce.number().int().positive().default(900),
+    // Only for PUBLIC-visibility media served to anonymous website visitors
+    // (og:image, sitemap image entries, public post/page featured images)
+    // when no stable getPublicUrl() can be computed — a real fix would be
+    // configuring OBJECT_STORAGE_PUBLIC_BASE_URL/a public Supabase bucket
+    // so these URLs never expire at all; this is the fallback, not the
+    // goal. Default 24h, comfortably longer than any cache/CDN TTL that
+    // would otherwise re-request it, without being a permanent link.
+    MEDIA_PUBLIC_SIGNED_URL_TTL_SECONDS: z.coerce.number().int().positive().default(24 * 60 * 60),
     MEDIA_UPLOAD_SESSION_TTL_MINUTES: z.coerce.number().int().positive().default(15),
 
     // Phase 3 — centralized security tunables (docs/AUTHENTICATION_ARCHITECTURE.md).
@@ -240,9 +256,11 @@ export type AppConfig = Readonly<{
   supabaseStorageUrl: string;
   supabaseStorageServiceRoleKey: string;
   localStorageDir: string;
+  objectStoragePublicBaseUrl: string;
   mediaMaxImageSizeBytes: number;
   mediaMaxDocumentSizeBytes: number;
   mediaSignedUrlTtlSeconds: number;
+  mediaPublicSignedUrlTtlSeconds: number;
   mediaUploadSessionTtlMinutes: number;
   sessionTtlHours: number;
   accountLockoutThreshold: number;
@@ -301,9 +319,11 @@ export function validateEnv(raw: NodeJS.ProcessEnv | Record<string, string | und
       supabaseStorageUrl: env.SUPABASE_STORAGE_URL,
       supabaseStorageServiceRoleKey: env.SUPABASE_STORAGE_SERVICE_ROLE_KEY,
       localStorageDir: env.LOCAL_STORAGE_DIR,
+      objectStoragePublicBaseUrl: env.OBJECT_STORAGE_PUBLIC_BASE_URL,
       mediaMaxImageSizeBytes: env.MEDIA_MAX_IMAGE_SIZE_BYTES,
       mediaMaxDocumentSizeBytes: env.MEDIA_MAX_DOCUMENT_SIZE_BYTES,
       mediaSignedUrlTtlSeconds: env.MEDIA_SIGNED_URL_TTL_SECONDS,
+      mediaPublicSignedUrlTtlSeconds: env.MEDIA_PUBLIC_SIGNED_URL_TTL_SECONDS,
       mediaUploadSessionTtlMinutes: env.MEDIA_UPLOAD_SESSION_TTL_MINUTES,
       sessionTtlHours: env.SESSION_TTL_HOURS,
       accountLockoutThreshold: env.ACCOUNT_LOCKOUT_THRESHOLD,

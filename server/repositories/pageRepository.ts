@@ -53,6 +53,19 @@ export const pageRepository = {
     return prisma.page.findFirst({ where: { organizationId, slug, status: "PUBLISHED", deletedAt: null }, ...withPublicRelations });
   },
 
+  /**
+   * Cross-organization by design (see postRepository.findDueScheduled) —
+   * backs the system cron job that promotes SCHEDULED pages to PUBLISHED.
+   */
+  async findDueScheduled(now: Date, limit = 20): Promise<PageWithRevision[]> {
+    return prisma.page.findMany({
+      where: { status: "SCHEDULED", scheduledAt: { lte: now }, deletedAt: null },
+      take: limit,
+      orderBy: { scheduledAt: "asc" },
+      ...withCurrentRevision,
+    });
+  },
+
   async findUniqueSlugInOrg(organizationId: string, base: string): Promise<string> {
     const baseSlug = slugify(base) || "page";
     let slug = baseSlug;

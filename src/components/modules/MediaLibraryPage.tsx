@@ -3,7 +3,7 @@ import React, { useEffect, useState } from "react";
 import { Image as ImageIcon, FileText, Upload, Search, Archive, Trash2, Copy, Pencil } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
-import { mediaApi, type CmsMedia, type MediaStatusValue, type AllowedMediaMimeType } from "../../lib/api";
+import { mediaApi, type CmsMedia, type MediaStatusValue, type MediaVisibilityValue, type AllowedMediaMimeType } from "../../lib/api";
 import { ApiClientError } from "../../lib/apiClient";
 import { Card, Button, Input, Select, Badge, LoadingState, ErrorState, EmptyState, Pagination, Modal, Field, ConfirmDialog } from "../ui/ui";
 import { hasPermission } from "../../lib/permissions";
@@ -125,6 +125,7 @@ const MetadataModal: React.FC<{ open: boolean; onClose: () => void; media: CmsMe
   const [displayName, setDisplayName] = useState("");
   const [altText, setAltText] = useState("");
   const [caption, setCaption] = useState("");
+  const [visibility, setVisibility] = useState<MediaVisibilityValue>("PRIVATE");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -133,6 +134,7 @@ const MetadataModal: React.FC<{ open: boolean; onClose: () => void; media: CmsMe
       setDisplayName(media.displayName ?? "");
       setAltText(media.altText ?? "");
       setCaption(media.caption ?? "");
+      setVisibility(media.visibility);
       setError(null);
     }
   }, [open, media]);
@@ -144,7 +146,7 @@ const MetadataModal: React.FC<{ open: boolean; onClose: () => void; media: CmsMe
     setError(null);
     setSubmitting(true);
     try {
-      await mediaApi.update(media.id, { displayName: displayName || null, altText: altText || null, caption: caption || null });
+      await mediaApi.update(media.id, { displayName: displayName || null, altText: altText || null, caption: caption || null, visibility });
       notify("Media updated.", "success");
       onSaved();
       onClose();
@@ -167,6 +169,12 @@ const MetadataModal: React.FC<{ open: boolean; onClose: () => void; media: CmsMe
         </Field>
         <Field label="Caption">
           <Input value={caption} onChange={(e) => setCaption(e.target.value)} />
+        </Field>
+        <Field label="Visibility" hint="Public is required for use as a featured image or anywhere else on the public website — a private image renders as missing there.">
+          <Select value={visibility} onChange={(e) => setVisibility(e.target.value as MediaVisibilityValue)}>
+            <option value="PRIVATE">Private (Control Center only)</option>
+            <option value="PUBLIC">Public (visible on the website)</option>
+          </Select>
         </Field>
         <div className="text-[11px] space-y-0.5" style={{ color: "var(--text-muted)" }}>
           <p>Type: {media.mimeType}</p>

@@ -44,12 +44,36 @@ async function loadMediaOrThrow(id: string, organizationId: string): Promise<Med
  * asset cannot become a new featured image, though an existing reference
  * to now-archived media is left alone rather than silently broken — see
  * docs/MEDIA_ARCHITECTURE.md).
+ *
+ * Uploads default to PRIVATE visibility, but a featured image exists to be
+ * shown on a public Post/Page — there is no legitimate reason to feature a
+ * PRIVATE image, and requiring the caller to separately flip visibility
+ * first (a step the Control Center previously had no UI for at all) just
+ * produced posts that publish successfully but silently render with no
+ * image (projectPublicMedia refuses to return a PRIVATE asset). A caller
+ * with permission to set a post/page's featured image is, by that same
+ * permission, authorized to make the chosen image public, so attaching it
+ * promotes it to PUBLIC automatically — audited the same as any other
+ * visibility change (MEDIA_METADATA_UPDATED).
  */
 export async function assertFeaturedMediaUsable(mediaId: string, organizationId: string): Promise<void> {
   const media = await mediaRepository.findByIdInOrg(mediaId, organizationId);
   if (!media) throw new ValidationError("featuredMediaId does not refer to a media asset in this organization.");
   if (media.status !== "ACTIVE") throw new ValidationError("featuredMediaId must refer to an ACTIVE media asset.");
   if (!isImageMimeType(media.mimeType)) throw new ValidationError("featuredMediaId must refer to an image.");
+  if (media.visibility !== "PUBLIC") {
+    await mediaRepository.update(mediaId, { visibility: "PUBLIC" });
+    await auditLogRepository.record({
+      organizationId,
+      actorType: "SYSTEM",
+      actorName: "featured-media-auto-publish",
+      action: "MEDIA_METADATA_UPDATED",
+      resourceType: "media",
+      resourceId: mediaId,
+      beforeData: { visibility: media.visibility },
+      afterData: { visibility: "PUBLIC" },
+    });
+  }
 }
 
 export const mediaService = {
