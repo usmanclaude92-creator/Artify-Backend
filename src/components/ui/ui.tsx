@@ -119,6 +119,67 @@ export const TableSkeleton: React.FC<{ rows?: number; cols?: number }> = ({ rows
   </div>
 );
 
+/**
+ * Phase 13 — shared table renderer, replacing the hand-rolled `<table>`
+ * markup duplicated across Leads/Contacts/Users/Organizations/Onboarding/
+ * AuditLog. Deliberately just the `<table>` itself: loading/error/empty
+ * states stay the caller's job (LoadingState/ErrorState/EmptyState),
+ * matching how every one of those pages already gates on those before
+ * ever reaching this component — a `rows` array here is always real data.
+ */
+export interface DataTableColumn<T> {
+  key: string;
+  header: string;
+  align?: "left" | "right";
+  headerClassName?: string;
+  cellClassName?: string;
+  cellStyle?: React.CSSProperties;
+  render: (row: T) => React.ReactNode;
+}
+
+export function DataTable<T>({
+  columns,
+  rows,
+  keyOf,
+  onRowClick,
+}: {
+  columns: DataTableColumn<T>[];
+  rows: T[];
+  keyOf: (row: T) => string;
+  onRowClick?: (row: T) => void;
+}) {
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-left text-xs">
+        <thead style={{ background: "var(--bg-surface-alt)", color: "var(--text-muted)" }}>
+          <tr className="uppercase text-[10px] font-bold">
+            {columns.map((col) => (
+              <th key={col.key} className={`px-4 py-2.5 ${col.align === "right" ? "text-right" : ""} ${col.headerClassName ?? ""}`}>
+                {col.header}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody className="divide-y" style={{ borderColor: "var(--border)" }}>
+          {rows.map((row) => (
+            <tr key={keyOf(row)} className={onRowClick ? "cursor-pointer" : undefined} onClick={onRowClick ? () => onRowClick(row) : undefined}>
+              {columns.map((col) => (
+                <td
+                  key={col.key}
+                  className={`px-4 py-3 ${col.align === "right" ? "text-right space-x-2 whitespace-nowrap" : ""} ${col.cellClassName ?? ""}`}
+                  style={col.cellStyle}
+                >
+                  {col.render(row)}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 export const Pagination: React.FC<{ page: number; totalPages: number; onChange: (page: number) => void }> = ({
   page,
   totalPages,

@@ -6,7 +6,7 @@ import { useToast } from "../../context/ToastContext";
 import { useRouter } from "../../lib/router";
 import { onboardingApi, type Onboarding, type OnboardingStatusValue } from "../../lib/api";
 import { ApiClientError } from "../../lib/apiClient";
-import { Card, Button, Input, Select, Badge, LoadingState, ErrorState, EmptyState, Pagination, Modal } from "../ui/ui";
+import { Card, Button, Input, Select, Badge, LoadingState, ErrorState, EmptyState, Pagination, Modal, DataTable, type DataTableColumn } from "../ui/ui";
 import { hasPermission } from "../../lib/permissions";
 
 const STATUS_OPTIONS: OnboardingStatusValue[] = ["NOT_STARTED", "IN_PROGRESS", "READY", "COMPLETED", "CANCELLED"];
@@ -117,6 +117,36 @@ export const OnboardingPage: React.FC = () => {
     void load();
   }, [load]);
 
+  const onboardingColumns: DataTableColumn<Onboarding>[] = [
+    { key: "client", header: "Client", cellClassName: "font-semibold", cellStyle: { color: "var(--text-primary)" }, render: (row) => row.client?.name ?? row.clientId },
+    { key: "status", header: "Onboarding", render: (row) => <Badge tone={STATUS_TONE[row.status]}>{row.status}</Badge> },
+    {
+      key: "workspace",
+      header: "Workspace",
+      cellStyle: { color: "var(--text-secondary)" },
+      render: (row) => row.client?.workspaceOrganization?.status ?? "—",
+    },
+    { key: "currentStep", header: "Current step", cellStyle: { color: "var(--text-secondary)" }, render: (row) => row.currentStep ?? "—" },
+    {
+      key: "started",
+      header: "Started",
+      cellStyle: { color: "var(--text-muted)" },
+      render: (row) => (row.startedAt ? new Date(row.startedAt).toLocaleDateString() : "—"),
+    },
+    {
+      key: "lastActivity",
+      header: "Last activity",
+      cellStyle: { color: "var(--text-muted)" },
+      render: (row) => new Date(row.updatedAt).toLocaleDateString(),
+    },
+    {
+      key: "completed",
+      header: "Completed",
+      cellStyle: { color: "var(--text-muted)" },
+      render: (row) => (row.completedAt ? new Date(row.completedAt).toLocaleDateString() : "—"),
+    },
+  ];
+
   return (
     <div className="space-y-4">
       <div>
@@ -151,48 +181,7 @@ export const OnboardingPage: React.FC = () => {
         ) : rows.length === 0 ? (
           <EmptyState title="No onboarding records" description="Start onboarding from a CRM client's detail page." />
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
-              <thead style={{ background: "var(--bg-surface-alt)", color: "var(--text-muted)" }}>
-                <tr className="uppercase text-[10px] font-bold">
-                  <th className="px-4 py-2.5">Client</th>
-                  <th className="px-4 py-2.5">Onboarding</th>
-                  <th className="px-4 py-2.5">Workspace</th>
-                  <th className="px-4 py-2.5">Current step</th>
-                  <th className="px-4 py-2.5">Started</th>
-                  <th className="px-4 py-2.5">Last activity</th>
-                  <th className="px-4 py-2.5">Completed</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y" style={{ borderColor: "var(--border)" }}>
-                {rows.map((row) => (
-                  <tr key={row.id} className="cursor-pointer" onClick={() => setDetail(row)}>
-                    <td className="px-4 py-3 font-semibold" style={{ color: "var(--text-primary)" }}>
-                      {row.client?.name ?? row.clientId}
-                    </td>
-                    <td className="px-4 py-3">
-                      <Badge tone={STATUS_TONE[row.status]}>{row.status}</Badge>
-                    </td>
-                    <td className="px-4 py-3" style={{ color: "var(--text-secondary)" }}>
-                      {row.client?.workspaceOrganization?.status ?? "—"}
-                    </td>
-                    <td className="px-4 py-3" style={{ color: "var(--text-secondary)" }}>
-                      {row.currentStep ?? "—"}
-                    </td>
-                    <td className="px-4 py-3" style={{ color: "var(--text-muted)" }}>
-                      {row.startedAt ? new Date(row.startedAt).toLocaleDateString() : "—"}
-                    </td>
-                    <td className="px-4 py-3" style={{ color: "var(--text-muted)" }}>
-                      {new Date(row.updatedAt).toLocaleDateString()}
-                    </td>
-                    <td className="px-4 py-3" style={{ color: "var(--text-muted)" }}>
-                      {row.completedAt ? new Date(row.completedAt).toLocaleDateString() : "—"}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <DataTable columns={onboardingColumns} rows={rows} keyOf={(row) => row.id} onRowClick={(row) => setDetail(row)} />
         )}
         <Pagination page={page} totalPages={totalPages} onChange={setPage} />
       </Card>

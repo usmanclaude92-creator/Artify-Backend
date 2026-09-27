@@ -5,7 +5,7 @@ import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
 import { contactsApi, clientsApi, type CrmContact, type CrmClient } from "../../lib/api";
 import { ApiClientError } from "../../lib/apiClient";
-import { Card, Button, Input, Select, Badge, LoadingState, ErrorState, EmptyState, Pagination, Modal, Field, ConfirmDialog } from "../ui/ui";
+import { Card, Button, Input, Select, Badge, LoadingState, ErrorState, EmptyState, Pagination, Modal, Field, ConfirmDialog, DataTable, type DataTableColumn } from "../ui/ui";
 import { hasPermission } from "../../lib/permissions";
 
 const ContactEditModal: React.FC<{ open: boolean; onClose: () => void; onSaved: () => void; contact?: CrmContact }> = ({
@@ -165,6 +165,46 @@ export const ContactsPage: React.FC = () => {
 
   const clientName = (id: string | null) => (id ? clientOptions.find((c) => c.id === id)?.name ?? "—" : "—");
 
+  const contactColumns: DataTableColumn<CrmContact>[] = [
+    {
+      key: "name",
+      header: "Name",
+      render: (c) => (
+        <p className="font-semibold flex items-center gap-1.5" style={{ color: "var(--text-primary)" }}>
+          {c.firstName} {c.lastName}
+          {c.isPrimary && <Badge tone="success">Primary</Badge>}
+        </p>
+      ),
+    },
+    { key: "client", header: "Client", cellStyle: { color: "var(--text-secondary)" }, render: (c) => clientName(c.clientId) },
+    { key: "jobTitle", header: "Job title", cellStyle: { color: "var(--text-secondary)" }, render: (c) => c.jobTitle ?? "—" },
+    { key: "email", header: "Email", cellStyle: { color: "var(--text-muted)" }, render: (c) => c.email ?? "—" },
+    {
+      key: "actions",
+      header: "Actions",
+      align: "right",
+      render: (c) => (
+        <>
+          {canUpdate && !c.isPrimary && (
+            <Button variant="secondary" onClick={() => void handleMakePrimary(c)}>
+              <Star className="w-3 h-3" /> Primary
+            </Button>
+          )}
+          {canUpdate && (
+            <Button variant="secondary" onClick={() => setEditTarget(c)}>
+              Edit
+            </Button>
+          )}
+          {canDelete && (
+            <Button variant="danger" onClick={() => setRemoveTarget(c)}>
+              <Trash2 className="w-3 h-3" />
+            </Button>
+          )}
+        </>
+      ),
+    },
+  ];
+
   return (
     <div className="space-y-4">
       <div>
@@ -201,57 +241,7 @@ export const ContactsPage: React.FC = () => {
         ) : contacts.length === 0 ? (
           <EmptyState title="No contacts found" description="Add contacts from a client's detail page." />
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
-              <thead style={{ background: "var(--bg-surface-alt)", color: "var(--text-muted)" }}>
-                <tr className="uppercase text-[10px] font-bold">
-                  <th className="px-4 py-2.5">Name</th>
-                  <th className="px-4 py-2.5">Client</th>
-                  <th className="px-4 py-2.5">Job title</th>
-                  <th className="px-4 py-2.5">Email</th>
-                  <th className="px-4 py-2.5 text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y" style={{ borderColor: "var(--border)" }}>
-                {contacts.map((c) => (
-                  <tr key={c.id}>
-                    <td className="px-4 py-3">
-                      <p className="font-semibold flex items-center gap-1.5" style={{ color: "var(--text-primary)" }}>
-                        {c.firstName} {c.lastName}
-                        {c.isPrimary && <Badge tone="success">Primary</Badge>}
-                      </p>
-                    </td>
-                    <td className="px-4 py-3" style={{ color: "var(--text-secondary)" }}>
-                      {clientName(c.clientId)}
-                    </td>
-                    <td className="px-4 py-3" style={{ color: "var(--text-secondary)" }}>
-                      {c.jobTitle ?? "—"}
-                    </td>
-                    <td className="px-4 py-3" style={{ color: "var(--text-muted)" }}>
-                      {c.email ?? "—"}
-                    </td>
-                    <td className="px-4 py-3 text-right space-x-2 whitespace-nowrap">
-                      {canUpdate && !c.isPrimary && (
-                        <Button variant="secondary" onClick={() => void handleMakePrimary(c)}>
-                          <Star className="w-3 h-3" /> Primary
-                        </Button>
-                      )}
-                      {canUpdate && (
-                        <Button variant="secondary" onClick={() => setEditTarget(c)}>
-                          Edit
-                        </Button>
-                      )}
-                      {canDelete && (
-                        <Button variant="danger" onClick={() => setRemoveTarget(c)}>
-                          <Trash2 className="w-3 h-3" />
-                        </Button>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <DataTable columns={contactColumns} rows={contacts} keyOf={(c) => c.id} />
         )}
         <Pagination page={page} totalPages={totalPages} onChange={setPage} />
       </Card>

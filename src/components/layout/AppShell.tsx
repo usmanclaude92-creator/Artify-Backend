@@ -1,12 +1,25 @@
-import React, { useState } from "react";
+import React, { Suspense, useState } from "react";
 import { Sidebar } from "./Sidebar";
 import { Header } from "./Header";
 import { Breadcrumbs } from "./Breadcrumbs";
 import { CommandPalette, useCommandPaletteShortcut } from "./CommandPalette";
 import { AccessDenied } from "../common/AccessDenied";
+import { Spinner } from "../ui/ui";
 import { useAuth } from "../../context/AuthContext";
 import { useRouter } from "../../lib/router";
 import { NAV_ITEMS, hasPermission, visibleNavItems } from "../../lib/permissions";
+
+// Phase 13 — every routed page except Dashboard is React.lazy (see
+// permissions.ts), so rendering `<Page />` needs a Suspense boundary. A
+// route switch (not just first load) can suspend too, so this sits right
+// around the content, not once at the app root — otherwise navigating to
+// a not-yet-fetched page would blank the whole shell (sidebar/header
+// included) instead of just the content area.
+const RouteFallback: React.FC = () => (
+  <div className="flex items-center justify-center py-24">
+    <Spinner className="w-6 h-6" />
+  </div>
+);
 
 export const AppShell: React.FC = () => {
   const { user } = useAuth();
@@ -49,7 +62,9 @@ export const AppShell: React.FC = () => {
       <div className="flex-1 flex flex-col min-w-0">
         <Header onOpenMobileMenu={() => setMobileOpen(true)} onOpenCommandPalette={() => setPaletteOpen(true)} />
         <Breadcrumbs item={item} />
-        <main className="flex-1 p-4 sm:p-6 max-w-[1400px] w-full mx-auto">{content}</main>
+        <main className="flex-1 p-4 sm:p-6 max-w-[1400px] w-full mx-auto">
+          <Suspense fallback={<RouteFallback />}>{content}</Suspense>
+        </main>
       </div>
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
     </div>

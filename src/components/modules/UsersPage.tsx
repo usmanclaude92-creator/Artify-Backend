@@ -5,7 +5,7 @@ import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
 import { usersApi, type SanitizedUser } from "../../lib/api";
 import { ApiClientError } from "../../lib/apiClient";
-import { Card, Button, Input, Badge, LoadingState, ErrorState, EmptyState, Pagination, Modal, Field, Select } from "../ui/ui";
+import { Card, Button, Input, Badge, LoadingState, ErrorState, EmptyState, Pagination, Modal, Field, Select, DataTable, type DataTableColumn } from "../ui/ui";
 import { hasPermission } from "../../lib/permissions";
 
 const ASSIGNABLE_ROLES = ["ADMIN", "MANAGER", "USER", "VIEWER"];
@@ -154,6 +154,53 @@ export const UsersPage: React.FC = () => {
     return !q || u.email.toLowerCase().includes(q) || `${u.firstName} ${u.lastName}`.toLowerCase().includes(q);
   });
 
+  const userColumns: DataTableColumn<SanitizedUser>[] = [
+    {
+      key: "name",
+      header: "Name",
+      render: (u) => (
+        <>
+          <p className="font-semibold" style={{ color: "var(--text-primary)" }}>
+            {u.displayName ?? `${u.firstName} ${u.lastName}`}
+            {u.id === currentUser?.id && (
+              <span className="ml-1 text-[10px] font-normal" style={{ color: "var(--text-muted)" }}>
+                (you)
+              </span>
+            )}
+          </p>
+          <p style={{ color: "var(--text-muted)" }}>{u.email}</p>
+        </>
+      ),
+    },
+    { key: "role", header: "Role", render: (u) => <Badge tone="info">{u.role.key}</Badge> },
+    { key: "status", header: "Status", render: (u) => <Badge tone={STATUS_TONE[u.status]}>{u.status}</Badge> },
+    {
+      key: "lastLogin",
+      header: "Last login",
+      cellStyle: { color: "var(--text-muted)" },
+      render: (u) => (u.lastLoginAt ? new Date(u.lastLoginAt).toLocaleDateString() : "Never"),
+    },
+    {
+      key: "actions",
+      header: "Actions",
+      align: "right",
+      render: (u) => (
+        <>
+          {canUpdate && (
+            <Button variant="secondary" onClick={() => setModal({ mode: "edit", user: u })}>
+              Edit
+            </Button>
+          )}
+          {canUpdate && u.id !== currentUser?.id && (
+            <Button variant={u.status === "ACTIVE" ? "danger" : "primary"} onClick={() => void toggleStatus(u)}>
+              {u.status === "ACTIVE" ? "Deactivate" : "Activate"}
+            </Button>
+          )}
+        </>
+      ),
+    },
+  ];
+
   return (
     <div className="space-y-4">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -187,57 +234,7 @@ export const UsersPage: React.FC = () => {
         ) : filtered.length === 0 ? (
           <EmptyState title="No users found" description="Invite a user or adjust your search." />
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
-              <thead style={{ background: "var(--bg-surface-alt)", color: "var(--text-muted)" }}>
-                <tr className="uppercase text-[10px] font-bold">
-                  <th className="px-4 py-2.5">Name</th>
-                  <th className="px-4 py-2.5">Role</th>
-                  <th className="px-4 py-2.5">Status</th>
-                  <th className="px-4 py-2.5">Last login</th>
-                  <th className="px-4 py-2.5 text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y" style={{ borderColor: "var(--border)" }}>
-                {filtered.map((u) => (
-                  <tr key={u.id}>
-                    <td className="px-4 py-3">
-                      <p className="font-semibold" style={{ color: "var(--text-primary)" }}>
-                        {u.displayName ?? `${u.firstName} ${u.lastName}`}
-                        {u.id === currentUser?.id && (
-                          <span className="ml-1 text-[10px] font-normal" style={{ color: "var(--text-muted)" }}>
-                            (you)
-                          </span>
-                        )}
-                      </p>
-                      <p style={{ color: "var(--text-muted)" }}>{u.email}</p>
-                    </td>
-                    <td className="px-4 py-3">
-                      <Badge tone="info">{u.role.key}</Badge>
-                    </td>
-                    <td className="px-4 py-3">
-                      <Badge tone={STATUS_TONE[u.status]}>{u.status}</Badge>
-                    </td>
-                    <td className="px-4 py-3" style={{ color: "var(--text-muted)" }}>
-                      {u.lastLoginAt ? new Date(u.lastLoginAt).toLocaleDateString() : "Never"}
-                    </td>
-                    <td className="px-4 py-3 text-right space-x-2">
-                      {canUpdate && (
-                        <Button variant="secondary" onClick={() => setModal({ mode: "edit", user: u })}>
-                          Edit
-                        </Button>
-                      )}
-                      {canUpdate && u.id !== currentUser?.id && (
-                        <Button variant={u.status === "ACTIVE" ? "danger" : "primary"} onClick={() => void toggleStatus(u)}>
-                          {u.status === "ACTIVE" ? "Deactivate" : "Activate"}
-                        </Button>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <DataTable columns={userColumns} rows={filtered} keyOf={(u) => u.id} />
         )}
         <Pagination page={page} totalPages={totalPages} onChange={setPage} />
       </Card>

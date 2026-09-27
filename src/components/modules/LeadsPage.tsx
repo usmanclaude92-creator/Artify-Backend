@@ -5,7 +5,7 @@ import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
 import { leadsApi, type Lead, type LeadStatus } from "../../lib/api";
 import { ApiClientError } from "../../lib/apiClient";
-import { Card, Button, Input, Select, Badge, LoadingState, ErrorState, EmptyState, Pagination, Modal, Field, ConfirmDialog } from "../ui/ui";
+import { Card, Button, Input, Select, Badge, LoadingState, ErrorState, EmptyState, Pagination, Modal, Field, ConfirmDialog, DataTable, type DataTableColumn } from "../ui/ui";
 import { hasPermission } from "../../lib/permissions";
 import { initialSearchFromQuery, consumeNewFlag } from "../../lib/deepLink";
 
@@ -255,6 +255,49 @@ export const LeadsPage: React.FC = () => {
     }
   };
 
+  const leadColumns: DataTableColumn<Lead>[] = [
+    {
+      key: "company",
+      header: "Company",
+      render: (l) => (
+        <>
+          <p className="font-semibold" style={{ color: "var(--text-primary)" }}>
+            {l.companyName}
+          </p>
+          <p style={{ color: "var(--text-muted)" }}>{l.email}</p>
+        </>
+      ),
+    },
+    { key: "contact", header: "Contact", cellStyle: { color: "var(--text-secondary)" }, render: (l) => l.contactName ?? "—" },
+    { key: "source", header: "Source", cellStyle: { color: "var(--text-secondary)" }, render: (l) => l.source ?? "—" },
+    { key: "status", header: "Status", render: (l) => <Badge tone={STATUS_TONE[l.status]}>{l.status}</Badge> },
+    { key: "created", header: "Created", cellStyle: { color: "var(--text-muted)" }, render: (l) => new Date(l.createdAt).toLocaleDateString() },
+    {
+      key: "actions",
+      header: "Actions",
+      align: "right",
+      render: (l) => (
+        <>
+          {canUpdate && l.status !== "CONVERTED" && (
+            <Button variant="secondary" onClick={() => setModal({ mode: "edit", lead: l })}>
+              Edit
+            </Button>
+          )}
+          {canConvert && l.status !== "CONVERTED" && (
+            <Button variant="primary" onClick={() => setConvertTarget(l)}>
+              <ArrowRightCircle className="w-3.5 h-3.5" /> Convert
+            </Button>
+          )}
+          {canDelete && (
+            <Button variant="danger" onClick={() => setDeleteTarget(l)}>
+              Delete
+            </Button>
+          )}
+        </>
+      ),
+    },
+  ];
+
   return (
     <div className="space-y-4">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -296,61 +339,7 @@ export const LeadsPage: React.FC = () => {
         ) : leads.length === 0 ? (
           <EmptyState title="No leads found" description="Create a lead or adjust your filters." />
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
-              <thead style={{ background: "var(--bg-surface-alt)", color: "var(--text-muted)" }}>
-                <tr className="uppercase text-[10px] font-bold">
-                  <th className="px-4 py-2.5">Company</th>
-                  <th className="px-4 py-2.5">Contact</th>
-                  <th className="px-4 py-2.5">Source</th>
-                  <th className="px-4 py-2.5">Status</th>
-                  <th className="px-4 py-2.5">Created</th>
-                  <th className="px-4 py-2.5 text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y" style={{ borderColor: "var(--border)" }}>
-                {leads.map((l) => (
-                  <tr key={l.id}>
-                    <td className="px-4 py-3">
-                      <p className="font-semibold" style={{ color: "var(--text-primary)" }}>
-                        {l.companyName}
-                      </p>
-                      <p style={{ color: "var(--text-muted)" }}>{l.email}</p>
-                    </td>
-                    <td className="px-4 py-3" style={{ color: "var(--text-secondary)" }}>
-                      {l.contactName ?? "—"}
-                    </td>
-                    <td className="px-4 py-3" style={{ color: "var(--text-secondary)" }}>
-                      {l.source ?? "—"}
-                    </td>
-                    <td className="px-4 py-3">
-                      <Badge tone={STATUS_TONE[l.status]}>{l.status}</Badge>
-                    </td>
-                    <td className="px-4 py-3" style={{ color: "var(--text-muted)" }}>
-                      {new Date(l.createdAt).toLocaleDateString()}
-                    </td>
-                    <td className="px-4 py-3 text-right space-x-2 whitespace-nowrap">
-                      {canUpdate && l.status !== "CONVERTED" && (
-                        <Button variant="secondary" onClick={() => setModal({ mode: "edit", lead: l })}>
-                          Edit
-                        </Button>
-                      )}
-                      {canConvert && l.status !== "CONVERTED" && (
-                        <Button variant="primary" onClick={() => setConvertTarget(l)}>
-                          <ArrowRightCircle className="w-3.5 h-3.5" /> Convert
-                        </Button>
-                      )}
-                      {canDelete && (
-                        <Button variant="danger" onClick={() => setDeleteTarget(l)}>
-                          Delete
-                        </Button>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <DataTable columns={leadColumns} rows={leads} keyOf={(l) => l.id} />
         )}
         <Pagination page={page} totalPages={totalPages} onChange={setPage} />
       </Card>

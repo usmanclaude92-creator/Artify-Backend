@@ -5,7 +5,7 @@ import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
 import { organizationsApi, type Organization, type OrganizationMember } from "../../lib/api";
 import { ApiClientError } from "../../lib/apiClient";
-import { Card, Badge, Button, LoadingState, ErrorState, EmptyState, Modal, Field, Input, Select, ConfirmDialog } from "../ui/ui";
+import { Card, Badge, Button, LoadingState, ErrorState, EmptyState, Modal, Field, Input, Select, ConfirmDialog, DataTable, type DataTableColumn } from "../ui/ui";
 import { hasPermission } from "../../lib/permissions";
 
 const ROLE_OPTIONS = ["ADMIN", "MANAGER", "USER", "VIEWER"];
@@ -143,6 +143,50 @@ export const OrganizationsPage: React.FC = () => {
   if (loading) return <LoadingState />;
   if (error) return <ErrorState message={error} />;
 
+  const memberColumns: DataTableColumn<OrganizationMember>[] = [
+    {
+      key: "user",
+      header: "User",
+      render: (m) => (
+        <>
+          <p className="font-semibold" style={{ color: "var(--text-primary)" }}>
+            {m.displayName ?? `${m.firstName} ${m.lastName}`}
+          </p>
+          <p style={{ color: "var(--text-muted)" }}>{m.email}</p>
+        </>
+      ),
+    },
+    {
+      key: "role",
+      header: "Role",
+      render: (m) =>
+        canAssignRole && m.roleKey !== "SUPER_ADMIN" && m.userId !== user?.id ? (
+          <Select value={m.roleKey} onChange={(e) => void handleRoleChange(m, e.target.value)}>
+            {ROLE_OPTIONS.map((r) => (
+              <option key={r} value={r}>
+                {r}
+              </option>
+            ))}
+          </Select>
+        ) : (
+          <Badge tone="info">{m.roleKey}</Badge>
+        ),
+    },
+    { key: "status", header: "Status", render: (m) => <Badge tone={m.status === "ACTIVE" ? "success" : "warning"}>{m.status}</Badge> },
+    { key: "joined", header: "Joined", cellStyle: { color: "var(--text-muted)" }, render: (m) => new Date(m.joinedAt).toLocaleDateString() },
+    {
+      key: "actions",
+      header: "Actions",
+      align: "right",
+      render: (m) =>
+        canManageMembers && m.userId !== user?.id ? (
+          <Button variant="danger" onClick={() => setRemoveTarget(m)}>
+            <Trash2 className="w-3 h-3" />
+          </Button>
+        ) : null,
+    },
+  ];
+
   return (
     <div className="space-y-4">
       <div>
@@ -205,57 +249,7 @@ export const OrganizationsPage: React.FC = () => {
             ) : members.length === 0 ? (
               <EmptyState title="No members" />
             ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs">
-                  <thead style={{ background: "var(--bg-surface-alt)", color: "var(--text-muted)" }}>
-                    <tr className="uppercase text-[10px] font-bold">
-                      <th className="px-4 py-2.5">User</th>
-                      <th className="px-4 py-2.5">Role</th>
-                      <th className="px-4 py-2.5">Status</th>
-                      <th className="px-4 py-2.5">Joined</th>
-                      <th className="px-4 py-2.5 text-right">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y" style={{ borderColor: "var(--border)" }}>
-                    {members.map((m) => (
-                      <tr key={m.userId}>
-                        <td className="px-4 py-3">
-                          <p className="font-semibold" style={{ color: "var(--text-primary)" }}>
-                            {m.displayName ?? `${m.firstName} ${m.lastName}`}
-                          </p>
-                          <p style={{ color: "var(--text-muted)" }}>{m.email}</p>
-                        </td>
-                        <td className="px-4 py-3">
-                          {canAssignRole && m.roleKey !== "SUPER_ADMIN" && m.userId !== user?.id ? (
-                            <Select value={m.roleKey} onChange={(e) => void handleRoleChange(m, e.target.value)}>
-                              {ROLE_OPTIONS.map((r) => (
-                                <option key={r} value={r}>
-                                  {r}
-                                </option>
-                              ))}
-                            </Select>
-                          ) : (
-                            <Badge tone="info">{m.roleKey}</Badge>
-                          )}
-                        </td>
-                        <td className="px-4 py-3">
-                          <Badge tone={m.status === "ACTIVE" ? "success" : "warning"}>{m.status}</Badge>
-                        </td>
-                        <td className="px-4 py-3" style={{ color: "var(--text-muted)" }}>
-                          {new Date(m.joinedAt).toLocaleDateString()}
-                        </td>
-                        <td className="px-4 py-3 text-right">
-                          {canManageMembers && m.userId !== user?.id && (
-                            <Button variant="danger" onClick={() => setRemoveTarget(m)}>
-                              <Trash2 className="w-3 h-3" />
-                            </Button>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+              <DataTable columns={memberColumns} rows={members} keyOf={(m) => m.userId} />
             )}
           </Card>
         )}

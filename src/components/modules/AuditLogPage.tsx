@@ -2,7 +2,7 @@
 import React, { useEffect, useState } from "react";
 import { ScrollText } from "lucide-react";
 import { auditLogsApi, type AuditLogEntry } from "../../lib/api";
-import { Card, Badge, Input, Select, LoadingState, ErrorState, EmptyState, Pagination } from "../ui/ui";
+import { Card, Badge, Input, Select, LoadingState, ErrorState, EmptyState, Pagination, DataTable, type DataTableColumn } from "../ui/ui";
 
 export const AuditLogPage: React.FC = () => {
   const [page, setPage] = useState(1);
@@ -30,6 +30,20 @@ export const AuditLogPage: React.FC = () => {
       cancelled = true;
     };
   }, [page, action, result]);
+
+  const auditColumns: DataTableColumn<AuditLogEntry>[] = [
+    {
+      key: "when",
+      header: "When",
+      cellClassName: "whitespace-nowrap",
+      cellStyle: { color: "var(--text-muted)" },
+      render: (entry) => new Date(entry.createdAt).toLocaleString(),
+    },
+    { key: "actor", header: "Actor", cellStyle: { color: "var(--text-primary)" }, render: (entry) => entry.actorName ?? entry.actorType },
+    { key: "action", header: "Action", cellClassName: "font-mono", cellStyle: { color: "var(--text-primary)" }, render: (entry) => entry.action },
+    { key: "resource", header: "Resource", cellStyle: { color: "var(--text-muted)" }, render: (entry) => entry.resourceType ?? "—" },
+    { key: "result", header: "Result", render: (entry) => <Badge tone={entry.result === "SUCCESS" ? "success" : "danger"}>{entry.result}</Badge> },
+  ];
 
   return (
     <div className="space-y-4">
@@ -73,40 +87,7 @@ export const AuditLogPage: React.FC = () => {
         ) : entries.length === 0 ? (
           <EmptyState title="No audit events" description="No events match the current filters." />
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
-              <thead style={{ background: "var(--bg-surface-alt)", color: "var(--text-muted)" }}>
-                <tr className="uppercase text-[10px] font-bold">
-                  <th className="px-4 py-2.5">When</th>
-                  <th className="px-4 py-2.5">Actor</th>
-                  <th className="px-4 py-2.5">Action</th>
-                  <th className="px-4 py-2.5">Resource</th>
-                  <th className="px-4 py-2.5">Result</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y" style={{ borderColor: "var(--border)" }}>
-                {entries.map((entry) => (
-                  <tr key={entry.id}>
-                    <td className="px-4 py-2.5 whitespace-nowrap" style={{ color: "var(--text-muted)" }}>
-                      {new Date(entry.createdAt).toLocaleString()}
-                    </td>
-                    <td className="px-4 py-2.5" style={{ color: "var(--text-primary)" }}>
-                      {entry.actorName ?? entry.actorType}
-                    </td>
-                    <td className="px-4 py-2.5 font-mono" style={{ color: "var(--text-primary)" }}>
-                      {entry.action}
-                    </td>
-                    <td className="px-4 py-2.5" style={{ color: "var(--text-muted)" }}>
-                      {entry.resourceType ?? "—"}
-                    </td>
-                    <td className="px-4 py-2.5">
-                      <Badge tone={entry.result === "SUCCESS" ? "success" : "danger"}>{entry.result}</Badge>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <DataTable columns={auditColumns} rows={entries} keyOf={(entry) => entry.id} />
         )}
         <Pagination page={page} totalPages={totalPages} onChange={setPage} />
       </Card>

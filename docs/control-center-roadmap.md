@@ -18,15 +18,24 @@ shippable units — it does not restate what's already built.
 | 10 | **Analytics** — website, SEO, content, CRM, business | **Real gap.** Per spec's own instruction ("avoid building redundant analytics infrastructure if an existing provider already supplies the underlying data") — first confirm whether Artify already has (or intends) a hosted analytics provider (e.g. Plausible/GA4) before building a first-party pageview pipeline. If yes, this phase is an *integration* (pull via provider API into CRM/content dashboards), not new tracking infrastructure. If no provider is decided, this phase is blocked on that product decision, not an engineering one. |
 | 11 | **Automation / Notifications** — user-facing notification center, scheduled publishing | **Done.** Scheduled publishing already shipped (existing Vercel Cron tick). `Notification`/`NotificationPreference` now wired: self-scoped `notificationRoutes.ts` + a bell in `Header.tsx`, emitted from 5 real events (lead/opportunity assignment, opportunity win/loss, content publish) — see `docs/NOTIFICATIONS_ARCHITECTURE.md`. Remaining, explicitly out of scope: no fan-out-by-permission notifications (e.g. "submitted for review" notifying every publisher), no deep link from a notification back to its record (the model has no resourceType/resourceId column). |
 | 12 | **AI Control Center** | **Already complete** (Phase 12 of the prior CMS/SEO work). No new work. |
-| 13 | **Enterprise Hardening** — code-splitting, shared DataTable, performance, disaster recovery | **Deferred, tracked.** Route-level `React.lazy` per nav section (currently one ~1.07 MB bundle) and a shared `DataTable` component (six pages currently hand-roll their own `<table>`) are the two concrete, low-risk frontend-only items ready to pick up whenever a phase touches those files anyway — no need for a dedicated pass first. |
+| 13 | **Enterprise Hardening** — code-splitting, shared DataTable, performance, disaster recovery | **Done (scoped slice).** Route-level `React.lazy` per nav item (main bundle ~1.6 MB → ~568 KB gzip ~157 KB; Phase 3's TipTap editor now a separate ~485 KB on-demand chunk) and a shared `DataTable<T>` component replacing the hand-rolled `<table>` in all six pages that had one — see `docs/CONTROL_CENTER_ARCHITECTURE.md`'s "Phase 13" section. Performance beyond bundle size and disaster-recovery planning remain out of scope — not concrete, shippable units yet. |
 
-## Immediate next phase recommendation
+## Status
 
-With Phases 3, 4 (scoped), 5, 7, 9, and 11 done, **Phase 13** (route-level code-splitting for the Control
-Center's ~1.6 MB bundle + a shared `DataTable`, six-plus pages currently hand-rolling their own `<table>`) is
-the last fully-scoped, ready-to-pick-up item — genuinely higher priority now than "nice to have," since every
-phase since 3 has kept growing that one bundle. Phase 6's Industries/Solutions/Case-Study relationship model
-and Phase 9's public-facing form renderer are real but deliberately deferred until a concrete content need or
-Phase 4's section-driven renderer respectively exists to justify them — not guessed at ahead of time. Phase 10
-(Analytics) stays explicitly blocked on a product decision (self-built pageview pipeline vs. integrating an
-existing provider like Plausible/GA4) rather than guessed at.
+Every phase this roadmap scoped as a concrete, shippable unit is now done: 1 (Foundation), 2 (CMS), 3
+(Professional Editor), 4 (Website Management — scoped slice), 5 (SEO), 7 (CRM), 8 (Client Management), 9
+(Marketing — MVP slice), 11 (Notifications), 12 (AI), and 13 (Enterprise Hardening — scoped slice). What
+remains is explicitly **not** guessed-at, undersized work manufactured to look busy — each is a real gap this
+roadmap already named and deliberately deferred pending something outside engineering's control:
+
+- **Phase 10 (Analytics)** — blocked on a product decision (self-built pageview pipeline vs. integrating an
+  existing provider like Plausible/GA4).
+- **Phase 6's Industries/Solutions/Case-Study relationship model** — deferred until a real content need
+  names one.
+- **Phase 9's public-facing form renderer** and **Phase 4's full website-management vision**
+  (homepage/nav/section-driven authoring, a visual builder) — both depend on the same not-yet-justified,
+  larger architectural design pass a section-driven renderer requires.
+- A true **Company** entity distinct from `Organization`/`Client` (CRM, Phase 7) — not a confirmed need.
+
+None of these should be started speculatively — each needs either a product decision or a concrete content
+need to name it first, exactly as this roadmap said when it originally deferred them.

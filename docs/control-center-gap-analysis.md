@@ -36,11 +36,11 @@ avoid drift.
 | Command palette / global search | **Added this phase** | Was MISSING (zero matches for "CommandPalette"/"cmdk"/"Ctrl+K" before this phase); `CommandPalette.tsx` now provides quick actions + live entity search. |
 | Notification bell | **Done (Phase 11)** | `NotificationBell.tsx` in the Control Center header — unread badge (polled every 60s), dropdown list, mark-read/mark-all-read. |
 | Rich-text editor | **Done (Phase 3)** | `RichTextEditor.tsx` (TipTap) replaces the plain `<textarea>` in `PostFormModal`/`PageFormModal`; scoped to the tag set `sanitizeContentHtml` allows. See `docs/CMS_ARCHITECTURE.md`'s "Phase 3" section. |
-| Design system / DataTable | PARTIAL | Real shared primitives exist (`ui/ui.tsx`); no shared `DataTable` — Leads/Contacts/Posts/etc. each hand-roll their own `<table>`. |
+| Design system / DataTable | **Done (Phase 13)** | Shared `DataTable<T>` in `ui/ui.tsx` replaces the hand-rolled `<table>` in all six pages that had one (Leads/Contacts/Users/Organizations-members/Onboarding/AuditLog) — see `docs/CONTROL_CENTER_ARCHITECTURE.md`'s "Phase 13" section. |
 | Theme | EXISTS | `.dark` class on `<html>`, CSS variables, `ThemeContext`. |
 | CRM UI | **Opportunity/pipeline UI done (Phase 7)** | Leads/Clients/Contacts/CRM-dashboard pages exist; new "Opportunities" page (search/filter/stage/win-lose) added under the existing CRM nav section, plus pipeline stats on the CRM dashboard. |
 | Mobile responsiveness | EXISTS | Real mobile drawer (`Sidebar.tsx:126-136`), not just reflow. |
-| Code-splitting | MISSING | No `React.lazy`/`import()` anywhere; `permissions.ts` statically imports all ~30 page components — the whole Control Center ships as one bundle (now ~1.6 MB after Phase 3's TipTap editor — was ~1.07 MB — making Phase 13 higher priority). |
+| Code-splitting | **Done (Phase 13)** | Every `NavItem.component` except `DashboardPage` is `React.lazy()`; `AppShell.tsx` wraps routed content in `Suspense`. Main bundle dropped from ~1.6 MB to ~568 KB gzip ~157 KB; Phase 3's TipTap editor is now its own ~485 KB on-demand chunk. See `docs/CONTROL_CENTER_ARCHITECTURE.md`'s "Phase 13" section. |
 
 ## Net gap summary
 
@@ -51,8 +51,7 @@ the frontend had no breadcrumbs or command palette.
 **Current state**: SEO (Phase 5), CRM pipeline (Phase 7), user-facing Notifications (Phase 11), the rich-text
 editor (Phase 3), a real public route for CMS Pages (Phase 4, scoped), and a Forms MVP slice (Phase 9) are all
 done — see each domain's row above and its linked architecture doc. Breadcrumbs and the command palette
-closed in the original Phase 1 foundation pass. Only two real gaps remain: **Analytics** (MISSING, blocked on
-a product decision — self-built pageview pipeline vs. integrating an existing provider) and a true Company
-entity distinct from `Organization`/`Client` (not a confirmed need). Settings stays a flat key/value store
-with no category taxonomy. On the frontend, code-splitting (the Control Center is a single ~1.6 MB bundle)
-and a shared `DataTable` remain open, lower-risk frontend-only gaps — both tracked as Phase 13.
+closed in the original Phase 1 foundation pass; code-splitting and a shared `DataTable` closed in Phase 13.
+Only two real gaps remain: **Analytics** (MISSING, blocked on a product decision — self-built pageview
+pipeline vs. integrating an existing provider) and a true Company entity distinct from `Organization`/`Client`
+(not a confirmed need). Settings stays a flat key/value store with no category taxonomy.

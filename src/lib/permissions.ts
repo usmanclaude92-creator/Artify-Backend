@@ -7,7 +7,7 @@
  * module exists so the UI doesn't show entry points a user's own token
  * would be rejected for, not to be the source of truth for what's allowed.
  */
-import type { ComponentType } from "react";
+import { lazy, type ComponentType, type LazyExoticComponent } from "react";
 import {
   LayoutDashboard,
   Users,
@@ -51,43 +51,56 @@ import {
   ClipboardList,
 } from "lucide-react";
 import { DashboardPage } from "../components/modules/DashboardPage";
-import { UsersPage } from "../components/modules/UsersPage";
-import { RolesPage } from "../components/modules/RolesPage";
-import { PermissionsPage } from "../components/modules/PermissionsPage";
-import { OrganizationsPage } from "../components/modules/OrganizationsPage";
-import { AuditLogPage } from "../components/modules/AuditLogPage";
-import { SecurityPage } from "../components/modules/SecurityPage";
-import { SettingsPage } from "../components/modules/SettingsPage";
-import { CrmDashboardPage } from "../components/modules/CrmDashboardPage";
-import { LeadsPage } from "../components/modules/LeadsPage";
-import { ClientsPage } from "../components/modules/ClientsPage";
-import { ContactsPage } from "../components/modules/ContactsPage";
-import { OnboardingPage } from "../components/modules/OnboardingPage";
-import { WorkspacesPage } from "../components/modules/WorkspacesPage";
-import { ProductsPage } from "../components/modules/ProductsPage";
-import { PagesPage } from "../components/modules/PagesPage";
-import { PostsPage } from "../components/modules/PostsPage";
-import { CmsTaxonomyPage } from "../components/modules/CmsTaxonomyPage";
-import { AuthorsPage } from "../components/modules/AuthorsPage";
-import { MediaLibraryPage } from "../components/modules/MediaLibraryPage";
-import { ContractsPage } from "../components/modules/ContractsPage";
-import { SubscriptionsPage } from "../components/modules/SubscriptionsPage";
-import { InvoicesPage } from "../components/modules/InvoicesPage";
-import { PaymentsPage } from "../components/modules/PaymentsPage";
-import { ClientPortalPage } from "../components/modules/ClientPortalPage";
-import { SeoIssuesPage } from "../components/modules/SeoIssuesPage";
-import { RedirectsPage } from "../components/modules/RedirectsPage";
-import { OpportunitiesPage } from "../components/modules/OpportunitiesPage";
-import { FormsPage } from "../components/modules/FormsPage";
-import { AiOverviewPage } from "../components/modules/ai/AiOverviewPage";
-import { AiProvidersPage } from "../components/modules/ai/AiProvidersPage";
-import { AiToolsPage } from "../components/modules/ai/AiToolsPage";
-import { AiPromptsPage } from "../components/modules/ai/AiPromptsPage";
-import { AiWorkflowsPage } from "../components/modules/ai/AiWorkflowsPage";
-import { AiExecutionsPage } from "../components/modules/ai/AiExecutionsPage";
-import { AiUsagePage } from "../components/modules/ai/AiUsagePage";
-import { AiApprovalsPage } from "../components/modules/ai/AiApprovalsPage";
-import { AiCopilotPage } from "../components/modules/ai/AiCopilotPage";
+
+// Phase 13 — every other page is fetched on demand (React.lazy) rather than
+// bundled into the initial Control Center chunk. Dashboard alone stays
+// eager: AppShell redirects "/" to "/dashboard" and it requires no
+// permission, so it's guaranteed to render for every signed-in user —
+// lazy-loading it would just trade one unavoidable fetch for another
+// with an extra loading flash. `lazyPage` centralizes the
+// `.then((m) => ({ default: m.X }))` boilerplate every one of these named
+// (not default) exports needs to work with React.lazy.
+function lazyPage<T extends ComponentType>(loader: () => Promise<Record<string, unknown>>, exportName: string): LazyExoticComponent<T> {
+  return lazy(() => loader().then((m) => ({ default: m[exportName] as T })));
+}
+
+const UsersPage = lazyPage(() => import("../components/modules/UsersPage"), "UsersPage");
+const RolesPage = lazyPage(() => import("../components/modules/RolesPage"), "RolesPage");
+const PermissionsPage = lazyPage(() => import("../components/modules/PermissionsPage"), "PermissionsPage");
+const OrganizationsPage = lazyPage(() => import("../components/modules/OrganizationsPage"), "OrganizationsPage");
+const AuditLogPage = lazyPage(() => import("../components/modules/AuditLogPage"), "AuditLogPage");
+const SecurityPage = lazyPage(() => import("../components/modules/SecurityPage"), "SecurityPage");
+const SettingsPage = lazyPage(() => import("../components/modules/SettingsPage"), "SettingsPage");
+const CrmDashboardPage = lazyPage(() => import("../components/modules/CrmDashboardPage"), "CrmDashboardPage");
+const LeadsPage = lazyPage(() => import("../components/modules/LeadsPage"), "LeadsPage");
+const ClientsPage = lazyPage(() => import("../components/modules/ClientsPage"), "ClientsPage");
+const ContactsPage = lazyPage(() => import("../components/modules/ContactsPage"), "ContactsPage");
+const OnboardingPage = lazyPage(() => import("../components/modules/OnboardingPage"), "OnboardingPage");
+const WorkspacesPage = lazyPage(() => import("../components/modules/WorkspacesPage"), "WorkspacesPage");
+const ProductsPage = lazyPage(() => import("../components/modules/ProductsPage"), "ProductsPage");
+const PagesPage = lazyPage(() => import("../components/modules/PagesPage"), "PagesPage");
+const PostsPage = lazyPage(() => import("../components/modules/PostsPage"), "PostsPage");
+const CmsTaxonomyPage = lazyPage(() => import("../components/modules/CmsTaxonomyPage"), "CmsTaxonomyPage");
+const AuthorsPage = lazyPage(() => import("../components/modules/AuthorsPage"), "AuthorsPage");
+const MediaLibraryPage = lazyPage(() => import("../components/modules/MediaLibraryPage"), "MediaLibraryPage");
+const ContractsPage = lazyPage(() => import("../components/modules/ContractsPage"), "ContractsPage");
+const SubscriptionsPage = lazyPage(() => import("../components/modules/SubscriptionsPage"), "SubscriptionsPage");
+const InvoicesPage = lazyPage(() => import("../components/modules/InvoicesPage"), "InvoicesPage");
+const PaymentsPage = lazyPage(() => import("../components/modules/PaymentsPage"), "PaymentsPage");
+const ClientPortalPage = lazyPage(() => import("../components/modules/ClientPortalPage"), "ClientPortalPage");
+const SeoIssuesPage = lazyPage(() => import("../components/modules/SeoIssuesPage"), "SeoIssuesPage");
+const RedirectsPage = lazyPage(() => import("../components/modules/RedirectsPage"), "RedirectsPage");
+const OpportunitiesPage = lazyPage(() => import("../components/modules/OpportunitiesPage"), "OpportunitiesPage");
+const FormsPage = lazyPage(() => import("../components/modules/FormsPage"), "FormsPage");
+const AiOverviewPage = lazyPage(() => import("../components/modules/ai/AiOverviewPage"), "AiOverviewPage");
+const AiProvidersPage = lazyPage(() => import("../components/modules/ai/AiProvidersPage"), "AiProvidersPage");
+const AiToolsPage = lazyPage(() => import("../components/modules/ai/AiToolsPage"), "AiToolsPage");
+const AiPromptsPage = lazyPage(() => import("../components/modules/ai/AiPromptsPage"), "AiPromptsPage");
+const AiWorkflowsPage = lazyPage(() => import("../components/modules/ai/AiWorkflowsPage"), "AiWorkflowsPage");
+const AiExecutionsPage = lazyPage(() => import("../components/modules/ai/AiExecutionsPage"), "AiExecutionsPage");
+const AiUsagePage = lazyPage(() => import("../components/modules/ai/AiUsagePage"), "AiUsagePage");
+const AiApprovalsPage = lazyPage(() => import("../components/modules/ai/AiApprovalsPage"), "AiApprovalsPage");
+const AiCopilotPage = lazyPage(() => import("../components/modules/ai/AiCopilotPage"), "AiCopilotPage");
 
 export function hasPermission(permissions: readonly string[] | undefined, key: string): boolean {
   return !!permissions?.includes(key);
@@ -100,7 +113,7 @@ export interface NavItem {
   icon: ComponentType<{ className?: string }>;
   /** Any one of these permissions is enough to show the item; empty means always visible to an authenticated user. */
   requiresAnyPermission?: string[];
-  component: ComponentType;
+  component: ComponentType | LazyExoticComponent<ComponentType>;
   /** Groups items under a heading in the sidebar (§22/§31) — purely presentational. */
   section: "Platform" | "CRM" | "Onboarding" | "Workspaces" | "Products" | "CMS" | "SEO" | "Marketing" | "Commercial" | "AI" | "Client Portal";
 }
