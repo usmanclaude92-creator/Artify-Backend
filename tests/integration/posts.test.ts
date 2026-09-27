@@ -103,7 +103,7 @@ describe("CMS posts", () => {
     expect(cleared.body.data.post.tags).toHaveLength(0);
   });
 
-  it("publishes a post, blocks direct content edits, and unpublish clones a new revision", async () => {
+  it("publishes a post, keeps live content edits published, and explicit unpublish forks a DRAFT revision", async () => {
     const created = await request(app).post("/api/v1/posts").set("Authorization", `Bearer ${adminToken}`).send({ title: "Publish Flow", body: "v1" });
     const id = created.body.data.post.id;
 
@@ -112,16 +112,41 @@ describe("CMS posts", () => {
     expect(publish.body.data.post.status).toBe("PUBLISHED");
     const publishedRevisionId = publish.body.data.post.currentRevisionId;
 
-    const editWhilePublished = await request(app).patch(`/api/v1/posts/${id}`).set("Authorization", `Bearer ${adminToken}`).send({ body: "sneaky" });
-    expect(editWhilePublished.status).toBe(409);
+    // Editing a PUBLISHED post's content directly (no `status` field, i.e.
+    // the composer's ordinary Save) is a live edit: it stays published
+    // immediately, but forks a new revision rather than mutating the
+    // already-published one in place.
+    const liveEdit = await request(app).patch(`/api/v1/posts/${id}`).set("Authorization", `Bearer ${adminToken}`).send({ body: "v2 live" });
+    expect(liveEdit.status).toBe(200);
+    expect(liveEdit.body.data.post.status).toBe("PUBLISHED");
+    expect(liveEdit.body.data.post.currentRevisionId).not.toBe(publishedRevisionId);
+    expect(liveEdit.body.data.post.currentRevision.version).toBe(2);
+    expect(liveEdit.body.data.post.currentRevision.status).toBe("PUBLISHED");
+    expect(liveEdit.body.data.post.currentRevision.body).toBe("v2 live");
 
-    const unpublish = await request(app).patch(`/api/v1/posts/${id}`).set("Authorization", `Bearer ${adminToken}`).send({ status: "DRAFT", body: "v2" });
+    const originalRevision = await prisma.contentRevision.findUnique({ where: { id: publishedRevisionId } });
+    expect(originalRevision?.status).toBe("PUBLISHED");
+    expect(originalRevision?.body).toBe("v1");
+
+    // An explicit unpublish (status: DRAFT) forks yet another revision and
+    // takes the post off the public site.
+    const unpublish = await request(app).patch(`/api/v1/posts/${id}`).set("Authorization", `Bearer ${adminToken}`).send({ status: "DRAFT", body: "v3 draft" });
     expect(unpublish.status).toBe(200);
-    expect(unpublish.body.data.post.currentRevision.version).toBe(2);
+    expect(unpublish.body.data.post.status).toBe("DRAFT");
+    expect(unpublish.body.data.post.currentRevision.version).toBe(3);
+    expect(unpublish.body.data.post.currentRevision.status).toBe("DRAFT");
+  });
 
-    const publishedRevision = await prisma.contentRevision.findUnique({ where: { id: publishedRevisionId } });
-    expect(publishedRevision?.status).toBe("PUBLISHED");
-    expect(publishedRevision?.body).toBe("v1");
+  it("blocks direct content edits on an ARCHIVED post", async () => {
+    const created = await request(app).post("/api/v1/posts").set("Authorization", `Bearer ${adminToken}`).send({ title: "Archive Edit Guard", body: "v1" });
+    const id = created.body.data.post.id;
+
+    const archive = await request(app).post(`/api/v1/posts/${id}/archive`).set("Authorization", `Bearer ${adminToken}`).send();
+    expect(archive.status).toBe(200);
+    expect(archive.body.data.post.status).toBe("ARCHIVED");
+
+    const editWhileArchived = await request(app).patch(`/api/v1/posts/${id}`).set("Authorization", `Bearer ${adminToken}`).send({ body: "sneaky" });
+    expect(editWhileArchived.status).toBe(409);
   });
 
   it("submits for review, archives via the dedicated endpoint, and reverts to a prior (published) revision", async () => {
