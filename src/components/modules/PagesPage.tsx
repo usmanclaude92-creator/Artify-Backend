@@ -88,6 +88,9 @@ const PageFormModal: React.FC<{ open: boolean; onClose: () => void; onSaved: (pa
   const [slug, setSlug] = useState(page?.slug ?? "");
   const [body, setBody] = useState(page?.currentRevision?.body ?? "");
   const [featuredMediaId, setFeaturedMediaId] = useState<string | undefined>(page?.featuredMediaId ?? undefined);
+  const [metaTitle, setMetaTitle] = useState((page?.currentRevision?.metadata?.metaTitle as string) ?? "");
+  const [metaDescription, setMetaDescription] = useState((page?.currentRevision?.metadata?.metaDescription as string) ?? "");
+  const [ogImage, setOgImage] = useState((page?.currentRevision?.metadata?.ogImage as string) ?? "");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -97,6 +100,9 @@ const PageFormModal: React.FC<{ open: boolean; onClose: () => void; onSaved: (pa
       setSlug(page?.slug ?? "");
       setBody(page?.currentRevision?.body ?? "");
       setFeaturedMediaId(page?.featuredMediaId ?? undefined);
+      setMetaTitle((page?.currentRevision?.metadata?.metaTitle as string) ?? "");
+      setMetaDescription((page?.currentRevision?.metadata?.metaDescription as string) ?? "");
+      setOgImage((page?.currentRevision?.metadata?.ogImage as string) ?? "");
       setError(null);
     }
   }, [open, page]);
@@ -105,15 +111,21 @@ const PageFormModal: React.FC<{ open: boolean; onClose: () => void; onSaved: (pa
     e.preventDefault();
     setError(null);
     setSubmitting(true);
+    const metadata = {
+      ...(metaTitle.trim() ? { metaTitle: metaTitle.trim() } : {}),
+      ...(metaDescription.trim() ? { metaDescription: metaDescription.trim() } : {}),
+      ...(ogImage.trim() ? { ogImage: ogImage.trim() } : {}),
+    };
     try {
       if (mode === "create") {
-        const res = await pagesApi.create({ title, slug: slug || undefined, body, featuredMediaId });
+        const res = await pagesApi.create({ title, slug: slug || undefined, body, metadata, featuredMediaId });
         onSaved(res.page);
       } else if (page) {
         const res = await pagesApi.update(page.id, {
           title,
           slug,
           body,
+          metadata,
           featuredMediaId: featuredMediaId ?? null,
           expectedUpdatedAt: page.updatedAt,
         });
@@ -147,6 +159,27 @@ const PageFormModal: React.FC<{ open: boolean; onClose: () => void; onSaved: (pa
             onChange={(e) => setBody(e.target.value)}
           />
         </Field>
+        <div className="pt-3 border-t space-y-3" style={{ borderColor: "var(--border)" }}>
+          <p className="text-xs font-bold uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>
+            SEO
+          </p>
+          <Field label="Meta title" hint="Shown in search results and social previews. Falls back to the page title if left blank.">
+            <Input value={metaTitle} onChange={(e) => setMetaTitle(e.target.value)} maxLength={70} />
+          </Field>
+          <Field label="Meta description">
+            <textarea
+              className="w-full px-3 py-2 rounded-lg text-sm focus:outline-none"
+              style={{ background: "var(--bg-app)", border: "1px solid var(--border)", color: "var(--text-primary)" }}
+              rows={2}
+              maxLength={200}
+              value={metaDescription}
+              onChange={(e) => setMetaDescription(e.target.value)}
+            />
+          </Field>
+          <Field label="Open Graph image URL" hint="Falls back to the featured image if left blank.">
+            <Input value={ogImage} onChange={(e) => setOgImage(e.target.value)} placeholder="https://..." />
+          </Field>
+        </div>
         <div className="pt-2 border-t flex justify-end gap-2" style={{ borderColor: "var(--border)" }}>
           <Button type="button" variant="secondary" onClick={onClose}>
             Cancel

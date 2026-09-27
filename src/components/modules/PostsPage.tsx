@@ -103,6 +103,9 @@ const PostFormModal: React.FC<{
   const [categoryId, setCategoryId] = useState(post?.categoryId ?? "");
   const [tagIds, setTagIds] = useState<string[]>(post?.tags.map((t) => t.tagId) ?? []);
   const [featuredMediaId, setFeaturedMediaId] = useState<string | undefined>(post?.featuredMediaId ?? undefined);
+  const [metaTitle, setMetaTitle] = useState((post?.currentRevision?.metadata?.metaTitle as string) ?? "");
+  const [metaDescription, setMetaDescription] = useState((post?.currentRevision?.metadata?.metaDescription as string) ?? "");
+  const [ogImage, setOgImage] = useState((post?.currentRevision?.metadata?.ogImage as string) ?? "");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -114,6 +117,9 @@ const PostFormModal: React.FC<{
       setCategoryId(post?.categoryId ?? "");
       setTagIds(post?.tags.map((t) => t.tagId) ?? []);
       setFeaturedMediaId(post?.featuredMediaId ?? undefined);
+      setMetaTitle((post?.currentRevision?.metadata?.metaTitle as string) ?? "");
+      setMetaDescription((post?.currentRevision?.metadata?.metaDescription as string) ?? "");
+      setOgImage((post?.currentRevision?.metadata?.ogImage as string) ?? "");
       setError(null);
     }
   }, [open, post]);
@@ -124,15 +130,21 @@ const PostFormModal: React.FC<{
     e.preventDefault();
     setError(null);
     setSubmitting(true);
+    const metadata = {
+      ...(metaTitle.trim() ? { metaTitle: metaTitle.trim() } : {}),
+      ...(metaDescription.trim() ? { metaDescription: metaDescription.trim() } : {}),
+      ...(ogImage.trim() ? { ogImage: ogImage.trim() } : {}),
+    };
     try {
       if (mode === "create") {
-        const res = await postsApi.create({ title, slug: slug || undefined, body, categoryId: categoryId || undefined, tagIds, featuredMediaId });
+        const res = await postsApi.create({ title, slug: slug || undefined, body, metadata, categoryId: categoryId || undefined, tagIds, featuredMediaId });
         onSaved(res.post);
       } else if (post) {
         const res = await postsApi.update(post.id, {
           title,
           slug,
           body,
+          metadata,
           categoryId: categoryId || null,
           tagIds,
           featuredMediaId: featuredMediaId ?? null,
@@ -200,6 +212,27 @@ const PostFormModal: React.FC<{
             onChange={(e) => setBody(e.target.value)}
           />
         </Field>
+        <div className="pt-3 border-t space-y-3" style={{ borderColor: "var(--border)" }}>
+          <p className="text-xs font-bold uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>
+            SEO
+          </p>
+          <Field label="Meta title" hint="Shown in search results and social previews. Falls back to the post title if left blank.">
+            <Input value={metaTitle} onChange={(e) => setMetaTitle(e.target.value)} maxLength={70} />
+          </Field>
+          <Field label="Meta description" hint="Falls back to an auto-generated excerpt if left blank.">
+            <textarea
+              className="w-full px-3 py-2 rounded-lg text-sm focus:outline-none"
+              style={{ background: "var(--bg-app)", border: "1px solid var(--border)", color: "var(--text-primary)" }}
+              rows={2}
+              maxLength={200}
+              value={metaDescription}
+              onChange={(e) => setMetaDescription(e.target.value)}
+            />
+          </Field>
+          <Field label="Open Graph image URL" hint="Falls back to the featured image if left blank.">
+            <Input value={ogImage} onChange={(e) => setOgImage(e.target.value)} placeholder="https://..." />
+          </Field>
+        </div>
         <div className="pt-2 border-t flex justify-end gap-2" style={{ borderColor: "var(--border)" }}>
           <Button type="button" variant="secondary" onClick={onClose}>
             Cancel
