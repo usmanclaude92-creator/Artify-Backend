@@ -11,7 +11,7 @@
   "crons": [
     {
       "path": "/api/v1/automation/internal/tick",
-      "schedule": "* * * * *"
+      "schedule": "0 0 * * *"
     }
   ]
 }
