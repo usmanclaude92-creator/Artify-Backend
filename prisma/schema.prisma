@@ -480,6 +480,7 @@ model Lead {
   @@index([status])
   @@index([assignedTo])
   @@index([createdAt])
+  @@index([email])
   @@map("leads")
 }
 
@@ -541,6 +542,7 @@ model Client {
   @@index([organizationId])
   @@index([status])
   @@index([createdAt])
+  @@index([email])
   @@map("clients")
 }
 
@@ -577,6 +579,7 @@ model Contact {
 
   @@index([organizationId])
   @@index([clientId])
+  @@index([email])
   @@map("contacts")
 }
 
