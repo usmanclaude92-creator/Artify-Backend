@@ -36,6 +36,7 @@
 import { pageRepository, type PageWithRevision } from "../repositories/pageRepository";
 import { auditLogRepository } from "../repositories/auditLogRepository";
 import { assertFeaturedMediaUsable } from "./mediaService";
+import { sanitizeContentHtml } from "../utils/sanitizeHtml";
 import { prisma } from "../db/prisma";
 import { ConflictError, NotFoundError, ValidationError } from "../core/errors";
 import type { SanitizedUser } from "../types/domain";
@@ -96,6 +97,7 @@ export const pageService = {
 
   async createPage(caller: SanitizedUser, input: CreatePageInput, meta: RequestMeta = {}): Promise<PageWithRevision> {
     const organizationId = caller.organizationId;
+    const body = sanitizeContentHtml(input.body);
 
     if (input.slug) {
       const dup = await pageRepository.findBySlugInOrg(organizationId, input.slug);
@@ -116,7 +118,7 @@ export const pageService = {
             version: 1,
             status: "DRAFT",
             title: input.title,
-            body: input.body,
+            body,
             metadata: (input.metadata ?? {}) as Prisma.InputJsonValue,
             createdById: caller.id,
           },
@@ -146,6 +148,7 @@ export const pageService = {
   async updatePage(caller: SanitizedUser, id: string, input: UpdatePageInput, meta: RequestMeta = {}): Promise<PageWithRevision> {
     const organizationId = caller.organizationId;
     const existing = await loadPageOrThrow(id, organizationId);
+    const sanitizedBody = input.body !== undefined ? sanitizeContentHtml(input.body) : undefined;
 
     // Schema restricts input.status to "DRAFT" — every other status is
     // dedicated-endpoint-only (submitForReview/schedulePage/publishPage/
@@ -202,7 +205,7 @@ export const pageService = {
               version: currentRevision.version + 1,
               status: liveEditOfPublished ? "PUBLISHED" : "DRAFT",
               title: input.title ?? currentRevision.title,
-              body: input.body ?? currentRevision.body,
+              body: sanitizedBody ?? currentRevision.body,
               metadata: (input.metadata ?? currentRevision.metadata) as Prisma.InputJsonValue,
               createdById: caller.id,
               publishedAt: liveEditOfPublished ? new Date() : null,
@@ -212,7 +215,7 @@ export const pageService = {
         } else if (hasContentEdit && currentRevision) {
           const revisionPatch: Record<string, unknown> = {};
           if (input.title !== undefined) revisionPatch.title = input.title;
-          if (input.body !== undefined) revisionPatch.body = input.body;
+          if (sanitizedBody !== undefined) revisionPatch.body = sanitizedBody;
           if (input.metadata !== undefined) revisionPatch.metadata = input.metadata as Prisma.InputJsonValue;
           if (Object.keys(revisionPatch).length > 0) {
             await tx.contentRevision.update({ where: { id: currentRevision.id }, data: revisionPatch });

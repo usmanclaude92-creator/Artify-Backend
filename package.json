@@ -39,6 +39,7 @@
     "express-rate-limit": "^7.4.1",
     "helmet": "^8.0.0",
     "ioredis": "^5.11.1",
+    "isomorphic-dompurify": "^2.36.0",
     "lucide-react": "^0.546.0",
     "pino": "^9.5.0",
     "pino-http": "^10.3.0",
