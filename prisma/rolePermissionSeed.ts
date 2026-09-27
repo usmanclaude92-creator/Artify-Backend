@@ -159,6 +159,12 @@ const ROLE_PERMISSION_SETS: Record<RoleKey, readonly string[] | "*"> = {
     "portal.subscriptions.read",
     "portal.invoices.read",
     "portal.payments.read",
+    // Phase 5 — ADMIN gets full redirect management and the SEO audit.
+    "seo.redirects.read",
+    "seo.redirects.create",
+    "seo.redirects.update",
+    "seo.redirects.delete",
+    "seo.audit.read",
   ],
   MANAGER: [
     "users.read",
@@ -253,6 +259,11 @@ const ROLE_PERMISSION_SETS: Record<RoleKey, readonly string[] | "*"> = {
     "portal.subscriptions.read",
     "portal.invoices.read",
     "portal.payments.read",
+    // Phase 5 — MANAGER can manage redirects day-to-day but not delete them (ADMIN-only, §34 pattern).
+    "seo.redirects.read",
+    "seo.redirects.create",
+    "seo.redirects.update",
+    "seo.audit.read",
   ],
   USER: [
     "clients.read",
@@ -299,6 +310,9 @@ const ROLE_PERMISSION_SETS: Record<RoleKey, readonly string[] | "*"> = {
     "portal.subscriptions.read",
     "portal.invoices.read",
     "portal.payments.read",
+    // Phase 5 — USER is read-only for SEO, same as most other modules.
+    "seo.redirects.read",
+    "seo.audit.read",
   ],
   VIEWER: [
     "users.read",
@@ -345,6 +359,9 @@ const ROLE_PERMISSION_SETS: Record<RoleKey, readonly string[] | "*"> = {
     "portal.subscriptions.read",
     "portal.invoices.read",
     "portal.payments.read",
+    // Phase 5 — VIEWER is read-only for SEO, same convention as everywhere else.
+    "seo.redirects.read",
+    "seo.audit.read",
   ],
 };
 

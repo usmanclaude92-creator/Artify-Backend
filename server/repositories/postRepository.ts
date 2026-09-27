@@ -98,6 +98,21 @@ export const postRepository = {
     });
   },
 
+  /** Phase 5 SEO audit — every live-or-about-to-be-live post (not ARCHIVED, not soft-deleted), with exactly the fields the rule-based checks need. */
+  async listForSeoAudit(organizationId: string) {
+    return prisma.post.findMany({
+      where: { organizationId, deletedAt: null, status: { not: "ARCHIVED" } },
+      select: {
+        id: true,
+        slug: true,
+        title: true,
+        status: true,
+        currentRevision: { select: { title: true, metadata: true } },
+        featuredMedia: { select: { altText: true } },
+      },
+    });
+  },
+
   async findUniqueSlugInOrg(organizationId: string, base: string): Promise<string> {
     const baseSlug = slugify(base) || "post";
     let slug = baseSlug;

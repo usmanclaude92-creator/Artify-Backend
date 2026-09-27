@@ -27,6 +27,19 @@ export const listPublicProductsQuerySchema = z.object({
 });
 export type ListPublicProductsQuery = z.infer<typeof listPublicProductsQuerySchema>;
 
+// Phase 5 — SEO Control Center. The public site queries this when a slug it
+// tried to render 404s, to check whether it's an old slug with a redirect
+// on file before showing a hard not-found page.
+export const publicRedirectLookupQuerySchema = z.object({
+  path: z
+    .string()
+    .trim()
+    .min(1)
+    .max(2048)
+    .refine((v) => v.startsWith("/") && !v.startsWith("//"), { message: "Must be a site-relative path starting with a single /." }),
+});
+export type PublicRedirectLookupQuery = z.infer<typeof publicRedirectLookupQuerySchema>;
+
 const nonEmptyTrimmed = (max: number) => z.string().trim().min(1).max(max);
 
 /**

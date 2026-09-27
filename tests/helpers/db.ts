@@ -90,6 +90,9 @@ export async function resetDb(): Promise<void> {
   await prisma.page.deleteMany();
   await prisma.category.deleteMany();
   await prisma.tag.deleteMany();
+  // redirects CASCADEs on organization_id, but delete explicitly for
+  // clarity (same rationale as the workspace_invitation comment above).
+  await prisma.redirect.deleteMany();
 
   // media_upload_sessions CASCADEs on media_id and organization_id, but
   // delete explicitly before media_assets for clarity (same rationale as

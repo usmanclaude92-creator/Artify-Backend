@@ -19,6 +19,7 @@ import {
   createPublicLeadSchema,
   listPublicPostsQuerySchema,
   listPublicProductsQuerySchema,
+  publicRedirectLookupQuerySchema,
 } from "../../schemas/publicSchemas";
 
 const router = Router();
@@ -103,6 +104,15 @@ router.get(
   asyncHandler(async (req, res) => {
     const modules = await publicProductService.getProductModules(req.params.slug!);
     sendSuccess(res, { modules });
+  })
+);
+
+router.get(
+  "/redirects",
+  asyncHandler(async (req, res) => {
+    const query = publicRedirectLookupQuerySchema.parse(req.query);
+    const redirect = await publicSiteService.getRedirectForPath(query.path);
+    sendSuccess(res, { redirect });
   })
 );
 

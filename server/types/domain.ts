@@ -197,6 +197,15 @@ export const PERMISSION_KEYS = [
   "portal.subscriptions.read",
   "portal.invoices.read",
   "portal.payments.read",
+  // Phase 5 (SEO Control Center, docs/SEO_ARCHITECTURE.md) — redirects
+  // and the rule-based SEO audit are their own permission domain rather
+  // than folded into content.*, since a redirect isn't itself content
+  // and the audit reads across Posts/Pages without needing content.update.
+  "seo.redirects.read",
+  "seo.redirects.create",
+  "seo.redirects.update",
+  "seo.redirects.delete",
+  "seo.audit.read",
 ] as const;
 
 export type PermissionKey = (typeof PERMISSION_KEYS)[number];

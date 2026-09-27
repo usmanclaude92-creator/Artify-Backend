@@ -12,6 +12,7 @@ import { pageRepository, type PageWithPublicRelations } from "../repositories/pa
 import { postRepository, type PostWithPublicRelations } from "../repositories/postRepository";
 import { categoryRepository } from "../repositories/categoryRepository";
 import { tagRepository } from "../repositories/tagRepository";
+import { redirectRepository } from "../repositories/redirectRepository";
 import { getStorageProvider } from "../storage";
 import { config } from "../config/env";
 import { NotFoundError } from "../core/errors";
@@ -132,5 +133,18 @@ export const publicSiteService = {
     if (!hasPublicWebsiteOrganization()) return [];
     const tags = await tagRepository.list(config.publicWebsiteOrganizationId);
     return tags.map((t) => ({ slug: t.slug, name: t.name }));
+  },
+
+  /**
+   * Phase 5 — called by the public site when a slug it's rendering (e.g.
+   * `/blog/old-slug`) 404s, before it shows a hard not-found page. Returns
+   * null rather than throwing on a miss — "no redirect exists" is not an
+   * error, it's the common case.
+   */
+  async getRedirectForPath(path: string): Promise<{ toPath: string; statusCode: number } | null> {
+    if (!hasPublicWebsiteOrganization()) return null;
+    const redirect = await redirectRepository.findByFromPathInOrg(config.publicWebsiteOrganizationId, path);
+    if (!redirect) return null;
+    return { toPath: redirect.toPath, statusCode: redirect.statusCode };
   },
 };

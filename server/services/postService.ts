@@ -11,6 +11,7 @@ import { tagRepository } from "../repositories/tagRepository";
 import { auditLogRepository } from "../repositories/auditLogRepository";
 import { assertFeaturedMediaUsable } from "./mediaService";
 import { sanitizeContentHtml } from "../utils/sanitizeHtml";
+import { redirectService } from "./redirectService";
 import { prisma } from "../db/prisma";
 import { ConflictError, NotFoundError, ValidationError } from "../core/errors";
 import type { SanitizedUser } from "../types/domain";
@@ -259,6 +260,27 @@ export const postService = {
       ipAddress: meta.ip,
       userAgent: meta.userAgent,
     });
+
+    // A slug change on a post that's (still) PUBLISHED after this update
+    // means its real, indexed public URL just moved — auto-create a
+    // redirect so existing links/search results don't dead-end. Gated on
+    // the resulting status, not the prior one: if this same PATCH also
+    // unpublishes the post, there's no live page to send visitors to, so
+    // no redirect is created. Posts render at /blog/:slug on the public
+    // site (artifysolscom) — Pages have no public route yet (Phase 4),
+    // so this doesn't run for pageService.updatePage.
+    if (input.slug !== undefined && input.slug !== existing.slug) {
+      const finalStatus = input.status ?? existing.status;
+      if (finalStatus === "PUBLISHED") {
+        await redirectService.autoRedirectOnSlugChange({
+          organizationId,
+          fromPath: `/blog/${existing.slug}`,
+          toPath: `/blog/${input.slug}`,
+          resourceType: "post",
+          resourceId: id,
+        });
+      }
+    }
 
     if (hasFeaturedMediaEdit && input.featuredMediaId !== existing.featuredMediaId) {
       await auditLogRepository.record({

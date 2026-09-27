@@ -10,7 +10,7 @@ shippable units — it does not restate what's already built.
 | 2 | **CMS Foundation** — Posts/Pages/Categories/Tags/Authors, revisions, publishing | **Already complete.** No new work. |
 | 3 | **Professional Editor** — block/component editor, media, preview, autosave | **Not started.** Current editor is a plain textarea + Media Library picker; no block model. Scope: rich-text (TipTap-class) editing, not a full page-builder block system yet (see Phase 4). |
 | 4 | **Website Management** — homepage/header/footer/navigation/landing pages/reusable sections | **Not started, and not scoped yet** — the public site (`artifysolscom`) is a hand-authored React SPA, not a section-driven renderer. Making its homepage/nav backend-configurable is a larger architectural change than a CMS field addition; needs its own design pass before implementation. |
-| 5 | **SEO Control Center** — dashboard, technical SEO, sitemap, redirects, schema, issue detection | **Real gap, next priority.** Backend: sitemap/robots generation service, a redirects table (old slug → new slug + status code, especially for renamed Posts/Pages), an SEO-issues detector (rule-based: missing title/description, duplicate titles, missing alt text, missing canonical — never a fabricated "ranking score"). Frontend: SEO section in the nav, issue list linking to the offending record. |
+| 5 | **SEO Control Center** — dashboard, technical SEO, sitemap, redirects, schema, issue detection | **Done.** Redirects (auto-created on Post slug change, chain-collapsing, open-redirect-hardened) + a rule-based `seo.audit.read` issue detector, both with Control Center UI (new "SEO" nav section) — see `docs/SEO_ARCHITECTURE.md`. Also fixed a real bug found during this phase: `artifysolscom`'s sitemap generator capped at the first 50 posts/products. Remaining SEO-adjacent gap, explicitly out of this phase's scope: CMS Pages still have no public route to render at (Website Management, Phase 4 below) — the audit still scores them, but redirects/lookup are Post-only until that exists. |
 | 6 | **Products & Services** — catalog, relationships, SEO, content integration | **Mostly complete** (Product/ProductModule exist with full CRUD). Gap: no Industries/Solutions/Case-Study relationship model — defer until a real content need names one, rather than pre-building relations nothing populates. |
 | 7 | **CRM** — leads, contacts, organizations, opportunities, pipeline | **Partial, real gap.** Lead→Client conversion and Contact-per-Client exist. Missing: an `Opportunity` model (stage enum, value, close date, linked Lead/Client) and pipeline UI (kanban or stage-grouped table). This is a schema change — needs a migration, which needs a reachable Postgres to generate and verify (now available in this environment; previously blocked). |
 | 8 | **Client Management** — clients, onboarding, documents, portal | **Already complete.** No new work. |
@@ -22,8 +22,9 @@ shippable units — it does not restate what's already built.
 
 ## Immediate next phase recommendation
 
-**Phase 5 (SEO Control Center)** is the highest-leverage next step: it's a real, confirmed gap with no
-architectural prerequisite (unlike Phase 4/9's dependency on a section-driven public-site renderer, or
-Phase 10's dependency on an analytics-provider decision), and it extends the CMS domain that's already fully
-built rather than starting a new one. Concretely: a redirects table + sitemap/robots service in
-`server/services/`, and an SEO issues list surfaced in the Control Center CMS section.
+With Phase 5 done, **Phase 7 (CRM — Opportunity/pipeline)** is the next highest-leverage step by the same
+criteria: a real, confirmed gap (no `Opportunity` model or pipeline-stage concept exists at all today) with no
+architectural prerequisite, extending a CRM domain that's already substantially built (Lead→Client conversion,
+Contact-per-Client) rather than starting a new one. Concretely: an `Opportunity` model (stage enum, value,
+close date, linked Lead/Client) + CRUD + RBAC, and a pipeline view (kanban or stage-grouped table) in the
+existing CRM nav section.

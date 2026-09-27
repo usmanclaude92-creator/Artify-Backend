@@ -918,6 +918,49 @@ export const mediaApi = {
 };
 
 // ---------------------------------------------------------------------------
+// Phase 5 — SEO Control Center: redirects + the rule-based SEO audit.
+// ---------------------------------------------------------------------------
+export interface CmsRedirect {
+  id: string;
+  organizationId: string;
+  fromPath: string;
+  toPath: string;
+  statusCode: number;
+  resourceType: string | null;
+  resourceId: string | null;
+  createdById: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export const redirectsApi = {
+  list: (params: { page?: number; limit?: number; search?: string; sort?: string; order?: "asc" | "desc" } = {}) =>
+    paginatedGet<CmsRedirect>("/redirects", "redirects", params),
+  get: (id: string) => apiClient.get<{ redirect: CmsRedirect }>(`/redirects/${id}`),
+  create: (payload: { fromPath: string; toPath: string; statusCode?: 301 | 302 | 307 | 308 }) =>
+    apiClient.post<{ redirect: CmsRedirect }>("/redirects", payload),
+  update: (id: string, payload: Partial<{ toPath: string; statusCode: 301 | 302 | 307 | 308 }>) =>
+    apiClient.patch<{ redirect: CmsRedirect }>(`/redirects/${id}`, payload),
+  remove: (id: string) => apiClient.delete<{ message: string }>(`/redirects/${id}`),
+};
+
+export type SeoIssueSeverity = "critical" | "warning";
+export interface SeoIssue {
+  resourceType: "post" | "page";
+  resourceId: string;
+  resourceTitle: string;
+  slug: string;
+  status: string;
+  severity: SeoIssueSeverity;
+  code: string;
+  message: string;
+}
+
+export const seoApi = {
+  issues: () => apiClient.get<{ issues: SeoIssue[] }>("/seo/issues"),
+};
+
+// ---------------------------------------------------------------------------
 // Phase 10 — Commercial/Billing (contracts, subscriptions, invoices,
 // payments) & the read-only Client Portal. Every monetary field is the
 // server's Decimal serialized as a string (e.g. "1290.5") — never parsed

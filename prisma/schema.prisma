@@ -90,6 +90,7 @@ model Organization {
   categories                 Category[]
   tags                       Tag[]
   mediaAssets                MediaAsset[]
+  redirects                  Redirect[]
   mediaUploadSessions        MediaUploadSession[]
   notifications              Notification[]
   systemSettings             SystemSetting[]
@@ -173,6 +174,7 @@ model User {
   managedClients              Client[]                    @relation("ClientAccountManager")
   createdPages                Page[]                      @relation("PageCreatedBy")
   createdPosts                Post[]                      @relation("PostCreatedBy")
+  createdRedirects            Redirect[]                  @relation("RedirectCreatedBy")
   createdRevisions            ContentRevision[]           @relation("RevisionCreatedBy")
   uploadedMedia               MediaAsset[]                @relation("MediaUploadedBy")
   uploadSessions              MediaUploadSession[]        @relation("UploadSessionUploadedBy")
@@ -1187,6 +1189,34 @@ model PostTag {
   @@id([postId, tagId])
   @@index([tagId])
   @@map("post_tags")
+}
+
+// Phase 5 — SEO Control Center (docs/SEO_ARCHITECTURE.md). A redirect is a
+// standalone record, not a foreign key onto Post/Page: it must keep working
+// after the content it originally pointed to is renamed again, deleted, or
+// never existed at all (a manually-created vanity redirect). `fromPath` is
+// unique per organization so a lookup is a single indexed equality check on
+// the public site's hot path. `resourceType`/`resourceId` are optional
+// provenance only (was this auto-created by a slug change, and on what) —
+// never used for the redirect's own resolution logic.
+model Redirect {
+  id             String   @id @default(uuid())
+  organizationId String   @map("organization_id")
+  fromPath       String   @map("from_path")
+  toPath         String   @map("to_path")
+  statusCode     Int      @default(301) @map("status_code")
+  resourceType   String?  @map("resource_type")
+  resourceId     String?  @map("resource_id")
+  createdById    String?  @map("created_by")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdBy    User?        @relation("RedirectCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@unique([organizationId, fromPath])
+  @@index([organizationId])
+  @@map("redirects")
 }
 
 // One shared revision table for both Pages and Posts (§31 asks for a

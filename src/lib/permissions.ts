@@ -45,6 +45,8 @@ import {
   Gauge,
   ShieldAlert,
   Bot,
+  Search,
+  ArrowRightLeft,
 } from "lucide-react";
 import { DashboardPage } from "../components/modules/DashboardPage";
 import { UsersPage } from "../components/modules/UsersPage";
@@ -71,6 +73,8 @@ import { SubscriptionsPage } from "../components/modules/SubscriptionsPage";
 import { InvoicesPage } from "../components/modules/InvoicesPage";
 import { PaymentsPage } from "../components/modules/PaymentsPage";
 import { ClientPortalPage } from "../components/modules/ClientPortalPage";
+import { SeoIssuesPage } from "../components/modules/SeoIssuesPage";
+import { RedirectsPage } from "../components/modules/RedirectsPage";
 import { AiOverviewPage } from "../components/modules/ai/AiOverviewPage";
 import { AiProvidersPage } from "../components/modules/ai/AiProvidersPage";
 import { AiToolsPage } from "../components/modules/ai/AiToolsPage";
@@ -94,7 +98,7 @@ export interface NavItem {
   requiresAnyPermission?: string[];
   component: ComponentType;
   /** Groups items under a heading in the sidebar (§22/§31) — purely presentational. */
-  section: "Platform" | "CRM" | "Onboarding" | "Workspaces" | "Products" | "CMS" | "Commercial" | "AI" | "Client Portal";
+  section: "Platform" | "CRM" | "Onboarding" | "Workspaces" | "Products" | "CMS" | "SEO" | "Commercial" | "AI" | "Client Portal";
 }
 
 /**
@@ -294,6 +298,24 @@ export const NAV_ITEMS: NavItem[] = [
     requiresAnyPermission: ["media.read"],
     component: MediaLibraryPage,
     section: "CMS",
+  },
+  {
+    id: "seo-issues",
+    label: "SEO Issues",
+    path: "/seo/issues",
+    icon: Search,
+    requiresAnyPermission: ["seo.audit.read"],
+    component: SeoIssuesPage,
+    section: "SEO",
+  },
+  {
+    id: "seo-redirects",
+    label: "Redirects",
+    path: "/seo/redirects",
+    icon: ArrowRightLeft,
+    requiresAnyPermission: ["seo.redirects.read"],
+    component: RedirectsPage,
+    section: "SEO",
   },
   {
     id: "commercial-contracts",
