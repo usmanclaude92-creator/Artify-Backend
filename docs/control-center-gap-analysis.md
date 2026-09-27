@@ -35,11 +35,12 @@ avoid drift.
 | Breadcrumbs | **Added this phase** | Was MISSING; `Breadcrumbs.tsx` now derives section + page from the matched `NavItem`. |
 | Command palette / global search | **Added this phase** | Was MISSING (zero matches for "CommandPalette"/"cmdk"/"Ctrl+K" before this phase); `CommandPalette.tsx` now provides quick actions + live entity search. |
 | Notification bell | **Done (Phase 11)** | `NotificationBell.tsx` in the Control Center header — unread badge (polled every 60s), dropdown list, mark-read/mark-all-read. |
+| Rich-text editor | **Done (Phase 3)** | `RichTextEditor.tsx` (TipTap) replaces the plain `<textarea>` in `PostFormModal`/`PageFormModal`; scoped to the tag set `sanitizeContentHtml` allows. See `docs/CMS_ARCHITECTURE.md`'s "Phase 3" section. |
 | Design system / DataTable | PARTIAL | Real shared primitives exist (`ui/ui.tsx`); no shared `DataTable` — Leads/Contacts/Posts/etc. each hand-roll their own `<table>`. |
 | Theme | EXISTS | `.dark` class on `<html>`, CSS variables, `ThemeContext`. |
 | CRM UI | **Opportunity/pipeline UI done (Phase 7)** | Leads/Clients/Contacts/CRM-dashboard pages exist; new "Opportunities" page (search/filter/stage/win-lose) added under the existing CRM nav section, plus pipeline stats on the CRM dashboard. |
 | Mobile responsiveness | EXISTS | Real mobile drawer (`Sidebar.tsx:126-136`), not just reflow. |
-| Code-splitting | MISSING | No `React.lazy`/`import()` anywhere; `permissions.ts` statically imports all ~30 page components — the whole Control Center ships as one bundle (confirmed again post-changes: single ~1.07 MB main chunk). |
+| Code-splitting | MISSING | No `React.lazy`/`import()` anywhere; `permissions.ts` statically imports all ~30 page components — the whole Control Center ships as one bundle (now ~1.6 MB after Phase 3's TipTap editor — was ~1.07 MB — making Phase 13 higher priority). |
 
 ## Net gap summary
 

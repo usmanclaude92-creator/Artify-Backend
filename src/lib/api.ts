@@ -986,6 +986,7 @@ export const mediaApi = {
   ) => paginatedGet<CmsMedia>("/media", "media", params),
   get: (id: string) => apiClient.get<{ media: CmsMedia }>(`/media/${id}`),
   getReadUrl: (id: string) => apiClient.get<{ url: string; expiresAt: string }>(`/media/${id}/url`),
+  getEmbedUrl: (id: string) => apiClient.get<{ url: string }>(`/media/${id}/embed-url`),
   createUploadSession: (payload: { filename: string; mimeType: AllowedMediaMimeType; sizeBytes: number; displayName?: string; altText?: string; caption?: string }) =>
     apiClient.post<UploadSessionResult>("/media/upload-session", payload),
   complete: (id: string, token: string) => apiClient.post<{ media: CmsMedia }>(`/media/${id}/complete`, { token }),

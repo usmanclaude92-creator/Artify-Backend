@@ -112,6 +112,15 @@ router.get(
   })
 );
 
+router.get(
+  "/:id/embed-url",
+  requirePermission("media.update"),
+  asyncHandler(async (req, res) => {
+    const result = await mediaService.getEmbedUrl(req.user!, req.params.id!, requestMeta(req));
+    sendSuccess(res, result);
+  })
+);
+
 router.post(
   "/upload-session",
   requirePermission("media.upload"),

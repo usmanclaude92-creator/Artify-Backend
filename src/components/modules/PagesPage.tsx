@@ -9,6 +9,7 @@ import { Card, Button, Input, Select, Badge, LoadingState, ErrorState, EmptyStat
 import { hasPermission } from "../../lib/permissions";
 import { initialSearchFromQuery, consumeNewFlag } from "../../lib/deepLink";
 import { MediaPickerModal } from "../common/MediaPickerModal";
+import { RichTextEditor } from "../common/RichTextEditor";
 
 const FeaturedImageField: React.FC<{ mediaId: string | undefined; onChange: (mediaId: string | undefined) => void }> = ({ mediaId, onChange }) => {
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -152,13 +153,7 @@ const PageFormModal: React.FC<{ open: boolean; onClose: () => void; onSaved: (pa
         </Field>
         <FeaturedImageField mediaId={featuredMediaId} onChange={setFeaturedMediaId} />
         <Field label="Body">
-          <textarea
-            className="w-full px-3 py-2 rounded-lg text-sm focus:outline-none font-mono"
-            style={{ background: "var(--bg-app)", border: "1px solid var(--border)", color: "var(--text-primary)" }}
-            rows={10}
-            value={body}
-            onChange={(e) => setBody(e.target.value)}
-          />
+          <RichTextEditor value={body} onChange={setBody} placeholder="Write the page…" />
         </Field>
         <div className="pt-3 border-t space-y-3" style={{ borderColor: "var(--border)" }}>
           <p className="text-xs font-bold uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>
@@ -333,9 +328,13 @@ const PageDetail: React.FC<{ page: CmsPage; onChanged: (p?: CmsPage) => void }> 
         </div>
       </div>
 
-      <div className="p-4 text-xs whitespace-pre-wrap" style={{ color: "var(--text-secondary)" }}>
-        {page.currentRevision?.body || <span style={{ color: "var(--text-muted)" }}>No body content yet.</span>}
-      </div>
+      {page.currentRevision?.body ? (
+        <div className="p-4 cms-rendered-body" dangerouslySetInnerHTML={{ __html: page.currentRevision.body }} />
+      ) : (
+        <div className="p-4 text-xs" style={{ color: "var(--text-muted)" }}>
+          No body content yet.
+        </div>
+      )}
 
       <PageFormModal open={editOpen} onClose={() => setEditOpen(false)} onSaved={(updated) => onChanged(updated)} mode="edit" page={page} />
       <ScheduleModal open={scheduleOpen} onClose={() => setScheduleOpen(false)} onSchedule={handleSchedule} />

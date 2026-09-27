@@ -211,6 +211,46 @@ export const mediaService = {
     return toApiMedia(activated);
   },
 
+  /**
+   * Phase 3 — a stable URL for embedding an image inline in a Post/Page
+   * body (TipTap editor "insert from Media Library"). Unlike getReadUrl,
+   * this is never short-lived: the returned URL is baked directly into
+   * `ContentRevision.body` HTML and re-served verbatim by
+   * publicSiteService for as long as the content stays published — a
+   * 15-minute signed URL would go dead long before that. Reuses the same
+   * auto-promote-to-PUBLIC reasoning as `assertFeaturedMediaUsable`: a
+   * caller with media.update can choose to make this specific image
+   * public by embedding it, audited like any other visibility change.
+   */
+  async getEmbedUrl(caller: SanitizedUser, id: string, meta: RequestMeta = {}): Promise<{ url: string }> {
+    const organizationId = caller.organizationId;
+    const media = await loadMediaOrThrow(id, organizationId);
+    if (media.status !== "ACTIVE") throw new ConflictError("This media has no readable object yet.");
+    if (!isImageMimeType(media.mimeType as AllowedMimeType)) throw new ValidationError("Only images can be embedded in content.");
+
+    if (media.visibility !== "PUBLIC") {
+      await mediaRepository.update(id, { visibility: "PUBLIC" });
+      await auditLogRepository.record({
+        organizationId,
+        actorUserId: caller.id,
+        actorType: "USER",
+        action: "MEDIA_METADATA_UPDATED",
+        resourceType: "media",
+        resourceId: id,
+        beforeData: { visibility: media.visibility },
+        afterData: { visibility: "PUBLIC" },
+        ipAddress: meta.ip,
+        userAgent: meta.userAgent,
+      });
+    }
+
+    const provider = getStorageProvider();
+    const url =
+      provider.getPublicUrl(media.storageKey) ??
+      (await provider.createSignedReadUrl({ key: media.storageKey, expiresInSeconds: config.mediaPublicSignedUrlTtlSeconds }));
+    return { url };
+  },
+
   async getReadUrl(caller: SanitizedUser, id: string, meta: RequestMeta = {}): Promise<{ url: string; expiresAt: string }> {
     const organizationId = caller.organizationId;
     const media = await loadMediaOrThrow(id, organizationId);

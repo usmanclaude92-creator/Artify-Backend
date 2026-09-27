@@ -20,6 +20,7 @@ import { Card, Button, Input, Select, Badge, LoadingState, ErrorState, EmptyStat
 import { hasPermission } from "../../lib/permissions";
 import { initialSearchFromQuery, consumeNewFlag } from "../../lib/deepLink";
 import { MediaPickerModal } from "../common/MediaPickerModal";
+import { RichTextEditor } from "../common/RichTextEditor";
 
 const STATUS_OPTIONS: ContentStatusValue[] = ["DRAFT", "IN_REVIEW", "SCHEDULED", "PUBLISHED", "ARCHIVED"];
 const STATUS_TONE: Record<ContentStatusValue, "success" | "warning" | "danger" | "info" | "neutral"> = {
@@ -205,13 +206,7 @@ const PostFormModal: React.FC<{
         </Field>
         <FeaturedImageField mediaId={featuredMediaId} onChange={setFeaturedMediaId} />
         <Field label="Body">
-          <textarea
-            className="w-full px-3 py-2 rounded-lg text-sm focus:outline-none font-mono"
-            style={{ background: "var(--bg-app)", border: "1px solid var(--border)", color: "var(--text-primary)" }}
-            rows={10}
-            value={body}
-            onChange={(e) => setBody(e.target.value)}
-          />
+          <RichTextEditor value={body} onChange={setBody} placeholder="Write the post…" />
         </Field>
         <div className="pt-3 border-t space-y-3" style={{ borderColor: "var(--border)" }}>
           <p className="text-xs font-bold uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>
@@ -401,9 +396,13 @@ const PostDetail: React.FC<{ post: CmsPost; categories: CmsCategory[]; tags: Cms
         </div>
       </div>
 
-      <div className="p-4 text-xs whitespace-pre-wrap" style={{ color: "var(--text-secondary)" }}>
-        {post.currentRevision?.body || <span style={{ color: "var(--text-muted)" }}>No body content yet.</span>}
-      </div>
+      {post.currentRevision?.body ? (
+        <div className="p-4 cms-rendered-body" dangerouslySetInnerHTML={{ __html: post.currentRevision.body }} />
+      ) : (
+        <div className="p-4 text-xs" style={{ color: "var(--text-muted)" }}>
+          No body content yet.
+        </div>
+      )}
 
       <PostFormModal
         open={editOpen}

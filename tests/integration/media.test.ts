@@ -195,6 +195,34 @@ describe("Media Library", () => {
     expect(pendingUrl.status).toBe(409);
   });
 
+  it("issues a stable embed URL for a Phase 3 rich-text image insert, auto-promoting a PRIVATE (upload default) asset to PUBLIC", async () => {
+    const { mediaId } = await createAndComplete(app, adminToken, { filename: "embed-me.png" });
+    const before = await request(app).get(`/api/v1/media/${mediaId}`).set("Authorization", `Bearer ${adminToken}`);
+    expect(before.body.data.media.visibility).toBe("PRIVATE");
+
+    const res = await request(app).get(`/api/v1/media/${mediaId}/embed-url`).set("Authorization", `Bearer ${adminToken}`);
+    expect(res.status).toBe(200);
+    expect(res.body.data.url).toBeTruthy();
+
+    const after = await request(app).get(`/api/v1/media/${mediaId}`).set("Authorization", `Bearer ${adminToken}`);
+    expect(after.body.data.media.visibility).toBe("PUBLIC");
+
+    const audit = await prisma.auditLog.findFirst({ where: { action: "MEDIA_METADATA_UPDATED", resourceId: mediaId } });
+    expect(audit).not.toBeNull();
+
+    // Calling it again on an already-PUBLIC asset is a no-op, not a second promotion audit entry.
+    const auditCountBefore = await prisma.auditLog.count({ where: { action: "MEDIA_METADATA_UPDATED", resourceId: mediaId } });
+    await request(app).get(`/api/v1/media/${mediaId}/embed-url`).set("Authorization", `Bearer ${adminToken}`);
+    const auditCountAfter = await prisma.auditLog.count({ where: { action: "MEDIA_METADATA_UPDATED", resourceId: mediaId } });
+    expect(auditCountAfter).toBe(auditCountBefore);
+  });
+
+  it("rejects an embed-url request for a non-image asset", async () => {
+    const { mediaId } = await createAndComplete(app, adminToken, { filename: "doc.pdf", mimeType: "application/pdf", bytes: PDF_BYTES });
+    const res = await request(app).get(`/api/v1/media/${mediaId}/embed-url`).set("Authorization", `Bearer ${adminToken}`);
+    expect(res.status).toBe(400);
+  });
+
   it("updates media metadata (displayName/altText/caption/visibility) and audits MEDIA_METADATA_UPDATED", async () => {
     const { mediaId } = await createAndComplete(app, adminToken, { filename: "editable.png" });
     const res = await request(app)

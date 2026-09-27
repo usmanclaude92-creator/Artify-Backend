@@ -134,7 +134,7 @@ describe("notifications", () => {
   });
 
   it("notifies the original author (not the publishing actor) when their post is published", async () => {
-    const author = await request(app)
+    await request(app)
       .post("/api/v1/users")
       .set("Authorization", `Bearer ${adminToken}`)
       .send({ email: "notif-author@example.com", password: "MemberPassword123", firstName: "Au", lastName: "Thor", roleKey: "USER" });
