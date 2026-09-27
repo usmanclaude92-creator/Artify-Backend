@@ -87,6 +87,15 @@ const envSchema = z
     // Phase 6 — client-admin workspace invitations (docs/WORKSPACE_PROVISIONING.md).
     INVITATION_TOKEN_TTL_HOURS: z.coerce.number().int().positive().default(72),
 
+    // Phase 13 — Automation scheduler/queue cron trigger
+    // (docs/AUTOMATION_ARCHITECTURE.md). Serverless deployments (Vercel)
+    // tear down the process between requests, so the in-process
+    // setInterval-based scheduler/queue workers never reliably fire —
+    // POST /api/v1/automation/internal/tick exists for a Vercel Cron job to
+    // call instead. Left unset, that endpoint is disabled outright (503)
+    // rather than accepting an unauthenticated trigger.
+    CRON_SECRET: z.string().optional().default(""),
+
     // Phase 11 — public website integration (docs/PUBLIC_API_ARCHITECTURE.md).
     // The public website (artifysolscom) has no tenant/session context of
     // its own — every public CMS page/post/lead belongs to exactly one
@@ -98,6 +107,14 @@ const envSchema = z
   })
   .superRefine((val, ctx) => {
     const isProdLike = val.NODE_ENV === "production" || val.NODE_ENV === "staging";
+
+    if (val.CRON_SECRET && val.CRON_SECRET.length < 16) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["CRON_SECRET"],
+        message: "CRON_SECRET must be at least 16 characters when set",
+      });
+    }
 
     if (val.WEBHOOK_SECRET === KNOWN_COMPROMISED_WEBHOOK_SECRET) {
       ctx.addIssue({
@@ -128,6 +145,16 @@ const envSchema = z
         // eslint-disable-next-line no-console
         console.warn(
           "[config] AI_PROVIDER=gemini but GEMINI_API_KEY is empty — AI endpoints will report unavailable until it is set."
+        );
+      }
+      if (!val.CRON_SECRET) {
+        // Not fatal: the automation scheduler/queue simply stays
+        // catch-up-only via its (unreliable on serverless) in-process
+        // timers until this is set and a Vercel Cron job is wired to
+        // /api/v1/automation/internal/tick.
+        // eslint-disable-next-line no-console
+        console.warn(
+          "[config] CRON_SECRET is empty — POST /api/v1/automation/internal/tick is disabled, so scheduled/queued automation workflows will only run via the unreliable in-process timers until it is set."
         );
       }
       if (!val.PUBLIC_WEBSITE_ORGANIZATION_ID) {
@@ -205,6 +232,7 @@ export type AppConfig = Readonly<{
   passwordMinLength: number;
   invitationTokenTtlHours: number;
   publicWebsiteOrganizationId: string;
+  cronSecret: string;
 }>;
 
 export type EnvValidationResult =
@@ -264,6 +292,7 @@ export function validateEnv(raw: NodeJS.ProcessEnv | Record<string, string | und
       passwordMinLength: env.PASSWORD_MIN_LENGTH,
       invitationTokenTtlHours: env.INVITATION_TOKEN_TTL_HOURS,
       publicWebsiteOrganizationId: env.PUBLIC_WEBSITE_ORGANIZATION_ID,
+      cronSecret: env.CRON_SECRET,
     }),
   };
 }

@@ -207,7 +207,7 @@ export const authService = {
           firstName: payload.firstName,
           lastName: payload.lastName,
           displayName: `${payload.firstName} ${payload.lastName}`.trim(),
-          title: "Organization Administrator",
+          title: payload.title?.trim() || "Organization Administrator",
           roleId: adminRole.id,
         },
       });

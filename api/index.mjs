@@ -1,5 +1,5 @@
 // server/app/app.ts
-import express3 from "express";
+import express4 from "express";
 
 // server/middleware/requestId.ts
 import { randomUUID } from "node:crypto";
@@ -73,6 +73,14 @@ var envSchema = z.object({
   PASSWORD_MIN_LENGTH: z.coerce.number().int().min(8).default(10),
   // Phase 6 — client-admin workspace invitations (docs/WORKSPACE_PROVISIONING.md).
   INVITATION_TOKEN_TTL_HOURS: z.coerce.number().int().positive().default(72),
+  // Phase 13 — Automation scheduler/queue cron trigger
+  // (docs/AUTOMATION_ARCHITECTURE.md). Serverless deployments (Vercel)
+  // tear down the process between requests, so the in-process
+  // setInterval-based scheduler/queue workers never reliably fire —
+  // POST /api/v1/automation/internal/tick exists for a Vercel Cron job to
+  // call instead. Left unset, that endpoint is disabled outright (503)
+  // rather than accepting an unauthenticated trigger.
+  CRON_SECRET: z.string().optional().default(""),
   // Phase 11 — public website integration (docs/PUBLIC_API_ARCHITECTURE.md).
   // The public website (artifysolscom) has no tenant/session context of
   // its own — every public CMS page/post/lead belongs to exactly one
@@ -83,6 +91,13 @@ var envSchema = z.object({
   PUBLIC_WEBSITE_ORGANIZATION_ID: z.string().optional().default("")
 }).superRefine((val, ctx) => {
   const isProdLike = val.NODE_ENV === "production" || val.NODE_ENV === "staging";
+  if (val.CRON_SECRET && val.CRON_SECRET.length < 16) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["CRON_SECRET"],
+      message: "CRON_SECRET must be at least 16 characters when set"
+    });
+  }
   if (val.WEBHOOK_SECRET === KNOWN_COMPROMISED_WEBHOOK_SECRET) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
@@ -108,6 +123,11 @@ var envSchema = z.object({
     if (val.AI_PROVIDER === "gemini" && !val.GEMINI_API_KEY) {
       console.warn(
         "[config] AI_PROVIDER=gemini but GEMINI_API_KEY is empty \u2014 AI endpoints will report unavailable until it is set."
+      );
+    }
+    if (!val.CRON_SECRET) {
+      console.warn(
+        "[config] CRON_SECRET is empty \u2014 POST /api/v1/automation/internal/tick is disabled, so scheduled/queued automation workflows will only run via the unreliable in-process timers until it is set."
       );
     }
     if (!val.PUBLIC_WEBSITE_ORGANIZATION_ID) {
@@ -183,7 +203,8 @@ function validateEnv(raw) {
       passwordResetTokenTtlMinutes: env.PASSWORD_RESET_TOKEN_TTL_MINUTES,
       passwordMinLength: env.PASSWORD_MIN_LENGTH,
       invitationTokenTtlHours: env.INVITATION_TOKEN_TTL_HOURS,
-      publicWebsiteOrganizationId: env.PUBLIC_WEBSITE_ORGANIZATION_ID
+      publicWebsiteOrganizationId: env.PUBLIC_WEBSITE_ORGANIZATION_ID,
+      cronSecret: env.CRON_SECRET
     })
   };
 }
@@ -401,6 +422,14 @@ var sensitiveActionLimiter = rateLimit({
   handler: rateLimitHandler,
   keyGenerator: (req) => req.user?.id ?? req.ip ?? "unknown"
 });
+var aiExecutionLimiter = rateLimit({
+  windowMs: 5 * 60 * 1e3,
+  limit: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: rateLimitHandler,
+  keyGenerator: (req) => req.user?.id ?? req.ip ?? "unknown"
+});
 
 // server/middleware/errorHandler.ts
 import { ZodError } from "zod";
@@ -499,7 +528,7 @@ function errorHandlerMiddleware(err, req, res, _next) {
 }
 
 // server/routes/v1/index.ts
-import { Router as Router30 } from "express";
+import { Router as Router40 } from "express";
 
 // server/routes/v1/authRoutes.ts
 import { Router } from "express";
@@ -997,7 +1026,7 @@ var authService = {
           firstName: payload.firstName,
           lastName: payload.lastName,
           displayName: `${payload.firstName} ${payload.lastName}`.trim(),
-          title: "Organization Administrator",
+          title: payload.title?.trim() || "Organization Administrator",
           roleId: adminRole.id
         }
       });
@@ -1267,7 +1296,8 @@ var registerSchema = z2.object({
   password: newPasswordSchema,
   firstName: z2.string().trim().min(1).max(100),
   lastName: z2.string().trim().min(1).max(100),
-  organizationName: z2.string().trim().min(1).max(200)
+  organizationName: z2.string().trim().min(1).max(200),
+  title: z2.string().trim().min(1).max(150).optional()
 });
 var changePasswordSchema = z2.object({
   currentPassword: z2.string().min(1),
@@ -9128,8 +9158,6889 @@ router29.post(
 );
 var publicRoutes_default = router29;
 
+// server/routes/v1/aiProviderRoutes.ts
+import { Router as Router30 } from "express";
+
+// server/repositories/aiProviderRepository.ts
+var aiProviderRepository = {
+  async listProviders() {
+    return prisma.aIProvider.findMany({ include: { models: true }, orderBy: { name: "asc" } });
+  },
+  async getProvider(id) {
+    return prisma.aIProvider.findUnique({ where: { id }, include: { models: true } });
+  },
+  async findProviderByCode(code) {
+    return prisma.aIProvider.findUnique({ where: { code } });
+  },
+  async createProvider(input) {
+    return prisma.aIProvider.create({
+      data: { code: input.code, name: input.name, status: input.status ?? "INACTIVE", isDefault: input.isDefault ?? false }
+    });
+  },
+  async updateProvider(id, input) {
+    return prisma.aIProvider.update({ where: { id }, data: input });
+  },
+  async clearDefaultProviders() {
+    await prisma.aIProvider.updateMany({ where: { isDefault: true }, data: { isDefault: false } });
+  },
+  async listModels(providerId) {
+    return prisma.aIModel.findMany({ where: providerId ? { providerId } : void 0, orderBy: { displayName: "asc" } });
+  },
+  async getModel(id) {
+    return prisma.aIModel.findUnique({ where: { id } });
+  },
+  async createModel(input) {
+    return prisma.aIModel.create({
+      data: {
+        providerId: input.providerId,
+        modelId: input.modelId,
+        displayName: input.displayName,
+        contextWindow: input.contextWindow,
+        supportsStructuredOutput: input.supportsStructuredOutput ?? false,
+        supportsToolCalling: input.supportsToolCalling ?? false,
+        inputPricePerMillionTokens: input.inputPricePerMillionTokens,
+        outputPricePerMillionTokens: input.outputPricePerMillionTokens,
+        isActive: input.isActive ?? true,
+        isDefault: input.isDefault ?? false
+      }
+    });
+  },
+  async updateModel(id, input) {
+    return prisma.aIModel.update({ where: { id }, data: input });
+  },
+  async clearDefaultModels(providerId) {
+    await prisma.aIModel.updateMany({ where: { providerId, isDefault: true }, data: { isDefault: false } });
+  }
+};
+
+// server/services/aiProviderService.ts
+var aiProviderService = {
+  async listProviders() {
+    return aiProviderRepository.listProviders();
+  },
+  async getProvider(id) {
+    const provider = await aiProviderRepository.getProvider(id);
+    if (!provider) throw new NotFoundError("AI provider not found.");
+    return provider;
+  },
+  async createProvider(caller, input, meta = {}) {
+    const existing = await aiProviderRepository.findProviderByCode(input.code);
+    if (existing) throw new ConflictError(`An AI provider with code "${input.code}" already exists.`);
+    if (input.isDefault) await aiProviderRepository.clearDefaultProviders();
+    const provider = await aiProviderRepository.createProvider(input);
+    await auditLogRepository.record({
+      organizationId: caller.organizationId,
+      actorUserId: caller.id,
+      actorType: "USER",
+      action: "AI_PROVIDER_CREATED",
+      resourceType: "ai_provider",
+      resourceId: provider.id,
+      afterData: { code: provider.code, status: provider.status },
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent
+    });
+    return provider;
+  },
+  async updateProvider(caller, id, input, meta = {}) {
+    await this.getProvider(id);
+    if (input.isDefault) await aiProviderRepository.clearDefaultProviders();
+    const provider = await aiProviderRepository.updateProvider(id, input);
+    await auditLogRepository.record({
+      organizationId: caller.organizationId,
+      actorUserId: caller.id,
+      actorType: "USER",
+      action: "AI_PROVIDER_UPDATED",
+      resourceType: "ai_provider",
+      resourceId: id,
+      afterData: input,
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent
+    });
+    return provider;
+  },
+  async listModels(providerId) {
+    return aiProviderRepository.listModels(providerId);
+  },
+  async createModel(caller, input, meta = {}) {
+    await this.getProvider(input.providerId);
+    if (input.isDefault) await aiProviderRepository.clearDefaultModels(input.providerId);
+    const model = await aiProviderRepository.createModel(input);
+    await auditLogRepository.record({
+      organizationId: caller.organizationId,
+      actorUserId: caller.id,
+      actorType: "USER",
+      action: "AI_MODEL_CREATED",
+      resourceType: "ai_model",
+      resourceId: model.id,
+      afterData: { providerId: model.providerId, modelId: model.modelId },
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent
+    });
+    return model;
+  },
+  async updateModel(caller, id, input, meta = {}) {
+    const existing = await aiProviderRepository.getModel(id);
+    if (!existing) throw new NotFoundError("AI model not found.");
+    if (input.isDefault) await aiProviderRepository.clearDefaultModels(existing.providerId);
+    const model = await aiProviderRepository.updateModel(id, input);
+    await auditLogRepository.record({
+      organizationId: caller.organizationId,
+      actorUserId: caller.id,
+      actorType: "USER",
+      action: "AI_MODEL_UPDATED",
+      resourceType: "ai_model",
+      resourceId: id,
+      afterData: input,
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent
+    });
+    return model;
+  }
+};
+
+// server/schemas/aiSchemas.ts
+import { z as z27 } from "zod";
+var createAiProviderSchema = z27.object({
+  code: z27.string().trim().min(1).max(50),
+  name: z27.string().trim().min(1).max(200),
+  status: z27.enum(["ACTIVE", "INACTIVE"]).optional(),
+  isDefault: z27.boolean().optional()
+});
+var updateAiProviderSchema = z27.object({
+  name: z27.string().trim().min(1).max(200).optional(),
+  status: z27.enum(["ACTIVE", "INACTIVE"]).optional(),
+  isDefault: z27.boolean().optional()
+});
+var createAiModelSchema = z27.object({
+  providerId: z27.string().uuid(),
+  modelId: z27.string().trim().min(1).max(100),
+  displayName: z27.string().trim().min(1).max(200),
+  contextWindow: z27.number().int().positive().optional(),
+  supportsStructuredOutput: z27.boolean().optional(),
+  supportsToolCalling: z27.boolean().optional(),
+  inputPricePerMillionTokens: z27.number().nonnegative().optional(),
+  outputPricePerMillionTokens: z27.number().nonnegative().optional(),
+  isActive: z27.boolean().optional(),
+  isDefault: z27.boolean().optional()
+});
+var updateAiModelSchema = createAiModelSchema.partial().omit({ providerId: true, modelId: true });
+var updateAiOrgToolSettingSchema = z27.object({
+  enabled: z27.boolean().optional(),
+  requireApprovalOverride: z27.boolean().nullable().optional()
+});
+var PROMPT_SORT_FIELDS = ["key", "name", "status", "createdAt", "updatedAt"];
+var listAiPromptsQuerySchema = z27.object(paginationQuerySchema(PROMPT_SORT_FIELDS, "createdAt", "desc"));
+var createAiPromptTemplateSchema = z27.object({
+  key: z27.string().trim().min(1).max(100).regex(/^[a-z0-9._-]+$/, "key must be lowercase, URL-safe (letters, numbers, dots, hyphens, underscores)"),
+  name: z27.string().trim().min(1).max(200),
+  purpose: z27.string().trim().max(1e3).optional(),
+  systemInstructions: z27.string().trim().min(1).max(2e4),
+  userTemplate: z27.string().trim().min(1).max(2e4),
+  variablesSchema: z27.record(z27.unknown()).optional()
+});
+var createAiPromptVersionSchema = z27.object({
+  systemInstructions: z27.string().trim().min(1).max(2e4),
+  userTemplate: z27.string().trim().min(1).max(2e4),
+  variablesSchema: z27.record(z27.unknown()).optional()
+});
+var updateAiPromptTemplateSchema = z27.object({
+  name: z27.string().trim().min(1).max(200).optional(),
+  purpose: z27.string().trim().max(1e3).nullable().optional(),
+  status: z27.enum(["DRAFT", "ACTIVE", "ARCHIVED"]).optional()
+});
+var publishAiPromptVersionSchema = z27.object({
+  versionId: z27.string().uuid()
+});
+var WORKFLOW_SORT_FIELDS = ["key", "name", "status", "createdAt", "updatedAt"];
+var listAiWorkflowsQuerySchema = z27.object(paginationQuerySchema(WORKFLOW_SORT_FIELDS, "createdAt", "desc"));
+var workflowStepSchema = z27.object({
+  order: z27.number().int().nonnegative(),
+  toolCode: z27.string().trim().min(1).max(100),
+  description: z27.string().trim().max(500).optional()
+});
+var createAiWorkflowSchema = z27.object({
+  key: z27.string().trim().min(1).max(100).regex(/^[a-z0-9._-]+$/, "key must be lowercase, URL-safe (letters, numbers, dots, hyphens, underscores)"),
+  name: z27.string().trim().min(1).max(200),
+  description: z27.string().trim().max(2e3).optional(),
+  steps: z27.array(workflowStepSchema).min(1).max(10),
+  maxSteps: z27.number().int().positive().max(10).optional(),
+  timeoutMs: z27.number().int().positive().max(12e4).optional()
+});
+var updateAiWorkflowSchema = z27.object({
+  name: z27.string().trim().min(1).max(200).optional(),
+  description: z27.string().trim().max(2e3).nullable().optional(),
+  steps: z27.array(workflowStepSchema).min(1).max(10).optional(),
+  maxSteps: z27.number().int().positive().max(10).optional(),
+  timeoutMs: z27.number().int().positive().max(12e4).optional(),
+  expectedUpdatedAt: expectedUpdatedAtSchema2
+});
+var executeAiWorkflowSchema = z27.object({
+  /** Keyed by step order — each step's tool input, supplied by the caller (Phase 12 has no autonomous planning, see AIWorkflow's schema.prisma doc comment). */
+  stepInputs: z27.record(z27.string(), z27.record(z27.unknown())).default({})
+});
+var executeAiToolSchema = z27.object({
+  toolCode: z27.string().trim().min(1).max(100),
+  input: z27.record(z27.unknown()).default({})
+});
+var EXECUTION_SORT_FIELDS = ["createdAt", "startedAt", "status"];
+var listAiExecutionsQuerySchema = z27.object({
+  ...paginationQuerySchema(EXECUTION_SORT_FIELDS, "createdAt", "desc"),
+  kind: z27.enum(["TOOL_CALL", "WORKFLOW"]).optional(),
+  status: z27.enum(["PENDING", "RUNNING", "AWAITING_APPROVAL", "COMPLETED", "FAILED", "CANCELLED"]).optional()
+});
+var usageSummaryQuerySchema = z27.object({
+  dateFrom: z27.coerce.date().optional(),
+  dateTo: z27.coerce.date().optional()
+});
+var APPROVAL_SORT_FIELDS = ["createdAt", "expiresAt", "status"];
+var listAiApprovalsQuerySchema = z27.object({
+  ...paginationQuerySchema(APPROVAL_SORT_FIELDS, "createdAt", "desc"),
+  status: z27.enum(["PENDING", "APPROVED", "REJECTED", "EXPIRED"]).optional()
+});
+var decideAiApprovalSchema = z27.object({
+  decision: z27.enum(["APPROVE", "REJECT"]),
+  rejectionReason: z27.string().trim().max(2e3).optional()
+});
+
+// server/routes/v1/aiProviderRoutes.ts
+var router30 = Router30();
+router30.use(authenticateToken);
+function requestMeta21(req) {
+  return { ip: req.ip, userAgent: req.headers["user-agent"], requestId: req.requestId };
+}
+router30.get(
+  "/",
+  requirePermission("ai.providers.read"),
+  asyncHandler(async (_req, res) => {
+    const providers = await aiProviderService.listProviders();
+    sendSuccess(res, { providers });
+  })
+);
+router30.post(
+  "/",
+  requirePermission("ai.providers.manage"),
+  asyncHandler(async (req, res) => {
+    const input = createAiProviderSchema.parse(req.body);
+    const provider = await aiProviderService.createProvider(req.user, input, requestMeta21(req));
+    sendSuccess(res, { provider }, 201);
+  })
+);
+router30.patch(
+  "/:id",
+  requirePermission("ai.providers.manage"),
+  asyncHandler(async (req, res) => {
+    const input = updateAiProviderSchema.parse(req.body);
+    const provider = await aiProviderService.updateProvider(req.user, req.params.id, input, requestMeta21(req));
+    sendSuccess(res, { provider });
+  })
+);
+router30.get(
+  "/models",
+  requirePermission("ai.models.read"),
+  asyncHandler(async (req, res) => {
+    const providerId = typeof req.query.providerId === "string" ? req.query.providerId : void 0;
+    const models = await aiProviderService.listModels(providerId);
+    sendSuccess(res, { models });
+  })
+);
+router30.post(
+  "/models",
+  requirePermission("ai.models.manage"),
+  asyncHandler(async (req, res) => {
+    const input = createAiModelSchema.parse(req.body);
+    const model = await aiProviderService.createModel(req.user, input, requestMeta21(req));
+    sendSuccess(res, { model }, 201);
+  })
+);
+router30.patch(
+  "/models/:id",
+  requirePermission("ai.models.manage"),
+  asyncHandler(async (req, res) => {
+    const input = updateAiModelSchema.parse(req.body);
+    const model = await aiProviderService.updateModel(req.user, req.params.id, input, requestMeta21(req));
+    sendSuccess(res, { model });
+  })
+);
+var aiProviderRoutes_default = router30;
+
+// server/routes/v1/aiToolRoutes.ts
+import { Router as Router31 } from "express";
+
+// server/repositories/aiToolRepository.ts
+var aiToolRepository = {
+  async listTools() {
+    return prisma.aITool.findMany({ orderBy: { code: "asc" } });
+  },
+  async getToolByCode(code) {
+    return prisma.aITool.findUnique({ where: { code } });
+  },
+  async listOrgSettings(organizationId) {
+    return prisma.aIOrgToolSetting.findMany({ where: { organizationId } });
+  },
+  async getOrgSetting(organizationId, toolCode) {
+    return prisma.aIOrgToolSetting.findUnique({ where: { organizationId_toolCode: { organizationId, toolCode } } });
+  },
+  async upsertOrgSetting(organizationId, toolCode, input) {
+    return prisma.aIOrgToolSetting.upsert({
+      where: { organizationId_toolCode: { organizationId, toolCode } },
+      update: input,
+      create: {
+        organizationId,
+        toolCode,
+        enabled: input.enabled ?? true,
+        requireApprovalOverride: input.requireApprovalOverride ?? null
+      }
+    });
+  }
+};
+
+// server/services/aiToolService.ts
+var aiToolService = {
+  async listToolsForOrg(organizationId) {
+    const [tools, settings] = await Promise.all([aiToolRepository.listTools(), aiToolRepository.listOrgSettings(organizationId)]);
+    const settingByCode = new Map(settings.map((s) => [s.toolCode, s]));
+    return tools.map((tool2) => ({
+      ...tool2,
+      orgEnabled: settingByCode.get(tool2.code)?.enabled ?? true,
+      requireApprovalOverride: settingByCode.get(tool2.code)?.requireApprovalOverride ?? null
+    }));
+  },
+  async updateOrgSetting(caller, toolCode, input, meta = {}) {
+    const tool2 = await aiToolRepository.getToolByCode(toolCode);
+    if (!tool2) throw new NotFoundError(`AI tool "${toolCode}" not found.`);
+    const setting = await aiToolRepository.upsertOrgSetting(caller.organizationId, toolCode, input);
+    await auditLogRepository.record({
+      organizationId: caller.organizationId,
+      actorUserId: caller.id,
+      actorType: "USER",
+      action: "AI_ORG_TOOL_SETTING_UPDATED",
+      resourceType: "ai_tool",
+      resourceId: toolCode,
+      afterData: { enabled: setting.enabled, requireApprovalOverride: setting.requireApprovalOverride },
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent
+    });
+    return setting;
+  }
+};
+
+// server/routes/v1/aiToolRoutes.ts
+var router31 = Router31();
+router31.use(authenticateToken);
+function requestMeta22(req) {
+  return { ip: req.ip, userAgent: req.headers["user-agent"], requestId: req.requestId };
+}
+router31.get(
+  "/",
+  requirePermission("ai.tools.read"),
+  asyncHandler(async (req, res) => {
+    const tools = await aiToolService.listToolsForOrg(req.user.organizationId);
+    sendSuccess(res, { tools });
+  })
+);
+router31.patch(
+  "/:code/settings",
+  requirePermission("ai.tools.manage"),
+  asyncHandler(async (req, res) => {
+    const input = updateAiOrgToolSettingSchema.parse(req.body);
+    const setting = await aiToolService.updateOrgSetting(req.user, req.params.code, input, requestMeta22(req));
+    sendSuccess(res, { setting });
+  })
+);
+var aiToolRoutes_default = router31;
+
+// server/routes/v1/aiPromptRoutes.ts
+import { Router as Router32 } from "express";
+
+// server/repositories/aiPromptRepository.ts
+var aiPromptRepository = {
+  async list(organizationId, filters, page, limit, sort, order) {
+    const where = {
+      organizationId,
+      ...filters.status ? { status: filters.status } : {},
+      ...filters.search ? { name: { contains: filters.search, mode: "insensitive" } } : {}
+    };
+    const [rows, total] = await Promise.all([
+      prisma.aIPromptTemplate.findMany({
+        where,
+        include: { currentVersion: true },
+        orderBy: { [sort]: order },
+        skip: (page - 1) * limit,
+        take: limit
+      }),
+      prisma.aIPromptTemplate.count({ where })
+    ]);
+    return { rows, total };
+  },
+  async findByIdInOrg(id, organizationId) {
+    return prisma.aIPromptTemplate.findFirst({
+      where: { id, organizationId },
+      include: { currentVersion: true, versions: { orderBy: { version: "desc" } } }
+    });
+  },
+  async findByKeyInOrg(key, organizationId) {
+    return prisma.aIPromptTemplate.findUnique({ where: { organizationId_key: { organizationId, key } } });
+  },
+  async create(organizationId, createdById, input) {
+    return prisma.$transaction(async (tx) => {
+      const template = await tx.aIPromptTemplate.create({
+        data: {
+          organizationId,
+          key: input.key,
+          name: input.name,
+          purpose: input.purpose,
+          status: "DRAFT",
+          createdById,
+          updatedById: createdById
+        }
+      });
+      const version = await tx.aIPromptVersion.create({
+        data: {
+          templateId: template.id,
+          version: 1,
+          systemInstructions: input.systemInstructions,
+          userTemplate: input.userTemplate,
+          variablesSchema: input.variablesSchema,
+          createdById
+        }
+      });
+      return tx.aIPromptTemplate.update({
+        where: { id: template.id },
+        data: { currentVersionId: version.id },
+        include: { currentVersion: true }
+      });
+    });
+  },
+  async createVersion(templateId, createdById, input) {
+    const latest = await prisma.aIPromptVersion.findFirst({ where: { templateId }, orderBy: { version: "desc" } });
+    const nextVersion = (latest?.version ?? 0) + 1;
+    return prisma.aIPromptVersion.create({
+      data: {
+        templateId,
+        version: nextVersion,
+        systemInstructions: input.systemInstructions,
+        userTemplate: input.userTemplate,
+        variablesSchema: input.variablesSchema,
+        createdById
+      }
+    });
+  },
+  async update(id, updatedById, input) {
+    return prisma.aIPromptTemplate.update({
+      where: { id },
+      data: { ...input, updatedById },
+      include: { currentVersion: true }
+    });
+  },
+  async setCurrentVersion(id, versionId, updatedById) {
+    return prisma.aIPromptTemplate.update({
+      where: { id },
+      data: { currentVersionId: versionId, updatedById },
+      include: { currentVersion: true }
+    });
+  },
+  async findVersionInTemplate(templateId, versionId) {
+    return prisma.aIPromptVersion.findFirst({ where: { id: versionId, templateId } });
+  }
+};
+
+// server/services/aiPromptService.ts
+async function loadTemplateOrThrow(id, organizationId) {
+  const template = await aiPromptRepository.findByIdInOrg(id, organizationId);
+  if (!template) throw new NotFoundError("Prompt template not found.");
+  return template;
+}
+var aiPromptService = {
+  async listTemplates(organizationId, filters, page, limit, sort, order) {
+    return aiPromptRepository.list(organizationId, filters, page, limit, sort, order);
+  },
+  async getTemplate(organizationId, id) {
+    return loadTemplateOrThrow(id, organizationId);
+  },
+  async createTemplate(caller, input, meta = {}) {
+    const existing = await aiPromptRepository.findByKeyInOrg(input.key, caller.organizationId);
+    if (existing) throw new ConflictError(`A prompt template with key "${input.key}" already exists in this organization.`);
+    const template = await aiPromptRepository.create(caller.organizationId, caller.id, input);
+    await auditLogRepository.record({
+      organizationId: caller.organizationId,
+      actorUserId: caller.id,
+      actorType: "USER",
+      action: "AI_PROMPT_TEMPLATE_CREATED",
+      resourceType: "ai_prompt_template",
+      resourceId: template.id,
+      afterData: { key: template.key, name: template.name },
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent
+    });
+    return template;
+  },
+  async createVersion(caller, templateId, input, meta = {}) {
+    await loadTemplateOrThrow(templateId, caller.organizationId);
+    const version = await aiPromptRepository.createVersion(templateId, caller.id, input);
+    await auditLogRepository.record({
+      organizationId: caller.organizationId,
+      actorUserId: caller.id,
+      actorType: "USER",
+      action: "AI_PROMPT_VERSION_CREATED",
+      resourceType: "ai_prompt_version",
+      resourceId: version.id,
+      afterData: { templateId, version: version.version },
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent
+    });
+    return version;
+  },
+  async updateTemplate(caller, id, input, meta = {}) {
+    await loadTemplateOrThrow(id, caller.organizationId);
+    const template = await aiPromptRepository.update(id, caller.id, input);
+    await auditLogRepository.record({
+      organizationId: caller.organizationId,
+      actorUserId: caller.id,
+      actorType: "USER",
+      action: "AI_PROMPT_TEMPLATE_UPDATED",
+      resourceType: "ai_prompt_template",
+      resourceId: id,
+      afterData: input,
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent
+    });
+    return template;
+  },
+  async publishVersion(caller, templateId, versionId, meta = {}) {
+    await loadTemplateOrThrow(templateId, caller.organizationId);
+    const version = await aiPromptRepository.findVersionInTemplate(templateId, versionId);
+    if (!version) throw new ValidationError("versionId does not refer to a version of this prompt template.");
+    const template = await aiPromptRepository.setCurrentVersion(templateId, versionId, caller.id);
+    if (template.status === "DRAFT") {
+      await aiPromptRepository.update(templateId, caller.id, { status: "ACTIVE" });
+    }
+    await auditLogRepository.record({
+      organizationId: caller.organizationId,
+      actorUserId: caller.id,
+      actorType: "USER",
+      action: "AI_PROMPT_VERSION_PUBLISHED",
+      resourceType: "ai_prompt_template",
+      resourceId: templateId,
+      afterData: { versionId },
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent
+    });
+    return aiPromptRepository.findByIdInOrg(templateId, caller.organizationId);
+  },
+  async deleteTemplate(caller, id, meta = {}) {
+    await loadTemplateOrThrow(id, caller.organizationId);
+    await aiPromptRepository.update(id, caller.id, { status: "ARCHIVED" });
+    await auditLogRepository.record({
+      organizationId: caller.organizationId,
+      actorUserId: caller.id,
+      actorType: "USER",
+      action: "AI_PROMPT_TEMPLATE_ARCHIVED",
+      resourceType: "ai_prompt_template",
+      resourceId: id,
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent
+    });
+  }
+};
+
+// server/routes/v1/aiPromptRoutes.ts
+var router32 = Router32();
+router32.use(authenticateToken);
+function requestMeta23(req) {
+  return { ip: req.ip, userAgent: req.headers["user-agent"], requestId: req.requestId };
+}
+router32.get(
+  "/",
+  requirePermission("ai.prompts.read"),
+  asyncHandler(async (req, res) => {
+    const query = listAiPromptsQuerySchema.parse(req.query);
+    const { rows, total } = await aiPromptService.listTemplates(
+      req.user.organizationId,
+      { search: query.search },
+      query.page,
+      query.limit,
+      query.sort,
+      query.order
+    );
+    sendSuccess(res, { promptTemplates: rows }, 200, { page: query.page, limit: query.limit, total });
+  })
+);
+router32.get(
+  "/:id",
+  requirePermission("ai.prompts.read"),
+  asyncHandler(async (req, res) => {
+    const promptTemplate = await aiPromptService.getTemplate(req.user.organizationId, req.params.id);
+    sendSuccess(res, { promptTemplate });
+  })
+);
+router32.post(
+  "/",
+  requirePermission("ai.prompts.create"),
+  asyncHandler(async (req, res) => {
+    const input = createAiPromptTemplateSchema.parse(req.body);
+    const promptTemplate = await aiPromptService.createTemplate(req.user, input, requestMeta23(req));
+    sendSuccess(res, { promptTemplate }, 201);
+  })
+);
+router32.patch(
+  "/:id",
+  requirePermission("ai.prompts.update"),
+  asyncHandler(async (req, res) => {
+    const input = updateAiPromptTemplateSchema.parse(req.body);
+    const promptTemplate = await aiPromptService.updateTemplate(req.user, req.params.id, input, requestMeta23(req));
+    sendSuccess(res, { promptTemplate });
+  })
+);
+router32.post(
+  "/:id/versions",
+  requirePermission("ai.prompts.update"),
+  asyncHandler(async (req, res) => {
+    const input = createAiPromptVersionSchema.parse(req.body);
+    const version = await aiPromptService.createVersion(req.user, req.params.id, input, requestMeta23(req));
+    sendSuccess(res, { version }, 201);
+  })
+);
+router32.post(
+  "/:id/publish",
+  requirePermission("ai.prompts.publish"),
+  asyncHandler(async (req, res) => {
+    const input = publishAiPromptVersionSchema.parse(req.body);
+    const promptTemplate = await aiPromptService.publishVersion(req.user, req.params.id, input.versionId, requestMeta23(req));
+    sendSuccess(res, { promptTemplate });
+  })
+);
+router32.delete(
+  "/:id",
+  requirePermission("ai.prompts.delete"),
+  asyncHandler(async (req, res) => {
+    await aiPromptService.deleteTemplate(req.user, req.params.id, requestMeta23(req));
+    sendSuccess(res, { archived: true });
+  })
+);
+var aiPromptRoutes_default = router32;
+
+// server/routes/v1/aiWorkflowRoutes.ts
+import { Router as Router33 } from "express";
+
+// server/repositories/aiWorkflowRepository.ts
+var aiWorkflowRepository = {
+  async list(organizationId, filters, page, limit, sort, order) {
+    const where = {
+      organizationId,
+      ...filters.status ? { status: filters.status } : {},
+      ...filters.search ? { name: { contains: filters.search, mode: "insensitive" } } : {}
+    };
+    const [rows, total] = await Promise.all([
+      prisma.aIWorkflow.findMany({ where, orderBy: { [sort]: order }, skip: (page - 1) * limit, take: limit }),
+      prisma.aIWorkflow.count({ where })
+    ]);
+    return { rows, total };
+  },
+  async findByIdInOrg(id, organizationId) {
+    return prisma.aIWorkflow.findFirst({ where: { id, organizationId } });
+  },
+  async findByKeyInOrg(key, organizationId) {
+    return prisma.aIWorkflow.findUnique({ where: { organizationId_key: { organizationId, key } } });
+  },
+  async create(organizationId, createdById, input) {
+    return prisma.aIWorkflow.create({
+      data: {
+        organizationId,
+        key: input.key,
+        name: input.name,
+        description: input.description,
+        status: "DRAFT",
+        version: 1,
+        steps: input.steps,
+        maxSteps: input.maxSteps ?? 10,
+        timeoutMs: input.timeoutMs ?? 3e4,
+        createdById,
+        updatedById: createdById
+      }
+    });
+  },
+  async update(id, updatedById, input) {
+    return prisma.aIWorkflow.update({
+      where: { id },
+      data: { ...input, updatedById, ...input.steps ? { version: { increment: 1 } } : {} }
+    });
+  },
+  async setStatus(id, status, updatedById) {
+    return prisma.aIWorkflow.update({ where: { id }, data: { status, updatedById } });
+  }
+};
+
+// server/repositories/aiExecutionRepository.ts
+var aiExecutionRepository = {
+  async list(organizationId, filters, page, limit, sort, order) {
+    const where = { organizationId, ...filters };
+    const [rows, total] = await Promise.all([
+      prisma.aIExecution.findMany({
+        where,
+        include: { toolExecutions: true, workflow: { select: { key: true, name: true } } },
+        orderBy: { [sort]: order },
+        skip: (page - 1) * limit,
+        take: limit
+      }),
+      prisma.aIExecution.count({ where })
+    ]);
+    return { rows, total };
+  },
+  async findByIdInOrg(id, organizationId) {
+    return prisma.aIExecution.findFirst({
+      where: { id, organizationId },
+      include: { toolExecutions: true, usageRecords: true, approvals: true, workflow: { select: { key: true, name: true } } }
+    });
+  },
+  async create(data) {
+    return prisma.aIExecution.create({
+      data: {
+        organizationId: data.organizationId,
+        userId: data.userId,
+        kind: data.kind,
+        workflowId: data.workflowId,
+        toolCode: data.toolCode,
+        requestId: data.requestId,
+        input: data.input,
+        status: "RUNNING"
+      }
+    });
+  },
+  async complete(id, status, output, errorMessage) {
+    const startedAt = (await prisma.aIExecution.findUnique({ where: { id }, select: { startedAt: true } }))?.startedAt ?? /* @__PURE__ */ new Date();
+    const completedAt = /* @__PURE__ */ new Date();
+    return prisma.aIExecution.update({
+      where: { id },
+      data: {
+        status,
+        output,
+        errorMessage,
+        completedAt,
+        durationMs: completedAt.getTime() - startedAt.getTime()
+      }
+    });
+  }
+};
+
+// server/ai/governance.ts
+import crypto from "crypto";
+import { Prisma as Prisma5 } from "@prisma/client";
+
+// server/ai/toolRegistry.ts
+import { z as z28 } from "zod";
+function tool(def) {
+  return def;
+}
+var listLeadsInput = z28.object({
+  search: z28.string().trim().max(200).optional(),
+  status: z28.enum(["NEW", "CONTACTED", "QUALIFIED", "CONVERTED", "LOST"]).optional(),
+  page: z28.number().int().positive().default(1),
+  limit: z28.number().int().positive().max(50).default(20)
+});
+var createLeadInput = z28.object({
+  companyName: z28.string().trim().min(1).max(200),
+  contactName: z28.string().trim().max(200).optional(),
+  email: z28.string().trim().email().max(255).optional(),
+  phone: z28.string().trim().max(50).optional(),
+  source: z28.string().trim().max(100).optional(),
+  notes: z28.string().trim().max(5e3).optional()
+});
+var convertLeadInput = z28.object({
+  leadId: z28.string().uuid(),
+  clientCode: z28.string().trim().min(1).max(50).regex(/^[A-Za-z0-9._-]+$/),
+  name: z28.string().trim().max(200).optional(),
+  createContact: z28.boolean().default(true)
+});
+var listClientsInput = z28.object({
+  search: z28.string().trim().max(200).optional(),
+  status: z28.enum(["ACTIVE", "INACTIVE", "ARCHIVED"]).optional(),
+  page: z28.number().int().positive().default(1),
+  limit: z28.number().int().positive().max(50).default(20)
+});
+var createClientInput = z28.object({
+  clientCode: z28.string().trim().min(1).max(50).regex(/^[A-Za-z0-9._-]+$/),
+  name: z28.string().trim().min(1).max(200),
+  email: z28.string().trim().email().max(255).optional(),
+  phone: z28.string().trim().max(50).optional(),
+  notes: z28.string().trim().max(5e3).optional()
+});
+var listPostsInput = z28.object({
+  search: z28.string().trim().max(200).optional(),
+  status: z28.enum(["DRAFT", "IN_REVIEW", "SCHEDULED", "PUBLISHED", "ARCHIVED"]).optional(),
+  page: z28.number().int().positive().default(1),
+  limit: z28.number().int().positive().max(50).default(20)
+});
+var createDraftPostInput = z28.object({
+  title: z28.string().trim().min(1).max(200),
+  body: z28.string().trim().max(5e5).default(""),
+  categoryId: z28.string().trim().uuid().optional()
+});
+var listProductsInput = z28.object({
+  search: z28.string().trim().max(200).optional(),
+  type: z28.enum(["PRODUCT", "SERVICE"]).optional(),
+  status: z28.enum(["DRAFT", "ACTIVE", "INACTIVE", "ARCHIVED"]).optional(),
+  page: z28.number().int().positive().default(1),
+  limit: z28.number().int().positive().max(50).default(20)
+});
+var issueInvoiceInput = z28.object({
+  invoiceId: z28.string().uuid()
+});
+var activateContractInput = z28.object({
+  contractId: z28.string().uuid()
+});
+var AI_TOOL_REGISTRY = Object.freeze({
+  "leads.list": tool({
+    code: "leads.list",
+    name: "List leads",
+    description: "Search and list CRM leads for the caller's organization.",
+    requiredPermission: "leads.read",
+    riskLevel: "READ_ONLY",
+    isMutating: false,
+    requiresApproval: false,
+    inputSchema: listLeadsInput,
+    handler: async (caller, input) => {
+      const { page, limit, ...filters } = input;
+      return leadService.listLeads(caller.organizationId, filters, page, limit, "createdAt", "desc");
+    }
+  }),
+  "leads.create": tool({
+    code: "leads.create",
+    name: "Create lead",
+    description: "Create a new CRM lead in the caller's organization.",
+    requiredPermission: "leads.create",
+    riskLevel: "LOW",
+    isMutating: true,
+    requiresApproval: false,
+    inputSchema: createLeadInput,
+    handler: async (caller, input, meta) => leadService.createLead(caller, input, meta)
+  }),
+  "leads.convert": tool({
+    code: "leads.convert",
+    name: "Convert lead to client",
+    description: "Convert an existing lead into a client record.",
+    requiredPermission: "leads.convert",
+    riskLevel: "MEDIUM",
+    isMutating: true,
+    requiresApproval: false,
+    inputSchema: convertLeadInput,
+    handler: async (caller, input, meta) => {
+      const { leadId, ...rest } = input;
+      return leadService.convertLead(caller, leadId, rest, meta);
+    }
+  }),
+  "clients.list": tool({
+    code: "clients.list",
+    name: "List clients",
+    description: "Search and list clients for the caller's organization.",
+    requiredPermission: "clients.read",
+    riskLevel: "READ_ONLY",
+    isMutating: false,
+    requiresApproval: false,
+    inputSchema: listClientsInput,
+    handler: async (caller, input) => {
+      const { page, limit, ...filters } = input;
+      return clientService.listClients(caller.organizationId, filters, page, limit, "createdAt", "desc");
+    }
+  }),
+  "clients.create": tool({
+    code: "clients.create",
+    name: "Create client",
+    description: "Create a new client record in the caller's organization.",
+    requiredPermission: "clients.create",
+    riskLevel: "LOW",
+    isMutating: true,
+    requiresApproval: false,
+    inputSchema: createClientInput,
+    handler: async (caller, input, meta) => clientService.createClient(caller, input, meta)
+  }),
+  "content.list_posts": tool({
+    code: "content.list_posts",
+    name: "List content posts",
+    description: "Search and list CMS posts for the caller's organization.",
+    requiredPermission: "content.read",
+    riskLevel: "READ_ONLY",
+    isMutating: false,
+    requiresApproval: false,
+    inputSchema: listPostsInput,
+    handler: async (caller, input) => {
+      const { page, limit, ...filters } = input;
+      return postService.listPosts(caller.organizationId, filters, page, limit, "createdAt", "desc");
+    }
+  }),
+  "content.create_draft": tool({
+    code: "content.create_draft",
+    name: "Create draft post",
+    description: "Create a new CMS post in DRAFT status (never publishes \u2014 a human must submit/publish it separately).",
+    requiredPermission: "content.create",
+    riskLevel: "MEDIUM",
+    isMutating: true,
+    requiresApproval: false,
+    inputSchema: createDraftPostInput,
+    handler: async (caller, input, meta) => postService.createPost(caller, input, meta)
+  }),
+  "products.list": tool({
+    code: "products.list",
+    name: "List products",
+    description: "Search and list the product/service catalog.",
+    requiredPermission: "products.read",
+    riskLevel: "READ_ONLY",
+    isMutating: false,
+    requiresApproval: false,
+    inputSchema: listProductsInput,
+    handler: async (_caller, input) => {
+      const { page, limit, ...filters } = input;
+      return productService.listProducts(filters, page, limit, "displayOrder", "asc");
+    }
+  }),
+  "invoices.issue": tool({
+    code: "invoices.issue",
+    name: "Issue invoice",
+    description: "Issue a draft invoice, making it payable. Moves money \u2014 always requires human approval.",
+    requiredPermission: "invoices.issue",
+    riskLevel: "HIGH",
+    isMutating: true,
+    requiresApproval: true,
+    inputSchema: issueInvoiceInput,
+    handler: async (caller, input, meta) => invoiceService.issueInvoice(caller, input.invoiceId, {}, meta)
+  }),
+  "contracts.activate": tool({
+    code: "contracts.activate",
+    name: "Activate contract",
+    description: "Activate a contract, making it legally binding and billable. Always requires human approval.",
+    requiredPermission: "contracts.activate",
+    riskLevel: "HIGH",
+    isMutating: true,
+    requiresApproval: true,
+    inputSchema: activateContractInput,
+    handler: async (caller, input, meta) => contractService.activateContract(caller, input.contractId, meta)
+  })
+});
+function isRegisteredToolCode(code) {
+  return Object.prototype.hasOwnProperty.call(AI_TOOL_REGISTRY, code);
+}
+
+// server/ai/governance.ts
+var SUPER_ADMIN_ROLE_KEY2 = "SUPER_ADMIN";
+function hasPermission(caller, permission) {
+  return caller.role.key === SUPER_ADMIN_ROLE_KEY2 || caller.role.permissions.includes(permission);
+}
+function payloadHash(input) {
+  return crypto.createHash("sha256").update(JSON.stringify(input ?? {})).digest("hex");
+}
+function resolveRequiresApproval(definition, orgOverride) {
+  if (definition.riskLevel === "HIGH") return true;
+  if (definition.requiresApproval) return true;
+  return orgOverride === true;
+}
+async function assertToolEnabledForOrg(organizationId, toolCode) {
+  const setting = await prisma.aIOrgToolSetting.findUnique({
+    where: { organizationId_toolCode: { organizationId, toolCode } }
+  });
+  if (setting && !setting.enabled) {
+    throw new AuthorizationError(`AI tool "${toolCode}" has been disabled for this organization.`);
+  }
+}
+async function executeGovernedTool(params) {
+  const { caller, toolCode, input, executionId, stepOrder, meta = {} } = params;
+  if (!isRegisteredToolCode(toolCode)) {
+    throw new NotFoundError(`AI tool "${toolCode}" is not registered.`);
+  }
+  const definition = AI_TOOL_REGISTRY[toolCode];
+  const toolRow = await prisma.aITool.findUnique({ where: { code: toolCode } });
+  if (!toolRow || toolRow.status !== "ENABLED") {
+    throw new NotFoundError(`AI tool "${toolCode}" is not available.`);
+  }
+  if (!hasPermission(caller, definition.requiredPermission)) {
+    throw new AuthorizationError(`Permission denied for AI tool "${toolCode}". Required privilege: "${definition.requiredPermission}"`);
+  }
+  await assertToolEnabledForOrg(caller.organizationId, toolCode);
+  const parseResult = definition.inputSchema.safeParse(input);
+  if (!parseResult.success) {
+    throw new ValidationError(`Invalid input for AI tool "${toolCode}": ${parseResult.error.message}`);
+  }
+  const validatedInput = parseResult.data;
+  const orgSetting = await prisma.aIOrgToolSetting.findUnique({
+    where: { organizationId_toolCode: { organizationId: caller.organizationId, toolCode } }
+  });
+  const requiresApproval = resolveRequiresApproval(definition, orgSetting?.requireApprovalOverride);
+  const startedAt = /* @__PURE__ */ new Date();
+  if (requiresApproval) {
+    const toolExecution2 = await prisma.aIToolExecution.create({
+      data: {
+        executionId,
+        toolCode,
+        stepOrder,
+        status: "AWAITING_APPROVAL",
+        input: validatedInput,
+        riskLevel: definition.riskLevel,
+        requiresApproval: true,
+        startedAt
+      }
+    });
+    const approval = await prisma.aIApprovalRequest.create({
+      data: {
+        organizationId: caller.organizationId,
+        executionId,
+        toolExecutionId: toolExecution2.id,
+        requestedById: caller.id,
+        action: toolCode,
+        resourceType: definition.riskLevel === "HIGH" ? toolCode.split(".")[0] : void 0,
+        payload: validatedInput,
+        payloadHash: payloadHash(validatedInput),
+        status: "PENDING",
+        expiresAt: new Date(Date.now() + 72 * 60 * 60 * 1e3)
+      }
+    });
+    await auditLogRepository.record({
+      organizationId: caller.organizationId,
+      actorUserId: caller.id,
+      actorType: "USER",
+      action: "AI_TOOL_APPROVAL_REQUESTED",
+      resourceType: "ai_tool",
+      resourceId: toolCode,
+      afterData: { approvalRequestId: approval.id, toolExecutionId: toolExecution2.id },
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent
+    });
+    return { status: "AWAITING_APPROVAL", toolExecutionId: toolExecution2.id, approvalRequestId: approval.id };
+  }
+  const toolExecution = await prisma.aIToolExecution.create({
+    data: {
+      executionId,
+      toolCode,
+      stepOrder,
+      status: "RUNNING",
+      input: validatedInput,
+      riskLevel: definition.riskLevel,
+      requiresApproval: false,
+      startedAt
+    }
+  });
+  return runToolHandler(definition, caller, validatedInput, meta, toolExecution.id);
+}
+async function runToolHandler(definition, caller, validatedInput, meta, toolExecutionId) {
+  const startedAt = /* @__PURE__ */ new Date();
+  try {
+    const output = await definition.handler(caller, validatedInput, meta);
+    const completedAt = /* @__PURE__ */ new Date();
+    await prisma.aIToolExecution.update({
+      where: { id: toolExecutionId },
+      data: {
+        status: "COMPLETED",
+        output: output === void 0 ? Prisma5.JsonNull : output,
+        completedAt,
+        durationMs: completedAt.getTime() - startedAt.getTime()
+      }
+    });
+    await auditLogRepository.record({
+      organizationId: caller.organizationId,
+      actorUserId: caller.id,
+      actorType: "AI_COWORKER",
+      actorName: `ai-tool:${definition.code}`,
+      action: "AI_TOOL_EXECUTED",
+      resourceType: "ai_tool",
+      resourceId: definition.code,
+      afterData: { toolExecutionId },
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent
+    });
+    return { status: "COMPLETED", output, toolExecutionId };
+  } catch (err) {
+    const completedAt = /* @__PURE__ */ new Date();
+    const errorMessage = err instanceof Error ? err.message : "AI tool execution failed.";
+    await prisma.aIToolExecution.update({
+      where: { id: toolExecutionId },
+      data: {
+        status: "FAILED",
+        errorMessage,
+        completedAt,
+        durationMs: completedAt.getTime() - startedAt.getTime()
+      }
+    });
+    await auditLogRepository.record({
+      organizationId: caller.organizationId,
+      actorUserId: caller.id,
+      actorType: "AI_COWORKER",
+      actorName: `ai-tool:${definition.code}`,
+      action: "AI_TOOL_EXECUTION_FAILED",
+      resourceType: "ai_tool",
+      resourceId: definition.code,
+      result: "FAILURE",
+      afterData: { toolExecutionId, error: errorMessage },
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent
+    });
+    return { status: "FAILED", error: errorMessage, toolExecutionId };
+  }
+}
+
+// server/services/aiWorkflowService.ts
+function assertStepsValid(steps, maxSteps) {
+  if (steps.length > maxSteps) {
+    throw new ValidationError(`This workflow defines ${steps.length} steps, exceeding its own maxSteps (${maxSteps}).`);
+  }
+  for (const step of steps) {
+    if (!isRegisteredToolCode(step.toolCode)) {
+      throw new ValidationError(`Workflow step references unknown AI tool "${step.toolCode}".`);
+    }
+  }
+}
+async function loadWorkflowOrThrow(id, organizationId) {
+  const workflow = await aiWorkflowRepository.findByIdInOrg(id, organizationId);
+  if (!workflow) throw new NotFoundError("AI workflow not found.");
+  return workflow;
+}
+var aiWorkflowService = {
+  async listWorkflows(organizationId, filters, page, limit, sort, order) {
+    return aiWorkflowRepository.list(organizationId, filters, page, limit, sort, order);
+  },
+  async getWorkflow(organizationId, id) {
+    return loadWorkflowOrThrow(id, organizationId);
+  },
+  async createWorkflow(caller, input, meta = {}) {
+    const existing = await aiWorkflowRepository.findByKeyInOrg(input.key, caller.organizationId);
+    if (existing) throw new ConflictError(`A workflow with key "${input.key}" already exists in this organization.`);
+    assertStepsValid(input.steps, input.maxSteps ?? 10);
+    const workflow = await aiWorkflowRepository.create(caller.organizationId, caller.id, input);
+    await auditLogRepository.record({
+      organizationId: caller.organizationId,
+      actorUserId: caller.id,
+      actorType: "USER",
+      action: "AI_WORKFLOW_CREATED",
+      resourceType: "ai_workflow",
+      resourceId: workflow.id,
+      afterData: { key: workflow.key, name: workflow.name },
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent
+    });
+    return workflow;
+  },
+  async updateWorkflow(caller, id, input, meta = {}) {
+    const existing = await loadWorkflowOrThrow(id, caller.organizationId);
+    if (input.expectedUpdatedAt && existing.updatedAt.getTime() !== input.expectedUpdatedAt.getTime()) {
+      throw new ConflictError("This workflow was modified by someone else since you loaded it.");
+    }
+    const { expectedUpdatedAt: _expectedUpdatedAt, ...patch } = input;
+    if (patch.steps) {
+      assertStepsValid(patch.steps, patch.maxSteps ?? existing.maxSteps);
+    }
+    const workflow = await aiWorkflowRepository.update(id, caller.id, patch);
+    await auditLogRepository.record({
+      organizationId: caller.organizationId,
+      actorUserId: caller.id,
+      actorType: "USER",
+      action: "AI_WORKFLOW_UPDATED",
+      resourceType: "ai_workflow",
+      resourceId: id,
+      afterData: patch,
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent
+    });
+    return workflow;
+  },
+  async publishWorkflow(caller, id, meta = {}) {
+    await loadWorkflowOrThrow(id, caller.organizationId);
+    const workflow = await aiWorkflowRepository.setStatus(id, "ACTIVE", caller.id);
+    await auditLogRepository.record({
+      organizationId: caller.organizationId,
+      actorUserId: caller.id,
+      actorType: "USER",
+      action: "AI_WORKFLOW_PUBLISHED",
+      resourceType: "ai_workflow",
+      resourceId: id,
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent
+    });
+    return workflow;
+  },
+  async archiveWorkflow(caller, id, meta = {}) {
+    await loadWorkflowOrThrow(id, caller.organizationId);
+    const workflow = await aiWorkflowRepository.setStatus(id, "ARCHIVED", caller.id);
+    await auditLogRepository.record({
+      organizationId: caller.organizationId,
+      actorUserId: caller.id,
+      actorType: "USER",
+      action: "AI_WORKFLOW_ARCHIVED",
+      resourceType: "ai_workflow",
+      resourceId: id,
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent
+    });
+    return workflow;
+  },
+  /**
+   * Runs a workflow's bounded steps in order through the governance
+   * dispatcher. Stops at the first step that fails or requires approval —
+   * there is no retry/resume in Phase 12 (that is Phase 13's async job
+   * territory); a workflow left AWAITING_APPROVAL is a terminal state here,
+   * re-run from scratch once the approval is resolved.
+   */
+  async executeWorkflow(caller, id, input, meta = {}) {
+    const workflow = await loadWorkflowOrThrow(id, caller.organizationId);
+    if (workflow.status !== "ACTIVE") {
+      throw new ValidationError("Only an ACTIVE workflow can be executed.");
+    }
+    const steps = workflow.steps.slice().sort((a, b) => a.order - b.order);
+    assertStepsValid(steps, workflow.maxSteps);
+    const execution = await aiExecutionRepository.create({
+      organizationId: caller.organizationId,
+      userId: caller.id,
+      kind: "WORKFLOW",
+      workflowId: workflow.id,
+      requestId: meta.requestId,
+      input: input.stepInputs
+    });
+    await auditLogRepository.record({
+      organizationId: caller.organizationId,
+      actorUserId: caller.id,
+      actorType: "USER",
+      action: "AI_WORKFLOW_EXECUTION_STARTED",
+      resourceType: "ai_execution",
+      resourceId: execution.id,
+      afterData: { workflowId: workflow.id, workflowKey: workflow.key },
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent
+    });
+    const stepResults = [];
+    const deadline = Date.now() + workflow.timeoutMs;
+    for (const step of steps) {
+      if (Date.now() > deadline) {
+        const completed = await aiExecutionRepository.complete(execution.id, "FAILED", stepResults, "Workflow exceeded its timeout.");
+        return completed;
+      }
+      const stepInput = input.stepInputs[String(step.order)] ?? {};
+      const result = await executeGovernedTool({
+        caller,
+        toolCode: step.toolCode,
+        input: stepInput,
+        executionId: execution.id,
+        stepOrder: step.order,
+        meta
+      });
+      stepResults.push({ order: step.order, toolCode: step.toolCode, ...result });
+      if (result.status === "AWAITING_APPROVAL") {
+        return aiExecutionRepository.complete(execution.id, "AWAITING_APPROVAL", stepResults);
+      }
+      if (result.status === "FAILED") {
+        return aiExecutionRepository.complete(execution.id, "FAILED", stepResults, result.error);
+      }
+    }
+    return aiExecutionRepository.complete(execution.id, "COMPLETED", stepResults);
+  }
+};
+
+// server/routes/v1/aiWorkflowRoutes.ts
+var router33 = Router33();
+router33.use(authenticateToken);
+function requestMeta24(req) {
+  return { ip: req.ip, userAgent: req.headers["user-agent"], requestId: req.requestId };
+}
+router33.get(
+  "/",
+  requirePermission("ai.workflows.read"),
+  asyncHandler(async (req, res) => {
+    const query = listAiWorkflowsQuerySchema.parse(req.query);
+    const { rows, total } = await aiWorkflowService.listWorkflows(
+      req.user.organizationId,
+      { search: query.search },
+      query.page,
+      query.limit,
+      query.sort,
+      query.order
+    );
+    sendSuccess(res, { workflows: rows }, 200, { page: query.page, limit: query.limit, total });
+  })
+);
+router33.get(
+  "/:id",
+  requirePermission("ai.workflows.read"),
+  asyncHandler(async (req, res) => {
+    const workflow = await aiWorkflowService.getWorkflow(req.user.organizationId, req.params.id);
+    sendSuccess(res, { workflow });
+  })
+);
+router33.post(
+  "/",
+  requirePermission("ai.workflows.create"),
+  asyncHandler(async (req, res) => {
+    const input = createAiWorkflowSchema.parse(req.body);
+    const workflow = await aiWorkflowService.createWorkflow(req.user, input, requestMeta24(req));
+    sendSuccess(res, { workflow }, 201);
+  })
+);
+router33.patch(
+  "/:id",
+  requirePermission("ai.workflows.update"),
+  asyncHandler(async (req, res) => {
+    const input = updateAiWorkflowSchema.parse(req.body);
+    const workflow = await aiWorkflowService.updateWorkflow(req.user, req.params.id, input, requestMeta24(req));
+    sendSuccess(res, { workflow });
+  })
+);
+router33.post(
+  "/:id/publish",
+  requirePermission("ai.workflows.publish"),
+  asyncHandler(async (req, res) => {
+    const workflow = await aiWorkflowService.publishWorkflow(req.user, req.params.id, requestMeta24(req));
+    sendSuccess(res, { workflow });
+  })
+);
+router33.delete(
+  "/:id",
+  requirePermission("ai.workflows.delete"),
+  asyncHandler(async (req, res) => {
+    const workflow = await aiWorkflowService.archiveWorkflow(req.user, req.params.id, requestMeta24(req));
+    sendSuccess(res, { workflow });
+  })
+);
+router33.post(
+  "/:id/execute",
+  requirePermission("ai.workflows.execute"),
+  aiExecutionLimiter,
+  asyncHandler(async (req, res) => {
+    const input = executeAiWorkflowSchema.parse(req.body);
+    const execution = await aiWorkflowService.executeWorkflow(req.user, req.params.id, input, requestMeta24(req));
+    sendSuccess(res, { execution }, 202);
+  })
+);
+var aiWorkflowRoutes_default = router33;
+
+// server/routes/v1/aiExecutionRoutes.ts
+import { Router as Router34 } from "express";
+
+// server/services/aiExecutionService.ts
+var aiExecutionService = {
+  async listExecutions(organizationId, filters, page, limit, sort, order) {
+    return aiExecutionRepository.list(organizationId, filters, page, limit, sort, order);
+  },
+  async getExecution(organizationId, id) {
+    const execution = await aiExecutionRepository.findByIdInOrg(id, organizationId);
+    if (!execution) throw new NotFoundError("AI execution not found.");
+    return execution;
+  },
+  /** A single governed tool call, outside of any workflow — e.g. a human coworker's assistant panel invoking one action directly. */
+  async executeTool(caller, input, meta = {}) {
+    const execution = await aiExecutionRepository.create({
+      organizationId: caller.organizationId,
+      userId: caller.id,
+      kind: "TOOL_CALL",
+      toolCode: input.toolCode,
+      requestId: meta.requestId,
+      input: input.input
+    });
+    const result = await executeGovernedTool({
+      caller,
+      toolCode: input.toolCode,
+      input: input.input,
+      executionId: execution.id,
+      meta
+    });
+    if (result.status === "AWAITING_APPROVAL") {
+      return aiExecutionRepository.complete(execution.id, "AWAITING_APPROVAL", result);
+    }
+    if (result.status === "FAILED") {
+      return aiExecutionRepository.complete(execution.id, "FAILED", result, result.error);
+    }
+    return aiExecutionRepository.complete(execution.id, "COMPLETED", result);
+  }
+};
+
+// server/routes/v1/aiExecutionRoutes.ts
+var router34 = Router34();
+router34.use(authenticateToken);
+function requestMeta25(req) {
+  return { ip: req.ip, userAgent: req.headers["user-agent"], requestId: req.requestId };
+}
+router34.get(
+  "/",
+  requirePermission("ai.executions.read"),
+  asyncHandler(async (req, res) => {
+    const query = listAiExecutionsQuerySchema.parse(req.query);
+    const { rows, total } = await aiExecutionService.listExecutions(
+      req.user.organizationId,
+      { kind: query.kind, status: query.status },
+      query.page,
+      query.limit,
+      query.sort,
+      query.order
+    );
+    sendSuccess(res, { executions: rows }, 200, { page: query.page, limit: query.limit, total });
+  })
+);
+router34.get(
+  "/:id",
+  requirePermission("ai.executions.read"),
+  asyncHandler(async (req, res) => {
+    const execution = await aiExecutionService.getExecution(req.user.organizationId, req.params.id);
+    sendSuccess(res, { execution });
+  })
+);
+router34.post(
+  "/tool-call",
+  // Reuses ai.workflows.execute — "can invoke governed AI actions" is one
+  // capability whether the call is wrapped in a workflow or made directly;
+  // server/ai/governance.ts still checks the specific tool's own
+  // requiredPermission on top of this route-level gate.
+  requirePermission("ai.workflows.execute"),
+  aiExecutionLimiter,
+  asyncHandler(async (req, res) => {
+    const input = executeAiToolSchema.parse(req.body);
+    const execution = await aiExecutionService.executeTool(req.user, input, requestMeta25(req));
+    sendSuccess(res, { execution }, 202);
+  })
+);
+var aiExecutionRoutes_default = router34;
+
+// server/routes/v1/aiUsageRoutes.ts
+import { Router as Router35 } from "express";
+
+// server/repositories/aiUsageRepository.ts
+var aiUsageRepository = {
+  async record(data) {
+    return prisma.aIUsageRecord.create({
+      data: {
+        organizationId: data.organizationId,
+        executionId: data.executionId,
+        providerId: data.providerId,
+        modelId: data.modelId,
+        inputTokens: data.inputTokens,
+        outputTokens: data.outputTokens,
+        totalTokens: data.totalTokens,
+        estimatedCost: data.estimatedCost,
+        currency: data.currency ?? "USD"
+      }
+    });
+  },
+  async listForOrg(organizationId, dateFrom, dateTo) {
+    return prisma.aIUsageRecord.findMany({
+      where: {
+        organizationId,
+        ...dateFrom || dateTo ? { createdAt: { gte: dateFrom, lte: dateTo } } : {}
+      },
+      orderBy: { createdAt: "desc" }
+    });
+  },
+  async summaryForOrg(organizationId, dateFrom, dateTo) {
+    const where = {
+      organizationId,
+      ...dateFrom || dateTo ? { createdAt: { gte: dateFrom, lte: dateTo } } : {}
+    };
+    const [totals, byModel] = await Promise.all([
+      prisma.aIUsageRecord.aggregate({
+        where,
+        _sum: { inputTokens: true, outputTokens: true, totalTokens: true, estimatedCost: true },
+        _count: true
+      }),
+      prisma.aIUsageRecord.groupBy({
+        by: ["modelId"],
+        where,
+        _sum: { inputTokens: true, outputTokens: true, totalTokens: true, estimatedCost: true },
+        _count: true
+      })
+    ]);
+    return { totals, byModel };
+  }
+};
+
+// server/services/aiUsageService.ts
+var aiUsageService = {
+  async listUsage(organizationId, dateFrom, dateTo) {
+    return aiUsageRepository.listForOrg(organizationId, dateFrom, dateTo);
+  },
+  async summary(organizationId, dateFrom, dateTo) {
+    return aiUsageRepository.summaryForOrg(organizationId, dateFrom, dateTo);
+  }
+};
+
+// server/routes/v1/aiUsageRoutes.ts
+var router35 = Router35();
+router35.use(authenticateToken);
+router35.use(requirePermission("ai.usage.read"));
+router35.get(
+  "/",
+  asyncHandler(async (req, res) => {
+    const query = usageSummaryQuerySchema.parse(req.query);
+    const records = await aiUsageService.listUsage(req.user.organizationId, query.dateFrom, query.dateTo);
+    sendSuccess(res, { usageRecords: records });
+  })
+);
+router35.get(
+  "/summary",
+  asyncHandler(async (req, res) => {
+    const query = usageSummaryQuerySchema.parse(req.query);
+    const summary = await aiUsageService.summary(req.user.organizationId, query.dateFrom, query.dateTo);
+    sendSuccess(res, { summary });
+  })
+);
+var aiUsageRoutes_default = router35;
+
+// server/routes/v1/aiApprovalRoutes.ts
+import { Router as Router36 } from "express";
+
+// server/services/aiApprovalService.ts
+import crypto2 from "crypto";
+
+// server/repositories/aiApprovalRepository.ts
+var aiApprovalRepository = {
+  async list(organizationId, filters, page, limit, sort, order) {
+    const where = { organizationId, ...filters };
+    const [rows, total] = await Promise.all([
+      prisma.aIApprovalRequest.findMany({
+        where,
+        include: { toolExecution: true, requestedBy: { select: { id: true, firstName: true, lastName: true, email: true } } },
+        orderBy: { [sort]: order },
+        skip: (page - 1) * limit,
+        take: limit
+      }),
+      prisma.aIApprovalRequest.count({ where })
+    ]);
+    return { rows, total };
+  },
+  async findByIdInOrg(id, organizationId) {
+    return prisma.aIApprovalRequest.findFirst({
+      where: { id, organizationId },
+      include: { toolExecution: true, execution: true }
+    });
+  },
+  async approve(id, approvedById) {
+    return prisma.aIApprovalRequest.update({
+      where: { id },
+      data: { status: "APPROVED", approvedById, approvedAt: /* @__PURE__ */ new Date() }
+    });
+  },
+  async reject(id, approvedById, rejectionReason) {
+    return prisma.aIApprovalRequest.update({
+      where: { id },
+      data: { status: "REJECTED", approvedById, approvedAt: /* @__PURE__ */ new Date(), rejectionReason }
+    });
+  },
+  async expireStale() {
+    return prisma.aIApprovalRequest.updateMany({
+      where: { status: "PENDING", expiresAt: { lt: /* @__PURE__ */ new Date() } },
+      data: { status: "EXPIRED" }
+    });
+  }
+};
+
+// server/services/aiApprovalService.ts
+function payloadHash2(input) {
+  return crypto2.createHash("sha256").update(JSON.stringify(input ?? {})).digest("hex");
+}
+var aiApprovalService = {
+  async listApprovals(organizationId, filters, page, limit, sort, order) {
+    return aiApprovalRepository.list(organizationId, filters, page, limit, sort, order);
+  },
+  async getApproval(organizationId, id) {
+    const approval = await aiApprovalRepository.findByIdInOrg(id, organizationId);
+    if (!approval) throw new NotFoundError("AI approval request not found.");
+    return approval;
+  },
+  async decide(caller, id, input, meta = {}) {
+    const approval = await this.getApproval(caller.organizationId, id);
+    if (approval.status !== "PENDING") {
+      throw new ConflictError(`This approval request has already been ${approval.status.toLowerCase()}.`);
+    }
+    if (approval.expiresAt.getTime() < Date.now()) {
+      await aiApprovalRepository.reject(id, caller.id, "Expired before a decision was made.");
+      throw new ConflictError("This approval request has expired.");
+    }
+    if (payloadHash2(approval.payload) !== approval.payloadHash) {
+      throw new ConflictError("This approval request's payload no longer matches what was requested; it cannot be approved.");
+    }
+    if (input.decision === "REJECT") {
+      const rejected = await aiApprovalRepository.reject(id, caller.id, input.rejectionReason);
+      if (approval.toolExecutionId) {
+        await prisma.aIToolExecution.update({ where: { id: approval.toolExecutionId }, data: { status: "CANCELLED" } });
+      }
+      await auditLogRepository.record({
+        organizationId: caller.organizationId,
+        actorUserId: caller.id,
+        actorType: "USER",
+        action: "AI_APPROVAL_REJECTED",
+        resourceType: "ai_approval_request",
+        resourceId: id,
+        afterData: { rejectionReason: input.rejectionReason },
+        ipAddress: meta.ip,
+        userAgent: meta.userAgent
+      });
+      return rejected;
+    }
+    if (!approval.toolExecutionId) {
+      throw new ValidationError("This approval request has no associated tool execution to run.");
+    }
+    if (!isRegisteredToolCode(approval.action)) {
+      throw new ValidationError(`AI tool "${approval.action}" is no longer registered.`);
+    }
+    const definition = AI_TOOL_REGISTRY[approval.action];
+    const parsed = definition.inputSchema.safeParse(approval.payload);
+    if (!parsed.success) {
+      throw new ValidationError(`Approved payload no longer matches "${approval.action}"'s current input schema.`);
+    }
+    const approved = await aiApprovalRepository.approve(id, caller.id);
+    await auditLogRepository.record({
+      organizationId: caller.organizationId,
+      actorUserId: caller.id,
+      actorType: "USER",
+      action: "AI_APPROVAL_APPROVED",
+      resourceType: "ai_approval_request",
+      resourceId: id,
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent
+    });
+    const requestingUser = await userRepository.findById(approval.requestedById);
+    if (!requestingUser) {
+      throw new NotFoundError("The user who originally requested this action no longer exists.");
+    }
+    const requesterCaller = await resolveSanitizedUserForOrganization(requestingUser, approval.organizationId);
+    if (!requesterCaller) {
+      throw new ConflictError("The user who originally requested this action no longer has access to this organization.");
+    }
+    await runToolHandler(definition, requesterCaller, parsed.data, meta, approval.toolExecutionId);
+    return approved;
+  }
+};
+
+// server/routes/v1/aiApprovalRoutes.ts
+var router36 = Router36();
+router36.use(authenticateToken);
+function requestMeta26(req) {
+  return { ip: req.ip, userAgent: req.headers["user-agent"], requestId: req.requestId };
+}
+router36.get(
+  "/",
+  requirePermission("ai.approvals.read"),
+  asyncHandler(async (req, res) => {
+    const query = listAiApprovalsQuerySchema.parse(req.query);
+    const { rows, total } = await aiApprovalService.listApprovals(
+      req.user.organizationId,
+      { status: query.status },
+      query.page,
+      query.limit,
+      query.sort,
+      query.order
+    );
+    sendSuccess(res, { approvals: rows }, 200, { page: query.page, limit: query.limit, total });
+  })
+);
+router36.get(
+  "/:id",
+  requirePermission("ai.approvals.read"),
+  asyncHandler(async (req, res) => {
+    const approval = await aiApprovalService.getApproval(req.user.organizationId, req.params.id);
+    sendSuccess(res, { approval });
+  })
+);
+router36.post(
+  "/:id/decide",
+  requirePermission("ai.approvals.decide"),
+  asyncHandler(async (req, res) => {
+    const input = decideAiApprovalSchema.parse(req.body);
+    const approval = await aiApprovalService.decide(req.user, req.params.id, input, requestMeta26(req));
+    sendSuccess(res, { approval });
+  })
+);
+var aiApprovalRoutes_default = router36;
+
+// server/routes/v1/automationRoutes.ts
+import { Router as Router37 } from "express";
+import { z as z31 } from "zod";
+
+// server/services/automation/AutomationService.ts
+import crypto11 from "node:crypto";
+
+// server/services/automation/ConditionEngine.ts
+var ConditionEngine = class {
+  /**
+   * Safely resolves a nested property path from an object (e.g., 'invoice.amount' or 'payload.client.email').
+   */
+  static resolvePath(obj, path) {
+    if (!obj || typeof obj !== "object" || !path) {
+      return void 0;
+    }
+    const segments = path.split(".").map((s) => s.trim()).filter(Boolean);
+    let current = obj;
+    for (const segment of segments) {
+      if (current === null || current === void 0) {
+        return void 0;
+      }
+      if (typeof current !== "object") {
+        return void 0;
+      }
+      current = current[segment];
+    }
+    return current;
+  }
+  /**
+   * Evaluates a single condition against the context.
+   */
+  static evaluateSingle(condition, context) {
+    const actual = this.resolvePath(context, condition.field);
+    const expected = condition.value;
+    return this.compare(actual, condition.operator, expected);
+  }
+  /**
+   * Safely compares actual vs expected using defined operators.
+   */
+  static compare(actual, operator, expected) {
+    switch (operator) {
+      case "=":
+      case "==":
+      case "===": {
+        if (typeof actual === "number" && typeof expected === "string") {
+          return actual === Number(expected);
+        }
+        if (typeof actual === "string" && typeof expected === "number") {
+          return Number(actual) === expected;
+        }
+        return actual === expected;
+      }
+      case "!=":
+      case "!==": {
+        if (typeof actual === "number" && typeof expected === "string") {
+          return actual !== Number(expected);
+        }
+        if (typeof actual === "string" && typeof expected === "number") {
+          return Number(actual) !== expected;
+        }
+        return actual !== expected;
+      }
+      case ">": {
+        const numActual = Number(actual);
+        const numExpected = Number(expected);
+        if (isNaN(numActual) || isNaN(numExpected)) return false;
+        return numActual > numExpected;
+      }
+      case ">=": {
+        const numActual = Number(actual);
+        const numExpected = Number(expected);
+        if (isNaN(numActual) || isNaN(numExpected)) return false;
+        return numActual >= numExpected;
+      }
+      case "<": {
+        const numActual = Number(actual);
+        const numExpected = Number(expected);
+        if (isNaN(numActual) || isNaN(numExpected)) return false;
+        return numActual < numExpected;
+      }
+      case "<=": {
+        const numActual = Number(actual);
+        const numExpected = Number(expected);
+        if (isNaN(numActual) || isNaN(numExpected)) return false;
+        return numActual <= numExpected;
+      }
+      case "IN": {
+        if (Array.isArray(expected)) {
+          return expected.includes(actual);
+        }
+        if (typeof expected === "string") {
+          return expected.split(",").map((s) => s.trim()).includes(String(actual));
+        }
+        return false;
+      }
+      case "NOT_IN": {
+        if (Array.isArray(expected)) {
+          return !expected.includes(actual);
+        }
+        if (typeof expected === "string") {
+          return !expected.split(",").map((s) => s.trim()).includes(String(actual));
+        }
+        return true;
+      }
+      case "CONTAINS": {
+        if (Array.isArray(actual)) {
+          return actual.includes(expected);
+        }
+        if (typeof actual === "string") {
+          return actual.toLowerCase().includes(String(expected).toLowerCase());
+        }
+        return false;
+      }
+      case "NOT_CONTAINS": {
+        if (Array.isArray(actual)) {
+          return !actual.includes(expected);
+        }
+        if (typeof actual === "string") {
+          return !actual.toLowerCase().includes(String(expected).toLowerCase());
+        }
+        return true;
+      }
+      case "IS_EMPTY": {
+        if (actual === null || actual === void 0) return true;
+        if (typeof actual === "string") return actual.trim().length === 0;
+        if (Array.isArray(actual)) return actual.length === 0;
+        if (typeof actual === "object") return Object.keys(actual).length === 0;
+        return false;
+      }
+      case "IS_NOT_EMPTY": {
+        if (actual === null || actual === void 0) return false;
+        if (typeof actual === "string") return actual.trim().length > 0;
+        if (Array.isArray(actual)) return actual.length > 0;
+        if (typeof actual === "object") return Object.keys(actual).length > 0;
+        return true;
+      }
+      case "STARTS_WITH": {
+        if (typeof actual === "string" && typeof expected === "string") {
+          return actual.startsWith(expected);
+        }
+        return false;
+      }
+      case "ENDS_WITH": {
+        if (typeof actual === "string" && typeof expected === "string") {
+          return actual.endsWith(expected);
+        }
+        return false;
+      }
+      default:
+        return false;
+    }
+  }
+  /**
+   * Recursively evaluates a condition or nested condition group.
+   */
+  static evaluate(condition, context) {
+    if (!condition) return true;
+    if (Array.isArray(condition)) {
+      if (condition.length === 0) return true;
+      return condition.every((cond) => this.evaluate(cond, context));
+    }
+    if ("logic" in condition && Array.isArray(condition.conditions)) {
+      const group = condition;
+      if (group.conditions.length === 0) return true;
+      if (group.logic === "OR") {
+        return group.conditions.some((child) => this.evaluate(child, context));
+      }
+      return group.conditions.every((child) => this.evaluate(child, context));
+    }
+    if ("field" in condition && "operator" in condition) {
+      return this.evaluateSingle(condition, context);
+    }
+    return true;
+  }
+};
+
+// server/services/automation/EventEngine.ts
+import crypto3 from "node:crypto";
+var EventEngine = class _EventEngine {
+  constructor() {
+    this.eventRegistry = /* @__PURE__ */ new Map();
+    this.listeners = [];
+    this.registerStandardEvents();
+  }
+  static getInstance() {
+    if (!_EventEngine.instance) {
+      _EventEngine.instance = new _EventEngine();
+    }
+    return _EventEngine.instance;
+  }
+  /**
+   * Registers default Artify business event types.
+   */
+  registerStandardEvents() {
+    const standardEvents = [
+      // CRM & Clients
+      { eventType: "client.created", entityType: "client", sourceModule: "CRM", description: "Triggered when a new client record is created" },
+      { eventType: "client.updated", entityType: "client", sourceModule: "CRM", description: "Triggered when client details are updated" },
+      { eventType: "client.onboarded", entityType: "client", sourceModule: "ONBOARDING", description: "Triggered when client onboarding is completed" },
+      // Projects
+      { eventType: "project.created", entityType: "project", sourceModule: "PROJECTS", description: "Triggered when a new client project is initiated" },
+      { eventType: "project.status_changed", entityType: "project", sourceModule: "PROJECTS", description: "Triggered when project workflow status changes" },
+      // Products & Catalog
+      { eventType: "product.created", entityType: "product", sourceModule: "CATALOG", description: "Triggered when a new service/product is added" },
+      { eventType: "product.updated", entityType: "product", sourceModule: "CATALOG", description: "Triggered when a product/service is updated" },
+      // Commercial & Billing
+      { eventType: "invoice.created", entityType: "invoice", sourceModule: "BILLING", description: "Triggered when a new invoice is created" },
+      { eventType: "invoice.overdue", entityType: "invoice", sourceModule: "BILLING", description: "Triggered when an invoice passes its due date without payment" },
+      { eventType: "invoice.paid", entityType: "invoice", sourceModule: "BILLING", description: "Triggered when an invoice is fully marked paid" },
+      { eventType: "payment.created", entityType: "payment", sourceModule: "BILLING", description: "Triggered when a payment is recorded" },
+      { eventType: "payment.failed", entityType: "payment", sourceModule: "BILLING", description: "Triggered when a payment attempt fails" },
+      // CMS & Content
+      { eventType: "cms.content_created", entityType: "content", sourceModule: "CMS", description: "Triggered when CMS page or post is drafted" },
+      { eventType: "cms.content_updated", entityType: "content", sourceModule: "CMS", description: "Triggered when CMS content revision is updated" },
+      { eventType: "cms.content_published", entityType: "content", sourceModule: "CMS", description: "Triggered when CMS content is published" },
+      // Identity & RBAC
+      { eventType: "user.created", entityType: "user", sourceModule: "AUTH", description: "Triggered when a new team member is registered" },
+      { eventType: "user.role_changed", entityType: "user", sourceModule: "RBAC", description: "Triggered when a user's role/permissions change" },
+      // Automation Lifecycle
+      { eventType: "workflow.created", entityType: "workflow", sourceModule: "AUTOMATION", description: "Triggered when a new workflow is configured" },
+      { eventType: "workflow.failed", entityType: "workflow", sourceModule: "AUTOMATION", description: "Triggered when an execution fails" },
+      { eventType: "workflow.completed", entityType: "workflow", sourceModule: "AUTOMATION", description: "Triggered when an execution completes" }
+    ];
+    for (const evt of standardEvents) {
+      this.eventRegistry.set(evt.eventType, evt);
+    }
+  }
+  /**
+   * Register a custom event dynamically.
+   */
+  registerEvent(registration) {
+    this.eventRegistry.set(registration.eventType, registration);
+  }
+  /**
+   * List all registered event descriptors.
+   */
+  listRegisteredEvents() {
+    return Array.from(this.eventRegistry.values());
+  }
+  /**
+   * Subscribe to business events.
+   */
+  subscribe(listener) {
+    this.listeners.push(listener);
+    return () => {
+      this.listeners = this.listeners.filter((l) => l !== listener);
+    };
+  }
+  /**
+   * Emits a business event into the system.
+   * Sanitizes payload, persists to automation_events, and dispatches to subscribers.
+   */
+  async emit(params) {
+    const eventId = crypto3.randomUUID();
+    const correlationId = params.correlationId || crypto3.randomUUID();
+    const timestamp = (/* @__PURE__ */ new Date()).toISOString();
+    const registered = this.eventRegistry.get(params.eventType);
+    const sourceModule = params.sourceModule || registered?.sourceModule || "SYSTEM";
+    const sanitizedPayload = this.sanitizePayload(params.payload);
+    const event = {
+      eventId,
+      eventType: params.eventType,
+      entityType: params.entityType,
+      entityId: params.entityId,
+      organizationId: params.organizationId,
+      actorId: params.actorId,
+      actorType: params.actorType || "USER",
+      timestamp,
+      payload: sanitizedPayload,
+      correlationId,
+      sourceModule
+    };
+    try {
+      await prisma.automationEvent.create({
+        data: {
+          id: eventId,
+          organizationId: params.organizationId,
+          eventType: params.eventType,
+          entityType: params.entityType,
+          entityId: params.entityId,
+          actorId: params.actorId || null,
+          actorType: event.actorType,
+          sourceModule,
+          correlationId,
+          payload: sanitizedPayload,
+          processed: false
+        }
+      });
+    } catch (err) {
+      logger.error({ err, eventId }, "[EventEngine] Failed to persist automation event");
+    }
+    for (const listener of this.listeners) {
+      try {
+        await listener(event);
+      } catch (err) {
+        logger.error({ err, eventId, eventType: params.eventType }, "[EventEngine] Listener error");
+      }
+    }
+    return event;
+  }
+  /**
+   * Sanitizes payload by stripping sensitive keys.
+   */
+  sanitizePayload(data) {
+    if (!data || typeof data !== "object") return data;
+    if (Array.isArray(data)) {
+      return data.map((item) => this.sanitizePayload(item));
+    }
+    const sanitized = {};
+    const sensitiveKeys = /* @__PURE__ */ new Set([
+      "password",
+      "passwordhash",
+      "token",
+      "accesstoken",
+      "refreshtoken",
+      "secret",
+      "apikey",
+      "sessionsecret"
+    ]);
+    for (const [key, value] of Object.entries(data)) {
+      if (sensitiveKeys.has(key.toLowerCase())) {
+        sanitized[key] = "[REDACTED]";
+      } else if (typeof value === "object" && value !== null) {
+        sanitized[key] = this.sanitizePayload(value);
+      } else {
+        sanitized[key] = value;
+      }
+    }
+    return sanitized;
+  }
+};
+var eventEngine = EventEngine.getInstance();
+
+// server/services/automation/ActionRegistry.ts
+import { z as z29 } from "zod";
+import crypto4 from "node:crypto";
+var ActionRegistry = class _ActionRegistry {
+  constructor() {
+    this.actions = /* @__PURE__ */ new Map();
+    this.registerStandardActions();
+  }
+  static getInstance() {
+    if (!_ActionRegistry.instance) {
+      _ActionRegistry.instance = new _ActionRegistry();
+    }
+    return _ActionRegistry.instance;
+  }
+  registerAction(action) {
+    this.actions.set(action.id, action);
+  }
+  getAction(id) {
+    return this.actions.get(id);
+  }
+  listActions() {
+    return Array.from(this.actions.values()).map((a) => ({
+      id: a.id,
+      name: a.name,
+      description: a.description,
+      requiredPermission: a.requiredPermission,
+      riskLevel: a.riskLevel,
+      requiresApproval: a.requiresApproval,
+      requiresAudit: a.requiresAudit
+    }));
+  }
+  registerStandardActions() {
+    this.registerAction({
+      id: "create_task",
+      name: "Create Task",
+      description: "Creates an automated or AI-recommended business task assigned to a team member or role",
+      requiredPermission: "automation.execute",
+      riskLevel: "LOW",
+      requiresApproval: false,
+      requiresAudit: true,
+      inputSchema: z29.object({
+        title: z29.string().min(1),
+        description: z29.string().optional(),
+        assignedUserId: z29.string().optional(),
+        assignedRole: z29.string().optional(),
+        priority: z29.enum(["LOW", "MEDIUM", "HIGH", "URGENT"]).default("MEDIUM"),
+        dueDate: z29.string().optional(),
+        sourceEntityType: z29.string().optional(),
+        sourceEntityId: z29.string().optional(),
+        isAiGenerated: z29.boolean().default(true),
+        metadata: z29.record(z29.unknown()).optional()
+      }),
+      outputSchema: z29.object({ taskId: z29.string(), title: z29.string(), status: z29.string() }),
+      execute: async (input, context) => {
+        const taskId = crypto4.randomUUID();
+        const dueDate = input.dueDate ? new Date(input.dueDate) : null;
+        const task = await prisma.automationTask.create({
+          data: {
+            id: taskId,
+            organizationId: context.organizationId,
+            title: input.title,
+            description: input.description || null,
+            assignedUserId: input.assignedUserId || null,
+            assignedRole: input.assignedRole || null,
+            priority: input.priority,
+            status: "PENDING",
+            dueDate,
+            sourceWorkflowId: context.workflowId || null,
+            sourceExecutionId: context.executionId || null,
+            sourceEntityType: input.sourceEntityType || null,
+            sourceEntityId: input.sourceEntityId || null,
+            isAiGenerated: input.isAiGenerated,
+            metadata: input.metadata || {}
+          }
+        });
+        return { taskId: task.id, title: task.title, status: task.status };
+      }
+    });
+    this.registerAction({
+      id: "update_client",
+      name: "Update Client Details",
+      description: "Updates CRM client status or notes based on automation workflow",
+      requiredPermission: "clients.update",
+      riskLevel: "MEDIUM",
+      requiresApproval: false,
+      requiresAudit: true,
+      inputSchema: z29.object({
+        clientId: z29.string().min(1),
+        status: z29.enum(["PROSPECT", "ACTIVE", "INACTIVE", "SUSPENDED", "ARCHIVED"]).optional(),
+        notes: z29.string().optional()
+      }),
+      outputSchema: z29.object({ clientId: z29.string(), updated: z29.boolean() }),
+      execute: async (input, context) => {
+        const client3 = await prisma.client.findFirst({ where: { id: input.clientId, organizationId: context.organizationId } });
+        if (!client3) {
+          throw new Error(`Client with id ${input.clientId} not found in organization.`);
+        }
+        const updateData = {};
+        if (input.status) updateData.status = input.status;
+        if (input.notes) updateData.notes = input.notes;
+        if (Object.keys(updateData).length > 0) {
+          await prisma.client.update({ where: { id: client3.id }, data: updateData });
+        }
+        return { clientId: client3.id, updated: true };
+      }
+    });
+    this.registerAction({
+      id: "create_notification",
+      name: "Create Notification",
+      description: "Creates an in-app and system notification for target user or role",
+      requiredPermission: "automation.execute",
+      riskLevel: "LOW",
+      requiresApproval: false,
+      requiresAudit: false,
+      inputSchema: z29.object({
+        userId: z29.string().optional(),
+        recipientRole: z29.string().optional(),
+        title: z29.string().min(1),
+        message: z29.string().min(1),
+        level: z29.enum(["INFO", "WARNING", "ERROR", "SUCCESS"]).default("INFO"),
+        channel: z29.enum(["IN_APP", "EMAIL", "SMS", "WEBHOOK"]).default("IN_APP"),
+        metadata: z29.record(z29.unknown()).optional()
+      }),
+      outputSchema: z29.object({ notificationId: z29.string(), delivered: z29.boolean() }),
+      execute: async (input, context) => {
+        const notifId = crypto4.randomUUID();
+        const autoNotif = await prisma.automationNotification.create({
+          data: {
+            id: notifId,
+            organizationId: context.organizationId,
+            userId: input.userId || null,
+            recipientRole: input.recipientRole || null,
+            channel: input.channel,
+            title: input.title,
+            message: input.message,
+            level: input.level,
+            status: "DELIVERED",
+            sourceWorkflowId: context.workflowId || null,
+            sourceExecutionId: context.executionId || null,
+            metadata: input.metadata || {}
+          }
+        });
+        if (input.userId) {
+          try {
+            await prisma.notification.create({
+              data: {
+                id: crypto4.randomUUID(),
+                organizationId: context.organizationId,
+                userId: input.userId,
+                title: input.title,
+                message: input.message,
+                type: input.level === "ERROR" ? "SYSTEM_ALERT" : "WORKFLOW_UPDATE",
+                status: "UNREAD"
+              }
+            });
+          } catch (err) {
+            logger.warn({ err }, "[ActionRegistry] Optional core notification write skipped");
+          }
+        }
+        return { notificationId: autoNotif.id, delivered: true };
+      }
+    });
+    this.registerAction({
+      id: "assign_user",
+      name: "Assign User to Entity",
+      description: "Assigns a team member to a lead, client, or task",
+      requiredPermission: "automation.execute",
+      riskLevel: "MEDIUM",
+      requiresApproval: false,
+      requiresAudit: true,
+      inputSchema: z29.object({
+        entityType: z29.enum(["LEAD", "CLIENT", "TASK"]),
+        entityId: z29.string().min(1),
+        userId: z29.string().min(1)
+      }),
+      outputSchema: z29.object({ entityId: z29.string(), assignedUserId: z29.string(), success: z29.boolean() }),
+      execute: async (input, _context) => {
+        if (input.entityType === "LEAD") {
+          await prisma.lead.update({ where: { id: input.entityId }, data: { assignedTo: input.userId } });
+        } else if (input.entityType === "CLIENT") {
+          await prisma.client.update({ where: { id: input.entityId }, data: { accountManager: input.userId } });
+        } else if (input.entityType === "TASK") {
+          await prisma.automationTask.update({ where: { id: input.entityId }, data: { assignedUserId: input.userId } });
+        }
+        return { entityId: input.entityId, assignedUserId: input.userId, success: true };
+      }
+    });
+    this.registerAction({
+      id: "generate_report",
+      name: "Generate Report",
+      description: "Generates a structured automation or performance report",
+      requiredPermission: "reports.read",
+      riskLevel: "LOW",
+      requiresApproval: false,
+      requiresAudit: true,
+      inputSchema: z29.object({ reportType: z29.string(), title: z29.string(), parameters: z29.record(z29.unknown()).optional() }),
+      outputSchema: z29.object({ reportId: z29.string(), generatedAt: z29.string(), summary: z29.string() }),
+      execute: async (input, context) => {
+        const reportId = crypto4.randomUUID();
+        const generatedAt = (/* @__PURE__ */ new Date()).toISOString();
+        return { reportId, generatedAt, summary: `Report "${input.title}" (${input.reportType}) generated successfully for workflow ${context.workflowId || "manual"}.` };
+      }
+    });
+    this.registerAction({
+      id: "create_invoice_draft",
+      name: "Create Invoice Draft",
+      description: "Drafts a new invoice requiring accounts review or automation dispatch",
+      requiredPermission: "invoices.create",
+      riskLevel: "HIGH",
+      requiresApproval: true,
+      requiresAudit: true,
+      inputSchema: z29.object({
+        clientId: z29.string().min(1),
+        amountDue: z29.number().positive(),
+        currency: z29.string().default("USD"),
+        dueDate: z29.string().optional(),
+        memo: z29.string().optional()
+      }),
+      outputSchema: z29.object({ draftCreated: z29.boolean(), invoiceNumber: z29.string(), amountDue: z29.number() }),
+      execute: async (input, _context) => {
+        const invoiceNumber = `INV-DRAFT-${Date.now().toString(36).toUpperCase()}`;
+        return { draftCreated: true, invoiceNumber, amountDue: input.amountDue };
+      }
+    });
+    this.registerAction({
+      id: "update_workflow_status",
+      name: "Update Workflow Status",
+      description: "Controls the active or paused status of an automated workflow",
+      requiredPermission: "automation.manage",
+      riskLevel: "HIGH",
+      requiresApproval: false,
+      requiresAudit: true,
+      inputSchema: z29.object({ workflowId: z29.string().min(1), status: z29.enum(["ACTIVE", "PAUSED", "ARCHIVED"]) }),
+      outputSchema: z29.object({ workflowId: z29.string(), newStatus: z29.string() }),
+      execute: async (input, _context) => {
+        const updated = await prisma.automationWorkflow.update({ where: { id: input.workflowId }, data: { status: input.status } });
+        return { workflowId: updated.id, newStatus: updated.status };
+      }
+    });
+    this.registerAction({
+      id: "publish_approved_content",
+      name: "Publish Approved Content",
+      description: "Publishes approved CMS page or post content",
+      requiredPermission: "content.publish",
+      riskLevel: "HIGH",
+      requiresApproval: true,
+      requiresAudit: true,
+      inputSchema: z29.object({ contentType: z29.enum(["PAGE", "POST"]), contentId: z29.string().min(1) }),
+      outputSchema: z29.object({ contentId: z29.string(), published: z29.boolean() }),
+      execute: async (input, _context) => {
+        if (input.contentType === "PAGE") {
+          await prisma.page.update({ where: { id: input.contentId }, data: { status: "PUBLISHED", publishedAt: /* @__PURE__ */ new Date() } });
+        } else {
+          await prisma.post.update({ where: { id: input.contentId }, data: { status: "PUBLISHED", publishedAt: /* @__PURE__ */ new Date() } });
+        }
+        return { contentId: input.contentId, published: true };
+      }
+    });
+    this.registerAction({
+      id: "send_approved_notification",
+      name: "Send Approved Notification",
+      description: "Dispatches a high-priority approved notification",
+      requiredPermission: "automation.execute",
+      riskLevel: "MEDIUM",
+      requiresApproval: true,
+      requiresAudit: true,
+      inputSchema: z29.object({ recipientUserId: z29.string().min(1), title: z29.string().min(1), message: z29.string().min(1) }),
+      outputSchema: z29.object({ sent: z29.boolean() }),
+      execute: async (input, context) => {
+        await prisma.automationNotification.create({
+          data: {
+            id: crypto4.randomUUID(),
+            organizationId: context.organizationId,
+            userId: input.recipientUserId,
+            channel: "IN_APP",
+            title: input.title,
+            message: input.message,
+            level: "INFO",
+            status: "DELIVERED",
+            sourceWorkflowId: context.workflowId || null,
+            sourceExecutionId: context.executionId || null
+          }
+        });
+        return { sent: true };
+      }
+    });
+  }
+  /**
+   * Executes a registered action with safety checks, idempotency, and audit logging.
+   */
+  async executeAction(params) {
+    const action = this.actions.get(params.actionId);
+    if (!action) {
+      throw new Error(`Business action "${params.actionId}" is not registered in the system.`);
+    }
+    if (action.requiredPermission && !params.userPermissions.includes(action.requiredPermission) && !params.userPermissions.includes("*")) {
+      throw new Error(`Forbidden: missing required permission "${action.requiredPermission}" for action "${action.id}".`);
+    }
+    const validatedInput = action.inputSchema.parse(params.input);
+    if (params.idempotencyKey) {
+      const existing = await prisma.automationActionExecution.findFirst({
+        where: { organizationId: params.organizationId, idempotencyKey: params.idempotencyKey, status: "SUCCESS" }
+      });
+      if (existing) {
+        logger.info({ idempotencyKey: params.idempotencyKey, actionId: params.actionId }, "[ActionRegistry] Returning idempotent cached action output");
+        return existing.output;
+      }
+    }
+    const startTime = Date.now();
+    let actionOutput;
+    let actionStatus = "SUCCESS";
+    let errorMessage = null;
+    try {
+      actionOutput = await action.execute(validatedInput, {
+        organizationId: params.organizationId,
+        userId: params.userId,
+        workflowId: params.workflowId,
+        executionId: params.executionId,
+        stepId: params.stepId,
+        correlationId: params.correlationId
+      });
+      actionOutput = action.outputSchema.parse(actionOutput);
+    } catch (err) {
+      actionStatus = "FAILED";
+      errorMessage = err?.message || String(err);
+      throw err;
+    } finally {
+      const durationMs = Date.now() - startTime;
+      if (params.executionId) {
+        try {
+          await prisma.automationActionExecution.create({
+            data: {
+              id: crypto4.randomUUID(),
+              organizationId: params.organizationId,
+              executionId: params.executionId,
+              stepId: params.stepId || "action_step",
+              actionId: params.actionId,
+              status: actionStatus,
+              input: validatedInput,
+              output: actionOutput || {},
+              idempotencyKey: params.idempotencyKey || null,
+              durationMs,
+              errorMessage
+            }
+          });
+        } catch (recErr) {
+          logger.warn({ recErr }, "[ActionRegistry] Failed to record action execution");
+        }
+      }
+      if (action.requiresAudit) {
+        await auditLogRepository.record({
+          organizationId: params.organizationId,
+          actorUserId: params.userId || void 0,
+          actorType: params.userId ? "USER" : "SYSTEM",
+          action: `AUTOMATION_ACTION_${params.actionId.toUpperCase()}`,
+          resourceType: "automation_action",
+          resourceId: params.actionId,
+          metadata: { workflowId: params.workflowId, executionId: params.executionId, stepId: params.stepId, status: actionStatus, riskLevel: action.riskLevel, correlationId: params.correlationId }
+        });
+      }
+    }
+    return actionOutput;
+  }
+};
+var actionRegistry = ActionRegistry.getInstance();
+
+// server/services/automation/ApprovalEngine.ts
+import crypto5 from "node:crypto";
+var ApprovalEngine = class _ApprovalEngine {
+  static getInstance() {
+    if (!_ApprovalEngine.instance) {
+      _ApprovalEngine.instance = new _ApprovalEngine();
+    }
+    return _ApprovalEngine.instance;
+  }
+  /**
+   * Request human approval for an automation workflow step.
+   */
+  async requestApproval(params) {
+    const approvalId = crypto5.randomUUID();
+    const expiresAt = params.timeoutMinutes ? new Date(Date.now() + params.timeoutMinutes * 60 * 1e3) : null;
+    const approval = await prisma.automationApproval.create({
+      data: {
+        id: approvalId,
+        organizationId: params.organizationId,
+        executionId: params.executionId,
+        stepExecutionId: params.stepExecutionId || null,
+        workflowId: params.workflowId,
+        stepId: params.stepId,
+        action: params.action,
+        description: params.description || null,
+        entityType: params.entityType || null,
+        entityId: params.entityId || null,
+        payload: params.payload,
+        requiredRole: params.requiredRole || null,
+        status: "PENDING",
+        requesterId: params.requesterId || null,
+        expiresAt
+      }
+    });
+    await auditLogRepository.record({
+      organizationId: params.organizationId,
+      actorUserId: params.requesterId || void 0,
+      actorType: params.requesterId ? "USER" : "SYSTEM",
+      action: "AUTOMATION_APPROVAL_REQUESTED",
+      resourceType: "automation_approval",
+      resourceId: approval.id,
+      metadata: { workflowId: params.workflowId, executionId: params.executionId, stepId: params.stepId, action: params.action }
+    });
+    return { approvalId: approval.id, status: "PENDING" };
+  }
+  /**
+   * Decide on a pending approval (APPROVE / REJECT).
+   */
+  async decideApproval(params) {
+    const approval = await prisma.automationApproval.findFirst({
+      where: { id: params.approvalId, organizationId: params.organizationId }
+    });
+    if (!approval) {
+      throw new NotFoundError("Automation approval request not found.");
+    }
+    if (approval.status !== "PENDING") {
+      throw new ValidationError(`Approval request is already resolved with status ${approval.status}.`);
+    }
+    if (approval.requiredRole && params.userRole !== approval.requiredRole && params.userRole !== "SUPER_ADMIN" && params.userRole !== "ADMIN") {
+      throw new ValidationError(`Forbidden: Only users with role ${approval.requiredRole} can decide this approval.`);
+    }
+    const updated = await prisma.automationApproval.update({
+      where: { id: approval.id },
+      data: {
+        status: params.decision,
+        approverId: params.userId,
+        decisionReason: params.reason || null,
+        decidedAt: /* @__PURE__ */ new Date()
+      }
+    });
+    await auditLogRepository.record({
+      organizationId: params.organizationId,
+      actorUserId: params.userId,
+      actorType: "USER",
+      action: params.decision === "APPROVED" ? "AUTOMATION_APPROVAL_GRANTED" : "AUTOMATION_APPROVAL_REJECTED",
+      resourceType: "automation_approval",
+      resourceId: approval.id,
+      metadata: { workflowId: approval.workflowId, executionId: approval.executionId, decision: params.decision, reason: params.reason }
+    });
+    return { approval: updated, executionResumed: params.decision === "APPROVED" };
+  }
+  /**
+   * List approvals with filters.
+   */
+  async listApprovals(params) {
+    const page = Math.max(1, params.page || 1);
+    const limit = Math.min(100, Math.max(1, params.limit || 20));
+    const skip = (page - 1) * limit;
+    const where = { organizationId: params.organizationId };
+    if (params.status) where.status = params.status;
+    if (params.workflowId) where.workflowId = params.workflowId;
+    const [rows, total] = await Promise.all([
+      prisma.automationApproval.findMany({
+        where,
+        skip,
+        take: limit,
+        orderBy: { requestedAt: "desc" },
+        include: {
+          approver: { select: { id: true, firstName: true, lastName: true, email: true } },
+          workflow: { select: { id: true, name: true, category: true } }
+        }
+      }),
+      prisma.automationApproval.count({ where })
+    ]);
+    return { rows, total, page, limit };
+  }
+};
+var approvalEngine = ApprovalEngine.getInstance();
+
+// server/services/automation/TaskManager.ts
+import crypto6 from "node:crypto";
+var TaskManager = class _TaskManager {
+  static getInstance() {
+    if (!_TaskManager.instance) {
+      _TaskManager.instance = new _TaskManager();
+    }
+    return _TaskManager.instance;
+  }
+  /**
+   * Create a new automated task.
+   */
+  async createTask(params) {
+    const taskId = crypto6.randomUUID();
+    const dueDate = params.dueDate ? new Date(params.dueDate) : null;
+    const task = await prisma.automationTask.create({
+      data: {
+        id: taskId,
+        organizationId: params.organizationId,
+        title: params.title,
+        description: params.description || null,
+        assignedUserId: params.assignedUserId || null,
+        assignedRole: params.assignedRole || null,
+        priority: params.priority || "MEDIUM",
+        status: "PENDING",
+        dueDate,
+        sourceWorkflowId: params.sourceWorkflowId || null,
+        sourceExecutionId: params.sourceExecutionId || null,
+        sourceEntityType: params.sourceEntityType || null,
+        sourceEntityId: params.sourceEntityId || null,
+        isAiGenerated: params.isAiGenerated ?? true,
+        metadata: params.metadata || {}
+      },
+      include: {
+        assignedUser: {
+          select: { id: true, firstName: true, lastName: true, email: true }
+        }
+      }
+    });
+    return task;
+  }
+  /**
+   * Update task status or assignment.
+   */
+  async updateTask(params) {
+    const task = await prisma.automationTask.findFirst({
+      where: { id: params.taskId, organizationId: params.organizationId }
+    });
+    if (!task) {
+      throw new NotFoundError("Automation task not found.");
+    }
+    const updateData = {};
+    if (params.status) {
+      updateData.status = params.status;
+      if (params.status === "COMPLETED") {
+        updateData.completedAt = /* @__PURE__ */ new Date();
+      }
+    }
+    if (params.assignedUserId !== void 0) {
+      updateData.assignedUserId = params.assignedUserId;
+    }
+    if (params.priority) {
+      updateData.priority = params.priority;
+    }
+    if (params.dueDate !== void 0) {
+      updateData.dueDate = params.dueDate ? new Date(params.dueDate) : null;
+    }
+    const updated = await prisma.automationTask.update({
+      where: { id: task.id },
+      data: updateData,
+      include: {
+        assignedUser: {
+          select: { id: true, firstName: true, lastName: true, email: true }
+        }
+      }
+    });
+    if (params.userId) {
+      await auditLogRepository.record({
+        organizationId: params.organizationId,
+        actorUserId: params.userId,
+        actorType: "USER",
+        action: "AUTOMATION_TASK_UPDATED",
+        resourceType: "automation_task",
+        resourceId: task.id,
+        metadata: { updateData }
+      });
+    }
+    return updated;
+  }
+  /**
+   * List tasks with filters.
+   */
+  async listTasks(params) {
+    const page = Math.max(1, params.page || 1);
+    const limit = Math.min(100, Math.max(1, params.limit || 20));
+    const skip = (page - 1) * limit;
+    const where = { organizationId: params.organizationId };
+    if (params.status) where.status = params.status;
+    if (params.priority) where.priority = params.priority;
+    if (params.assignedUserId) where.assignedUserId = params.assignedUserId;
+    if (params.sourceWorkflowId) where.sourceWorkflowId = params.sourceWorkflowId;
+    const [rows, total] = await Promise.all([
+      prisma.automationTask.findMany({
+        where,
+        skip,
+        take: limit,
+        orderBy: { createdAt: "desc" },
+        include: {
+          assignedUser: {
+            select: { id: true, firstName: true, lastName: true, email: true }
+          },
+          workflow: {
+            select: { id: true, name: true, category: true }
+          }
+        }
+      }),
+      prisma.automationTask.count({ where })
+    ]);
+    return { rows, total, page, limit };
+  }
+};
+var taskManager = TaskManager.getInstance();
+
+// server/services/automation/SchedulerEngine.ts
+import crypto7 from "node:crypto";
+var SchedulerEngine = class _SchedulerEngine {
+  constructor() {
+    this.timer = null;
+    this.isProcessing = false;
+    this.triggerWorkflowCallback = null;
+  }
+  static getInstance() {
+    if (!_SchedulerEngine.instance) {
+      _SchedulerEngine.instance = new _SchedulerEngine();
+    }
+    return _SchedulerEngine.instance;
+  }
+  /**
+   * Set callback to invoke when a scheduled workflow is triggered.
+   */
+  setWorkflowExecutor(executor) {
+    this.triggerWorkflowCallback = executor;
+  }
+  /**
+   * Start the scheduler tick interval.
+   */
+  start(intervalMs = 3e4) {
+    if (this.timer) return;
+    this.timer = setInterval(() => {
+      this.tick().catch((err) => {
+        logger.error({ err }, "[SchedulerEngine] Error during scheduler tick");
+      });
+    }, intervalMs);
+    this.timer.unref();
+    logger.info({ intervalMs }, "[SchedulerEngine] Background scheduler started");
+  }
+  /**
+   * Stop the background scheduler.
+   */
+  stop() {
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = null;
+      logger.info("[SchedulerEngine] Background scheduler stopped");
+    }
+  }
+  /**
+   * Calculate next run timestamp from schedule configuration.
+   */
+  static calculateNextRun(schedule) {
+    const now = /* @__PURE__ */ new Date();
+    if (schedule.scheduleType === "ONE_TIME") {
+      return schedule.lastRunAt ? null : now;
+    }
+    if (schedule.scheduleType === "RECURRING") {
+      const intervalSec = schedule.intervalSeconds || 3600;
+      const base = schedule.lastRunAt ? new Date(schedule.lastRunAt) : now;
+      const next = new Date(base.getTime() + intervalSec * 1e3);
+      if (next.getTime() <= now.getTime()) {
+        return new Date(now.getTime() + intervalSec * 1e3);
+      }
+      return next;
+    }
+    if (schedule.scheduleType === "CRON") {
+      const cron = (schedule.cronExpression || "0 0 * * *").trim();
+      const parts = cron.split(/\s+/);
+      const next = new Date(now.getTime() + 6e4);
+      if (parts.length >= 5) {
+        const [min, hour] = parts;
+        if (min !== "*" && !isNaN(Number(min))) {
+          next.setMinutes(Number(min), 0, 0);
+        }
+        if (hour !== "*" && !isNaN(Number(hour))) {
+          next.setHours(Number(hour));
+        }
+        if (next.getTime() <= now.getTime()) {
+          next.setDate(next.getDate() + 1);
+        }
+      }
+      return next;
+    }
+    return null;
+  }
+  /**
+   * Evaluates due schedules and executes them safely.
+   */
+  async tick() {
+    if (this.isProcessing) return 0;
+    this.isProcessing = true;
+    try {
+      const now = /* @__PURE__ */ new Date();
+      const dueSchedules = await prisma.automationSchedule.findMany({
+        where: {
+          isActive: true,
+          OR: [
+            { nextRunAt: { lte: now } },
+            { nextRunAt: null, lastRunAt: null }
+          ]
+        },
+        take: 20
+      });
+      let triggeredCount = 0;
+      for (const schedule of dueSchedules) {
+        try {
+          const correlationId = crypto7.randomUUID();
+          const nextRun = _SchedulerEngine.calculateNextRun({
+            scheduleType: schedule.scheduleType,
+            intervalSeconds: schedule.intervalSeconds,
+            cronExpression: schedule.cronExpression,
+            lastRunAt: now
+          });
+          await prisma.automationSchedule.update({
+            where: { id: schedule.id },
+            data: {
+              lastRunAt: now,
+              nextRunAt: nextRun,
+              runCount: { increment: 1 },
+              isActive: schedule.scheduleType === "ONE_TIME" ? false : schedule.isActive
+            }
+          });
+          if (this.triggerWorkflowCallback) {
+            await this.triggerWorkflowCallback({
+              workflowId: schedule.workflowId,
+              organizationId: schedule.organizationId,
+              triggerType: "SCHEDULE",
+              input: {
+                scheduleId: schedule.id,
+                scheduleName: schedule.name,
+                timestamp: now.toISOString(),
+                ...schedule.config || {}
+              },
+              correlationId
+            });
+            triggeredCount++;
+          }
+        } catch (execErr) {
+          logger.error({ execErr, scheduleId: schedule.id }, "[SchedulerEngine] Error executing schedule");
+        }
+      }
+      return triggeredCount;
+    } finally {
+      this.isProcessing = false;
+    }
+  }
+  /**
+   * Create a new schedule.
+   */
+  async createSchedule(params) {
+    const workflow = await prisma.automationWorkflow.findFirst({
+      where: { id: params.workflowId, organizationId: params.organizationId }
+    });
+    if (!workflow) {
+      throw new NotFoundError("Workflow not found.");
+    }
+    const nextRunAt = _SchedulerEngine.calculateNextRun({
+      scheduleType: params.scheduleType,
+      intervalSeconds: params.intervalSeconds,
+      cronExpression: params.cronExpression,
+      lastRunAt: null
+    });
+    const schedule = await prisma.automationSchedule.create({
+      data: {
+        id: crypto7.randomUUID(),
+        organizationId: params.organizationId,
+        workflowId: params.workflowId,
+        name: params.name,
+        description: params.description || null,
+        scheduleType: params.scheduleType,
+        cronExpression: params.cronExpression || null,
+        timezone: params.timezone || "UTC",
+        intervalSeconds: params.intervalSeconds || null,
+        isActive: true,
+        nextRunAt,
+        config: params.config || {}
+      },
+      include: {
+        workflow: {
+          select: { id: true, name: true, status: true }
+        }
+      }
+    });
+    return schedule;
+  }
+  /**
+   * Toggle schedule active state.
+   */
+  async toggleSchedule(id, organizationId, isActive) {
+    const schedule = await prisma.automationSchedule.findFirst({
+      where: { id, organizationId }
+    });
+    if (!schedule) {
+      throw new NotFoundError("Schedule not found.");
+    }
+    const newActive = isActive !== void 0 ? isActive : !schedule.isActive;
+    const nextRunAt = newActive ? _SchedulerEngine.calculateNextRun({
+      scheduleType: schedule.scheduleType,
+      intervalSeconds: schedule.intervalSeconds,
+      cronExpression: schedule.cronExpression,
+      lastRunAt: schedule.lastRunAt
+    }) : null;
+    return prisma.automationSchedule.update({
+      where: { id: schedule.id },
+      data: { isActive: newActive, nextRunAt },
+      include: {
+        workflow: {
+          select: { id: true, name: true, status: true }
+        }
+      }
+    });
+  }
+  /**
+   * Delete schedule.
+   */
+  async deleteSchedule(id, organizationId) {
+    const schedule = await prisma.automationSchedule.findFirst({
+      where: { id, organizationId }
+    });
+    if (!schedule) {
+      throw new NotFoundError("Schedule not found.");
+    }
+    await prisma.automationSchedule.delete({ where: { id } });
+    return { deleted: true, id };
+  }
+  /**
+   * List schedules with pagination.
+   */
+  async listSchedules(params) {
+    const page = Math.max(1, params.page || 1);
+    const limit = Math.min(100, Math.max(1, params.limit || 20));
+    const skip = (page - 1) * limit;
+    const where = { organizationId: params.organizationId };
+    if (params.workflowId) where.workflowId = params.workflowId;
+    if (params.isActive !== void 0) where.isActive = params.isActive;
+    const [rows, total] = await Promise.all([
+      prisma.automationSchedule.findMany({
+        where,
+        skip,
+        take: limit,
+        orderBy: { createdAt: "desc" },
+        include: {
+          workflow: {
+            select: { id: true, name: true, status: true, category: true }
+          }
+        }
+      }),
+      prisma.automationSchedule.count({ where })
+    ]);
+    return { rows, total, page, limit };
+  }
+};
+var schedulerEngine = SchedulerEngine.getInstance();
+
+// server/services/automation/WorkflowEngine.ts
+import crypto10 from "node:crypto";
+
+// server/services/automation/NotificationEngine.ts
+import crypto8 from "node:crypto";
+var NotificationEngine = class _NotificationEngine {
+  static getInstance() {
+    if (!_NotificationEngine.instance) {
+      _NotificationEngine.instance = new _NotificationEngine();
+    }
+    return _NotificationEngine.instance;
+  }
+  /**
+   * Dispatch a notification to a specific user or role.
+   */
+  async dispatchNotification(params) {
+    const channel = params.channel || "IN_APP";
+    const level = params.level || "INFO";
+    const notifId = crypto8.randomUUID();
+    if (params.userId && (channel === "EMAIL" || channel === "SMS")) {
+      try {
+        const pref = await prisma.notificationPreference.findUnique({
+          where: {
+            userId_channel_notificationType: {
+              userId: params.userId,
+              channel,
+              notificationType: "automation"
+            }
+          }
+        });
+        if (pref && !pref.enabled) {
+          logger.info({ userId: params.userId, channel }, "[NotificationEngine] Delivery suppressed by user preference");
+          return { id: notifId, delivered: false };
+        }
+      } catch {
+      }
+    }
+    const record = await prisma.automationNotification.create({
+      data: {
+        id: notifId,
+        organizationId: params.organizationId,
+        userId: params.userId || null,
+        recipientRole: params.recipientRole || null,
+        channel,
+        title: params.title,
+        message: params.message,
+        level,
+        status: "DELIVERED",
+        sourceWorkflowId: params.sourceWorkflowId || null,
+        sourceExecutionId: params.sourceExecutionId || null,
+        metadata: params.metadata || {}
+      }
+    });
+    if (params.userId && channel === "IN_APP") {
+      try {
+        await prisma.notification.create({
+          data: {
+            id: crypto8.randomUUID(),
+            organizationId: params.organizationId,
+            userId: params.userId,
+            title: params.title,
+            message: params.message,
+            type: level === "ERROR" ? "SYSTEM_ALERT" : "WORKFLOW_UPDATE",
+            status: "UNREAD"
+          }
+        });
+      } catch (err) {
+        logger.warn({ err }, "[NotificationEngine] Core notification sync skipped");
+      }
+    }
+    return { id: record.id, delivered: true };
+  }
+  /**
+   * List notifications for an organization or user.
+   */
+  async listNotifications(params) {
+    const page = Math.max(1, params.page || 1);
+    const limit = Math.min(100, Math.max(1, params.limit || 20));
+    const skip = (page - 1) * limit;
+    const where = { organizationId: params.organizationId };
+    if (params.userId) where.userId = params.userId;
+    const [rows, total] = await Promise.all([
+      prisma.automationNotification.findMany({ where, skip, take: limit, orderBy: { createdAt: "desc" } }),
+      prisma.automationNotification.count({ where })
+    ]);
+    return { rows, total, page, limit };
+  }
+  /**
+   * Mark notification as read.
+   */
+  async markAsRead(id, organizationId) {
+    await prisma.automationNotification.updateMany({
+      where: { id, organizationId },
+      data: { status: "READ", readAt: /* @__PURE__ */ new Date() }
+    });
+    return true;
+  }
+};
+var notificationEngine = NotificationEngine.getInstance();
+
+// server/ai/provider.ts
+import { GoogleGenAI } from "@google/genai";
+var GEMINI_MODEL = "gemini-3.7-flash";
+var GeminiProvider = class {
+  constructor() {
+    this.code = "gemini";
+    this.name = `Google Gemini (${GEMINI_MODEL})`;
+    this.defaultModel = GEMINI_MODEL;
+    this.client = null;
+  }
+  get available() {
+    return config.aiProvider === "gemini" && config.geminiApiKey.length > 0;
+  }
+  getClient() {
+    if (this.client) return this.client;
+    if (!this.available) {
+      throw new InfrastructureError("AI provider is not configured (GEMINI_API_KEY missing).");
+    }
+    this.client = new GoogleGenAI({ apiKey: config.geminiApiKey });
+    return this.client;
+  }
+  async generateText(prompt, options) {
+    const client3 = this.getClient();
+    const model = options?.model ?? this.defaultModel;
+    try {
+      const response = await client3.models.generateContent({
+        model,
+        contents: prompt,
+        config: {
+          systemInstruction: options?.systemInstruction,
+          temperature: options?.temperature ?? 0.3,
+          maxOutputTokens: options?.maxOutputTokens ?? 2048,
+          responseMimeType: options?.responseMimeType
+        }
+      });
+      const text = response.text;
+      if (!text) {
+        throw new InfrastructureError("Empty response received from the AI provider.");
+      }
+      const usageMetadata = response.usageMetadata;
+      const usage = usageMetadata ? {
+        inputTokens: usageMetadata.promptTokenCount,
+        outputTokens: usageMetadata.candidatesTokenCount,
+        totalTokens: usageMetadata.totalTokenCount
+      } : void 0;
+      return { text, model, usage };
+    } catch (err) {
+      logger.error({ err, event: "ai_provider_error" }, "AI provider call failed");
+      throw err instanceof InfrastructureError ? err : new InfrastructureError("AI provider call failed.");
+    }
+  }
+};
+var UnavailableProvider = class {
+  constructor() {
+    this.code = "none";
+    this.name = "none";
+    this.available = false;
+    this.defaultModel = "none";
+  }
+  async generateText() {
+    throw new InfrastructureError("AI provider is not configured.");
+  }
+};
+var defaultAiProvider = config.aiProvider === "gemini" ? new GeminiProvider() : new UnavailableProvider();
+
+// server/services/knowledge/KnowledgeService.ts
+import crypto9 from "crypto";
+
+// server/services/knowledge/ExtractionPipeline.ts
+var PlainTextExtractor = class {
+  canHandle(mimeType, filename) {
+    const ext = filename?.split(".").pop()?.toLowerCase();
+    return mimeType.startsWith("text/plain") || mimeType === "text/markdown" || mimeType === "application/json" || mimeType === "text/yaml" || ext === "txt" || ext === "md" || ext === "markdown" || ext === "json";
+  }
+  async extract(buffer, filename) {
+    const text = buffer.toString("utf8");
+    const words = text.trim().split(/\s+/).filter(Boolean);
+    return {
+      text,
+      mimeType: "text/plain",
+      metadata: {
+        title: filename || "Text Document",
+        characterCount: text.length,
+        wordCount: words.length,
+        extractedAt: (/* @__PURE__ */ new Date()).toISOString(),
+        format: "text"
+      }
+    };
+  }
+};
+var HtmlExtractor = class {
+  canHandle(mimeType, filename) {
+    const ext = filename?.split(".").pop()?.toLowerCase();
+    return mimeType === "text/html" || mimeType === "application/xhtml+xml" || ext === "html" || ext === "htm";
+  }
+  async extract(buffer, filename) {
+    const raw = buffer.toString("utf8");
+    const cleaned = raw.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, " ").replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, " ").replace(/<br\s*\/?>/gi, "\n").replace(/<\/p>/gi, "\n\n").replace(/<\/h[1-6]>/gi, "\n\n").replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/\n\s+\n/g, "\n\n").trim();
+    const words = cleaned.split(/\s+/).filter(Boolean);
+    return {
+      text: cleaned,
+      mimeType: "text/html",
+      metadata: {
+        title: filename || "HTML Document",
+        characterCount: cleaned.length,
+        wordCount: words.length,
+        extractedAt: (/* @__PURE__ */ new Date()).toISOString(),
+        format: "html"
+      }
+    };
+  }
+};
+var CsvSpreadsheetExtractor = class {
+  canHandle(mimeType, filename) {
+    const ext = filename?.split(".").pop()?.toLowerCase();
+    return mimeType === "text/csv" || mimeType === "application/vnd.ms-excel" || mimeType === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" || ext === "csv" || ext === "tsv" || ext === "xlsx" || ext === "xls";
+  }
+  async extract(buffer, filename) {
+    const ext = filename?.split(".").pop()?.toLowerCase();
+    if (ext === "csv" || ext === "tsv" || buffer.subarray(0, 100).toString("utf8").includes(",")) {
+      const text = buffer.toString("utf8");
+      const lines = text.split("\n").filter((l) => l.trim().length > 0);
+      const rows = lines.map((l) => l.split(/,|\t/).map((c) => c.trim().replace(/^["']|["']$/g, "")));
+      const formatted = rows.map((row, idx) => idx === 0 ? `[COLUMNS]: ${row.join(" | ")}` : `Row ${idx}: ${row.join(" | ")}`).join("\n");
+      return {
+        text: formatted,
+        mimeType: "text/csv",
+        metadata: {
+          title: filename || "Spreadsheet Document",
+          characterCount: formatted.length,
+          wordCount: formatted.split(/\s+/).filter(Boolean).length,
+          pageCount: Math.ceil(lines.length / 50),
+          extractedAt: (/* @__PURE__ */ new Date()).toISOString(),
+          format: "tabular"
+        }
+      };
+    }
+    const binaryStr = buffer.toString("latin1");
+    const extractedCells = [];
+    const cellRegex = /<t[^>]*>(.*?)<\/t>/g;
+    let match;
+    while ((match = cellRegex.exec(binaryStr)) !== null) {
+      if (match[1] && match[1].trim()) {
+        extractedCells.push(match[1].trim());
+      }
+    }
+    const content = extractedCells.length > 0 ? extractedCells.join("\n") : buffer.toString("utf8").replace(/[\x00-\x08\x0B-\x0C\x0E-\x1F\x7F-\x9F]/g, " ").trim();
+    return {
+      text: content,
+      mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      metadata: {
+        title: filename || "Excel Spreadsheet",
+        characterCount: content.length,
+        wordCount: content.split(/\s+/).filter(Boolean).length,
+        extractedAt: (/* @__PURE__ */ new Date()).toISOString(),
+        format: "xlsx"
+      }
+    };
+  }
+};
+var PdfExtractor = class {
+  canHandle(mimeType, filename) {
+    const ext = filename?.split(".").pop()?.toLowerCase();
+    return mimeType === "application/pdf" || ext === "pdf";
+  }
+  async extract(buffer, filename) {
+    const pdfData = buffer.toString("latin1");
+    const textChunks = [];
+    const blockRegex = /BT[\s\S]*?ET/g;
+    const matches = pdfData.match(blockRegex) || [];
+    for (const block of matches) {
+      const strMatches = block.match(/\((.*?)\)\s*(?:Tj|'|")/g) || [];
+      for (const sm of strMatches) {
+        const textMatch = sm.match(/\((.*?)\)/);
+        if (textMatch && textMatch[1]) {
+          textChunks.push(textMatch[1]);
+        }
+      }
+    }
+    let extracted = textChunks.join(" ").replace(/\\([()\\])/g, "$1").trim();
+    if (!extracted || extracted.length < 10) {
+      const asciiStrings = pdfData.match(/[\x20-\x7E]{4,}/g) || [];
+      const cleanAscii = asciiStrings.filter((s) => !s.startsWith("/") && !s.includes("obj") && !s.includes("endobj"));
+      extracted = cleanAscii.join(" ").slice(0, 5e4);
+    }
+    if (!extracted || extracted.length === 0) {
+      extracted = `[Scanned or Image-based PDF Document: ${filename || "unnamed.pdf"}]`;
+    }
+    const pageTokens = (pdfData.match(/\/Type\s*\/Page\b/g) || []).length;
+    const pageCount = Math.max(1, pageTokens);
+    return {
+      text: extracted,
+      mimeType: "application/pdf",
+      metadata: {
+        title: filename || "PDF Document",
+        pageCount,
+        characterCount: extracted.length,
+        wordCount: extracted.split(/\s+/).filter(Boolean).length,
+        extractedAt: (/* @__PURE__ */ new Date()).toISOString(),
+        format: "pdf"
+      }
+    };
+  }
+};
+var DocxExtractor = class {
+  canHandle(mimeType, filename) {
+    const ext = filename?.split(".").pop()?.toLowerCase();
+    return mimeType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" || mimeType === "application/msword" || ext === "docx" || ext === "doc";
+  }
+  async extract(buffer, filename) {
+    const raw = buffer.toString("utf8");
+    const textPieces = [];
+    const textTagRegex = /<w:t[^>]*>(.*?)<\/w:t>/g;
+    let m;
+    while ((m = textTagRegex.exec(raw)) !== null) {
+      if (m[1]) textPieces.push(m[1]);
+    }
+    let text = textPieces.join(" ").trim();
+    if (!text || text.length < 5) {
+      text = raw.replace(/[\x00-\x08\x0B-\x0C\x0E-\x1F\x7F-\x9F]/g, " ").trim().slice(0, 1e5);
+    }
+    return {
+      text,
+      mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      metadata: {
+        title: filename || "Word Document",
+        characterCount: text.length,
+        wordCount: text.split(/\s+/).filter(Boolean).length,
+        extractedAt: (/* @__PURE__ */ new Date()).toISOString(),
+        format: "docx"
+      }
+    };
+  }
+};
+var ExtractionPipeline = class {
+  static {
+    this.extractors = [
+      new PlainTextExtractor(),
+      new HtmlExtractor(),
+      new CsvSpreadsheetExtractor(),
+      new PdfExtractor(),
+      new DocxExtractor()
+    ];
+  }
+  static registerExtractor(extractor) {
+    this.extractors.unshift(extractor);
+  }
+  static async extract(buffer, mimeType, filename) {
+    for (const extractor of this.extractors) {
+      if (extractor.canHandle(mimeType, filename)) {
+        try {
+          return await extractor.extract(buffer, filename);
+        } catch (err) {
+          logger.warn({ err, mimeType, filename }, "[ExtractionPipeline] Extractor failed, trying next");
+        }
+      }
+    }
+    try {
+      const sample = buffer.subarray(0, 512).toString("utf8");
+      const isAscii = /^[\x09\x0A\x0D\x20-\x7E]*$/.test(sample);
+      if (isAscii) {
+        return new PlainTextExtractor().extract(buffer, filename);
+      }
+    } catch {
+    }
+    throw new ValidationError(`Unsupported document format or mime type: "${mimeType}".`);
+  }
+};
+
+// server/services/knowledge/ChunkingEngine.ts
+var ChunkingEngine = class {
+  /**
+   * Chunks a normalized document string into structured chunks with metadata.
+   */
+  static chunk(text, options = {}) {
+    const maxChunkSize = options.maxChunkSize || 1e3;
+    const overlapSize = options.overlapSize || 150;
+    if (!text || text.trim().length === 0) {
+      return [];
+    }
+    const cleanText = text.replace(/\r\n/g, "\n");
+    const rawSections = cleanText.split(/\n{2,}/);
+    const chunks = [];
+    let currentBuffer = "";
+    let currentHeading = void 0;
+    let currentPage = 1;
+    let chunkIndex = 0;
+    for (const section of rawSections) {
+      const trimmed = section.trim();
+      if (!trimmed) continue;
+      if (trimmed.startsWith("#") || /^[A-Z0-9\s-]{3,30}:?$/.test(trimmed.split("\n")[0] || "")) {
+        currentHeading = trimmed.split("\n")[0]?.replace(/^#+\s*/, "").slice(0, 100);
+      }
+      const pageMatch = trimmed.match(/\[PAGE\s*(\d+)\]|--- Page (\d+) ---/i);
+      if (pageMatch) {
+        currentPage = parseInt(pageMatch[1] || pageMatch[2] || "1", 10);
+      }
+      if (currentBuffer.length + trimmed.length + 1 > maxChunkSize && currentBuffer.length > 0) {
+        const tokenEstimate = Math.max(1, Math.ceil(currentBuffer.length / 4));
+        chunks.push({
+          chunkIndex,
+          content: currentBuffer.trim(),
+          tokenEstimate,
+          charCount: currentBuffer.length,
+          pageNumber: currentPage,
+          sectionHeading: currentHeading,
+          metadata: {
+            estimatedTokens: tokenEstimate,
+            chunkSeq: chunkIndex
+          }
+        });
+        chunkIndex++;
+        const overlap = currentBuffer.slice(-overlapSize).trim();
+        currentBuffer = overlap ? `${overlap}
+
+${trimmed}` : trimmed;
+      } else {
+        currentBuffer = currentBuffer ? `${currentBuffer}
+
+${trimmed}` : trimmed;
+      }
+      while (currentBuffer.length > maxChunkSize * 1.5) {
+        const splitPoint = currentBuffer.lastIndexOf(". ", maxChunkSize);
+        const cut = splitPoint > 200 ? splitPoint + 1 : maxChunkSize;
+        const part = currentBuffer.slice(0, cut).trim();
+        const remainder = currentBuffer.slice(cut).trim();
+        const tokenEstimate = Math.max(1, Math.ceil(part.length / 4));
+        chunks.push({
+          chunkIndex,
+          content: part,
+          tokenEstimate,
+          charCount: part.length,
+          pageNumber: currentPage,
+          sectionHeading: currentHeading
+        });
+        chunkIndex++;
+        currentBuffer = remainder;
+      }
+    }
+    if (currentBuffer.trim().length > 0) {
+      const tokenEstimate = Math.max(1, Math.ceil(currentBuffer.length / 4));
+      chunks.push({
+        chunkIndex,
+        content: currentBuffer.trim(),
+        tokenEstimate,
+        charCount: currentBuffer.length,
+        pageNumber: currentPage,
+        sectionHeading: currentHeading
+      });
+    }
+    return chunks;
+  }
+};
+
+// server/ai/adapters/geminiAdapter.ts
+import { GoogleGenAI as GoogleGenAI2 } from "@google/genai";
+var GeminiAdapter = class {
+  constructor(apiKey) {
+    this.providerType = "GEMINI";
+    this.client = null;
+    this.apiKey = apiKey && apiKey.length > 0 ? apiKey : config.geminiApiKey;
+  }
+  getClient() {
+    if (this.client) return this.client;
+    if (!this.apiKey || this.apiKey.length === 0) {
+      throw new InfrastructureError("Gemini API key is not configured in server environment.");
+    }
+    this.client = new GoogleGenAI2({ apiKey: this.apiKey });
+    return this.client;
+  }
+  async generateText(params) {
+    const start = Date.now();
+    const client3 = this.getClient();
+    const model = params.modelName || "gemini-2.5-flash";
+    try {
+      const response = await client3.models.generateContent({
+        model,
+        contents: params.prompt,
+        config: {
+          systemInstruction: params.systemInstruction,
+          temperature: params.temperature ?? 0.3,
+          maxOutputTokens: params.maxTokens ?? 2048,
+          responseMimeType: params.responseMimeType,
+          stopSequences: params.stopSequences
+        }
+      });
+      const durationMs = Date.now() - start;
+      const text = response.text || "";
+      const usage = response.usageMetadata;
+      const inputTokens = usage?.promptTokenCount ?? Math.max(1, Math.ceil(params.prompt.length / 4));
+      const outputTokens = usage?.candidatesTokenCount ?? Math.max(1, Math.ceil(text.length / 4));
+      const totalTokens = usage?.totalTokenCount ?? inputTokens + outputTokens;
+      return {
+        text,
+        inputTokens,
+        outputTokens,
+        totalTokens,
+        durationMs,
+        finishReason: "STOP"
+      };
+    } catch (err) {
+      const durationMs = Date.now() - start;
+      logger.error({ err, model, durationMs, event: "gemini_adapter_error" }, "Gemini invocation failed");
+      const message = err instanceof Error ? err.message : "Gemini provider call failed.";
+      throw new InfrastructureError(`Gemini error: ${message}`);
+    }
+  }
+  async generateStructured(params) {
+    const res = await this.generateText({
+      ...params,
+      responseMimeType: "application/json"
+    });
+    try {
+      const clean = res.text.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
+      return JSON.parse(clean);
+    } catch {
+      throw new InfrastructureError(`Failed to parse structured JSON output: ${res.text.slice(0, 100)}...`);
+    }
+  }
+  async generateEmbedding(params) {
+    const client3 = this.getClient();
+    const model = params.modelName || "text-embedding-004";
+    try {
+      const response = await client3.models.embedContent({
+        model,
+        contents: params.text
+      });
+      const values = response.embeddings?.[0]?.values;
+      if (Array.isArray(values) && values.length > 0) {
+        return values;
+      }
+      throw new Error("No embedding values returned from Gemini model.");
+    } catch (err) {
+      logger.error({ err, model }, "Gemini embedding invocation failed");
+      const message = err instanceof Error ? err.message : "Gemini embedContent failed.";
+      throw new InfrastructureError(`Gemini embedding error: ${message}`);
+    }
+  }
+};
+
+// server/ai/adapters/mockAdapter.ts
+var MockAdapter = class {
+  constructor() {
+    this.providerType = "MOCK";
+  }
+  async generateText(params) {
+    const start = Date.now();
+    const prompt = params.prompt.trim();
+    let responseText = "";
+    if (params.responseMimeType === "application/json" || prompt.toLowerCase().includes("json")) {
+      responseText = JSON.stringify({
+        status: "success",
+        synthesis: "Simulated structured intelligence output generated by Artify Mock Adapter.",
+        entities: [{ name: "Target Entity", type: "ENTERPRISE", score: 0.94 }],
+        recommendation: "Proceed with executive relationship advancement.",
+        timestamp: (/* @__PURE__ */ new Date()).toISOString()
+      }, null, 2);
+    } else if (prompt.toLowerCase().includes("summariz") || prompt.toLowerCase().includes("brief")) {
+      responseText = `**Executive Brief**
+
+- **Overview:** Synthesized analysis for prompt: "${prompt.slice(0, 80)}..."
+- **Key Finding:** Strong commercial alignment observed across account parameters.
+- **Risk Factor:** Low risk with operational governance active.
+- **Recommended Next Step:** Schedule milestone audit and confirm contract schedule.`;
+    } else if (prompt.toLowerCase().includes("classif") || prompt.toLowerCase().includes("categor")) {
+      responseText = `**Classification Result**
+- Primary Category: HIGH_PRIORITY
+- Confidence Score: 0.92
+- Strategic Alignment: Enterprise Tier Growth`;
+    } else {
+      responseText = `Artify Intelligence Response:
+
+Analysis completed successfully for model ${params.modelName}.
+
+Parameters evaluated: temperature=${params.temperature ?? 0.3}, maxTokens=${params.maxTokens ?? 2048}.
+System instructions observed: ${params.systemInstruction ? "Active" : "None"}.
+
+Evaluated input: ${prompt}
+
+Output: High quality deterministic synthesis conforming to Artify enterprise governance policies.`;
+    }
+    const durationMs = Math.max(15, Date.now() - start);
+    const inputTokens = Math.max(1, Math.ceil(prompt.length / 4));
+    const outputTokens = Math.max(1, Math.ceil(responseText.length / 4));
+    return {
+      text: responseText,
+      inputTokens,
+      outputTokens,
+      totalTokens: inputTokens + outputTokens,
+      durationMs,
+      finishReason: "STOP"
+    };
+  }
+  async generateStructured(params) {
+    const res = await this.generateText({
+      ...params,
+      responseMimeType: "application/json"
+    });
+    return JSON.parse(res.text);
+  }
+  async generateEmbedding(params) {
+    const dim = params.dimension || 768;
+    const text = params.text.toLowerCase();
+    const vec = new Array(dim).fill(0);
+    for (let i = 0; i < text.length; i++) {
+      const code = text.charCodeAt(i);
+      const idx = (code * 31 + i * 17) % dim;
+      vec[idx] = (vec[idx] + code / 255) % 1;
+    }
+    const norm = Math.sqrt(vec.reduce((sum, v) => sum + v * v, 0)) || 1;
+    return vec.map((v) => Number((v / norm).toFixed(6)));
+  }
+};
+
+// server/ai/adapters/adapterFactory.ts
+var AdapterFactory = class {
+  static {
+    this.mockInstance = new MockAdapter();
+  }
+  static {
+    this.geminiInstance = null;
+  }
+  static getAdapter(providerType, apiKey) {
+    const normalized = (providerType || "GEMINI").toUpperCase();
+    if (normalized === "MOCK") {
+      return this.mockInstance;
+    }
+    if (normalized === "GEMINI") {
+      const key = apiKey || config.geminiApiKey;
+      if (!key || key.length === 0) {
+        return this.mockInstance;
+      }
+      if (!this.geminiInstance || apiKey) {
+        const adapter = new GeminiAdapter(key);
+        if (!apiKey) this.geminiInstance = adapter;
+        return adapter;
+      }
+      return this.geminiInstance;
+    }
+    return this.mockInstance;
+  }
+};
+
+// server/ai/adapters/index.ts
+function getAdapter(providerType = "GEMINI", apiKey) {
+  return AdapterFactory.getAdapter(providerType, apiKey);
+}
+
+// server/services/knowledge/EmbeddingService.ts
+var EmbeddingService = class {
+  /**
+   * Generates embedding vector for a piece of text using the active AI adapter.
+   */
+  static async generateEmbedding(text, modelName = "text-embedding-004") {
+    const adapter = getAdapter();
+    if (adapter.generateEmbedding) {
+      try {
+        return await adapter.generateEmbedding({ text, modelName, dimension: 768 });
+      } catch (err) {
+        logger.warn({ err }, "[EmbeddingService] Adapter embedding failed, calculating deterministic vector");
+      }
+    }
+    const dim = 768;
+    const lower = text.toLowerCase();
+    const vec = new Array(dim).fill(0);
+    for (let i = 0; i < lower.length; i++) {
+      const code = lower.charCodeAt(i);
+      const idx = (code * 31 + i * 17) % dim;
+      vec[idx] = (vec[idx] + code / 255) % 1;
+    }
+    const norm = Math.sqrt(vec.reduce((sum, v) => sum + v * v, 0)) || 1;
+    return vec.map((v) => Number((v / norm).toFixed(6)));
+  }
+  /**
+   * Computes cosine similarity between two unit vectors.
+   */
+  static cosineSimilarity(a, b) {
+    if (!a || !b || a.length === 0 || b.length === 0) return 0;
+    const len = Math.min(a.length, b.length);
+    let dot = 0;
+    let normA = 0;
+    let normB = 0;
+    for (let i = 0; i < len; i++) {
+      const ai = a[i] ?? 0;
+      const bi = b[i] ?? 0;
+      dot += ai * bi;
+      normA += ai * ai;
+      normB += bi * bi;
+    }
+    const denom = Math.sqrt(normA) * Math.sqrt(normB);
+    return denom === 0 ? 0 : Math.max(0, Math.min(1, dot / denom));
+  }
+  /**
+   * Stores embedding for a chunk in the database.
+   */
+  static async storeEmbedding(chunkId, vector, modelName = "text-embedding-004") {
+    const adapter = getAdapter();
+    await prisma.knowledgeEmbedding.create({
+      data: {
+        chunkId,
+        providerType: adapter.providerType,
+        modelName,
+        dimension: vector.length,
+        vector
+      }
+    });
+  }
+};
+
+// server/services/knowledge/HybridSearchEngine.ts
+var HybridSearchEngine = class {
+  /**
+   * Performs permission-filtered semantic, keyword, or hybrid search.
+   */
+  static async search(request, context) {
+    const startTime = Date.now();
+    const mode = request.mode || "HYBRID";
+    const limit = Math.min(request.limit || 10, 50);
+    const minScore = request.minScore ?? 0.15;
+    const documents = await prisma.knowledgeDocument.findMany({
+      where: {
+        organizationId: context.organizationId,
+        status: "INDEXED",
+        ...request.filter?.collectionIds?.length ? { collectionId: { in: request.filter.collectionIds } } : {},
+        ...request.filter?.sourceIds?.length ? { sourceId: { in: request.filter.sourceIds } } : {},
+        ...request.filter?.documentIds?.length ? { id: { in: request.filter.documentIds } } : {}
+      },
+      include: {
+        collection: true,
+        source: true
+      }
+    });
+    if (documents.length === 0) {
+      return [];
+    }
+    const authorizedDocs = documents.filter((doc) => {
+      if (doc.requiredRole && context.roleName && context.roleName !== "ADMIN") {
+        if (doc.requiredRole !== context.roleName) {
+          return false;
+        }
+      }
+      if (doc.collection) {
+        const col = doc.collection;
+        if (col.accessPolicy === "RESTRICTED" || col.accessPolicy === "ROLE_BASED") {
+          const allowedRoles = Array.isArray(col.allowedRoles) ? col.allowedRoles : [];
+          if (allowedRoles.length > 0 && context.roleName && context.roleName !== "ADMIN") {
+            if (!allowedRoles.includes(context.roleName)) {
+              return false;
+            }
+          }
+        } else if (col.accessPolicy === "OWNER_ONLY") {
+          if (context.userId && col.createdById !== context.userId && context.roleName !== "ADMIN") {
+            return false;
+          }
+        }
+      }
+      return true;
+    });
+    if (authorizedDocs.length === 0) {
+      return [];
+    }
+    const docMap = new Map(authorizedDocs.map((d) => [d.id, d]));
+    const authorizedDocIds = Array.from(docMap.keys());
+    const chunks = await prisma.knowledgeChunk.findMany({
+      where: {
+        organizationId: context.organizationId,
+        documentId: { in: authorizedDocIds }
+      },
+      include: {
+        embeddings: true
+      },
+      take: 200
+      // Search over candidate pool
+    });
+    if (chunks.length === 0) {
+      return [];
+    }
+    let queryVector = [];
+    if (mode === "SEMANTIC" || mode === "HYBRID") {
+      queryVector = await EmbeddingService.generateEmbedding(request.query);
+    }
+    const queryTerms = request.query.toLowerCase().split(/\s+/).filter((t) => t.length > 1);
+    const scoredItems = [];
+    for (const chunk of chunks) {
+      const doc = docMap.get(chunk.documentId);
+      if (!doc) continue;
+      let keywordScore = 0;
+      const lowerContent = chunk.content.toLowerCase();
+      let matchedTerms = 0;
+      for (const term of queryTerms) {
+        if (lowerContent.includes(term)) {
+          matchedTerms++;
+          const occurrences = lowerContent.split(term).length - 1;
+          keywordScore += Math.min(occurrences * 0.2, 0.6);
+        }
+      }
+      if (queryTerms.length > 0) {
+        keywordScore += matchedTerms / queryTerms.length * 0.4;
+      }
+      keywordScore = Math.min(1, keywordScore);
+      let similarityScore = 0;
+      if ((mode === "SEMANTIC" || mode === "HYBRID") && chunk.embeddings.length > 0) {
+        const storedVector = chunk.embeddings[0]?.vector;
+        if (Array.isArray(storedVector) && storedVector.length > 0) {
+          similarityScore = EmbeddingService.cosineSimilarity(queryVector, storedVector);
+        }
+      }
+      let finalScore = 0;
+      if (mode === "SEMANTIC") {
+        finalScore = similarityScore;
+      } else if (mode === "KEYWORD") {
+        finalScore = keywordScore;
+      } else {
+        finalScore = similarityScore * 0.7 + keywordScore * 0.3;
+      }
+      if (finalScore >= minScore) {
+        scoredItems.push({
+          chunkId: chunk.id,
+          documentId: doc.id,
+          documentTitle: doc.title,
+          collectionId: doc.collectionId || void 0,
+          collectionName: doc.collection?.name,
+          sourceId: doc.sourceId || void 0,
+          sourceName: doc.source?.name,
+          versionNumber: chunk.versionNumber,
+          chunkIndex: chunk.chunkIndex,
+          content: chunk.content,
+          pageNumber: chunk.pageNumber || void 0,
+          sectionHeading: chunk.sectionHeading || void 0,
+          similarityScore: Number(similarityScore.toFixed(4)),
+          keywordScore: Number(keywordScore.toFixed(4)),
+          score: Number(finalScore.toFixed(4)),
+          securityScope: doc.securityScope,
+          requiredRole: doc.requiredRole || void 0,
+          metadata: chunk.metadata || {}
+        });
+      }
+    }
+    scoredItems.sort((a, b) => b.score - a.score);
+    const results = scoredItems.slice(0, limit);
+    try {
+      await prisma.knowledgeSearchLog.create({
+        data: {
+          organizationId: context.organizationId,
+          userId: context.userId,
+          query: request.query,
+          searchType: mode,
+          filterMetadata: request.filter || {},
+          resultsCount: results.length,
+          durationMs: Date.now() - startTime
+        }
+      });
+    } catch {
+    }
+    return results;
+  }
+};
+
+// server/services/knowledge/ContextBuilder.ts
+var ContextBuilder = class {
+  /**
+   * Transforms search results into a safe, cited context block for AI prompt augmentation.
+   */
+  static buildContext(chunks, options = {}) {
+    const maxTokens = options.maxTokens || 2500;
+    const threshold = options.minScoreThreshold ?? 0.2;
+    const filtered = chunks.filter((c) => c.score >= threshold);
+    const citations = [];
+    const contextBlocks = [];
+    let currentTokenEstimate = 0;
+    const sourcesSeen = /* @__PURE__ */ new Map();
+    let conflictsDetected = false;
+    const conflictNotes = [];
+    for (let i = 0; i < filtered.length; i++) {
+      const chunk = filtered[i];
+      if (!chunk) continue;
+      const chunkTokens = Math.max(1, Math.ceil(chunk.content.length / 4));
+      if (currentTokenEstimate + chunkTokens > maxTokens) {
+        break;
+      }
+      if (options.detectConflicts !== false) {
+        for (const [title, prevContent] of sourcesSeen.entries()) {
+          if (title !== chunk.documentTitle) {
+            if (chunk.content.toLowerCase().includes("not allowed") && prevContent.toLowerCase().includes("allowed") || chunk.content.toLowerCase().includes("deprecated") && prevContent.toLowerCase().includes("supported")) {
+              conflictsDetected = true;
+              conflictNotes.push(`Potential conflict between "${title}" and "${chunk.documentTitle}"`);
+            }
+          }
+        }
+        sourcesSeen.set(chunk.documentTitle, chunk.content);
+      }
+      citations.push({
+        sourceName: chunk.sourceName || "Knowledge Base",
+        documentTitle: chunk.documentTitle,
+        documentId: chunk.documentId,
+        version: chunk.versionNumber,
+        pageNumber: chunk.pageNumber,
+        sectionHeading: chunk.sectionHeading,
+        chunkIndex: chunk.chunkIndex,
+        similarityScore: chunk.score
+      });
+      const refTag = `[REF-${i + 1}]`;
+      const location = chunk.pageNumber ? `(Page ${chunk.pageNumber})` : chunk.sectionHeading ? `(${chunk.sectionHeading})` : "";
+      contextBlocks.push(
+        `${refTag} [Source: ${chunk.documentTitle} ${location} | Score: ${(chunk.score * 100).toFixed(0)}%]
+${chunk.content}`
+      );
+      currentTokenEstimate += chunkTokens;
+    }
+    const formattedContext = contextBlocks.length > 0 ? `--- ENTERPRISE KNOWLEDGE CONTEXT ---
+The following verified organizational documents were retrieved with high relevance:
+
+${contextBlocks.join("\n\n")}
+--- END ENTERPRISE KNOWLEDGE CONTEXT ---` : "";
+    return {
+      formattedContext,
+      citations,
+      totalChunksUsed: contextBlocks.length,
+      totalTokensEstimate: currentTokenEstimate,
+      conflictingSourcesDetected: conflictsDetected,
+      conflictsSummary: conflictNotes.length > 0 ? conflictNotes.join("; ") : void 0,
+      retrievedChunks: filtered.slice(0, contextBlocks.length)
+    };
+  }
+};
+
+// server/services/knowledge/KnowledgeService.ts
+var KnowledgeService = class {
+  // ---------------------------------------------------------------------------
+  // Collection Management
+  // ---------------------------------------------------------------------------
+  static async createCollection(params) {
+    if (!params.name || params.name.trim().length === 0) {
+      throw new ValidationError("Collection name is required.");
+    }
+    return await prisma.knowledgeCollection.create({
+      data: {
+        organizationId: params.organizationId,
+        createdById: params.userId,
+        name: params.name.trim(),
+        description: params.description,
+        accessPolicy: params.accessPolicy || "RESTRICTED",
+        allowedRoles: params.allowedRoles || [],
+        metadata: params.metadata || {},
+        status: "ACTIVE"
+      }
+    });
+  }
+  static async listCollections(organizationId) {
+    return await prisma.knowledgeCollection.findMany({
+      where: { organizationId, status: "ACTIVE" },
+      include: {
+        _count: {
+          select: { documents: true, sources: true }
+        }
+      },
+      orderBy: { createdAt: "desc" }
+    });
+  }
+  static async getCollection(id, organizationId) {
+    const col = await prisma.knowledgeCollection.findFirst({
+      where: { id, organizationId },
+      include: {
+        sources: true,
+        documents: true
+      }
+    });
+    if (!col) {
+      throw new NotFoundError(`Knowledge Collection "${id}" not found.`);
+    }
+    return col;
+  }
+  // ---------------------------------------------------------------------------
+  // Source Connectors & Registration
+  // ---------------------------------------------------------------------------
+  static async registerSource(params) {
+    return await prisma.knowledgeSource.create({
+      data: {
+        organizationId: params.organizationId,
+        collectionId: params.collectionId,
+        name: params.name,
+        sourceType: params.sourceType,
+        entityType: params.entityType,
+        entityId: params.entityId,
+        config: params.config || {},
+        status: "ACTIVE"
+      }
+    });
+  }
+  // ---------------------------------------------------------------------------
+  // Document Ingestion Pipeline
+  // ---------------------------------------------------------------------------
+  static async ingestDocument(params) {
+    if (!params.title || params.title.trim().length === 0) {
+      throw new ValidationError("Document title is required.");
+    }
+    if (!params.buffer || params.buffer.length === 0) {
+      throw new ValidationError("Document buffer cannot be empty.");
+    }
+    const checksum = crypto9.createHash("sha256").update(params.buffer).digest("hex");
+    const existing = await prisma.knowledgeDocument.findFirst({
+      where: {
+        organizationId: params.organizationId,
+        title: params.title,
+        collectionId: params.collectionId
+      },
+      include: {
+        versions: true
+      }
+    });
+    let documentId;
+    let versionNumber = 1;
+    if (existing) {
+      documentId = existing.id;
+      versionNumber = existing.activeVersion + 1;
+      await prisma.knowledgeDocument.update({
+        where: { id: documentId },
+        data: {
+          activeVersion: versionNumber,
+          status: "PROCESSING",
+          indexingStatus: "PROCESSING",
+          sizeBytes: params.buffer.length,
+          checksum,
+          updatedAt: /* @__PURE__ */ new Date()
+        }
+      });
+    } else {
+      const doc = await prisma.knowledgeDocument.create({
+        data: {
+          organizationId: params.organizationId,
+          createdById: params.userId,
+          collectionId: params.collectionId,
+          sourceId: params.sourceId,
+          title: params.title,
+          description: params.description,
+          mimeType: params.mimeType,
+          sizeBytes: params.buffer.length,
+          checksum,
+          activeVersion: 1,
+          status: "PROCESSING",
+          indexingStatus: "PROCESSING",
+          securityScope: params.securityScope || "DEFAULT",
+          requiredRole: params.requiredRole,
+          metadata: params.metadata || {}
+        }
+      });
+      documentId = doc.id;
+      versionNumber = 1;
+    }
+    const job = await prisma.knowledgeIngestionJob.create({
+      data: {
+        organizationId: params.organizationId,
+        documentId,
+        versionNumber,
+        stage: "EXTRACTING",
+        status: "PROCESSING",
+        startedAt: /* @__PURE__ */ new Date()
+      }
+    });
+    try {
+      const extracted = await ExtractionPipeline.extract(params.buffer, params.mimeType, params.filename);
+      const chunks = ChunkingEngine.chunk(extracted.text);
+      const versionRecord = await prisma.knowledgeDocumentVersion.create({
+        data: {
+          documentId,
+          version: versionNumber,
+          mimeType: params.mimeType,
+          sizeBytes: params.buffer.length,
+          checksum,
+          extractedText: extracted.text,
+          totalChunks: chunks.length,
+          createdById: params.userId,
+          metadata: extracted.metadata || {}
+        }
+      });
+      await prisma.knowledgeIngestionJob.update({
+        where: { id: job.id },
+        data: {
+          stage: "CHUNKING",
+          totalChunks: chunks.length,
+          progress: 50
+        }
+      });
+      for (const ch of chunks) {
+        const createdChunk = await prisma.knowledgeChunk.create({
+          data: {
+            organizationId: params.organizationId,
+            documentId,
+            versionId: versionRecord.id,
+            versionNumber,
+            chunkIndex: ch.chunkIndex,
+            content: ch.content,
+            tokenEstimate: ch.tokenEstimate,
+            charCount: ch.charCount,
+            pageNumber: ch.pageNumber,
+            sectionHeading: ch.sectionHeading,
+            metadata: ch.metadata || {}
+          }
+        });
+        const vector = await EmbeddingService.generateEmbedding(ch.content);
+        await EmbeddingService.storeEmbedding(createdChunk.id, vector);
+      }
+      await prisma.knowledgeDocument.update({
+        where: { id: documentId },
+        data: {
+          status: "INDEXED",
+          indexingStatus: "INDEXED"
+        }
+      });
+      await prisma.knowledgeIngestionJob.update({
+        where: { id: job.id },
+        data: {
+          stage: "COMPLETED",
+          status: "INDEXED",
+          progress: 100,
+          completedAt: /* @__PURE__ */ new Date()
+        }
+      });
+      logger.info({ documentId, versionNumber, chunks: chunks.length }, "[KnowledgeService] Ingestion completed");
+      return {
+        documentId,
+        versionNumber,
+        jobId: job.id,
+        totalChunks: chunks.length,
+        status: "INDEXED"
+      };
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : "Document ingestion failed";
+      logger.error({ err, documentId }, "[KnowledgeService] Ingestion failed");
+      await prisma.knowledgeDocument.update({
+        where: { id: documentId },
+        data: { status: "FAILED", indexingStatus: "FAILED" }
+      });
+      await prisma.knowledgeIngestionJob.update({
+        where: { id: job.id },
+        data: {
+          stage: "FAILED",
+          status: "FAILED",
+          errorMessage: errorMsg,
+          completedAt: /* @__PURE__ */ new Date()
+        }
+      });
+      throw err;
+    }
+  }
+  // ---------------------------------------------------------------------------
+  // Reindexing & Lifecycle
+  // ---------------------------------------------------------------------------
+  static async reindexDocument(documentId, organizationId) {
+    const doc = await prisma.knowledgeDocument.findFirst({
+      where: { id: documentId, organizationId },
+      include: { versions: { orderBy: { version: "desc" }, take: 1 } }
+    });
+    if (!doc || doc.versions.length === 0) {
+      throw new NotFoundError(`Document "${documentId}" or its active version not found.`);
+    }
+    const latestVersion = doc.versions[0];
+    if (!latestVersion || !latestVersion.extractedText) {
+      throw new ValidationError("Cannot reindex document without extracted text.");
+    }
+    await prisma.knowledgeChunk.deleteMany({
+      where: { documentId, versionNumber: latestVersion.version }
+    });
+    const chunks = ChunkingEngine.chunk(latestVersion.extractedText);
+    for (const ch of chunks) {
+      const createdChunk = await prisma.knowledgeChunk.create({
+        data: {
+          organizationId,
+          documentId,
+          versionId: latestVersion.id,
+          versionNumber: latestVersion.version,
+          chunkIndex: ch.chunkIndex,
+          content: ch.content,
+          tokenEstimate: ch.tokenEstimate,
+          charCount: ch.charCount,
+          pageNumber: ch.pageNumber,
+          sectionHeading: ch.sectionHeading,
+          metadata: ch.metadata || {}
+        }
+      });
+      const vector = await EmbeddingService.generateEmbedding(ch.content);
+      await EmbeddingService.storeEmbedding(createdChunk.id, vector);
+    }
+    await prisma.knowledgeDocument.update({
+      where: { id: documentId },
+      data: { status: "INDEXED", indexingStatus: "INDEXED", updatedAt: /* @__PURE__ */ new Date() }
+    });
+    return { documentId, chunksReindexed: chunks.length };
+  }
+  // ---------------------------------------------------------------------------
+  // Retrieval & Grounding
+  // ---------------------------------------------------------------------------
+  static async search(request, context) {
+    return await HybridSearchEngine.search(request, context);
+  }
+  static async getGroundedContext(query, context, options) {
+    const results = await HybridSearchEngine.search(
+      {
+        query,
+        mode: "HYBRID",
+        minScore: options?.minScore ?? 0.15,
+        limit: 10,
+        filter: options?.filter
+      },
+      context
+    );
+    return ContextBuilder.buildContext(results, {
+      maxTokens: options?.maxTokens ?? 2500,
+      minScoreThreshold: options?.minScore ?? 0.15,
+      detectConflicts: true
+    });
+  }
+};
+
+// server/services/automation/types.ts
+import { z as z30 } from "zod";
+var StructuredAiDecisionSchema = z30.object({
+  decision: z30.string(),
+  reason: z30.string(),
+  confidence: z30.number().min(0).max(1),
+  recommended_action: z30.string().optional(),
+  metadata: z30.record(z30.unknown()).optional()
+});
+var DEFAULT_WORKFLOW_LIMITS = {
+  maxSteps: 50,
+  maxDurationMs: 3e5,
+  // 5 minutes
+  maxAiCalls: 10,
+  maxToolCalls: 15,
+  maxLoopIterations: 10
+};
+var DEFAULT_RETRY_POLICY = {
+  maxRetries: 2,
+  backoffMs: 1e3,
+  exponential: true
+};
+
+// server/services/automation/WorkflowEngine.ts
+var WorkflowEngine = class _WorkflowEngine {
+  constructor() {
+    this.queueInterval = null;
+    this.isProcessingQueue = false;
+  }
+  static getInstance() {
+    if (!_WorkflowEngine.instance) {
+      _WorkflowEngine.instance = new _WorkflowEngine();
+    }
+    return _WorkflowEngine.instance;
+  }
+  /** Starts background worker that processes QUEUED executions. */
+  startWorker(intervalMs = 2e3) {
+    if (this.queueInterval) return;
+    this.queueInterval = setInterval(() => {
+      this.processQueue().catch((err) => {
+        logger.error({ err }, "[WorkflowEngine] Queue worker processing error");
+      });
+    }, intervalMs);
+    this.queueInterval.unref();
+  }
+  stopWorker() {
+    if (this.queueInterval) {
+      clearInterval(this.queueInterval);
+      this.queueInterval = null;
+    }
+  }
+  /** Enqueues an execution for background worker processing. */
+  async enqueueExecution(params) {
+    const workflow = await prisma.automationWorkflow.findFirst({ where: { id: params.workflowId, organizationId: params.organizationId } });
+    if (!workflow) {
+      throw new Error(`Workflow ${params.workflowId} not found.`);
+    }
+    if (workflow.status !== "ACTIVE") {
+      throw new Error(`Workflow "${workflow.name}" is not active (status: ${workflow.status}).`);
+    }
+    const correlationId = params.correlationId || crypto10.randomUUID();
+    const versionToRun = workflow.publishedVersion || workflow.currentVersion;
+    const executionId = crypto10.randomUUID();
+    if (params.idempotencyKey) {
+      const existing = await prisma.automationExecution.findFirst({
+        where: { organizationId: params.organizationId, idempotencyKey: params.idempotencyKey, status: { in: ["COMPLETED", "RUNNING", "WAITING_APPROVAL"] } }
+      });
+      if (existing) {
+        logger.info({ idempotencyKey: params.idempotencyKey, existingId: existing.id }, "[WorkflowEngine] Idempotent execution already exists, returning existing");
+        return { executionId: existing.id, status: existing.status };
+      }
+    }
+    const steps = Array.isArray(workflow.steps) ? workflow.steps : [];
+    await prisma.automationExecution.create({
+      data: {
+        id: executionId,
+        organizationId: params.organizationId,
+        workflowId: workflow.id,
+        workflowVersion: versionToRun,
+        status: "QUEUED",
+        triggerType: params.triggerType,
+        triggerEventId: params.triggerEventId || null,
+        entityType: params.entityType || null,
+        entityId: params.entityId || null,
+        correlationId,
+        idempotencyKey: params.idempotencyKey || null,
+        input: params.input || {},
+        output: {},
+        context: params.input || {},
+        currentStepIndex: 0,
+        totalSteps: steps.length,
+        initiatedById: params.initiatedById || null
+      }
+    });
+    setImmediate(() => {
+      this.execute(executionId).catch((err) => {
+        logger.error({ err, executionId }, "[WorkflowEngine] Background run error");
+      });
+    });
+    return { executionId, status: "QUEUED" };
+  }
+  /** Process pending queued jobs in batch. */
+  async processQueue() {
+    if (this.isProcessingQueue) return 0;
+    this.isProcessingQueue = true;
+    try {
+      const queuedJobs = await prisma.automationExecution.findMany({ where: { status: "QUEUED" }, take: 5, orderBy: { createdAt: "asc" } });
+      for (const job of queuedJobs) {
+        await this.execute(job.id);
+      }
+      return queuedJobs.length;
+    } finally {
+      this.isProcessingQueue = false;
+    }
+  }
+  /** Core workflow execution loop. */
+  async execute(executionId) {
+    const execution = await prisma.automationExecution.findUnique({ where: { id: executionId }, include: { workflow: true } });
+    if (!execution) return null;
+    if (execution.status === "COMPLETED" || execution.status === "CANCELLED") {
+      return execution;
+    }
+    const workflow = execution.workflow;
+    const steps = Array.isArray(workflow.steps) ? workflow.steps : [];
+    const limits = { ...DEFAULT_WORKFLOW_LIMITS, ...workflow.limits || {} };
+    const retryPolicy = { ...DEFAULT_RETRY_POLICY, ...workflow.retryPolicy || {} };
+    const startTime = execution.startedAt ? new Date(execution.startedAt).getTime() : Date.now();
+    await prisma.automationExecution.update({ where: { id: executionId }, data: { status: "RUNNING", startedAt: new Date(startTime) } });
+    const context = {
+      ...execution.context || {},
+      input: execution.input,
+      trigger: { type: execution.triggerType, eventId: execution.triggerEventId, entityType: execution.entityType, entityId: execution.entityId, correlationId: execution.correlationId }
+    };
+    let aiCallCount = 0;
+    let toolCallCount = 0;
+    let stepCount = 0;
+    let currentStepIdx = execution.currentStepIndex || 0;
+    while (currentStepIdx < steps.length) {
+      const step = steps[currentStepIdx];
+      if (!step) {
+        return this.failExecution(executionId, execution.organizationId, `Step at index ${currentStepIdx} is missing from workflow definition.`);
+      }
+      stepCount++;
+      const elapsedMs = Date.now() - startTime;
+      if (elapsedMs > limits.maxDurationMs) {
+        return this.failExecution(executionId, execution.organizationId, `Execution timed out after ${elapsedMs}ms.`);
+      }
+      if (stepCount > limits.maxSteps) {
+        return this.failExecution(executionId, execution.organizationId, `Exceeded maximum allowed workflow steps (${limits.maxSteps}).`);
+      }
+      const stepExecutionId = crypto10.randomUUID();
+      const stepStartTime = Date.now();
+      await prisma.automationStepExecution.create({
+        data: { id: stepExecutionId, executionId, stepIndex: currentStepIdx, stepId: step.id, stepName: step.name, stepType: step.type, status: "RUNNING", input: context, startedAt: new Date(stepStartTime) }
+      });
+      try {
+        let stepOutput = {};
+        let nextStepIdx = currentStepIdx + 1;
+        switch (step.type) {
+          case "CONDITION": {
+            const matches = ConditionEngine.evaluate(step.condition, context);
+            stepOutput = { conditionMet: matches };
+            if (matches && step.thenStepId) {
+              const targetIdx = steps.findIndex((s) => s.id === step.thenStepId);
+              if (targetIdx !== -1) nextStepIdx = targetIdx;
+            } else if (!matches && step.elseStepId) {
+              const targetIdx = steps.findIndex((s) => s.id === step.elseStepId);
+              if (targetIdx !== -1) nextStepIdx = targetIdx;
+            }
+            break;
+          }
+          case "AI_DECISION": {
+            aiCallCount++;
+            if (aiCallCount > limits.maxAiCalls) {
+              throw new Error(`Exceeded maximum allowed AI calls (${limits.maxAiCalls}).`);
+            }
+            const interpolatedPrompt = this.interpolate(step.prompt, context);
+            const decisionInstruction = `${interpolatedPrompt}
+
+You MUST respond strictly in valid JSON matching this schema:
+{
+  "decision": "APPROVED" | "REJECTED" | "REVIEW_REQUIRED" | "FLAGGED",
+  "reason": "explanation string",
+  "confidence": number between 0 and 1,
+  "recommended_action": "action_string"
+}`;
+            const result = await defaultAiProvider.generateText(decisionInstruction, { temperature: 0.1, responseMimeType: "application/json" });
+            const rawContent = (result.text || "").trim();
+            let parsedJson;
+            try {
+              const jsonMatch = rawContent.match(/\{[\s\S]*\}/);
+              parsedJson = JSON.parse(jsonMatch ? jsonMatch[0] : rawContent);
+            } catch {
+              parsedJson = { decision: "REVIEW_REQUIRED", reason: `AI output was not strictly valid JSON: ${rawContent.slice(0, 100)}`, confidence: 0.5, recommended_action: "MANUAL_REVIEW" };
+            }
+            const validated = StructuredAiDecisionSchema.safeParse(parsedJson);
+            stepOutput = validated.success ? validated.data : { decision: "REVIEW_REQUIRED", reason: "AI output failed schema validation", confidence: 0.5, raw: rawContent };
+            context[step.id] = stepOutput;
+            break;
+          }
+          case "AI_GENERATION": {
+            aiCallCount++;
+            if (aiCallCount > limits.maxAiCalls) {
+              throw new Error(`Exceeded maximum allowed AI calls (${limits.maxAiCalls}).`);
+            }
+            const interpolatedPrompt = this.interpolate(step.prompt, context);
+            let citations = [];
+            let promptWithContext = interpolatedPrompt;
+            if (step.useKnowledgeBase) {
+              try {
+                const grounded = await KnowledgeService.getGroundedContext(
+                  interpolatedPrompt,
+                  { organizationId: execution.organizationId, userId: execution.initiatedById || void 0, userPermissions: ["*"] },
+                  { filter: step.knowledgeFilter }
+                );
+                if (grounded.formattedContext) {
+                  promptWithContext = `${grounded.formattedContext}
+
+${interpolatedPrompt}`;
+                  citations = grounded.citations;
+                }
+              } catch (kErr) {
+                logger.warn({ kErr, executionId }, "[WorkflowEngine] Knowledge grounding non-fatal error");
+              }
+            }
+            const genResult = await defaultAiProvider.generateText(promptWithContext);
+            stepOutput = { generatedText: genResult.text, citations };
+            context[step.outputKey || step.id] = genResult.text;
+            break;
+          }
+          case "TOOL_CALL": {
+            toolCallCount++;
+            if (toolCallCount > limits.maxToolCalls) {
+              throw new Error(`Exceeded maximum allowed tool calls (${limits.maxToolCalls}).`);
+            }
+            if (!execution.initiatedById) {
+              throw new Error(`Tool call step "${step.name}" requires a workflow initiated by a real user (initiatedById is empty).`);
+            }
+            if (!isRegisteredToolCode(step.toolName)) {
+              throw new Error(`Tool "${step.toolName}" is not registered.`);
+            }
+            const initiatingUser = await userRepository.findById(execution.initiatedById);
+            const caller = initiatingUser && await resolveSanitizedUserForOrganization(initiatingUser, execution.organizationId);
+            if (!caller) {
+              throw new Error(`Initiating user no longer has access to this organization.`);
+            }
+            const definition = AI_TOOL_REGISTRY[step.toolName];
+            if (!caller.role.permissions.includes(definition.requiredPermission) && caller.role.key !== "SUPER_ADMIN") {
+              throw new Error(`Caller lacks required permission "${definition.requiredPermission}" for tool "${step.toolName}".`);
+            }
+            const toolArgs = this.interpolateObject(step.argumentsTemplate, context);
+            const parsed = definition.inputSchema.safeParse(toolArgs);
+            if (!parsed.success) {
+              throw new Error(`Invalid input for tool "${step.toolName}": ${parsed.error.message}`);
+            }
+            stepOutput = await definition.handler(caller, parsed.data, {}) || {};
+            context[step.outputKey || step.id] = stepOutput;
+            break;
+          }
+          case "BUSINESS_ACTION": {
+            if (step.requireApproval) {
+              await approvalEngine.requestApproval({
+                organizationId: execution.organizationId,
+                executionId,
+                stepExecutionId,
+                workflowId: workflow.id,
+                stepId: step.id,
+                action: step.actionId,
+                description: `Human approval required for action "${step.actionId}"`,
+                payload: { parameters: step.parameters, context: context[step.id] || {} }
+              });
+              await prisma.automationExecution.update({ where: { id: executionId }, data: { status: "WAITING_APPROVAL", currentStepIndex: currentStepIdx, context } });
+              await prisma.automationStepExecution.update({ where: { id: stepExecutionId }, data: { status: "WAITING_APPROVAL" } });
+              logger.info({ executionId, stepId: step.id }, "[WorkflowEngine] Paused for human approval");
+              return { executionId, status: "WAITING_APPROVAL" };
+            }
+            const actionParams = this.interpolateObject(step.parameters, context);
+            const idempotencyKey = `${workflow.id}:${execution.workflowVersion}:${execution.correlationId}:${step.id}`;
+            const actionOutput = await actionRegistry.executeAction({
+              actionId: step.actionId,
+              input: actionParams,
+              organizationId: execution.organizationId,
+              userId: execution.initiatedById || void 0,
+              userPermissions: ["*"],
+              workflowId: workflow.id,
+              executionId,
+              stepId: step.id,
+              correlationId: execution.correlationId,
+              idempotencyKey
+            });
+            stepOutput = actionOutput;
+            context[step.outputKey || step.id] = stepOutput;
+            break;
+          }
+          case "APPROVAL": {
+            const pendingApproval = await prisma.automationApproval.findFirst({ where: { executionId, stepId: step.id, status: "APPROVED" } });
+            if (!pendingApproval) {
+              await approvalEngine.requestApproval({
+                organizationId: execution.organizationId,
+                executionId,
+                stepExecutionId,
+                workflowId: workflow.id,
+                stepId: step.id,
+                action: "APPROVAL_GATE",
+                description: this.interpolate(step.actionDescription, context),
+                requiredRole: step.requiredRole,
+                payload: { contextSummary: context },
+                timeoutMinutes: step.timeoutMinutes
+              });
+              await prisma.automationExecution.update({ where: { id: executionId }, data: { status: "WAITING_APPROVAL", currentStepIndex: currentStepIdx, context } });
+              await prisma.automationStepExecution.update({ where: { id: stepExecutionId }, data: { status: "WAITING_APPROVAL" } });
+              return { executionId, status: "WAITING_APPROVAL" };
+            }
+            stepOutput = { approved: true, approverId: pendingApproval.approverId };
+            break;
+          }
+          case "NOTIFICATION": {
+            const title = this.interpolate(step.titleTemplate, context);
+            const message = this.interpolate(step.messageTemplate, context);
+            const targetUserId = step.recipientUserId ? this.interpolate(step.recipientUserId, context) : void 0;
+            stepOutput = await notificationEngine.dispatchNotification({
+              organizationId: execution.organizationId,
+              userId: targetUserId,
+              recipientRole: step.recipientRole,
+              channel: step.channel,
+              title,
+              message,
+              level: step.level || "INFO",
+              sourceWorkflowId: workflow.id,
+              sourceExecutionId: executionId
+            });
+            break;
+          }
+          case "DELAY": {
+            const delaySec = Math.min(step.durationSeconds, 10);
+            await new Promise((resolve) => setTimeout(resolve, delaySec * 1e3));
+            stepOutput = { delayedSeconds: delaySec };
+            break;
+          }
+          case "TRANSFORM": {
+            const transformed = {};
+            for (const [outKey, pathExpr] of Object.entries(step.mappings)) {
+              transformed[outKey] = ConditionEngine.resolvePath(context, pathExpr);
+            }
+            stepOutput = transformed;
+            context[step.outputKey || step.id] = transformed;
+            break;
+          }
+          case "LOOP": {
+            const items = ConditionEngine.resolvePath(context, step.itemsPath);
+            const loopArray = Array.isArray(items) ? items : [];
+            const maxIter = Math.min(loopArray.length, step.maxIterations || limits.maxLoopIterations);
+            const loopOutputs = [];
+            for (let i = 0; i < maxIter; i++) {
+              loopOutputs.push({ index: i, item: loopArray[i] });
+            }
+            stepOutput = { iterations: maxIter, itemsProcessed: loopOutputs };
+            context[step.id] = stepOutput;
+            break;
+          }
+          case "KNOWLEDGE_RETRIEVAL": {
+            const query = this.interpolate(step.queryTemplate, context);
+            const results = await KnowledgeService.search(
+              { query, limit: step.maxResults || 5, filter: step.collectionIds?.length ? { collectionIds: step.collectionIds } : void 0 },
+              { organizationId: execution.organizationId, userId: execution.initiatedById || void 0, userPermissions: ["*"] }
+            );
+            stepOutput = {
+              query,
+              count: results.length,
+              results: results.map((r) => ({ documentTitle: r.documentTitle, collection: r.collectionName, score: r.score, snippet: r.content.slice(0, 300), content: r.content }))
+            };
+            context[step.outputKey || step.id] = stepOutput;
+            break;
+          }
+          default:
+            break;
+        }
+        const stepDuration = Date.now() - stepStartTime;
+        await prisma.automationStepExecution.update({ where: { id: stepExecutionId }, data: { status: "COMPLETED", output: stepOutput, durationMs: stepDuration, completedAt: /* @__PURE__ */ new Date() } });
+        currentStepIdx = nextStepIdx;
+        await prisma.automationExecution.update({ where: { id: executionId }, data: { currentStepIndex: currentStepIdx, context } });
+      } catch (stepErr) {
+        const stepDuration = Date.now() - stepStartTime;
+        await prisma.automationStepExecution.update({ where: { id: stepExecutionId }, data: { status: "FAILED", errorMessage: stepErr?.message || String(stepErr), durationMs: stepDuration, completedAt: /* @__PURE__ */ new Date() } });
+        if (execution.retryCount < retryPolicy.maxRetries && step.retryOnFailure !== false) {
+          const backoff = retryPolicy.exponential ? retryPolicy.backoffMs * Math.pow(2, execution.retryCount) : retryPolicy.backoffMs;
+          await prisma.automationExecution.update({ where: { id: executionId }, data: { retryCount: { increment: 1 }, status: "QUEUED", errorMessage: `Retrying after step failure: ${stepErr?.message}` } });
+          logger.warn({ executionId, stepId: step.id, retry: execution.retryCount + 1, backoff }, "[WorkflowEngine] Scheduling retry after failure");
+          return { executionId, status: "RETRYING" };
+        }
+        return this.failExecution(executionId, execution.organizationId, stepErr?.message || String(stepErr));
+      }
+    }
+    const totalDuration = Date.now() - startTime;
+    const completed = await prisma.automationExecution.update({ where: { id: executionId }, data: { status: "COMPLETED", completedAt: /* @__PURE__ */ new Date(), durationMs: totalDuration, output: context } });
+    await auditLogRepository.record({
+      organizationId: execution.organizationId,
+      actorUserId: execution.initiatedById || void 0,
+      actorType: execution.initiatedById ? "USER" : "SYSTEM",
+      action: "AUTOMATION_WORKFLOW_COMPLETED",
+      resourceType: "automation_workflow",
+      resourceId: workflow.id,
+      metadata: { executionId, workflowName: workflow.name, durationMs: totalDuration, stepsExecuted: stepCount }
+    });
+    return completed;
+  }
+  /** Resume an execution after approval grant. */
+  async resumeExecution(executionId, organizationId) {
+    const execution = await prisma.automationExecution.findFirst({ where: { id: executionId, organizationId } });
+    if (!execution) {
+      throw new Error(`Execution ${executionId} not found.`);
+    }
+    if (execution.status !== "WAITING_APPROVAL") {
+      throw new Error(`Execution ${executionId} is not in WAITING_APPROVAL status (current: ${execution.status}).`);
+    }
+    await prisma.automationExecution.update({ where: { id: executionId }, data: { status: "QUEUED", currentStepIndex: execution.currentStepIndex + 1 } });
+    return this.execute(executionId);
+  }
+  /** Cancel a running or waiting execution. */
+  async cancelExecution(executionId, organizationId, reason) {
+    const execution = await prisma.automationExecution.findFirst({ where: { id: executionId, organizationId } });
+    if (!execution) {
+      throw new Error(`Execution ${executionId} not found.`);
+    }
+    if (execution.status === "COMPLETED" || execution.status === "FAILED") {
+      throw new Error(`Cannot cancel an execution with status ${execution.status}.`);
+    }
+    return prisma.automationExecution.update({ where: { id: executionId }, data: { status: "CANCELLED", completedAt: /* @__PURE__ */ new Date(), errorMessage: reason || "Cancelled by user" } });
+  }
+  async failExecution(executionId, organizationId, error) {
+    const failed = await prisma.automationExecution.update({ where: { id: executionId }, data: { status: "FAILED", completedAt: /* @__PURE__ */ new Date(), errorMessage: error } });
+    await auditLogRepository.record({ organizationId, actorType: "SYSTEM", action: "AUTOMATION_WORKFLOW_FAILED", resourceType: "automation_execution", resourceId: executionId, metadata: { error } });
+    return failed;
+  }
+  /** Interpolate variable strings like {{payload.client.name}} or {{invoice.amount}} */
+  interpolate(template, context) {
+    if (!template) return "";
+    return template.replace(/\{\{([^}]+)\}\}/g, (_match, path) => {
+      const val = ConditionEngine.resolvePath(context, path.trim());
+      if (val === void 0 || val === null) return "";
+      if (typeof val === "object") return JSON.stringify(val);
+      return String(val);
+    });
+  }
+  interpolateObject(obj, context) {
+    if (typeof obj === "string") {
+      return this.interpolate(obj, context);
+    }
+    if (Array.isArray(obj)) {
+      return obj.map((item) => this.interpolateObject(item, context));
+    }
+    if (obj !== null && typeof obj === "object") {
+      const result = {};
+      for (const [k, v] of Object.entries(obj)) {
+        result[k] = this.interpolateObject(v, context);
+      }
+      return result;
+    }
+    return obj;
+  }
+};
+var workflowEngine = WorkflowEngine.getInstance();
+
+// server/services/automation/WorkflowValidator.ts
+var WorkflowValidator = class {
+  /**
+   * Validates a workflow definition before publishing.
+   */
+  static async validate(params) {
+    const issues = [];
+    if (!params.name || params.name.trim().length < 3) {
+      issues.push({ field: "name", message: "Workflow name must be at least 3 characters long.", severity: "ERROR" });
+    }
+    if (!params.triggerType) {
+      issues.push({ field: "triggerType", message: "Workflow trigger type is required.", severity: "ERROR" });
+    }
+    if (params.triggerType === "EVENT") {
+      const eventCfg = params.triggerConfig;
+      if (!eventCfg?.eventType) {
+        issues.push({ field: "triggerConfig.eventType", message: "Event trigger requires a valid 'eventType'.", severity: "ERROR" });
+      }
+    }
+    if (params.triggerType === "SCHEDULE") {
+      const schedCfg = params.triggerConfig;
+      if (!schedCfg?.scheduleType) {
+        issues.push({ field: "triggerConfig.scheduleType", message: "Schedule trigger requires 'scheduleType'.", severity: "ERROR" });
+      }
+    }
+    if (!Array.isArray(params.steps) || params.steps.length === 0) {
+      issues.push({ field: "steps", message: "Workflow must contain at least one step.", severity: "ERROR" });
+    } else {
+      const stepIds = /* @__PURE__ */ new Set();
+      for (let i = 0; i < params.steps.length; i++) {
+        const step = params.steps[i];
+        const stepPrefix = `steps[${i}]`;
+        if (!step) {
+          issues.push({ field: stepPrefix, message: `Step at index ${i} is missing.`, severity: "ERROR" });
+          continue;
+        }
+        if (!step.id) {
+          issues.push({ field: `${stepPrefix}.id`, message: `Step at index ${i} is missing a unique ID.`, severity: "ERROR" });
+        } else {
+          if (stepIds.has(step.id)) {
+            issues.push({ field: `${stepPrefix}.id`, message: `Duplicate step ID: "${step.id}".`, severity: "ERROR" });
+          }
+          stepIds.add(step.id);
+        }
+        if (!step.name) {
+          issues.push({ field: `${stepPrefix}.name`, message: `Step at index ${i} is missing a name.`, severity: "ERROR" });
+        }
+        switch (step.type) {
+          case "CONDITION": {
+            if (!step.condition) {
+              issues.push({ field: `${stepPrefix}.condition`, message: `Condition step "${step.name}" is missing condition logic.`, severity: "ERROR" });
+            }
+            break;
+          }
+          case "TOOL_CALL": {
+            if (!step.toolName) {
+              issues.push({ field: `${stepPrefix}.toolName`, message: `Tool call step "${step.name}" is missing toolName.`, severity: "ERROR" });
+            } else if (!isRegisteredToolCode(step.toolName)) {
+              issues.push({ field: `${stepPrefix}.toolName`, message: `Referenced tool "${step.toolName}" is not registered in the system.`, severity: "ERROR" });
+            }
+            break;
+          }
+          case "BUSINESS_ACTION": {
+            if (!step.actionId) {
+              issues.push({ field: `${stepPrefix}.actionId`, message: `Business action step "${step.name}" is missing actionId.`, severity: "ERROR" });
+            } else {
+              const action = actionRegistry.getAction(step.actionId);
+              if (!action) {
+                issues.push({ field: `${stepPrefix}.actionId`, message: `Referenced business action "${step.actionId}" does not exist in registry.`, severity: "ERROR" });
+              }
+            }
+            break;
+          }
+          case "AI_DECISION":
+          case "AI_GENERATION": {
+            if (!step.prompt) {
+              issues.push({ field: `${stepPrefix}.prompt`, message: `AI step "${step.name}" is missing prompt instruction.`, severity: "ERROR" });
+            }
+            break;
+          }
+          case "APPROVAL": {
+            if (!step.actionDescription) {
+              issues.push({ field: `${stepPrefix}.actionDescription`, message: `Approval step "${step.name}" requires an actionDescription.`, severity: "ERROR" });
+            }
+            break;
+          }
+          case "NOTIFICATION": {
+            if (!step.titleTemplate || !step.messageTemplate) {
+              issues.push({ field: `${stepPrefix}.templates`, message: `Notification step "${step.name}" requires titleTemplate and messageTemplate.`, severity: "ERROR" });
+            }
+            break;
+          }
+          case "LOOP": {
+            if (!step.itemsPath) {
+              issues.push({ field: `${stepPrefix}.itemsPath`, message: `Loop step "${step.name}" requires itemsPath.`, severity: "ERROR" });
+            }
+            if (step.maxIterations && step.maxIterations > 50) {
+              issues.push({ field: `${stepPrefix}.maxIterations`, message: "Loop step maximum iterations cannot exceed 50 for safety.", severity: "ERROR" });
+            }
+            break;
+          }
+          case "KNOWLEDGE_RETRIEVAL": {
+            if (!step.queryTemplate || step.queryTemplate.trim().length === 0) {
+              issues.push({ field: `${stepPrefix}.queryTemplate`, message: `Knowledge retrieval step "${step.name}" requires a queryTemplate.`, severity: "ERROR" });
+            }
+            break;
+          }
+          default:
+            break;
+        }
+      }
+      for (const step of params.steps) {
+        if (step.type === "CONDITION") {
+          if (step.thenStepId && !stepIds.has(step.thenStepId)) {
+            issues.push({ field: `steps.${step.id}.thenStepId`, message: `Condition target thenStepId "${step.thenStepId}" does not exist.`, severity: "ERROR" });
+          }
+          if (step.elseStepId && !stepIds.has(step.elseStepId)) {
+            issues.push({ field: `steps.${step.id}.elseStepId`, message: `Condition target elseStepId "${step.elseStepId}" does not exist.`, severity: "ERROR" });
+          }
+        }
+      }
+    }
+    if (params.limits) {
+      if (params.limits.maxSteps < 1 || params.limits.maxSteps > 100) {
+        issues.push({ field: "limits.maxSteps", message: "maxSteps must be between 1 and 100.", severity: "ERROR" });
+      }
+      if (params.limits.maxDurationMs < 5e3 || params.limits.maxDurationMs > 6e5) {
+        issues.push({ field: "limits.maxDurationMs", message: "maxDurationMs must be between 5000ms and 600000ms (10 minutes).", severity: "ERROR" });
+      }
+    }
+    if (params.retryPolicy) {
+      if (params.retryPolicy.maxRetries < 0 || params.retryPolicy.maxRetries > 5) {
+        issues.push({ field: "retryPolicy.maxRetries", message: "maxRetries cannot exceed 5.", severity: "ERROR" });
+      }
+    }
+    const errors = issues.filter((i) => i.severity === "ERROR").map((i) => i.message);
+    const warnings = issues.filter((i) => i.severity === "WARNING").map((i) => i.message);
+    return { isValid: errors.length === 0, errors, warnings, details: issues };
+  }
+};
+
+// server/services/automation/AutomationService.ts
+var AutomationService = class _AutomationService {
+  constructor() {
+    this.initEventListeners();
+    this.initSchedulerIntegration();
+  }
+  static getInstance() {
+    if (!_AutomationService.instance) {
+      _AutomationService.instance = new _AutomationService();
+    }
+    return _AutomationService.instance;
+  }
+  /**
+   * Automatically dispatches business events to matching active workflows.
+   */
+  initEventListeners() {
+    eventEngine.subscribe(async (event) => {
+      try {
+        const workflows = await prisma.automationWorkflow.findMany({
+          where: {
+            organizationId: event.organizationId,
+            status: "ACTIVE",
+            triggerType: "EVENT"
+          }
+        });
+        for (const wf of workflows) {
+          const cfg = wf.triggerConfig || {};
+          if (cfg.eventType === event.eventType || cfg.eventType === "*") {
+            if (cfg.filterCondition) {
+              const matches = ConditionEngine.evaluate(cfg.filterCondition, {
+                event: event.eventType,
+                entityType: event.entityType,
+                entityId: event.entityId,
+                payload: event.payload
+              });
+              if (!matches) continue;
+            }
+            logger.info(
+              { workflowId: wf.id, eventType: event.eventType, correlationId: event.correlationId },
+              "[AutomationService] Event triggered matching workflow execution"
+            );
+            await workflowEngine.enqueueExecution({
+              workflowId: wf.id,
+              organizationId: event.organizationId,
+              triggerType: "EVENT",
+              triggerEventId: event.eventId,
+              entityType: event.entityType,
+              entityId: event.entityId,
+              input: event.payload,
+              correlationId: event.correlationId,
+              idempotencyKey: `event:${event.eventId}:${wf.id}`
+            });
+          }
+        }
+      } catch (err) {
+        logger.error({ err, eventId: event.eventId }, "[AutomationService] Error routing event to workflows");
+      }
+    });
+  }
+  /**
+   * Connect scheduler ticks to workflow execution.
+   */
+  initSchedulerIntegration() {
+    schedulerEngine.setWorkflowExecutor(async (params) => {
+      return workflowEngine.enqueueExecution({
+        workflowId: params.workflowId,
+        organizationId: params.organizationId,
+        triggerType: "SCHEDULE",
+        input: params.input,
+        correlationId: params.correlationId
+      });
+    });
+    schedulerEngine.start();
+    workflowEngine.startWorker();
+  }
+  // ---------------------------------------------------------------------------
+  // Workflows Lifecycle & Management
+  // ---------------------------------------------------------------------------
+  async createWorkflow(params) {
+    const id = crypto11.randomUUID();
+    const workflow = await prisma.automationWorkflow.create({
+      data: {
+        id,
+        organizationId: params.organizationId,
+        name: params.name,
+        description: params.description || null,
+        category: params.category || "GENERAL",
+        status: "DRAFT",
+        currentVersion: 1,
+        triggerType: params.triggerType,
+        triggerConfig: params.triggerConfig || {},
+        conditions: params.conditions || [],
+        steps: params.steps || [],
+        retryPolicy: params.retryPolicy || DEFAULT_RETRY_POLICY,
+        limits: params.limits || DEFAULT_WORKFLOW_LIMITS,
+        createdById: params.userId || null,
+        updatedById: params.userId || null
+      }
+    });
+    if (params.userId) {
+      await auditLogRepository.record({
+        organizationId: params.organizationId,
+        actorUserId: params.userId,
+        actorType: "USER",
+        action: "AUTOMATION_WORKFLOW_CREATED",
+        resourceType: "automation_workflow",
+        resourceId: workflow.id,
+        metadata: { name: workflow.name, triggerType: workflow.triggerType }
+      });
+    }
+    return workflow;
+  }
+  async updateWorkflow(params) {
+    const existing = await prisma.automationWorkflow.findFirst({
+      where: { id: params.id, organizationId: params.organizationId }
+    });
+    if (!existing) {
+      throw new NotFoundError("Workflow not found.");
+    }
+    const updateData = {
+      updatedById: params.userId || null
+    };
+    if (params.name !== void 0) updateData.name = params.name;
+    if (params.description !== void 0) updateData.description = params.description;
+    if (params.category !== void 0) updateData.category = params.category;
+    if (params.triggerType !== void 0) updateData.triggerType = params.triggerType;
+    if (params.triggerConfig !== void 0) updateData.triggerConfig = params.triggerConfig;
+    if (params.conditions !== void 0) updateData.conditions = params.conditions;
+    if (params.steps !== void 0) updateData.steps = params.steps;
+    if (params.retryPolicy !== void 0) updateData.retryPolicy = params.retryPolicy;
+    if (params.limits !== void 0) updateData.limits = params.limits;
+    if (params.status !== void 0) updateData.status = params.status;
+    if (existing.publishedVersion && params.steps !== void 0) {
+      updateData.currentVersion = (existing.currentVersion || 1) + 1;
+    }
+    const updated = await prisma.automationWorkflow.update({
+      where: { id: existing.id },
+      data: updateData
+    });
+    if (params.userId) {
+      await auditLogRepository.record({
+        organizationId: params.organizationId,
+        actorUserId: params.userId,
+        actorType: "USER",
+        action: "AUTOMATION_WORKFLOW_UPDATED",
+        resourceType: "automation_workflow",
+        resourceId: updated.id
+      });
+    }
+    return updated;
+  }
+  /**
+   * Publishes a workflow:
+   * 1. Validates definition against strict rules
+   * 2. Saves snapshot to automation_workflow_versions
+   * 3. Sets publishedVersion and activates workflow
+   */
+  async publishWorkflow(params) {
+    const workflow = await prisma.automationWorkflow.findFirst({
+      where: { id: params.id, organizationId: params.organizationId }
+    });
+    if (!workflow) {
+      throw new NotFoundError("Workflow not found.");
+    }
+    const steps = Array.isArray(workflow.steps) ? workflow.steps : [];
+    const validation = await WorkflowValidator.validate({
+      organizationId: params.organizationId,
+      name: workflow.name,
+      triggerType: workflow.triggerType,
+      triggerConfig: workflow.triggerConfig,
+      conditions: workflow.conditions,
+      steps,
+      limits: workflow.limits,
+      retryPolicy: workflow.retryPolicy
+    });
+    if (!validation.isValid) {
+      throw new ValidationError(`Cannot publish invalid workflow:
+${validation.errors.join("\n")}`);
+    }
+    const newVersionNumber = (workflow.publishedVersion || 0) + 1;
+    await prisma.automationWorkflowVersion.create({
+      data: {
+        id: crypto11.randomUUID(),
+        workflowId: workflow.id,
+        version: newVersionNumber,
+        name: workflow.name,
+        description: workflow.description || null,
+        category: workflow.category,
+        triggerType: workflow.triggerType,
+        triggerConfig: workflow.triggerConfig,
+        conditions: workflow.conditions,
+        steps: workflow.steps,
+        retryPolicy: workflow.retryPolicy,
+        limits: workflow.limits,
+        publishedById: params.userId || null,
+        changeSummary: params.changeSummary || `Published version ${newVersionNumber}`
+      }
+    });
+    const published = await prisma.automationWorkflow.update({
+      where: { id: workflow.id },
+      data: {
+        publishedVersion: newVersionNumber,
+        currentVersion: newVersionNumber,
+        status: "ACTIVE",
+        updatedById: params.userId || null
+      }
+    });
+    await auditLogRepository.record({
+      organizationId: params.organizationId,
+      actorUserId: params.userId || void 0,
+      actorType: params.userId ? "USER" : "SYSTEM",
+      action: "AUTOMATION_WORKFLOW_PUBLISHED",
+      resourceType: "automation_workflow",
+      resourceId: workflow.id,
+      metadata: { version: newVersionNumber }
+    });
+    return published;
+  }
+  async getWorkflow(id, organizationId) {
+    const workflow = await prisma.automationWorkflow.findFirst({
+      where: { id, organizationId },
+      include: {
+        versions: {
+          orderBy: { version: "desc" },
+          take: 10
+        },
+        createdBy: {
+          select: { id: true, firstName: true, lastName: true, email: true }
+        }
+      }
+    });
+    if (!workflow) {
+      throw new NotFoundError("Workflow not found.");
+    }
+    return workflow;
+  }
+  async listWorkflows(params) {
+    const page = Math.max(1, params.page || 1);
+    const limit = Math.min(100, Math.max(1, params.limit || 20));
+    const skip = (page - 1) * limit;
+    const where = { organizationId: params.organizationId };
+    if (params.status) where.status = params.status;
+    if (params.category) where.category = params.category;
+    if (params.triggerType) where.triggerType = params.triggerType;
+    if (params.search) {
+      where.OR = [
+        { name: { contains: params.search, mode: "insensitive" } },
+        { description: { contains: params.search, mode: "insensitive" } }
+      ];
+    }
+    const [rows, total] = await Promise.all([
+      prisma.automationWorkflow.findMany({
+        where,
+        skip,
+        take: limit,
+        orderBy: { updatedAt: "desc" },
+        include: {
+          createdBy: {
+            select: { id: true, firstName: true, lastName: true }
+          },
+          _count: {
+            select: { executions: true, schedules: true }
+          }
+        }
+      }),
+      prisma.automationWorkflow.count({ where })
+    ]);
+    return { rows, total, page, limit };
+  }
+  async listWorkflowVersions(workflowId, organizationId) {
+    const workflow = await prisma.automationWorkflow.findFirst({
+      where: { id: workflowId, organizationId }
+    });
+    if (!workflow) throw new NotFoundError("Workflow not found.");
+    return prisma.automationWorkflowVersion.findMany({
+      where: { workflowId },
+      orderBy: { version: "desc" },
+      include: {
+        publishedBy: {
+          select: { id: true, firstName: true, lastName: true, email: true }
+        }
+      }
+    });
+  }
+  // ---------------------------------------------------------------------------
+  // Executions
+  // ---------------------------------------------------------------------------
+  async triggerWorkflow(params) {
+    return workflowEngine.enqueueExecution({
+      workflowId: params.workflowId,
+      organizationId: params.organizationId,
+      triggerType: params.triggerType || "MANUAL",
+      input: params.input || {},
+      initiatedById: params.userId,
+      correlationId: params.correlationId
+    });
+  }
+  async getExecution(id, organizationId) {
+    const execution = await prisma.automationExecution.findFirst({
+      where: { id, organizationId },
+      include: {
+        workflow: {
+          select: { id: true, name: true, category: true, steps: true }
+        },
+        stepExecutions: {
+          orderBy: { stepIndex: "asc" }
+        },
+        approvals: true,
+        actionExecutions: true,
+        notifications: true,
+        tasks: true
+      }
+    });
+    if (!execution) {
+      throw new NotFoundError("Execution not found.");
+    }
+    return execution;
+  }
+  async listExecutions(params) {
+    const page = Math.max(1, params.page || 1);
+    const limit = Math.min(100, Math.max(1, params.limit || 20));
+    const skip = (page - 1) * limit;
+    const where = { organizationId: params.organizationId };
+    if (params.workflowId) where.workflowId = params.workflowId;
+    if (params.status) where.status = params.status;
+    if (params.triggerType) where.triggerType = params.triggerType;
+    const [rows, total] = await Promise.all([
+      prisma.automationExecution.findMany({
+        where,
+        skip,
+        take: limit,
+        orderBy: { createdAt: "desc" },
+        include: {
+          workflow: {
+            select: { id: true, name: true, category: true }
+          },
+          _count: {
+            select: { stepExecutions: true, approvals: true, tasks: true }
+          }
+        }
+      }),
+      prisma.automationExecution.count({ where })
+    ]);
+    return { rows, total, page, limit };
+  }
+  async retryExecution(id, organizationId) {
+    const execution = await prisma.automationExecution.findFirst({
+      where: { id, organizationId }
+    });
+    if (!execution) throw new NotFoundError("Execution not found.");
+    if (execution.status !== "FAILED") {
+      throw new ValidationError(`Only failed executions can be retried (current status: ${execution.status}).`);
+    }
+    await prisma.automationExecution.update({
+      where: { id },
+      data: {
+        status: "QUEUED",
+        errorMessage: null
+      }
+    });
+    return workflowEngine.execute(id);
+  }
+  async cancelExecution(id, organizationId, reason) {
+    return workflowEngine.cancelExecution(id, organizationId, reason);
+  }
+  // ---------------------------------------------------------------------------
+  // Approvals
+  // ---------------------------------------------------------------------------
+  async listApprovals(params) {
+    return approvalEngine.listApprovals(params);
+  }
+  async decideApproval(params) {
+    const result = await approvalEngine.decideApproval(params);
+    if (result.executionResumed && result.approval.executionId) {
+      setImmediate(() => {
+        workflowEngine.resumeExecution(result.approval.executionId, params.organizationId).catch((err) => {
+          logger.error({ err, executionId: result.approval.executionId }, "[AutomationService] Resume after approval failed");
+        });
+      });
+    }
+    return result;
+  }
+  // ---------------------------------------------------------------------------
+  // Tasks
+  // ---------------------------------------------------------------------------
+  async listTasks(params) {
+    return taskManager.listTasks(params);
+  }
+  async createTask(params) {
+    return taskManager.createTask(params);
+  }
+  async updateTask(params) {
+    return taskManager.updateTask(params);
+  }
+  // ---------------------------------------------------------------------------
+  // Schedules
+  // ---------------------------------------------------------------------------
+  async listSchedules(params) {
+    return schedulerEngine.listSchedules(params);
+  }
+  async createSchedule(params) {
+    return schedulerEngine.createSchedule(params);
+  }
+  async toggleSchedule(id, organizationId, isActive) {
+    return schedulerEngine.toggleSchedule(id, organizationId, isActive);
+  }
+  async deleteSchedule(id, organizationId) {
+    return schedulerEngine.deleteSchedule(id, organizationId);
+  }
+  // ---------------------------------------------------------------------------
+  // Events
+  // ---------------------------------------------------------------------------
+  async emitEvent(params) {
+    return eventEngine.emit(params);
+  }
+  listRegisteredEventTypes() {
+    return eventEngine.listRegisteredEvents();
+  }
+  async listEvents(params) {
+    const page = Math.max(1, params.page || 1);
+    const limit = Math.min(100, Math.max(1, params.limit || 20));
+    const skip = (page - 1) * limit;
+    const where = { organizationId: params.organizationId };
+    if (params.eventType) where.eventType = params.eventType;
+    if (params.correlationId) where.correlationId = params.correlationId;
+    const [rows, total] = await Promise.all([
+      prisma.automationEvent.findMany({
+        where,
+        skip,
+        take: limit,
+        orderBy: { createdAt: "desc" }
+      }),
+      prisma.automationEvent.count({ where })
+    ]);
+    return { rows, total, page, limit };
+  }
+  // ---------------------------------------------------------------------------
+  // Actions
+  // ---------------------------------------------------------------------------
+  listRegisteredActions() {
+    return actionRegistry.listActions();
+  }
+  async executeActionDirectly(params) {
+    return actionRegistry.executeAction({
+      actionId: params.actionId,
+      input: params.input,
+      organizationId: params.organizationId,
+      userId: params.userId,
+      userPermissions: params.userPermissions,
+      correlationId: crypto11.randomUUID()
+    });
+  }
+  // ---------------------------------------------------------------------------
+  // Dashboard & Analytics
+  // ---------------------------------------------------------------------------
+  async getDashboardMetrics(organizationId) {
+    const [
+      totalWorkflows,
+      activeWorkflows,
+      totalExecutions,
+      completedExecutions,
+      failedExecutions,
+      runningExecutions,
+      pendingApprovals,
+      activeTasks,
+      recentExecutions
+    ] = await Promise.all([
+      prisma.automationWorkflow.count({ where: { organizationId } }),
+      prisma.automationWorkflow.count({ where: { organizationId, status: "ACTIVE" } }),
+      prisma.automationExecution.count({ where: { organizationId } }),
+      prisma.automationExecution.count({ where: { organizationId, status: "COMPLETED" } }),
+      prisma.automationExecution.count({ where: { organizationId, status: "FAILED" } }),
+      prisma.automationExecution.count({ where: { organizationId, status: { in: ["RUNNING", "QUEUED", "WAITING_APPROVAL"] } } }),
+      prisma.automationApproval.count({ where: { organizationId, status: "PENDING" } }),
+      prisma.automationTask.count({ where: { organizationId, status: { in: ["PENDING", "IN_PROGRESS"] } } }),
+      prisma.automationExecution.findMany({
+        where: { organizationId },
+        orderBy: { createdAt: "desc" },
+        take: 8,
+        include: {
+          workflow: { select: { id: true, name: true, category: true } }
+        }
+      })
+    ]);
+    const successRate = totalExecutions > 0 ? Math.round(completedExecutions / totalExecutions * 100) : 100;
+    return {
+      metrics: {
+        totalWorkflows,
+        activeWorkflows,
+        totalExecutions,
+        completedExecutions,
+        failedExecutions,
+        runningExecutions,
+        pendingApprovals,
+        activeTasks,
+        successRate
+      },
+      recentExecutions
+    };
+  }
+  /**
+   * Drains one batch of due schedules and queued executions on demand.
+   * `initSchedulerIntegration`'s setInterval-based timers cover a
+   * traditional long-running process, but on a serverless deployment
+   * (Vercel) the process is torn down between requests and those timers
+   * never reliably fire — this method is what POST
+   * /automation/internal/tick calls when triggered by an external Vercel
+   * Cron job instead. Safe to call concurrently/repeatedly: both
+   * `tick()` and `processQueue()` are already idempotent single-flight
+   * guarded (`isProcessing`/`isProcessingQueue`).
+   */
+  async runCronTick() {
+    const schedulesTriggered = await schedulerEngine.tick();
+    const queuedExecutionsProcessed = await workflowEngine.processQueue();
+    return { schedulesTriggered, queuedExecutionsProcessed };
+  }
+};
+var automationService = AutomationService.getInstance();
+
+// server/routes/v1/automationRoutes.ts
+var router37 = Router37();
+router37.get(
+  "/internal/tick",
+  asyncHandler(async (req, res) => {
+    if (!config.cronSecret) {
+      throw new NotFoundError("Not found.");
+    }
+    if (req.headers.authorization !== `Bearer ${config.cronSecret}`) {
+      throw new AuthenticationError("Invalid cron credentials.");
+    }
+    const result = await automationService.runCronTick();
+    sendSuccess(res, result);
+  })
+);
+router37.use(authenticateToken);
+var CreateWorkflowSchema = z31.object({
+  name: z31.string().min(1).max(200),
+  description: z31.string().optional(),
+  category: z31.string().default("GENERAL"),
+  triggerType: z31.enum(["EVENT", "SCHEDULE", "MANUAL", "API", "CONDITIONAL"]).default("EVENT"),
+  triggerConfig: z31.record(z31.unknown()).default({}),
+  conditions: z31.unknown().default([]),
+  steps: z31.array(z31.record(z31.unknown())).default([]),
+  retryPolicy: z31.object({
+    maxRetries: z31.number().int().min(0).max(5).default(2),
+    backoffMs: z31.number().int().min(100).max(6e4).default(1e3),
+    exponential: z31.boolean().default(true)
+  }).optional(),
+  limits: z31.object({
+    maxSteps: z31.number().int().min(1).max(100).default(50),
+    maxDurationMs: z31.number().int().min(5e3).max(6e5).default(3e5),
+    maxAiCalls: z31.number().int().min(0).max(50).default(10),
+    maxToolCalls: z31.number().int().min(0).max(50).default(15),
+    maxLoopIterations: z31.number().int().min(1).max(50).default(10)
+  }).optional()
+});
+var UpdateWorkflowSchema = CreateWorkflowSchema.partial().extend({
+  status: z31.enum(["DRAFT", "ACTIVE", "PAUSED", "ARCHIVED"]).optional()
+});
+var TriggerWorkflowSchema = z31.object({
+  input: z31.record(z31.unknown()).default({}),
+  correlationId: z31.string().optional()
+});
+var DecideApprovalSchema = z31.object({
+  decision: z31.enum(["APPROVED", "REJECTED"]),
+  reason: z31.string().optional()
+});
+var CreateTaskSchema = z31.object({
+  title: z31.string().min(1),
+  description: z31.string().optional(),
+  assignedUserId: z31.string().optional(),
+  assignedRole: z31.string().optional(),
+  priority: z31.enum(["LOW", "MEDIUM", "HIGH", "URGENT"]).default("MEDIUM"),
+  dueDate: z31.string().optional(),
+  sourceWorkflowId: z31.string().optional(),
+  sourceExecutionId: z31.string().optional(),
+  sourceEntityType: z31.string().optional(),
+  sourceEntityId: z31.string().optional(),
+  isAiGenerated: z31.boolean().default(false),
+  metadata: z31.record(z31.unknown()).optional()
+});
+var UpdateTaskSchema = z31.object({
+  status: z31.enum(["PENDING", "IN_PROGRESS", "COMPLETED", "CANCELLED"]).optional(),
+  assignedUserId: z31.string().optional(),
+  priority: z31.enum(["LOW", "MEDIUM", "HIGH", "URGENT"]).optional(),
+  dueDate: z31.string().optional()
+});
+var CreateScheduleSchema = z31.object({
+  workflowId: z31.string().uuid(),
+  name: z31.string().min(1),
+  description: z31.string().optional(),
+  scheduleType: z31.enum(["ONE_TIME", "RECURRING", "CRON"]).default("RECURRING"),
+  cronExpression: z31.string().optional(),
+  timezone: z31.string().default("UTC"),
+  intervalSeconds: z31.number().int().positive().optional(),
+  config: z31.record(z31.unknown()).optional()
+});
+var EmitEventSchema = z31.object({
+  eventType: z31.string().min(1),
+  entityType: z31.string().min(1),
+  entityId: z31.string().min(1),
+  sourceModule: z31.string().optional(),
+  payload: z31.record(z31.unknown()).default({}),
+  correlationId: z31.string().optional()
+});
+var ExecuteActionSchema = z31.object({
+  actionId: z31.string().min(1),
+  input: z31.record(z31.unknown()).default({})
+});
+router37.get(
+  "/dashboard",
+  requirePermission("automation.read"),
+  asyncHandler(async (req, res) => {
+    const data = await automationService.getDashboardMetrics(req.user.organizationId);
+    sendSuccess(res, data);
+  })
+);
+router37.get(
+  "/workflows",
+  requirePermission("automation.read"),
+  asyncHandler(async (req, res) => {
+    const result = await automationService.listWorkflows({
+      organizationId: req.user.organizationId,
+      status: req.query.status,
+      category: req.query.category,
+      triggerType: req.query.triggerType,
+      search: req.query.search,
+      page: req.query.page ? Number(req.query.page) : void 0,
+      limit: req.query.limit ? Number(req.query.limit) : void 0
+    });
+    sendSuccess(res, result);
+  })
+);
+router37.post(
+  "/workflows",
+  requirePermission("automation.create"),
+  asyncHandler(async (req, res) => {
+    const body = CreateWorkflowSchema.parse(req.body);
+    const workflow = await automationService.createWorkflow({
+      organizationId: req.user.organizationId,
+      userId: req.user.id,
+      name: body.name,
+      description: body.description,
+      category: body.category,
+      triggerType: body.triggerType,
+      triggerConfig: body.triggerConfig,
+      conditions: body.conditions,
+      steps: body.steps,
+      retryPolicy: body.retryPolicy,
+      limits: body.limits
+    });
+    sendSuccess(res, { workflow }, 201);
+  })
+);
+router37.get(
+  "/workflows/:id",
+  requirePermission("automation.read"),
+  asyncHandler(async (req, res) => {
+    const workflow = await automationService.getWorkflow(req.params.id, req.user.organizationId);
+    sendSuccess(res, { workflow });
+  })
+);
+router37.put(
+  "/workflows/:id",
+  requirePermission("automation.edit"),
+  asyncHandler(async (req, res) => {
+    const body = UpdateWorkflowSchema.parse(req.body);
+    const updated = await automationService.updateWorkflow({
+      id: req.params.id,
+      organizationId: req.user.organizationId,
+      userId: req.user.id,
+      name: body.name,
+      description: body.description,
+      category: body.category,
+      triggerType: body.triggerType,
+      triggerConfig: body.triggerConfig,
+      conditions: body.conditions,
+      steps: body.steps,
+      retryPolicy: body.retryPolicy,
+      limits: body.limits,
+      status: body.status
+    });
+    sendSuccess(res, { workflow: updated });
+  })
+);
+router37.post(
+  "/workflows/:id/publish",
+  requirePermission("automation.publish"),
+  asyncHandler(async (req, res) => {
+    const body = z31.object({ changeSummary: z31.string().optional() }).parse(req.body || {});
+    const published = await automationService.publishWorkflow({
+      id: req.params.id,
+      organizationId: req.user.organizationId,
+      userId: req.user.id,
+      changeSummary: body.changeSummary
+    });
+    sendSuccess(res, { workflow: published });
+  })
+);
+router37.get(
+  "/workflows/:id/versions",
+  requirePermission("automation.read"),
+  asyncHandler(async (req, res) => {
+    const versions = await automationService.listWorkflowVersions(req.params.id, req.user.organizationId);
+    sendSuccess(res, { versions });
+  })
+);
+router37.post(
+  "/workflows/:id/trigger",
+  requirePermission("automation.execute"),
+  asyncHandler(async (req, res) => {
+    const body = TriggerWorkflowSchema.parse(req.body || {});
+    const result = await automationService.triggerWorkflow({
+      workflowId: req.params.id,
+      organizationId: req.user.organizationId,
+      triggerType: "MANUAL",
+      input: body.input,
+      userId: req.user.id,
+      correlationId: body.correlationId
+    });
+    sendSuccess(res, result, 202);
+  })
+);
+router37.get(
+  "/executions",
+  requirePermission("automation.read"),
+  asyncHandler(async (req, res) => {
+    const result = await automationService.listExecutions({
+      organizationId: req.user.organizationId,
+      workflowId: req.query.workflowId,
+      status: req.query.status,
+      triggerType: req.query.triggerType,
+      page: req.query.page ? Number(req.query.page) : void 0,
+      limit: req.query.limit ? Number(req.query.limit) : void 0
+    });
+    sendSuccess(res, result);
+  })
+);
+router37.get(
+  "/executions/:id",
+  requirePermission("automation.read"),
+  asyncHandler(async (req, res) => {
+    const execution = await automationService.getExecution(req.params.id, req.user.organizationId);
+    sendSuccess(res, { execution });
+  })
+);
+router37.post(
+  "/executions/:id/retry",
+  requirePermission("automation.execute"),
+  asyncHandler(async (req, res) => {
+    const result = await automationService.retryExecution(req.params.id, req.user.organizationId);
+    sendSuccess(res, { execution: result });
+  })
+);
+router37.post(
+  "/executions/:id/cancel",
+  requirePermission("automation.manage"),
+  asyncHandler(async (req, res) => {
+    const body = z31.object({ reason: z31.string().optional() }).parse(req.body || {});
+    const result = await automationService.cancelExecution(req.params.id, req.user.organizationId, body.reason);
+    sendSuccess(res, { execution: result });
+  })
+);
+router37.get(
+  "/approvals",
+  requirePermission("automation.read"),
+  asyncHandler(async (req, res) => {
+    const result = await automationService.listApprovals({
+      organizationId: req.user.organizationId,
+      workflowId: req.query.workflowId,
+      status: req.query.status,
+      page: req.query.page ? Number(req.query.page) : void 0,
+      limit: req.query.limit ? Number(req.query.limit) : void 0
+    });
+    sendSuccess(res, result);
+  })
+);
+router37.post(
+  "/approvals/:id/decide",
+  requirePermission("automation.approve"),
+  asyncHandler(async (req, res) => {
+    const body = DecideApprovalSchema.parse(req.body);
+    const result = await automationService.decideApproval({
+      approvalId: req.params.id,
+      organizationId: req.user.organizationId,
+      userId: req.user.id,
+      userRole: req.user.role.key,
+      decision: body.decision,
+      reason: body.reason
+    });
+    sendSuccess(res, result);
+  })
+);
+router37.get(
+  "/tasks",
+  requirePermission("automation.read"),
+  asyncHandler(async (req, res) => {
+    const result = await automationService.listTasks({
+      organizationId: req.user.organizationId,
+      status: req.query.status,
+      priority: req.query.priority,
+      assignedUserId: req.query.assignedUserId,
+      sourceWorkflowId: req.query.sourceWorkflowId,
+      page: req.query.page ? Number(req.query.page) : void 0,
+      limit: req.query.limit ? Number(req.query.limit) : void 0
+    });
+    sendSuccess(res, result);
+  })
+);
+router37.post(
+  "/tasks",
+  requirePermission("automation.execute"),
+  asyncHandler(async (req, res) => {
+    const body = CreateTaskSchema.parse(req.body);
+    const task = await automationService.createTask({
+      organizationId: req.user.organizationId,
+      ...body
+    });
+    sendSuccess(res, { task }, 201);
+  })
+);
+router37.patch(
+  "/tasks/:id",
+  requirePermission("automation.execute"),
+  asyncHandler(async (req, res) => {
+    const body = UpdateTaskSchema.parse(req.body);
+    const updated = await automationService.updateTask({
+      taskId: req.params.id,
+      organizationId: req.user.organizationId,
+      userId: req.user.id,
+      ...body
+    });
+    sendSuccess(res, { task: updated });
+  })
+);
+router37.get(
+  "/schedules",
+  requirePermission("automation.read"),
+  asyncHandler(async (req, res) => {
+    const isActive = req.query.isActive !== void 0 ? req.query.isActive === "true" : void 0;
+    const result = await automationService.listSchedules({
+      organizationId: req.user.organizationId,
+      workflowId: req.query.workflowId,
+      isActive,
+      page: req.query.page ? Number(req.query.page) : void 0,
+      limit: req.query.limit ? Number(req.query.limit) : void 0
+    });
+    sendSuccess(res, result);
+  })
+);
+router37.post(
+  "/schedules",
+  requirePermission("automation.manage"),
+  asyncHandler(async (req, res) => {
+    const body = CreateScheduleSchema.parse(req.body);
+    const schedule = await automationService.createSchedule({
+      organizationId: req.user.organizationId,
+      ...body
+    });
+    sendSuccess(res, { schedule }, 201);
+  })
+);
+router37.patch(
+  "/schedules/:id/toggle",
+  requirePermission("automation.manage"),
+  asyncHandler(async (req, res) => {
+    const body = z31.object({ isActive: z31.boolean().optional() }).parse(req.body || {});
+    const schedule = await automationService.toggleSchedule(req.params.id, req.user.organizationId, body.isActive);
+    sendSuccess(res, { schedule });
+  })
+);
+router37.delete(
+  "/schedules/:id",
+  requirePermission("automation.manage"),
+  asyncHandler(async (req, res) => {
+    const result = await automationService.deleteSchedule(req.params.id, req.user.organizationId);
+    sendSuccess(res, result);
+  })
+);
+router37.get(
+  "/events/types",
+  requirePermission("automation.read"),
+  asyncHandler(async (_req, res) => {
+    const types = automationService.listRegisteredEventTypes();
+    sendSuccess(res, { types });
+  })
+);
+router37.get(
+  "/events",
+  requirePermission("automation.read"),
+  asyncHandler(async (req, res) => {
+    const result = await automationService.listEvents({
+      organizationId: req.user.organizationId,
+      eventType: req.query.eventType,
+      correlationId: req.query.correlationId,
+      page: req.query.page ? Number(req.query.page) : void 0,
+      limit: req.query.limit ? Number(req.query.limit) : void 0
+    });
+    sendSuccess(res, result);
+  })
+);
+router37.post(
+  "/events",
+  requirePermission("automation.execute"),
+  asyncHandler(async (req, res) => {
+    const body = EmitEventSchema.parse(req.body);
+    const event = await automationService.emitEvent({
+      organizationId: req.user.organizationId,
+      actorId: req.user.id,
+      actorType: "USER",
+      ...body
+    });
+    sendSuccess(res, { event }, 202);
+  })
+);
+router37.get(
+  "/actions",
+  requirePermission("automation.read"),
+  asyncHandler(async (_req, res) => {
+    const actions = automationService.listRegisteredActions();
+    sendSuccess(res, { actions });
+  })
+);
+router37.post(
+  "/actions/execute",
+  requirePermission("automation.execute"),
+  asyncHandler(async (req, res) => {
+    const body = ExecuteActionSchema.parse(req.body);
+    const result = await automationService.executeActionDirectly({
+      actionId: body.actionId,
+      input: body.input,
+      organizationId: req.user.organizationId,
+      userId: req.user.id,
+      userPermissions: req.user.role.permissions || []
+    });
+    sendSuccess(res, { result });
+  })
+);
+var automationRoutes_default = router37;
+
+// server/routes/v1/knowledgeRoutes.ts
+import { Router as Router38 } from "express";
+import express3 from "express";
+
+// server/schemas/knowledgeSchemas.ts
+import { z as z32 } from "zod";
+var knowledgeAccessPolicySchema = z32.enum(["PUBLIC", "RESTRICTED", "ROLE_BASED", "OWNER_ONLY"]);
+var knowledgeSourceTypeSchema = z32.enum([
+  "UPLOADED_DOCUMENT",
+  "MEDIA_ASSET",
+  "CMS_CONTENT",
+  "CRM_CLIENT",
+  "CRM_LEAD",
+  "PROJECT",
+  "PRODUCT_CATALOG",
+  "BILLING_RECORD",
+  "MANUAL_ENTRY",
+  "EXTERNAL_CONNECTOR"
+]);
+var createCollectionSchema = z32.object({
+  name: z32.string().trim().min(1).max(200),
+  description: z32.string().trim().max(2e3).optional(),
+  accessPolicy: knowledgeAccessPolicySchema.optional(),
+  allowedRoles: z32.array(z32.string().trim().min(1)).max(50).optional(),
+  metadata: z32.record(z32.unknown()).optional()
+});
+var registerSourceSchema = z32.object({
+  collectionId: z32.string().trim().uuid().optional(),
+  name: z32.string().trim().min(1).max(200),
+  sourceType: knowledgeSourceTypeSchema,
+  entityType: z32.string().trim().max(100).optional(),
+  entityId: z32.string().trim().max(200).optional(),
+  config: z32.record(z32.unknown()).optional()
+});
+var listDocumentsQuerySchema = z32.object({
+  collectionId: z32.string().trim().uuid().optional(),
+  sourceId: z32.string().trim().uuid().optional(),
+  status: z32.enum(["UPLOADED", "PROCESSING", "EXTRACTED", "CHUNKED", "INDEXING", "INDEXED", "FAILED", "ARCHIVED"]).optional()
+});
+var uploadDocumentSchema = z32.object({
+  text: z32.string().max(2e6).optional(),
+  contentBase64: z32.string().max(4e7).optional(),
+  mimeType: z32.string().trim().max(100).optional(),
+  filename: z32.string().trim().max(300).optional(),
+  title: z32.string().trim().max(300).optional(),
+  description: z32.string().trim().max(2e3).optional(),
+  collectionId: z32.string().trim().uuid().optional(),
+  sourceId: z32.string().trim().uuid().optional(),
+  securityScope: z32.string().trim().max(100).optional(),
+  requiredRole: z32.string().trim().max(100).optional(),
+  metadata: z32.record(z32.unknown()).optional()
+}).refine((v) => v.contentBase64 !== void 0 || v.text !== void 0, {
+  message: "Either text or contentBase64 is required."
+});
+var searchKnowledgeSchema = z32.object({
+  query: z32.string().trim().min(1).max(2e3),
+  mode: z32.enum(["KEYWORD", "SEMANTIC", "HYBRID"]).optional(),
+  limit: z32.coerce.number().int().positive().max(50).optional(),
+  minScore: z32.coerce.number().min(0).max(1).optional(),
+  filter: z32.record(z32.unknown()).optional()
+});
+
+// server/routes/v1/knowledgeRoutes.ts
+var router38 = Router38();
+router38.use(authenticateToken);
+router38.get(
+  "/collections",
+  requirePermission("knowledge.read"),
+  asyncHandler(async (req, res) => {
+    const collections = await KnowledgeService.listCollections(req.user.organizationId);
+    sendSuccess(res, { collections });
+  })
+);
+router38.post(
+  "/collections",
+  requirePermission("knowledge.create"),
+  asyncHandler(async (req, res) => {
+    const input = createCollectionSchema.parse(req.body);
+    const collection = await KnowledgeService.createCollection({
+      organizationId: req.user.organizationId,
+      userId: req.user.id,
+      ...input
+    });
+    sendSuccess(res, { collection }, 201);
+  })
+);
+router38.get(
+  "/collections/:id",
+  requirePermission("knowledge.read"),
+  asyncHandler(async (req, res) => {
+    const collection = await KnowledgeService.getCollection(req.params.id, req.user.organizationId);
+    sendSuccess(res, { collection });
+  })
+);
+router38.post(
+  "/sources",
+  requirePermission("knowledge.create"),
+  asyncHandler(async (req, res) => {
+    const input = registerSourceSchema.parse(req.body);
+    const source = await KnowledgeService.registerSource({
+      organizationId: req.user.organizationId,
+      ...input
+    });
+    sendSuccess(res, { source }, 201);
+  })
+);
+router38.get(
+  "/sources",
+  requirePermission("knowledge.read"),
+  asyncHandler(async (req, res) => {
+    const sources = await prisma.knowledgeSource.findMany({
+      where: { organizationId: req.user.organizationId, status: "ACTIVE" },
+      include: {
+        collection: true,
+        _count: { select: { documents: true } }
+      }
+    });
+    sendSuccess(res, { sources });
+  })
+);
+router38.get(
+  "/documents",
+  requirePermission("knowledge.read"),
+  asyncHandler(async (req, res) => {
+    const { collectionId, sourceId, status } = listDocumentsQuerySchema.parse(req.query);
+    const documents = await prisma.knowledgeDocument.findMany({
+      where: {
+        organizationId: req.user.organizationId,
+        ...collectionId ? { collectionId } : {},
+        ...sourceId ? { sourceId } : {},
+        ...status ? { status } : {}
+      },
+      include: {
+        collection: true,
+        source: true,
+        _count: { select: { chunks: true, versions: true } }
+      },
+      orderBy: { createdAt: "desc" }
+    });
+    sendSuccess(res, { documents });
+  })
+);
+router38.get(
+  "/documents/:id",
+  requirePermission("knowledge.read"),
+  asyncHandler(async (req, res) => {
+    const document = await prisma.knowledgeDocument.findFirst({
+      where: { id: req.params.id, organizationId: req.user.organizationId },
+      include: {
+        collection: true,
+        source: true,
+        versions: { orderBy: { version: "desc" } },
+        ingestionJobs: { orderBy: { createdAt: "desc" }, take: 5 }
+      }
+    });
+    if (!document) {
+      throw new NotFoundError(`Document "${req.params.id}" not found.`);
+    }
+    sendSuccess(res, { document });
+  })
+);
+router38.post(
+  "/documents/upload",
+  requirePermission("knowledge.upload"),
+  express3.json({ limit: "25mb" }),
+  asyncHandler(async (req, res) => {
+    const { text, contentBase64, mimeType, filename, title, description, collectionId, sourceId, securityScope, requiredRole, metadata } = uploadDocumentSchema.parse(req.body);
+    let buffer;
+    const finalMime = mimeType || "text/plain";
+    if (contentBase64) {
+      buffer = Buffer.from(contentBase64, "base64");
+    } else if (text !== void 0 && text !== null) {
+      buffer = Buffer.from(String(text), "utf8");
+    } else {
+      throw new ValidationError("Either text or contentBase64 is required.");
+    }
+    const result = await KnowledgeService.ingestDocument({
+      organizationId: req.user.organizationId,
+      userId: req.user.id,
+      collectionId,
+      sourceId,
+      title: title || filename || "Untitled Document",
+      description,
+      buffer,
+      mimeType: finalMime,
+      filename,
+      securityScope,
+      requiredRole,
+      metadata: metadata || {}
+    });
+    sendSuccess(res, result, 201);
+  })
+);
+router38.post(
+  "/documents/:id/reindex",
+  requirePermission("knowledge.reindex"),
+  asyncHandler(async (req, res) => {
+    const result = await KnowledgeService.reindexDocument(req.params.id, req.user.organizationId);
+    sendSuccess(res, result);
+  })
+);
+router38.post(
+  "/search",
+  requirePermission("knowledge.search"),
+  asyncHandler(async (req, res) => {
+    const { query, mode, limit, minScore, filter } = searchKnowledgeSchema.parse(req.body);
+    const results = await KnowledgeService.search(
+      {
+        query,
+        mode: mode || "HYBRID",
+        limit: limit ?? 10,
+        minScore: minScore ?? 0.15,
+        filter
+      },
+      {
+        organizationId: req.user.organizationId,
+        userId: req.user.id,
+        userPermissions: req.user.role.permissions || [],
+        roleName: req.user.role.key
+      }
+    );
+    sendSuccess(res, { results, count: results.length });
+  })
+);
+var knowledgeRoutes_default = router38;
+
+// server/routes/v1/copilotRoutes.ts
+import { Router as Router39 } from "express";
+
+// server/services/copilot/CopilotService.ts
+import crypto12 from "crypto";
+var SYSTEM_WORKSPACES = [
+  {
+    slug: "general-assistant",
+    name: "General Enterprise Assistant",
+    description: "Versatile corporate coworker for company policies, organizational knowledge, tasks, and high-level reports.",
+    icon: "Bot",
+    allowedTools: ["searchKnowledgeBase", "generateNaturalLanguageReport"],
+    allowedModules: ["GENERAL", "KNOWLEDGE", "REPORTS"],
+    requiredPermissions: ["copilot.use"],
+    defaultMode: "ANSWER",
+    temperature: 0.6,
+    maxTokens: 2048,
+    requireCitations: true,
+    isDefault: true,
+    systemInstruction: "You are the Artify Solutions General Enterprise Copilot. Provide accurate, professional, and well-grounded answers based on organizational knowledge. When knowledge is consulted, cite sources faithfully. Never invent business records."
+  },
+  {
+    slug: "crm-assistant",
+    name: "CRM & Client Intelligence Assistant",
+    description: "Client management assistant for researching accounts, reviewing contacts, and managing leads.",
+    icon: "Users",
+    allowedTools: ["searchClients", "modifyClientStatus", "generateNaturalLanguageReport", "searchKnowledgeBase"],
+    allowedModules: ["CRM", "CLIENTS", "LEADS"],
+    requiredPermissions: ["copilot.use", "clients.read"],
+    defaultMode: "ANSWER",
+    temperature: 0.5,
+    maxTokens: 2048,
+    requireCitations: true,
+    isDefault: false,
+    systemInstruction: "You are the Artify CRM Assistant. Assist account executives and managers with client records, lead pipelines, and customer follow-ups. Consequential client status changes require explicit confirmation preview."
+  },
+  {
+    slug: "billing-assistant",
+    name: "Commercial & Billing Assistant",
+    description: "Financial assistant for reviewing invoices, checking payment balances, and generating summaries.",
+    icon: "Receipt",
+    allowedTools: ["generateNaturalLanguageReport", "searchKnowledgeBase"],
+    allowedModules: ["COMMERCIAL", "BILLING", "INVOICES"],
+    requiredPermissions: ["copilot.use", "invoices.read"],
+    defaultMode: "ANSWER",
+    temperature: 0.3,
+    maxTokens: 2048,
+    requireCitations: true,
+    isDefault: false,
+    systemInstruction: "You are the Artify Billing & Commercial Assistant. Help users analyze invoice histories and locate overdue records. Never alter financial records or fabricate currency numbers."
+  },
+  {
+    slug: "operations-assistant",
+    name: "Operations & Workflows Assistant",
+    description: "Autonomous operations assistant to inspect workflow pipelines, trigger verified automations, and track executions.",
+    icon: "Workflow",
+    allowedTools: ["executeWorkflow", "generateNaturalLanguageReport", "searchKnowledgeBase"],
+    allowedModules: ["OPERATIONS", "AUTOMATION"],
+    requiredPermissions: ["copilot.use", "automation.read"],
+    defaultMode: "EXECUTE",
+    temperature: 0.4,
+    maxTokens: 2048,
+    requireCitations: false,
+    isDefault: false,
+    systemInstruction: "You are the Artify Operations & Automation Assistant. Guide users through workflow execution, step telemetry, and approval status. Triggering workflows must provide complete parameters and preview."
+  },
+  {
+    slug: "knowledge-assistant",
+    name: "Document Intelligence & Knowledge Assistant",
+    description: "Deep research and policy query specialist using semantic retrieval across corporate documents, manuals, and specifications.",
+    icon: "Search",
+    allowedTools: ["searchKnowledgeBase"],
+    allowedModules: ["KNOWLEDGE"],
+    requiredPermissions: ["copilot.use", "knowledge.read"],
+    defaultMode: "EXPLAIN",
+    temperature: 0.3,
+    maxTokens: 2500,
+    requireCitations: true,
+    isDefault: false,
+    systemInstruction: "You are the Artify Document Intelligence Specialist. Provide meticulous, evidence-grounded answers strictly based on retrieved enterprise documents. Always cite document name, section, and page."
+  }
+];
+var userMessageRateMap = /* @__PURE__ */ new Map();
+function checkRateLimit(userId) {
+  const now = Date.now();
+  const entry = userMessageRateMap.get(userId);
+  if (!entry || now > entry.resetAt) {
+    userMessageRateMap.set(userId, { count: 1, resetAt: now + 6e4 });
+    return;
+  }
+  if (entry.count >= 35) {
+    throw new ValidationError("Rate limit exceeded: You have sent too many messages in a short time. Please wait a minute.");
+  }
+  entry.count += 1;
+}
+async function generateReportSnapshot(organizationId, userQuery) {
+  if (userQuery.includes("invoice") || userQuery.includes("bill") || userQuery.includes("overdue")) {
+    const [total, overdue] = await Promise.all([
+      prisma.invoice.count({ where: { organizationId } }),
+      prisma.invoice.count({ where: { organizationId, status: "ISSUED", dueDate: { lt: /* @__PURE__ */ new Date() } } })
+    ]);
+    return { entity: "INVOICES", summary: `${total} invoice(s) total, ${overdue} currently overdue.` };
+  }
+  if (userQuery.includes("lead") || userQuery.includes("prospect")) {
+    const total = await prisma.lead.count({ where: { organizationId } });
+    return { entity: "LEADS", summary: `${total} lead(s) on file.` };
+  }
+  if (userQuery.includes("client") || userQuery.includes("account") || userQuery.includes("customer")) {
+    const [total, active] = await Promise.all([
+      prisma.client.count({ where: { organizationId } }),
+      prisma.client.count({ where: { organizationId, status: "ACTIVE" } })
+    ]);
+    return { entity: "CLIENTS", summary: `${total} client(s) total, ${active} active.` };
+  }
+  return null;
+}
+var CopilotService = class {
+  /**
+   * Seed default system workspaces for an organization if not already seeded.
+   */
+  static async ensureDefaultWorkspaces(organizationId) {
+    for (const ws of SYSTEM_WORKSPACES) {
+      const existing = await prisma.copilotWorkspace.findFirst({
+        where: { organizationId, slug: ws.slug }
+      });
+      if (!existing) {
+        await prisma.copilotWorkspace.create({
+          data: {
+            organizationId,
+            name: ws.name,
+            slug: ws.slug,
+            description: ws.description,
+            icon: ws.icon,
+            isSystem: true,
+            isDefault: ws.isDefault,
+            allowedTools: ws.allowedTools,
+            allowedModules: ws.allowedModules,
+            requiredPermissions: ws.requiredPermissions,
+            systemInstruction: ws.systemInstruction,
+            defaultMode: ws.defaultMode,
+            temperature: ws.temperature,
+            maxTokens: ws.maxTokens,
+            requireCitations: ws.requireCitations
+          }
+        });
+      }
+    }
+  }
+  /** List workspaces accessible to the user based on RBAC permissions. */
+  static async listWorkspaces(organizationId, userPermissions) {
+    await this.ensureDefaultWorkspaces(organizationId);
+    const workspaces = await prisma.copilotWorkspace.findMany({
+      where: { organizationId },
+      orderBy: [{ isDefault: "desc" }, { name: "asc" }]
+    });
+    const isSuperAdmin = userPermissions.includes("*");
+    return workspaces.filter((ws) => {
+      if (isSuperAdmin) return true;
+      const reqPerms = ws.requiredPermissions || [];
+      if (reqPerms.length === 0) return true;
+      return reqPerms.every((p) => userPermissions.includes(p));
+    });
+  }
+  /** Get workspace by ID with permission check. */
+  static async getWorkspace(id, organizationId, userPermissions) {
+    const ws = await prisma.copilotWorkspace.findFirst({ where: { id, organizationId } });
+    if (!ws) {
+      throw new NotFoundError(`Workspace "${id}" not found.`);
+    }
+    const isSuperAdmin = userPermissions.includes("*");
+    const reqPerms = ws.requiredPermissions || [];
+    if (!isSuperAdmin && reqPerms.some((p) => !userPermissions.includes(p))) {
+      throw new AuthorizationError(`You do not have the required permissions to access the "${ws.name}" workspace.`);
+    }
+    return ws;
+  }
+  /** Create custom workspace (requires copilot.manage). */
+  static async createWorkspace(organizationId, userId, data) {
+    const slug = data.slug || data.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+    const existing = await prisma.copilotWorkspace.findFirst({ where: { organizationId, slug } });
+    if (existing) {
+      throw new ValidationError(`Workspace with slug "${slug}" already exists in this organization.`);
+    }
+    return prisma.copilotWorkspace.create({
+      data: {
+        organizationId,
+        createdById: userId,
+        name: data.name,
+        slug,
+        description: data.description,
+        icon: data.icon || "Bot",
+        isSystem: false,
+        isDefault: false,
+        allowedTools: data.allowedTools || ["searchKnowledgeBase"],
+        allowedModules: data.allowedModules || ["GENERAL"],
+        requiredPermissions: data.requiredPermissions || ["copilot.use"],
+        systemInstruction: data.systemInstruction,
+        defaultMode: data.defaultMode || "ANSWER",
+        temperature: data.temperature ?? 0.7,
+        maxTokens: data.maxTokens ?? 2048,
+        requireCitations: data.requireCitations ?? true
+      }
+    });
+  }
+  /** List conversations for a specific user and organization. */
+  static async listConversations(organizationId, userId, filter) {
+    const limit = filter.limit ? Math.min(filter.limit, 50) : 20;
+    const offset = filter.offset || 0;
+    const where = { organizationId, userId, status: filter.status || "ACTIVE" };
+    if (filter.workspaceId) where.workspaceId = filter.workspaceId;
+    if (filter.search) where.title = { contains: filter.search, mode: "insensitive" };
+    const [conversations, total] = await Promise.all([
+      prisma.copilotConversation.findMany({
+        where,
+        include: { workspace: { select: { id: true, name: true, slug: true, icon: true } } },
+        orderBy: { lastMessageAt: "desc" },
+        take: limit,
+        skip: offset
+      }),
+      prisma.copilotConversation.count({ where })
+    ]);
+    return { conversations, total, limit, offset };
+  }
+  /** Get single conversation with message history and verification of ownership. */
+  static async getConversation(conversationId, organizationId, userId) {
+    const conv = await prisma.copilotConversation.findFirst({
+      where: { id: conversationId, organizationId, userId },
+      include: {
+        workspace: true,
+        messages: { orderBy: { createdAt: "asc" }, take: 50 },
+        actionPreviews: { where: { status: "PENDING" }, orderBy: { createdAt: "desc" } }
+      }
+    });
+    if (!conv) {
+      throw new NotFoundError(`Conversation "${conversationId}" not found or unauthorized.`);
+    }
+    return conv;
+  }
+  /** Create new conversation. */
+  static async createConversation(organizationId, userId, data) {
+    let workspaceId = data.workspaceId;
+    if (!workspaceId) {
+      await this.ensureDefaultWorkspaces(organizationId);
+      const defaultWs = await prisma.copilotWorkspace.findFirst({ where: { organizationId, isDefault: true } });
+      workspaceId = defaultWs?.id;
+    }
+    if (!workspaceId) {
+      throw new ValidationError("Workspace is required to start a conversation.");
+    }
+    const conversation = await prisma.copilotConversation.create({
+      data: {
+        organizationId,
+        userId,
+        workspaceId,
+        title: data.title?.trim() || "New AI Conversation",
+        contextMetadata: data.contextMetadata || {},
+        lastMessageAt: /* @__PURE__ */ new Date()
+      },
+      include: { workspace: true }
+    });
+    await auditLogRepository.record({
+      organizationId,
+      actorUserId: userId,
+      actorType: "USER",
+      action: "COPILOT_CONVERSATION_CREATED",
+      resourceType: "copilot_conversation",
+      resourceId: conversation.id,
+      metadata: { workspaceId, title: conversation.title }
+    });
+    return conversation;
+  }
+  /** Archive a conversation. */
+  static async archiveConversation(conversationId, organizationId, userId) {
+    const conv = await prisma.copilotConversation.findFirst({ where: { id: conversationId, organizationId, userId } });
+    if (!conv) {
+      throw new NotFoundError(`Conversation "${conversationId}" not found.`);
+    }
+    return prisma.copilotConversation.update({
+      where: { id: conversationId },
+      data: { status: "ARCHIVED", archivedAt: /* @__PURE__ */ new Date() }
+    });
+  }
+  /** Delete a conversation. */
+  static async deleteConversation(conversationId, organizationId, userId) {
+    const conv = await prisma.copilotConversation.findFirst({ where: { id: conversationId, organizationId, userId } });
+    if (!conv) {
+      throw new NotFoundError(`Conversation "${conversationId}" not found.`);
+    }
+    await prisma.copilotConversation.delete({ where: { id: conversationId } });
+    return { success: true, id: conversationId };
+  }
+  /**
+   * Validate server-side user context (client ID, invoice ID, document ID).
+   * Prevents browser entity spoofing.
+   */
+  static async validateEntityContext(organizationId, contextMetadata) {
+    if (!contextMetadata || Object.keys(contextMetadata).length === 0) {
+      return { validatedContext: {}, contextSummary: "" };
+    }
+    const validated = {};
+    const summaryParts = [];
+    if (contextMetadata.currentModule) {
+      validated.currentModule = String(contextMetadata.currentModule);
+      summaryParts.push(`Current Module: ${validated.currentModule}`);
+    }
+    if (contextMetadata.selectedClientId) {
+      const client3 = await prisma.client.findFirst({ where: { id: String(contextMetadata.selectedClientId), organizationId, deletedAt: null } });
+      if (client3) {
+        validated.selectedClient = { id: client3.id, name: client3.name, code: client3.clientCode, status: client3.status };
+        summaryParts.push(`Selected Client: ${client3.name} (${client3.clientCode}) [Status: ${client3.status}]`);
+      }
+    }
+    if (contextMetadata.selectedInvoiceId) {
+      const invoice = await prisma.invoice.findFirst({ where: { id: String(contextMetadata.selectedInvoiceId), organizationId } });
+      if (invoice) {
+        validated.selectedInvoice = { id: invoice.id, invoiceNumber: invoice.invoiceNumber, total: invoice.total.toString(), status: invoice.status };
+        summaryParts.push(`Selected Invoice: #${invoice.invoiceNumber} [Total: ${invoice.total} ${invoice.currency}, Status: ${invoice.status}]`);
+      }
+    }
+    if (contextMetadata.selectedDocumentId) {
+      const doc = await prisma.knowledgeDocument.findFirst({ where: { id: String(contextMetadata.selectedDocumentId), organizationId } });
+      if (doc) {
+        validated.selectedDocument = { id: doc.id, title: doc.title, mimeType: doc.mimeType, activeVersion: doc.activeVersion };
+        summaryParts.push(`Selected Document: "${doc.title}" (Version ${doc.activeVersion})`);
+      }
+    }
+    if (contextMetadata.selectedWorkflowId) {
+      const wf = await prisma.automationWorkflow.findFirst({ where: { id: String(contextMetadata.selectedWorkflowId), organizationId } });
+      if (wf) {
+        validated.selectedWorkflow = { id: wf.id, name: wf.name, status: wf.status };
+        summaryParts.push(`Selected Workflow: "${wf.name}" [Status: ${wf.status}]`);
+      }
+    }
+    return { validatedContext: validated, contextSummary: summaryParts.join("\n") };
+  }
+  /** Generates compact conversation memory summary for long chats (>= 10 messages). */
+  static async compactConversationSummary(conversationId, existingSummary, earlierMessages) {
+    if (earlierMessages.length === 0) return existingSummary || "";
+    const transcript = earlierMessages.map((m) => `${m.role.toUpperCase()}: ${m.content.slice(0, 150)}`).join("\n");
+    const summary = `Compact memory (updated ${(/* @__PURE__ */ new Date()).toISOString().slice(0, 10)}):
+Previous discussion highlighted:
+${transcript.slice(0, 600)}`;
+    await prisma.copilotConversation.update({ where: { id: conversationId }, data: { summary } });
+    return summary;
+  }
+  /**
+   * Main conversational turn: processes user message, performs grounding,
+   * evaluates tool requests, checks approvals, generates model response, and records audit.
+   */
+  static async sendMessage(userContext, options) {
+    checkRateLimit(userContext.userId);
+    const startTime = Date.now();
+    const correlationId = `copilot-${crypto12.randomUUID()}`;
+    let conversation;
+    if (options.conversationId) {
+      conversation = await prisma.copilotConversation.findFirst({
+        where: { id: options.conversationId, organizationId: userContext.organizationId, userId: userContext.userId },
+        include: { workspace: true }
+      });
+      if (!conversation) {
+        throw new NotFoundError(`Conversation "${options.conversationId}" not found or unauthorized.`);
+      }
+    } else {
+      conversation = await this.createConversation(userContext.organizationId, userContext.userId, {
+        workspaceId: options.workspaceId,
+        title: options.content.slice(0, 40) + "...",
+        contextMetadata: options.contextMetadata
+      });
+    }
+    const workspace = conversation.workspace;
+    const isSuperAdmin = userContext.userPermissions.includes("*");
+    const reqPerms = workspace.requiredPermissions || [];
+    if (!isSuperAdmin && reqPerms.some((p) => !userContext.userPermissions.includes(p))) {
+      throw new AuthorizationError(`You lack permission to use the "${workspace.name}" workspace.`);
+    }
+    const mergedContextMetadata = { ...conversation.contextMetadata, ...options.contextMetadata || {} };
+    const { validatedContext, contextSummary } = await this.validateEntityContext(userContext.organizationId, mergedContextMetadata);
+    const userMessage = await prisma.copilotMessage.create({
+      data: {
+        conversationId: conversation.id,
+        role: "user",
+        content: options.content.trim(),
+        status: "COMPLETED",
+        correlationId,
+        metadata: { clientTimestamp: (/* @__PURE__ */ new Date()).toISOString(), context: validatedContext }
+      }
+    });
+    if (conversation.title === "New AI Conversation" || conversation.title.endsWith("...")) {
+      const newTitle = options.content.trim().slice(0, 45);
+      await prisma.copilotConversation.update({ where: { id: conversation.id }, data: { title: newTitle } });
+    }
+    const allMessages = await prisma.copilotMessage.findMany({
+      where: { conversationId: conversation.id },
+      orderBy: { createdAt: "asc" }
+    });
+    let compactSummary = conversation.summary;
+    if (allMessages.length > 12 && !compactSummary) {
+      const earlier = allMessages.slice(0, allMessages.length - 8);
+      compactSummary = await this.compactConversationSummary(conversation.id, compactSummary, earlier);
+    }
+    const recentHistory = allMessages.slice(-8);
+    let citations = [];
+    let groundedKnowledgeText = "";
+    const userQuery = options.content.toLowerCase();
+    const shouldSearchKnowledge = workspace.requireCitations || workspace.slug === "knowledge-assistant" || userQuery.includes("policy") || userQuery.includes("document") || userQuery.includes("guide") || userQuery.includes("agreement") || userQuery.includes("contract") || userQuery.includes("standard") || userQuery.includes("rule");
+    if (shouldSearchKnowledge) {
+      try {
+        const groundedResult = await KnowledgeService.getGroundedContext(
+          options.content,
+          {
+            organizationId: userContext.organizationId,
+            userId: userContext.userId,
+            userPermissions: userContext.userPermissions,
+            roleName: userContext.roleName
+          },
+          { maxTokens: 1500 }
+        );
+        if (groundedResult.formattedContext) {
+          groundedKnowledgeText = groundedResult.formattedContext;
+          citations = groundedResult.citations;
+        }
+      } catch (kErr) {
+        logger.warn({ kErr, correlationId }, "[CopilotService] Knowledge grounding retrieval non-fatal error");
+      }
+    }
+    const allowedToolsList = workspace.allowedTools || [];
+    let actionPreviewData = null;
+    const toolExecutionResults = [];
+    if (allowedToolsList.includes("modifyClientStatus") && (userQuery.includes("change status") || userQuery.includes("update status") || userQuery.includes("suspend client") || userQuery.includes("activate client"))) {
+      const match = options.content.match(/[a-f0-9-]{36}/i);
+      const targetClientId = match ? match[0] : validatedContext.selectedClient?.id;
+      let newStatus = "ACTIVE";
+      if (userQuery.includes("suspend")) newStatus = "SUSPENDED";
+      if (userQuery.includes("archive")) newStatus = "ARCHIVED";
+      if (targetClientId) {
+        const client3 = await prisma.client.findFirst({ where: { id: targetClientId, organizationId: userContext.organizationId } });
+        if (client3) {
+          const preview = await prisma.copilotActionPreview.create({
+            data: {
+              organizationId: userContext.organizationId,
+              conversationId: conversation.id,
+              toolName: "modifyClientStatus",
+              actionType: "MODIFY_CLIENT_STATUS",
+              targetEntity: `${client3.name} (${client3.clientCode})`,
+              changesSummary: `Change client status from "${client3.status}" to "${newStatus}".`,
+              parameters: { clientId: client3.id, newStatus },
+              riskLevel: "HIGH",
+              reason: "User requested status modification in conversation.",
+              requiresApproval: true,
+              status: "PENDING"
+            }
+          });
+          actionPreviewData = {
+            id: preview.id,
+            toolName: preview.toolName,
+            actionType: preview.actionType,
+            targetEntity: preview.targetEntity,
+            changesSummary: preview.changesSummary,
+            riskLevel: preview.riskLevel,
+            status: preview.status,
+            requiresApproval: preview.requiresApproval
+          };
+        }
+      }
+    }
+    if (!actionPreviewData && allowedToolsList.includes("executeWorkflow") && (userQuery.includes("run workflow") || userQuery.includes("trigger workflow") || userQuery.includes("start workflow"))) {
+      const wfIdMatch = options.content.match(/[a-f0-9-]{36}/i)?.[0] || validatedContext.selectedWorkflow?.id;
+      if (wfIdMatch) {
+        const wf = await prisma.automationWorkflow.findFirst({ where: { id: String(wfIdMatch), organizationId: userContext.organizationId } });
+        if (wf) {
+          const preview = await prisma.copilotActionPreview.create({
+            data: {
+              organizationId: userContext.organizationId,
+              conversationId: conversation.id,
+              toolName: "executeWorkflow",
+              actionType: "EXECUTE_WORKFLOW",
+              targetEntity: `Workflow: ${wf.name} (v${wf.currentVersion})`,
+              changesSummary: `Trigger execution of workflow "${wf.name}" with manual trigger payload.`,
+              parameters: { workflowId: wf.id },
+              riskLevel: "HIGH",
+              reason: "User requested workflow execution in conversation.",
+              requiresApproval: true,
+              status: "PENDING"
+            }
+          });
+          actionPreviewData = {
+            id: preview.id,
+            toolName: preview.toolName,
+            actionType: preview.actionType,
+            targetEntity: preview.targetEntity,
+            changesSummary: preview.changesSummary,
+            riskLevel: preview.riskLevel,
+            status: preview.status,
+            requiresApproval: preview.requiresApproval
+          };
+        }
+      }
+    }
+    if (!actionPreviewData) {
+      if (allowedToolsList.includes("generateNaturalLanguageReport") && (userQuery.includes("report") || userQuery.includes("how many") || userQuery.includes("unpaid") || userQuery.includes("overdue") || userQuery.includes("breakdown") || userQuery.includes("statistics"))) {
+        const report = await generateReportSnapshot(userContext.organizationId, userQuery);
+        if (report) {
+          toolExecutionResults.push({ tool: "generateNaturalLanguageReport", result: report });
+        }
+      }
+      if (allowedToolsList.includes("searchClients") && (userQuery.includes("find client") || userQuery.includes("search client") || userQuery.includes("show client"))) {
+        const queryTerm = options.content.replace(/find client|search client|show client/gi, "").trim();
+        const { rows } = await clientService.listClients(userContext.organizationId, { search: queryTerm || void 0 }, 1, 5, "name", "asc");
+        toolExecutionResults.push({ tool: "searchClients", result: { count: rows.length, clients: rows.map((c) => ({ id: c.id, name: c.name, code: c.clientCode, status: c.status })) } });
+      }
+    }
+    const systemPrompt = `${workspace.systemInstruction || "You are an enterprise AI assistant."}
+Response Mode: ${options.mode || workspace.defaultMode}
+Active Workspace: ${workspace.name}
+User Name: ${userContext.displayName || "Authorized Team Member"}
+
+SECURITY AND INTEGRITY RULES:
+1. Ground answers strictly in available verified context and tool results.
+2. If sufficient data is not available, state clearly what cannot be determined. Do not speculate or invent numbers.
+3. If an Action Preview was prepared, explain the exact proposed changes and instruct the user to Confirm or Cancel using the interactive preview below.
+4. When citing documents, mention the document title and section clearly.`;
+    let contextSection = "";
+    if (contextSummary) contextSection += `
+[VERIFIED APPLICATION CONTEXT]:
+${contextSummary}
+`;
+    if (compactSummary) contextSection += `
+[CONVERSATION MEMORY SUMMARY]:
+${compactSummary}
+`;
+    if (groundedKnowledgeText) contextSection += `
+${groundedKnowledgeText}
+`;
+    if (toolExecutionResults.length > 0) contextSection += `
+[TOOL EXECUTION RESULTS]:
+${JSON.stringify(toolExecutionResults, null, 2)}
+`;
+    if (actionPreviewData) {
+      contextSection += `
+[ACTION PREVIEW GENERATED (PENDING USER CONFIRMATION)]:
+Action: ${actionPreviewData.actionType}
+Target: ${actionPreviewData.targetEntity}
+Summary: ${actionPreviewData.changesSummary}
+Risk: ${actionPreviewData.riskLevel}
+`;
+    }
+    const conversationHistoryText = recentHistory.map((m) => `${m.role === "user" ? "User" : "Assistant"}: ${m.content}`).join("\n\n");
+    const fullPrompt = `${systemPrompt}
+
+${contextSection}
+
+${conversationHistoryText}
+
+Assistant:`;
+    let assistantResponseText = "";
+    let tokenUsage = { inputTokens: Math.round(fullPrompt.length / 4), outputTokens: 120, totalTokens: Math.round(fullPrompt.length / 4) + 120 };
+    let modelUsed = defaultAiProvider.defaultModel;
+    try {
+      const result = await defaultAiProvider.generateText(fullPrompt, {
+        systemInstruction: systemPrompt,
+        temperature: workspace.temperature,
+        maxOutputTokens: workspace.maxTokens
+      });
+      assistantResponseText = result.text;
+      modelUsed = result.model;
+      if (result.usage) {
+        tokenUsage = {
+          inputTokens: result.usage.inputTokens ?? tokenUsage.inputTokens,
+          outputTokens: result.usage.outputTokens ?? tokenUsage.outputTokens,
+          totalTokens: result.usage.totalTokens ?? tokenUsage.totalTokens
+        };
+      }
+    } catch (modelErr) {
+      logger.warn({ modelErr, correlationId }, "[CopilotService] Provider generation fallback used");
+      if (actionPreviewData) {
+        assistantResponseText = `I have prepared the action preview for **${actionPreviewData.actionType}** on ${actionPreviewData.targetEntity}.
+
+**Proposed Changes:** ${actionPreviewData.changesSummary}
+
+Please review the details in the action card below and select **Confirm** or **Cancel** to proceed.`;
+      } else if (toolExecutionResults.length > 0 && toolExecutionResults[0]) {
+        const firstTool = toolExecutionResults[0];
+        assistantResponseText = `I processed your request using **${firstTool.tool}**.
+
+${JSON.stringify(firstTool.result, null, 2)}`;
+      } else if (citations.length > 0 && citations[0]) {
+        assistantResponseText = `Based on your enterprise knowledge base, I found relevant material in *${citations[0].documentTitle}*. See the context below for details.`;
+      } else {
+        assistantResponseText = `I have received your request regarding "${options.content}". How would you like me to assist with this in the ${workspace.name}?`;
+      }
+    }
+    const durationMs = Date.now() - startTime;
+    const estimatedCost = tokenUsage.inputTokens * 1e-6 + tokenUsage.outputTokens * 3e-6;
+    const assistantMessage = await prisma.copilotMessage.create({
+      data: {
+        conversationId: conversation.id,
+        role: "assistant",
+        content: assistantResponseText,
+        status: "COMPLETED",
+        providerType: defaultAiProvider.code,
+        modelName: modelUsed,
+        inputTokens: tokenUsage.inputTokens,
+        outputTokens: tokenUsage.outputTokens,
+        totalTokens: tokenUsage.totalTokens,
+        durationMs,
+        estimatedCost,
+        correlationId,
+        citations,
+        toolCalls: toolExecutionResults,
+        actionPreview: actionPreviewData,
+        metadata: { workspaceId: workspace.id, workspaceSlug: workspace.slug, mode: options.mode || workspace.defaultMode }
+      }
+    });
+    await prisma.copilotConversation.update({
+      where: { id: conversation.id },
+      data: { messageCount: { increment: 2 }, lastMessageAt: /* @__PURE__ */ new Date() }
+    });
+    await Promise.all([
+      prisma.copilotUsage.create({
+        data: {
+          organizationId: userContext.organizationId,
+          userId: userContext.userId,
+          workspaceId: workspace.id,
+          conversationId: conversation.id,
+          messageId: assistantMessage.id,
+          providerType: defaultAiProvider.code,
+          modelName: modelUsed,
+          inputTokens: tokenUsage.inputTokens,
+          outputTokens: tokenUsage.outputTokens,
+          totalTokens: tokenUsage.totalTokens,
+          durationMs,
+          estimatedCost,
+          status: "SUCCESS"
+        }
+      }),
+      auditLogRepository.record({
+        organizationId: userContext.organizationId,
+        actorUserId: userContext.userId,
+        actorType: "USER",
+        action: "COPILOT_MESSAGE_PROCESSED",
+        resourceType: "copilot_conversation",
+        resourceId: conversation.id,
+        metadata: { workspace: workspace.slug, tokens: tokenUsage.totalTokens, citationsCount: citations.length, hasActionPreview: !!actionPreviewData, correlationId },
+        requestId: correlationId
+      })
+    ]);
+    return {
+      conversationId: conversation.id,
+      userMessage,
+      assistantMessage,
+      actionPreview: actionPreviewData,
+      citations,
+      toolResults: toolExecutionResults,
+      correlationId
+    };
+  }
+  /**
+   * Confirm and execute a pending CopilotActionPreview. Dispatches locally
+   * to the two action types this service itself ever creates a preview for
+   * (modifyClientStatus, executeWorkflow) — this is Copilot's own bounded
+   * approval mechanism, separate from (and no less strict than) the main
+   * AI Control Center's governance dispatcher: both require an explicit
+   * human decision before a HIGH-risk action runs.
+   */
+  static async confirmAction(actionPreviewId, userContext) {
+    const preview = await prisma.copilotActionPreview.findFirst({
+      where: { id: actionPreviewId, organizationId: userContext.organizationId },
+      include: { conversation: true }
+    });
+    if (!preview) {
+      throw new NotFoundError(`Action preview "${actionPreviewId}" not found.`);
+    }
+    if (preview.status !== "PENDING") {
+      throw new ValidationError(`Action preview is already in "${preview.status}" status.`);
+    }
+    const requiredPermission = preview.toolName === "modifyClientStatus" ? "clients.update" : "automation.execute";
+    const isSuperAdmin = userContext.userPermissions.includes("*");
+    if (!isSuperAdmin && !userContext.userPermissions.includes(requiredPermission)) {
+      throw new AuthorizationError(`Permission "${requiredPermission}" required to confirm and execute this action.`);
+    }
+    const correlationId = `copilot-action-${crypto12.randomUUID()}`;
+    const params = preview.parameters || {};
+    let executionResult;
+    try {
+      if (preview.toolName === "modifyClientStatus") {
+        const user = await userRepository.findById(userContext.userId);
+        const caller = user && await resolveSanitizedUserForOrganization(user, userContext.organizationId);
+        if (!caller) throw new NotFoundError("Confirming user no longer has access to this organization.");
+        const client3 = await clientService.updateClient(caller, String(params.clientId), { status: params.newStatus });
+        executionResult = { clientId: client3.id, status: client3.status };
+      } else if (preview.toolName === "executeWorkflow") {
+        const enqueued = await workflowEngine.enqueueExecution({
+          workflowId: String(params.workflowId),
+          organizationId: userContext.organizationId,
+          initiatedById: userContext.userId,
+          triggerType: "MANUAL"
+        });
+        executionResult = await workflowEngine.execute(enqueued.executionId);
+      } else {
+        throw new ValidationError(`Action "${preview.toolName}" is not confirmable.`);
+      }
+    } catch (err) {
+      await prisma.copilotActionPreview.update({
+        where: { id: preview.id },
+        data: { status: "FAILED", executionResult: { error: err.message }, confirmedById: userContext.userId, confirmedAt: /* @__PURE__ */ new Date() }
+      });
+      throw err;
+    }
+    const updatedPreview = await prisma.copilotActionPreview.update({
+      where: { id: preview.id },
+      data: { status: "EXECUTED", executionResult, confirmedById: userContext.userId, confirmedAt: /* @__PURE__ */ new Date() }
+    });
+    await prisma.copilotMessage.create({
+      data: {
+        conversationId: preview.conversationId,
+        role: "assistant",
+        content: `**Action Confirmed & Executed Successfully:** ${preview.changesSummary}
+
+\`\`\`json
+${JSON.stringify(executionResult, null, 2)}
+\`\`\``,
+        status: "COMPLETED",
+        correlationId,
+        metadata: { actionPreviewId: preview.id, executedBy: userContext.userId }
+      }
+    });
+    await auditLogRepository.record({
+      organizationId: userContext.organizationId,
+      actorUserId: userContext.userId,
+      actorType: "USER",
+      action: "COPILOT_ACTION_CONFIRMED",
+      resourceType: "copilot_action_preview",
+      resourceId: preview.id,
+      metadata: { toolName: preview.toolName, actionType: preview.actionType, targetEntity: preview.targetEntity, correlationId },
+      requestId: correlationId
+    });
+    return { success: true, preview: updatedPreview, result: executionResult };
+  }
+  /** Reject a pending CopilotActionPreview. */
+  static async rejectAction(actionPreviewId, userContext) {
+    const preview = await prisma.copilotActionPreview.findFirst({ where: { id: actionPreviewId, organizationId: userContext.organizationId } });
+    if (!preview) {
+      throw new NotFoundError(`Action preview "${actionPreviewId}" not found.`);
+    }
+    if (preview.status !== "PENDING") {
+      throw new ValidationError(`Action preview is already in "${preview.status}" status.`);
+    }
+    const updated = await prisma.copilotActionPreview.update({
+      where: { id: actionPreviewId },
+      data: { status: "REJECTED", confirmedById: userContext.userId, confirmedAt: /* @__PURE__ */ new Date() }
+    });
+    await prisma.copilotMessage.create({
+      data: {
+        conversationId: preview.conversationId,
+        role: "assistant",
+        content: `*Action cancelled by user:* The proposed action (${preview.actionType}) was declined. No changes were made.`,
+        status: "COMPLETED",
+        metadata: { actionPreviewId: preview.id, rejectedBy: userContext.userId }
+      }
+    });
+    await auditLogRepository.record({
+      organizationId: userContext.organizationId,
+      actorUserId: userContext.userId,
+      actorType: "USER",
+      action: "COPILOT_ACTION_REJECTED",
+      resourceType: "copilot_action_preview",
+      resourceId: preview.id,
+      metadata: { toolName: preview.toolName, actionType: preview.actionType }
+    });
+    return { success: true, preview: updated };
+  }
+  /** Real-time metrics for the Copilot section of the Control Center. */
+  static async getDashboardStats(organizationId) {
+    await this.ensureDefaultWorkspaces(organizationId);
+    const [conversations, usages, pendingActions, executedActions, workspaces] = await Promise.all([
+      prisma.copilotConversation.findMany({ where: { organizationId }, select: { id: true, status: true, workspaceId: true } }),
+      prisma.copilotUsage.findMany({ where: { organizationId }, take: 200 }),
+      prisma.copilotActionPreview.count({ where: { organizationId, status: "PENDING" } }),
+      prisma.copilotActionPreview.count({ where: { organizationId, status: "EXECUTED" } }),
+      prisma.copilotWorkspace.findMany({ where: { organizationId }, include: { _count: { select: { conversations: true } } } })
+    ]);
+    const activeConversations = conversations.filter((c) => c.status === "ACTIVE").length;
+    const convIds = conversations.map((c) => c.id);
+    const totalMessages = convIds.length > 0 ? await prisma.copilotMessage.count({ where: { conversationId: { in: convIds } } }) : 0;
+    const totalTokens = usages.reduce((sum, u) => sum + u.totalTokens, 0);
+    const totalCost = usages.reduce((sum, u) => sum + u.estimatedCost, 0);
+    const successfulRequests = usages.filter((u) => u.status === "SUCCESS").length;
+    const failedRequests = usages.filter((u) => u.status === "FAILED").length;
+    const workspaceUsage = workspaces.map((w) => ({ id: w.id, name: w.name, slug: w.slug, icon: w.icon, conversationsCount: w._count?.conversations || 0 })).sort((a, b) => b.conversationsCount - a.conversationsCount);
+    return {
+      activeConversations,
+      totalMessages,
+      totalRequests: usages.length,
+      successfulRequests,
+      failedRequests,
+      pendingActions,
+      executedActions,
+      totalTokens,
+      estimatedCost: Number(totalCost.toFixed(4)),
+      mostUsedWorkspaces: workspaceUsage,
+      generatedAt: (/* @__PURE__ */ new Date()).toISOString()
+    };
+  }
+};
+
+// server/schemas/copilotSchemas.ts
+import { z as z33 } from "zod";
+var conversationModeSchema = z33.enum(["ANSWER", "EXPLAIN", "SUMMARIZE", "ANALYZE", "RECOMMEND", "DRAFT", "EXECUTE"]);
+var createWorkspaceSchema = z33.object({
+  name: z33.string().trim().min(1).max(200),
+  slug: z33.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)").optional(),
+  description: z33.string().trim().max(2e3).optional(),
+  icon: z33.string().trim().max(100).optional(),
+  allowedTools: z33.array(z33.string().trim().min(1)).max(100).optional(),
+  allowedModules: z33.array(z33.string().trim().min(1)).max(100).optional(),
+  requiredPermissions: z33.array(z33.string().trim().min(1)).max(100).optional(),
+  systemInstruction: z33.string().trim().max(1e4).optional(),
+  defaultMode: conversationModeSchema.optional(),
+  temperature: z33.coerce.number().min(0).max(2).optional(),
+  maxTokens: z33.coerce.number().int().positive().max(32e3).optional(),
+  requireCitations: z33.coerce.boolean().optional()
+});
+var createConversationSchema = z33.object({
+  workspaceId: z33.string().trim().uuid().optional(),
+  title: z33.string().trim().max(300).optional(),
+  contextMetadata: z33.record(z33.unknown()).optional()
+});
+var listConversationsQuerySchema = z33.object({
+  workspaceId: z33.string().trim().uuid().optional(),
+  status: z33.string().trim().max(50).optional(),
+  search: z33.string().trim().max(300).optional(),
+  limit: z33.coerce.number().int().positive().max(100).optional(),
+  offset: z33.coerce.number().int().nonnegative().optional()
+});
+var contextMetadataSchema = z33.object({
+  currentModule: z33.string().trim().max(200).optional(),
+  currentPage: z33.string().trim().max(200).optional(),
+  selectedClientId: z33.string().trim().uuid().optional(),
+  selectedInvoiceId: z33.string().trim().uuid().optional(),
+  selectedDocumentId: z33.string().trim().uuid().optional(),
+  selectedWorkflowId: z33.string().trim().uuid().optional()
+}).catchall(z33.unknown()).optional();
+var sendMessageSchema = z33.object({
+  conversationId: z33.string().trim().uuid().optional(),
+  workspaceId: z33.string().trim().uuid().optional(),
+  content: z33.string().trim().min(1).max(2e4),
+  mode: conversationModeSchema.optional(),
+  contextMetadata: contextMetadataSchema
+});
+
+// server/routes/v1/copilotRoutes.ts
+var router39 = Router39();
+router39.use(authenticateToken);
+router39.get(
+  "/workspaces",
+  asyncHandler(async (req, res) => {
+    const permissions = req.user.role.permissions || [];
+    const workspaces = await CopilotService.listWorkspaces(req.user.organizationId, permissions);
+    sendSuccess(res, { workspaces });
+  })
+);
+router39.post(
+  "/workspaces",
+  requirePermission("copilot.manage"),
+  asyncHandler(async (req, res) => {
+    const input = createWorkspaceSchema.parse(req.body);
+    const workspace = await CopilotService.createWorkspace(req.user.organizationId, req.user.id, input);
+    sendSuccess(res, { workspace }, 201);
+  })
+);
+router39.get(
+  "/workspaces/:id",
+  asyncHandler(async (req, res) => {
+    const permissions = req.user.role.permissions || [];
+    const workspace = await CopilotService.getWorkspace(req.params.id, req.user.organizationId, permissions);
+    sendSuccess(res, { workspace });
+  })
+);
+router39.get(
+  "/conversations",
+  requirePermission("copilot.read"),
+  asyncHandler(async (req, res) => {
+    const query = listConversationsQuerySchema.parse(req.query);
+    const result = await CopilotService.listConversations(req.user.organizationId, req.user.id, {
+      workspaceId: query.workspaceId,
+      status: query.status,
+      search: query.search,
+      limit: query.limit ?? 20,
+      offset: query.offset ?? 0
+    });
+    sendSuccess(res, result);
+  })
+);
+router39.post(
+  "/conversations",
+  requirePermission("copilot.use"),
+  asyncHandler(async (req, res) => {
+    const input = createConversationSchema.parse(req.body);
+    const conversation = await CopilotService.createConversation(req.user.organizationId, req.user.id, input);
+    sendSuccess(res, { conversation }, 201);
+  })
+);
+router39.get(
+  "/conversations/:id",
+  requirePermission("copilot.read"),
+  asyncHandler(async (req, res) => {
+    const conversation = await CopilotService.getConversation(req.params.id, req.user.organizationId, req.user.id);
+    sendSuccess(res, { conversation });
+  })
+);
+router39.post(
+  "/conversations/:id/archive",
+  requirePermission("copilot.use"),
+  asyncHandler(async (req, res) => {
+    const updated = await CopilotService.archiveConversation(req.params.id, req.user.organizationId, req.user.id);
+    sendSuccess(res, { conversation: updated });
+  })
+);
+router39.delete(
+  "/conversations/:id",
+  requirePermission("copilot.use"),
+  asyncHandler(async (req, res) => {
+    const result = await CopilotService.deleteConversation(req.params.id, req.user.organizationId, req.user.id);
+    sendSuccess(res, result);
+  })
+);
+router39.post(
+  "/messages",
+  requirePermission("copilot.use"),
+  asyncHandler(async (req, res) => {
+    const permissions = req.user.role.permissions || [];
+    const input = sendMessageSchema.parse(req.body);
+    const result = await CopilotService.sendMessage(
+      {
+        organizationId: req.user.organizationId,
+        userId: req.user.id,
+        userPermissions: permissions,
+        displayName: req.user.email?.split("@")[0] || "User"
+      },
+      input
+    );
+    sendSuccess(res, result);
+  })
+);
+router39.post(
+  "/messages/stream",
+  requirePermission("copilot.use"),
+  asyncHandler(async (req, res) => {
+    const permissions = req.user.role.permissions || [];
+    const input = sendMessageSchema.parse(req.body);
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+    const sendEvent = (event, data) => {
+      res.write(`event: ${event}
+data: ${JSON.stringify(data)}
+
+`);
+    };
+    sendEvent("start", { status: "PROCESSING" });
+    try {
+      const result = await CopilotService.sendMessage(
+        {
+          organizationId: req.user.organizationId,
+          userId: req.user.id,
+          userPermissions: permissions,
+          displayName: req.user.email?.split("@")[0] || "User"
+        },
+        input
+      );
+      if (result.citations && result.citations.length > 0) {
+        sendEvent("citations", result.citations);
+      }
+      if (result.toolResults && result.toolResults.length > 0) {
+        sendEvent("tool_calls", result.toolResults);
+      }
+      if (result.actionPreview) {
+        sendEvent("action_preview", result.actionPreview);
+      }
+      const fullText = result.assistantMessage.content;
+      const words = fullText.split(" ");
+      for (let i = 0; i < words.length; i += 3) {
+        const chunk = words.slice(i, i + 3).join(" ") + (i + 3 < words.length ? " " : "");
+        sendEvent("chunk", { text: chunk });
+      }
+      sendEvent("done", {
+        conversationId: result.conversationId,
+        messageId: result.assistantMessage.id,
+        correlationId: result.correlationId
+      });
+      res.end();
+    } catch (error) {
+      sendEvent("error", { error: error.message });
+      res.end();
+    }
+  })
+);
+router39.post(
+  "/actions/:id/confirm",
+  requirePermission("copilot.use"),
+  asyncHandler(async (req, res) => {
+    const permissions = req.user.role.permissions || [];
+    const result = await CopilotService.confirmAction(req.params.id, {
+      organizationId: req.user.organizationId,
+      userId: req.user.id,
+      userPermissions: permissions
+    });
+    sendSuccess(res, result);
+  })
+);
+router39.post(
+  "/actions/:id/reject",
+  requirePermission("copilot.use"),
+  asyncHandler(async (req, res) => {
+    const permissions = req.user.role.permissions || [];
+    const result = await CopilotService.rejectAction(req.params.id, {
+      organizationId: req.user.organizationId,
+      userId: req.user.id,
+      userPermissions: permissions
+    });
+    sendSuccess(res, result);
+  })
+);
+router39.get(
+  "/dashboard",
+  requirePermission("copilot.read"),
+  asyncHandler(async (req, res) => {
+    const stats = await CopilotService.getDashboardStats(req.user.organizationId);
+    sendSuccess(res, stats);
+  })
+);
+var copilotRoutes_default = router39;
+
 // server/routes/v1/index.ts
-var v1Router = Router30();
+var v1Router = Router40();
 v1Router.use("/auth", authRoutes_default);
 v1Router.use("/webhooks", webhookRoutes_default);
 v1Router.use("/system", systemRoutes_default);
@@ -9160,11 +16071,21 @@ v1Router.use("/invoices", invoiceRoutes_default);
 v1Router.use("/payments", paymentRoutes_default);
 v1Router.use("/portal", portalRoutes_default);
 v1Router.use("/public", publicRoutes_default);
+v1Router.use("/ai/providers", aiProviderRoutes_default);
+v1Router.use("/ai/tools", aiToolRoutes_default);
+v1Router.use("/ai/prompts", aiPromptRoutes_default);
+v1Router.use("/ai/workflows", aiWorkflowRoutes_default);
+v1Router.use("/ai/executions", aiExecutionRoutes_default);
+v1Router.use("/ai/usage", aiUsageRoutes_default);
+v1Router.use("/ai/approvals", aiApprovalRoutes_default);
+v1Router.use("/automation", automationRoutes_default);
+v1Router.use("/knowledge", knowledgeRoutes_default);
+v1Router.use("/copilot", copilotRoutes_default);
 var v1_default = v1Router;
 
 // server/app/app.ts
 function createApp() {
-  const app2 = express3();
+  const app2 = express4();
   app2.use(requestIdMiddleware);
   applySecurityMiddleware(app2);
   app2.use(requestLogger);

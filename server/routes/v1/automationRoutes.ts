@@ -13,8 +13,37 @@ import { authenticateToken, requirePermission } from "../../middleware/auth";
 import { asyncHandler } from "../../utils/asyncHandler";
 import { sendSuccess } from "../../core/apiResponse";
 import { automationService } from "../../services/automation/AutomationService";
+import { config } from "../../config/env";
+import { AuthenticationError, NotFoundError } from "../../core/errors";
 
 const router = Router();
+
+/**
+ * Cron-triggered batch drain (see AutomationService.runCronTick's doc
+ * comment) — deliberately mounted BEFORE `authenticateToken` below: the
+ * caller is an external scheduler (Vercel Cron, which always invokes a
+ * configured cron path with GET and auto-injects `Authorization: Bearer
+ * $CRON_SECRET` — see vercel.json's "crons" entry), never a logged-in
+ * user, so it authenticates via that shared secret instead of a session.
+ * Disabled (404, matching the "route doesn't exist" response an
+ * unauthenticated prober would see anywhere else) whenever CRON_SECRET
+ * isn't configured, rather than ever accepting an unauthenticated
+ * trigger. GET is safe here (not just tolerated) — draining a batch of
+ * already-due, already-persisted work is naturally idempotent.
+ */
+router.get(
+  "/internal/tick",
+  asyncHandler(async (req, res) => {
+    if (!config.cronSecret) {
+      throw new NotFoundError("Not found.");
+    }
+    if (req.headers.authorization !== `Bearer ${config.cronSecret}`) {
+      throw new AuthenticationError("Invalid cron credentials.");
+    }
+    const result = await automationService.runCronTick();
+    sendSuccess(res, result);
+  })
+);
 
 router.use(authenticateToken);
 

@@ -749,6 +749,23 @@ export class AutomationService {
       recentExecutions,
     };
   }
+
+  /**
+   * Drains one batch of due schedules and queued executions on demand.
+   * `initSchedulerIntegration`'s setInterval-based timers cover a
+   * traditional long-running process, but on a serverless deployment
+   * (Vercel) the process is torn down between requests and those timers
+   * never reliably fire — this method is what POST
+   * /automation/internal/tick calls when triggered by an external Vercel
+   * Cron job instead. Safe to call concurrently/repeatedly: both
+   * `tick()` and `processQueue()` are already idempotent single-flight
+   * guarded (`isProcessing`/`isProcessingQueue`).
+   */
+  public async runCronTick(): Promise<{ schedulesTriggered: number; queuedExecutionsProcessed: number }> {
+    const schedulesTriggered = await schedulerEngine.tick();
+    const queuedExecutionsProcessed = await workflowEngine.processQueue();
+    return { schedulesTriggered, queuedExecutionsProcessed };
+  }
 }
 
 export const automationService = AutomationService.getInstance();
