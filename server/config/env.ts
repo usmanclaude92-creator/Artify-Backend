@@ -87,6 +87,16 @@ const envSchema = z
     // Phase 6 — client-admin workspace invitations (docs/WORKSPACE_PROVISIONING.md).
     INVITATION_TOKEN_TTL_HOURS: z.coerce.number().int().positive().default(72),
 
+    // Rate limiting (docs/SECURITY_MODEL.md "Authentication"). The default
+    // express-rate-limit MemoryStore is per-process — on a serverless
+    // deployment (Vercel) each invocation can land on a different,
+    // short-lived instance with its own empty counters, so limits are not
+    // actually enforced across requests in production. Set this to enable
+    // a shared Redis-backed store instead; left unset, rate limiting
+    // degrades to per-instance (effectively unenforced on serverless)
+    // rather than failing to boot.
+    REDIS_URL: z.string().optional().default(""),
+
     // Phase 13 — Automation scheduler/queue cron trigger
     // (docs/AUTOMATION_ARCHITECTURE.md). Serverless deployments (Vercel)
     // tear down the process between requests, so the in-process
@@ -145,6 +155,15 @@ const envSchema = z
         // eslint-disable-next-line no-console
         console.warn(
           "[config] AI_PROVIDER=gemini but GEMINI_API_KEY is empty — AI endpoints will report unavailable until it is set."
+        );
+      }
+      if (!val.REDIS_URL) {
+        // Not fatal: rate limits still apply per-instance, which is a real
+        // (weaker) protection on a traditional long-running deployment and
+        // a much weaker one on serverless — see the REDIS_URL doc comment.
+        // eslint-disable-next-line no-console
+        console.warn(
+          "[config] REDIS_URL is empty — rate limiting uses a per-process in-memory store, which is not shared across serverless instances. Set REDIS_URL to enforce limits correctly in production."
         );
       }
       if (!val.CRON_SECRET) {
@@ -233,6 +252,7 @@ export type AppConfig = Readonly<{
   invitationTokenTtlHours: number;
   publicWebsiteOrganizationId: string;
   cronSecret: string;
+  redisUrl: string;
 }>;
 
 export type EnvValidationResult =
@@ -293,6 +313,7 @@ export function validateEnv(raw: NodeJS.ProcessEnv | Record<string, string | und
       invitationTokenTtlHours: env.INVITATION_TOKEN_TTL_HOURS,
       publicWebsiteOrganizationId: env.PUBLIC_WEBSITE_ORGANIZATION_ID,
       cronSecret: env.CRON_SECRET,
+      redisUrl: env.REDIS_URL,
     }),
   };
 }

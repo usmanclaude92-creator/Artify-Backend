@@ -4,14 +4,47 @@
  * credential-stuffing protection — docs/SECURITY_MODEL.md target
  * architecture, "Authentication" section).
  *
- * In-memory store is fine for Phase 1 (single instance). Multi-instance
- * deployment (Phase 16) should move to a shared store (e.g. Redis) so
- * limits are enforced across all instances — tracked in
- * docs/PRODUCTION_READINESS_CHECKLIST.md, not blocking Phase 1.
+ * Store: when config.redisUrl is set, every limiter below shares one Redis
+ * connection via rate-limit-redis (each limiter uses its own `prefix` so
+ * their counters never collide) — this is what actually enforces limits
+ * correctly on a serverless deployment (Vercel), where the default
+ * per-process MemoryStore does not persist across instances. Left unset,
+ * every limiter below falls back to that in-memory store (fine for local
+ * dev/single-instance, not for serverless production — see env.ts's
+ * REDIS_URL doc comment, which warns at boot).
  */
 import rateLimit from "express-rate-limit";
 import type { Request, Response } from "express";
+import { RedisStore } from "rate-limit-redis";
+import Redis from "ioredis";
 import { sendError, ApiErrorCode } from "../core/apiResponse";
+import { config } from "../config/env";
+import { logger } from "../core/logger";
+
+const redisClient = config.redisUrl
+  ? new Redis(config.redisUrl, {
+      // Rate limiting must never block a request waiting on Redis to
+      // reconnect — express-rate-limit's `passOnStoreError` (set per
+      // limiter below) lets the request through if the store throws, but
+      // a fast-failing client gets there sooner than ioredis's default
+      // unbounded retry backoff.
+      maxRetriesPerRequest: 1,
+      retryStrategy: (times) => Math.min(times * 200, 2000),
+      lazyConnect: false,
+    })
+  : null;
+
+redisClient?.on("error", (err) => {
+  logger.error({ err }, "[rateLimiter] Redis connection error — limits fall back to allowing the request through");
+});
+
+function makeStore(prefix: string): RedisStore | undefined {
+  if (!redisClient) return undefined;
+  return new RedisStore({
+    prefix: `rl:${prefix}:`,
+    sendCommand: (...args: string[]) => redisClient.call(...args) as Promise<never>,
+  });
+}
 
 function rateLimitHandler(req: Request, res: Response): void {
   sendError(res, 429, ApiErrorCode.RATE_LIMIT_EXCEEDED, "Too many requests. Please try again later.");
@@ -23,6 +56,8 @@ export const generalApiLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   handler: rateLimitHandler,
+  store: makeStore("general"),
+  passOnStoreError: true,
 });
 
 /** Applied to /auth/login and /auth/register only. */
@@ -32,6 +67,8 @@ export const authLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   handler: rateLimitHandler,
+  store: makeStore("auth"),
+  passOnStoreError: true,
   // Key by IP + attempted email so one IP can't lock out unrelated accounts,
   // while still throttling both credential stuffing and single-account brute force.
   keyGenerator: (req: Request) => {
@@ -46,6 +83,8 @@ export const webhookLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   handler: rateLimitHandler,
+  store: makeStore("webhook"),
+  passOnStoreError: true,
 });
 
 /** Password-reset request/confirm — prevents token-guessing and reset-spam against a single account, keyed the same way as authLimiter. */
@@ -55,6 +94,8 @@ export const passwordResetLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   handler: rateLimitHandler,
+  store: makeStore("password-reset"),
+  passOnStoreError: true,
   keyGenerator: (req: Request) => {
     const email = typeof req.body?.email === "string" ? req.body.email.toLowerCase() : "unknown";
     return `${req.ip ?? "unknown-ip"}:${email}`;
@@ -68,6 +109,8 @@ export const publicLeadLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   handler: rateLimitHandler,
+  store: makeStore("public-lead"),
+  passOnStoreError: true,
   keyGenerator: (req: Request) => req.ip ?? "unknown-ip",
 });
 
@@ -78,6 +121,8 @@ export const sensitiveActionLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   handler: rateLimitHandler,
+  store: makeStore("sensitive-action"),
+  passOnStoreError: true,
   keyGenerator: (req: Request) => req.user?.id ?? req.ip ?? "unknown",
 });
 
@@ -88,5 +133,7 @@ export const aiExecutionLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   handler: rateLimitHandler,
+  store: makeStore("ai-execution"),
+  passOnStoreError: true,
   keyGenerator: (req: Request) => req.user?.id ?? req.ip ?? "unknown",
 });

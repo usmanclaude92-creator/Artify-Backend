@@ -73,6 +73,15 @@ var envSchema = z.object({
   PASSWORD_MIN_LENGTH: z.coerce.number().int().min(8).default(10),
   // Phase 6 — client-admin workspace invitations (docs/WORKSPACE_PROVISIONING.md).
   INVITATION_TOKEN_TTL_HOURS: z.coerce.number().int().positive().default(72),
+  // Rate limiting (docs/SECURITY_MODEL.md "Authentication"). The default
+  // express-rate-limit MemoryStore is per-process — on a serverless
+  // deployment (Vercel) each invocation can land on a different,
+  // short-lived instance with its own empty counters, so limits are not
+  // actually enforced across requests in production. Set this to enable
+  // a shared Redis-backed store instead; left unset, rate limiting
+  // degrades to per-instance (effectively unenforced on serverless)
+  // rather than failing to boot.
+  REDIS_URL: z.string().optional().default(""),
   // Phase 13 — Automation scheduler/queue cron trigger
   // (docs/AUTOMATION_ARCHITECTURE.md). Serverless deployments (Vercel)
   // tear down the process between requests, so the in-process
@@ -123,6 +132,11 @@ var envSchema = z.object({
     if (val.AI_PROVIDER === "gemini" && !val.GEMINI_API_KEY) {
       console.warn(
         "[config] AI_PROVIDER=gemini but GEMINI_API_KEY is empty \u2014 AI endpoints will report unavailable until it is set."
+      );
+    }
+    if (!val.REDIS_URL) {
+      console.warn(
+        "[config] REDIS_URL is empty \u2014 rate limiting uses a per-process in-memory store, which is not shared across serverless instances. Set REDIS_URL to enforce limits correctly in production."
       );
     }
     if (!val.CRON_SECRET) {
@@ -204,7 +218,8 @@ function validateEnv(raw) {
       passwordMinLength: env.PASSWORD_MIN_LENGTH,
       invitationTokenTtlHours: env.INVITATION_TOKEN_TTL_HOURS,
       publicWebsiteOrganizationId: env.PUBLIC_WEBSITE_ORGANIZATION_ID,
-      cronSecret: env.CRON_SECRET
+      cronSecret: env.CRON_SECRET,
+      redisUrl: env.REDIS_URL
     })
   };
 }
@@ -330,6 +345,8 @@ var requestLogger = pinoHttp({
 
 // server/middleware/rateLimiter.ts
 import rateLimit from "express-rate-limit";
+import { RedisStore } from "rate-limit-redis";
+import Redis from "ioredis";
 
 // server/core/apiResponse.ts
 function getRequestId(req) {
@@ -365,6 +382,26 @@ function sendError(res, statusCode, code, message, details) {
 }
 
 // server/middleware/rateLimiter.ts
+var redisClient = config.redisUrl ? new Redis(config.redisUrl, {
+  // Rate limiting must never block a request waiting on Redis to
+  // reconnect — express-rate-limit's `passOnStoreError` (set per
+  // limiter below) lets the request through if the store throws, but
+  // a fast-failing client gets there sooner than ioredis's default
+  // unbounded retry backoff.
+  maxRetriesPerRequest: 1,
+  retryStrategy: (times) => Math.min(times * 200, 2e3),
+  lazyConnect: false
+}) : null;
+redisClient?.on("error", (err) => {
+  logger.error({ err }, "[rateLimiter] Redis connection error \u2014 limits fall back to allowing the request through");
+});
+function makeStore(prefix) {
+  if (!redisClient) return void 0;
+  return new RedisStore({
+    prefix: `rl:${prefix}:`,
+    sendCommand: (...args) => redisClient.call(...args)
+  });
+}
 function rateLimitHandler(req, res) {
   sendError(res, 429, "RATE_LIMIT_EXCEEDED" /* RATE_LIMIT_EXCEEDED */, "Too many requests. Please try again later.");
 }
@@ -373,7 +410,9 @@ var generalApiLimiter = rateLimit({
   limit: 300,
   standardHeaders: true,
   legacyHeaders: false,
-  handler: rateLimitHandler
+  handler: rateLimitHandler,
+  store: makeStore("general"),
+  passOnStoreError: true
 });
 var authLimiter = rateLimit({
   windowMs: 15 * 60 * 1e3,
@@ -381,6 +420,8 @@ var authLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   handler: rateLimitHandler,
+  store: makeStore("auth"),
+  passOnStoreError: true,
   // Key by IP + attempted email so one IP can't lock out unrelated accounts,
   // while still throttling both credential stuffing and single-account brute force.
   keyGenerator: (req) => {
@@ -393,7 +434,9 @@ var webhookLimiter = rateLimit({
   limit: 100,
   standardHeaders: true,
   legacyHeaders: false,
-  handler: rateLimitHandler
+  handler: rateLimitHandler,
+  store: makeStore("webhook"),
+  passOnStoreError: true
 });
 var passwordResetLimiter = rateLimit({
   windowMs: 60 * 60 * 1e3,
@@ -401,6 +444,8 @@ var passwordResetLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   handler: rateLimitHandler,
+  store: makeStore("password-reset"),
+  passOnStoreError: true,
   keyGenerator: (req) => {
     const email = typeof req.body?.email === "string" ? req.body.email.toLowerCase() : "unknown";
     return `${req.ip ?? "unknown-ip"}:${email}`;
@@ -412,6 +457,8 @@ var publicLeadLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   handler: rateLimitHandler,
+  store: makeStore("public-lead"),
+  passOnStoreError: true,
   keyGenerator: (req) => req.ip ?? "unknown-ip"
 });
 var sensitiveActionLimiter = rateLimit({
@@ -420,6 +467,8 @@ var sensitiveActionLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   handler: rateLimitHandler,
+  store: makeStore("sensitive-action"),
+  passOnStoreError: true,
   keyGenerator: (req) => req.user?.id ?? req.ip ?? "unknown"
 });
 var aiExecutionLimiter = rateLimit({
@@ -428,6 +477,8 @@ var aiExecutionLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   handler: rateLimitHandler,
+  store: makeStore("ai-execution"),
+  passOnStoreError: true,
   keyGenerator: (req) => req.user?.id ?? req.ip ?? "unknown"
 });
 
