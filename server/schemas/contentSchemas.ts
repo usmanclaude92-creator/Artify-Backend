@@ -17,6 +17,38 @@ export const patchableContentStatusSchema = z.enum(["DRAFT"]);
 /** Optimistic-concurrency guard (§12) — when supplied, the update is rejected with 409 unless the resource's updatedAt still matches, preventing a silent lost update. */
 export const expectedUpdatedAtSchema = z.coerce.date().optional();
 
+/**
+ * Post/Page `metadata` (stored on `ContentRevision.metadata`, exposed
+ * publicly as `seo` — see publicSiteService.ts). Field names and value
+ * shapes intentionally mirror artifysolscom's `ArticleSeoMetadata` type
+ * (src/types.ts) and what `generateBlogPostSeo()`/`updatePageSeo()` there
+ * actually read — the two repos must agree on this shape since one writes
+ * it and the other renders it. Previously validated as `z.record(z.unknown())`
+ * (any shape, any size, silently) — replaced with named+bounded fields so
+ * a save can't smuggle in an oversized blob or a key the public site would
+ * echo into an attribute/JSON-LD without either side expecting it.
+ * `.strict()` rejects unknown keys outright rather than silently dropping
+ * them, so a naming drift between the two repos fails loudly at save time
+ * instead of quietly losing data.
+ */
+export const seoMetadataSchema = z
+  .object({
+    metaTitle: z.string().trim().min(1).max(70).optional(),
+    metaDescription: z.string().trim().min(1).max(320).optional(),
+    focusKeywords: z.array(z.string().trim().min(1).max(60)).max(10).optional(),
+    canonicalUrl: z.string().trim().url().max(500).optional(),
+    ogTitle: z.string().trim().min(1).max(95).optional(),
+    ogDescription: z.string().trim().min(1).max(320).optional(),
+    ogImage: z.string().trim().url().max(1000).optional(),
+    twitterImage: z.string().trim().url().max(1000).optional(),
+    ogType: z.enum(["article", "website", "news"]).optional(),
+    twitterCard: z.enum(["summary_large_image", "summary"]).optional(),
+    robotsDirective: z.enum(["index, follow", "noindex, nofollow", "noindex, follow"]).optional(),
+    schemaType: z.enum(["TechArticle", "NewsArticle", "BlogPosting", "Report"]).optional(),
+  })
+  .strict();
+export type SeoMetadataInput = z.infer<typeof seoMetadataSchema>;
+
 export const revertContentSchema = z.object({
   revisionId: z.string().trim().uuid(),
 });

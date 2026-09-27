@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { patchableContentStatusSchema, expectedUpdatedAtSchema } from "./contentSchemas";
+import { patchableContentStatusSchema, expectedUpdatedAtSchema, seoMetadataSchema } from "./contentSchemas";
 
 const slugSchema = z
   .string()
@@ -12,7 +12,7 @@ export const createPostSchema = z.object({
   title: z.string().trim().min(1).max(200),
   slug: slugSchema.optional(),
   body: z.string().trim().max(500000).default(""),
-  metadata: z.record(z.unknown()).optional(),
+  metadata: seoMetadataSchema.optional(),
   categoryId: z.string().trim().uuid().optional(),
   authorId: z.string().trim().uuid().optional(),
   tagIds: z.array(z.string().trim().uuid()).max(50).optional(),
@@ -25,7 +25,7 @@ export const updatePostSchema = z
     title: z.string().trim().min(1).max(200).optional(),
     slug: slugSchema.optional(),
     body: z.string().trim().max(500000).optional(),
-    metadata: z.record(z.unknown()).optional(),
+    metadata: seoMetadataSchema.optional(),
     status: patchableContentStatusSchema.optional(),
     categoryId: z.string().trim().uuid().nullable().optional(),
     authorId: z.string().trim().uuid().nullable().optional(),

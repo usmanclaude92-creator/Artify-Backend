@@ -631,6 +631,29 @@ export type ContentStatusValue = "DRAFT" | "IN_REVIEW" | "SCHEDULED" | "PUBLISHE
 /** Only status reachable through the generic PATCH — every forward move is a dedicated endpoint (server/schemas/contentSchemas.ts). */
 export type PatchableContentStatus = "DRAFT";
 
+/**
+ * Stored on `ContentRevision.metadata`, validated server-side by
+ * server/schemas/contentSchemas.ts's `seoMetadataSchema` (`.strict()` —
+ * an unknown key is rejected, not silently dropped), and exposed publicly
+ * as `seo`. Field names mirror artifysolscom's `ArticleSeoMetadata`
+ * (src/types.ts there) exactly, since that's what actually reads this
+ * data to render `<title>`/meta tags/JSON-LD — the two must agree.
+ */
+export interface PostSeoMetadata {
+  metaTitle?: string;
+  metaDescription?: string;
+  focusKeywords?: string[];
+  canonicalUrl?: string;
+  ogTitle?: string;
+  ogDescription?: string;
+  ogImage?: string;
+  twitterImage?: string;
+  ogType?: "article" | "website" | "news";
+  twitterCard?: "summary_large_image" | "summary";
+  robotsDirective?: "index, follow" | "noindex, nofollow" | "noindex, follow";
+  schemaType?: "TechArticle" | "NewsArticle" | "BlogPosting" | "Report";
+}
+
 export interface ContentRevision {
   id: string;
   pageId: string | null;
@@ -639,7 +662,7 @@ export interface ContentRevision {
   status: ContentStatusValue;
   title: string;
   body: string;
-  metadata: Record<string, unknown>;
+  metadata: PostSeoMetadata;
   createdById: string | null;
   createdAt: string;
   publishedAt: string | null;
@@ -716,7 +739,7 @@ const contentUpdateBody = (payload: {
   title?: string;
   slug?: string;
   body?: string;
-  metadata?: Record<string, unknown>;
+  metadata?: PostSeoMetadata;
   status?: PatchableContentStatus;
   featuredMediaId?: string | null;
   expectedUpdatedAt?: string;
@@ -728,7 +751,7 @@ export const pagesApi = {
   ) => paginatedGet<CmsPage>("/pages", "pages", params),
   get: (id: string) => apiClient.get<{ page: CmsPage }>(`/pages/${id}`),
   revisions: (id: string) => apiClient.get<{ revisions: ContentRevision[] }>(`/pages/${id}/revisions`),
-  create: (payload: { title: string; slug?: string; body?: string; metadata?: Record<string, unknown>; featuredMediaId?: string }) =>
+  create: (payload: { title: string; slug?: string; body?: string; metadata?: PostSeoMetadata; featuredMediaId?: string }) =>
     apiClient.post<{ page: CmsPage }>("/pages", payload),
   update: (id: string, payload: Parameters<typeof contentUpdateBody>[0]) => apiClient.patch<{ page: CmsPage }>(`/pages/${id}`, contentUpdateBody(payload)),
   submitForReview: (id: string) => apiClient.post<{ page: CmsPage }>(`/pages/${id}/submit-review`),
@@ -758,7 +781,7 @@ export const postsApi = {
     title: string;
     slug?: string;
     body?: string;
-    metadata?: Record<string, unknown>;
+    metadata?: PostSeoMetadata;
     categoryId?: string;
     authorId?: string;
     tagIds?: string[];
@@ -770,7 +793,7 @@ export const postsApi = {
       title?: string;
       slug?: string;
       body?: string;
-      metadata?: Record<string, unknown>;
+      metadata?: PostSeoMetadata;
       status?: PatchableContentStatus;
       categoryId?: string | null;
       authorId?: string | null;
