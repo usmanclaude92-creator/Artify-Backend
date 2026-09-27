@@ -51,9 +51,34 @@ The extension set is deliberately scoped to exactly what `sanitizeContentHtml`'s
 
 **Inline images need a stable URL, not a signed one.** `GET /media/:id/url` (used for Control Center admin previews) always issues a short-lived signed URL — fine for a preview fetched on click, wrong for a URL baked directly into `body` HTML and re-served verbatim by `publicSiteService` for as long as the content stays published (a 15-minute signed URL would go dead long before a reader ever sees the post). Rather than let the editor embed an expiring URL as a known trap, this phase adds `GET /media/:id/embed-url` (`mediaService.getEmbedUrl`, `media.update` permission): it requires an ACTIVE image, auto-promotes it to `PUBLIC` visibility if not already (audited `MEDIA_METADATA_UPDATED`, reusing the exact reasoning `assertFeaturedMediaUsable` already established for featured images — a caller who can attach an image to content is, by that same permission, authorized to make that specific image public), and returns `provider.getPublicUrl()` with a signed-URL fallback, mirroring `publicSiteService.projectPublicMedia`'s existing pattern for featured images. The editor's toolbar image button reuses the existing `MediaPickerModal` and calls this new endpoint rather than `getReadUrl`.
 
+## Phase 4 (scoped) — Pages get a real public route
+
+Through Phase 11, `publicSiteService.getPageBySlug` and `artifysolscom`'s `publicApi.getPageBySlug()` existed
+end-to-end but nothing on the public site ever called it — a `Page` could be authored and published in the
+Control Center and still be unreachable by any URL. This phase closes exactly that gap, not the full "Website
+Management" vision (`control-center-roadmap.md`'s Phase 4 — homepage/nav/section-driven authoring and a visual
+builder remain **not started**, their own larger design pass).
+
+- **Backend**: `pageService.updatePage` now calls `redirectService.autoRedirectOnSlugChange()` on a slug change
+  to a (still) `PUBLISHED` page, mirroring `postService.updatePost` exactly — the only difference is the path
+  format: `/:slug` (site root) instead of `/blog/:slug`, since Pages don't share Posts' fixed prefix. No schema
+  change — `redirectService.autoRedirectOnSlugChange`'s `resourceType: "post" | "page"` parameter already
+  anticipated this from Phase 5.
+- **Frontend (`artifysolscom`)**: `App.tsx`'s `getRouteFromPath` gets a catch-all — any single-segment path
+  that doesn't match a reserved static route (`/services`, `/about`, `/blog`, etc.) is treated as a candidate
+  CMS Page slug. `src/components/pages/CmsPageRoute.tsx` (new, lazy-loaded) resolves it against
+  `publicApi.getPageBySlug()`, falls back to the redirect table on a 404 (only following a redirect that lands
+  on another root-level page path — never `/blog/...` or an external target), and only then shows a genuine
+  not-found state — the same three-step pattern `BlogPage.tsx` established for posts in Phase 11.
+- **Known, accepted limitation**: a published Page whose slug collides with a reserved static route
+  (`about`, `services`, ...) is unreachable — those routes are matched first in `getRouteFromPath`, before the
+  catch-all ever runs. There's no shared slug registry between the Control Center and the public site's
+  hardcoded route list; resolving that is website-management scope, not this phase's.
+
 ## See also
 
 - `docs/CONTENT_WORKFLOW_ARCHITECTURE.md` — the publish/schedule/revision/revert state machine and optimistic-concurrency design.
 - `docs/MEDIA_ARCHITECTURE.md` — storage provider abstraction, signed vs. public URLs, featured-image auto-publish.
+- `docs/SEO_ARCHITECTURE.md` — redirects, auto-redirect on slug change, the rule-based audit.
 - `docs/PHASE_8_IMPLEMENTATION.md` — endpoints, migration, audit events, tests.
 - `docs/PHASE_8_COMPLETION_REPORT.md` — final status.

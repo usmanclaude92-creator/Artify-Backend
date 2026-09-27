@@ -161,6 +161,33 @@ describe("SEO Control Center", () => {
     });
   });
 
+  describe("auto-redirect on page slug change (Phase 4)", () => {
+    it("creates a redirect at the page's root-level public path when a PUBLISHED page's slug changes, and does not when a DRAFT page's slug changes", async () => {
+      const created = await request(app).post("/api/v1/pages").set("Authorization", `Bearer ${adminToken}`).send({ title: "Page Slug Move", body: "v1" });
+      const id = created.body.data.page.id;
+      await request(app).post(`/api/v1/pages/${id}/publish`).set("Authorization", `Bearer ${adminToken}`).send();
+
+      const renamed = await request(app).patch(`/api/v1/pages/${id}`).set("Authorization", `Bearer ${adminToken}`).send({ slug: "page-slug-move-renamed" });
+      expect(renamed.status).toBe(200);
+      expect(renamed.body.data.page.slug).toBe("page-slug-move-renamed");
+
+      const list = await request(app).get("/api/v1/redirects").set("Authorization", `Bearer ${adminToken}`).query({ search: "page-slug-move" });
+      const redirect = list.body.data.redirects.find((r: { fromPath: string }) => r.fromPath === "/page-slug-move");
+      expect(redirect).toBeTruthy();
+      expect(redirect.toPath).toBe("/page-slug-move-renamed");
+      expect(redirect.resourceType).toBe("page");
+      expect(redirect.resourceId).toBe(id);
+
+      // A DRAFT page's slug is never publicly reachable, so renaming it must not create a redirect.
+      const draft = await request(app).post("/api/v1/pages").set("Authorization", `Bearer ${adminToken}`).send({ title: "Never Published Page", body: "v1" });
+      const draftId = draft.body.data.page.id;
+      await request(app).patch(`/api/v1/pages/${draftId}`).set("Authorization", `Bearer ${adminToken}`).send({ slug: "never-published-page-renamed" });
+
+      const noRedirect = await request(app).get("/api/v1/redirects").set("Authorization", `Bearer ${adminToken}`).query({ search: "never-published-page" });
+      expect(noRedirect.body.data.redirects).toHaveLength(0);
+    });
+  });
+
   describe("public redirect lookup", () => {
     it("resolves a redirect for the configured public organization, and returns null for an unknown path", async () => {
       const { config } = await import("../../server/config/env");

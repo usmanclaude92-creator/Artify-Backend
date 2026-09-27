@@ -38,6 +38,7 @@ import { auditLogRepository } from "../repositories/auditLogRepository";
 import { assertFeaturedMediaUsable } from "./mediaService";
 import { sanitizeContentHtml } from "../utils/sanitizeHtml";
 import { notificationService } from "./notificationService";
+import { redirectService } from "./redirectService";
 import { prisma } from "../db/prisma";
 import { ConflictError, NotFoundError, ValidationError } from "../core/errors";
 import type { SanitizedUser } from "../types/domain";
@@ -269,6 +270,27 @@ export const pageService = {
         ipAddress: meta.ip,
         userAgent: meta.userAgent,
       });
+    }
+
+    // A slug change on a page that's (still) PUBLISHED after this update
+    // means its real, indexed public URL just moved — auto-create a
+    // redirect so existing links/search results don't dead-end, mirroring
+    // postService.updatePost's identical handling for /blog/:slug. Pages
+    // render at the public site's root, /:slug (Phase 4 —
+    // docs/CMS_ARCHITECTURE.md), not under a fixed prefix like posts —
+    // gated on the resulting status, not the prior one, for the same
+    // unpublish-in-the-same-PATCH reason.
+    if (input.slug !== undefined && input.slug !== existing.slug) {
+      const finalStatus = input.status ?? existing.status;
+      if (finalStatus === "PUBLISHED") {
+        await redirectService.autoRedirectOnSlugChange({
+          organizationId,
+          fromPath: `/${existing.slug}`,
+          toPath: `/${input.slug}`,
+          resourceType: "page",
+          resourceId: id,
+        });
+      }
     }
 
     return loadPageOrThrow(id, organizationId);

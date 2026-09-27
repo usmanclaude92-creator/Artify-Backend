@@ -53,9 +53,10 @@ single indexed equality check on its hot path (a 404).
 - **Auto-creation on slug change**: `postService.updatePost` calls
   `redirectService.autoRedirectOnSlugChange()` when a post's slug changes AND the post is (still) `PUBLISHED`
   after that same update — gated on the *resulting* status, not the prior one, so a PATCH that both renames
-  the slug and unpublishes the post creates no redirect (there'd be no live page to send visitors to).
-  **Pages are not wired to this** — they have no public route yet (see "Known gap: Pages have no public
-  route" below), so an auto-created Page redirect would point at a URL format nobody has decided on.
+  the slug and unpublishes the post creates no redirect (there'd be no live page to send visitors to). Since
+  Phase 4, `pageService.updatePage` does the identical thing for Pages, now that they have a real public URL
+  format to redirect within (`/:slug` at the site root, not `/blog/:slug`) — see "Pages have a public route"
+  below.
 - **Chain collapse**: renaming twice (A→B, then B→C) repoints the A→B redirect to A→C directly
   (`redirectRepository.repointChainedRedirects`) rather than leaving a dead intermediate hop.
 - **Open-redirect hardening**: `fromPath`/`toPath` must be site-relative (`/...`, not `//...`) and must not
@@ -95,15 +96,20 @@ posts or products had a sitemap that silently omitted everything past the 50th f
 follow `meta.pagination.totalPages` and fetch every page (`fetchAllPages()`, capped at 40 pages as a sanity
 ceiling against a runaway total).
 
-## Known gap: Pages have no public route
+## Pages have a public route (Phase 4)
 
-`publicApi.getPageBySlug()` (`artifysolscom/src/lib/publicApi.ts`) exists and is fully wired end-to-end on the
-backend, but nothing in the public site's routing (`App.tsx`) ever calls it — a CMS `Page` can be authored and
-published in the Control Center but never actually renders anywhere on `artifysols.com`. This is why the SEO
-audit still scores Pages (their metadata will matter once they're reachable) but the auto-redirect and public
-redirect-lookup wiring is Post-only for now. Giving Pages a real public route is website-management/
-page-builder scope (`control-center-roadmap.md`'s Phase 4, "Website Management" — not started, needs its own
-design pass), not an SEO fix.
+Was a known gap through Phase 5/11: `publicApi.getPageBySlug()` existed and was fully wired end-to-end on the
+backend, but nothing in the public site's routing (`App.tsx`) ever called it — a CMS `Page` could be authored
+and published in the Control Center but never actually rendered anywhere on `artifysols.com`. Phase 4 (scoped)
+closed this: `App.tsx`'s router now falls back to a generic single-segment-path catch-all after every reserved
+static route, resolved by the new `CmsPageRoute.tsx` against the real API — with the same
+redirect-table-fallback-then-genuine-404 pattern `BlogPage.tsx` already used for posts. Pages render at the
+site root (`/:slug`), not under a `/blog/`-style prefix. This is a real public route, not the full
+website-management/page-builder vision (`control-center-roadmap.md`'s Phase 4, "Website Management" — still
+not started: no homepage/nav/section-driven authoring, no visual builder). A published Page whose slug
+collides with one of the site's existing hardcoded routes (`/services`, `/about`, etc.) is unreachable —
+the reserved static routes always win — a known, accepted limitation of a slug-based catch-all with no shared
+registry between the two, not a bug.
 
 ## RBAC summary
 
