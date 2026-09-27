@@ -29,11 +29,12 @@ import {
   Package,
   Image as ImageIcon,
   UploadCloud,
+  Target,
 } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
 import { useRouter } from "../../lib/router";
 import { hasPermission, visibleNavItems } from "../../lib/permissions";
-import { postsApi, pagesApi, leadsApi, clientsApi, productsApi, mediaApi } from "../../lib/api";
+import { postsApi, pagesApi, leadsApi, clientsApi, productsApi, mediaApi, opportunitiesApi } from "../../lib/api";
 
 interface CommandPaletteProps {
   open: boolean;
@@ -62,6 +63,7 @@ const QUICK_ACTIONS: QuickAction[] = [
   { id: "new-page", label: "New Page", permission: "content.create", path: "/cms/pages?new=1", icon: FileText },
   { id: "new-lead", label: "New Lead", permission: "leads.create", path: "/crm/leads?new=1", icon: Briefcase },
   { id: "new-client", label: "New Client", permission: "clients.create", path: "/crm/clients?new=1", icon: Building2 },
+  { id: "new-opportunity", label: "New Opportunity", permission: "opportunities.create", path: "/crm/opportunities?new=1", icon: Target },
   { id: "upload-media", label: "Upload Media", permission: "media.upload", path: "/cms/media?new=1", icon: UploadCloud },
 ];
 
@@ -137,6 +139,17 @@ const ENTITY_SEARCHERS: {
     search: async (query) => {
       const { items } = await mediaApi.list({ search: query, limit: 5 });
       return items.map((m) => ({ id: m.id, label: m.displayName || m.originalFilename, sublabel: m.mimeType }));
+    },
+  },
+  {
+    id: "opportunities",
+    group: "Opportunities",
+    permission: "opportunities.read",
+    icon: Target,
+    navPath: "/crm/opportunities",
+    search: async (query) => {
+      const { items } = await opportunitiesApi.list({ search: query, limit: 5 });
+      return items.map((o) => ({ id: o.id, label: o.name, sublabel: o.stage }));
     },
   },
 ];

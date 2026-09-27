@@ -47,6 +47,7 @@ import {
   Bot,
   Search,
   ArrowRightLeft,
+  Target,
 } from "lucide-react";
 import { DashboardPage } from "../components/modules/DashboardPage";
 import { UsersPage } from "../components/modules/UsersPage";
@@ -75,6 +76,7 @@ import { PaymentsPage } from "../components/modules/PaymentsPage";
 import { ClientPortalPage } from "../components/modules/ClientPortalPage";
 import { SeoIssuesPage } from "../components/modules/SeoIssuesPage";
 import { RedirectsPage } from "../components/modules/RedirectsPage";
+import { OpportunitiesPage } from "../components/modules/OpportunitiesPage";
 import { AiOverviewPage } from "../components/modules/ai/AiOverviewPage";
 import { AiProvidersPage } from "../components/modules/ai/AiProvidersPage";
 import { AiToolsPage } from "../components/modules/ai/AiToolsPage";
@@ -198,6 +200,15 @@ export const NAV_ITEMS: NavItem[] = [
     icon: Contact2,
     requiresAnyPermission: ["contacts.read"],
     component: ContactsPage,
+    section: "CRM",
+  },
+  {
+    id: "crm-opportunities",
+    label: "Opportunities",
+    path: "/crm/opportunities",
+    icon: Target,
+    requiresAnyPermission: ["opportunities.read"],
+    component: OpportunitiesPage,
     section: "CRM",
   },
   {

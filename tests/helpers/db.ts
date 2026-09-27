@@ -74,6 +74,8 @@ export async function resetDb(): Promise<void> {
   await prisma.contractVariation.deleteMany();
   await prisma.contract.deleteMany();
   await prisma.contact.deleteMany();
+  // opportunities RESTRICTs on client_id — must go before clients below.
+  await prisma.opportunity.deleteMany();
   // client_onboarding RESTRICTs on both client_id and organization_id —
   // must go before both clients and organizations are deleted below.
   await prisma.clientOnboarding.deleteMany();

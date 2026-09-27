@@ -70,6 +70,16 @@ export const PERMISSION_KEYS = [
   "contacts.create",
   "contacts.update",
   "contacts.delete",
+  // Phase 7 — CRM pipeline (docs/CRM_ARCHITECTURE.md). "close" covers both
+  // POST /opportunities/:id/win and /lose — both are symmetric terminal
+  // transitions (unlike contracts.activate/suspend/terminate, which differ
+  // enough in blast radius to warrant separate keys), so one permission
+  // covers both rather than adding win/lose granularity nothing asked for.
+  "opportunities.read",
+  "opportunities.create",
+  "opportunities.update",
+  "opportunities.delete",
+  "opportunities.close",
   "products.read",
   "products.create",
   "products.update",

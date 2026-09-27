@@ -1,9 +1,10 @@
 /** Phase 5 §21 — CRM dashboard, real counts only via /crm/summary. Cards degrade when a metric's permission is missing. */
 import React, { useEffect, useState } from "react";
-import { TrendingUp, Briefcase, Building2 } from "lucide-react";
+import { TrendingUp, Briefcase, Building2, Target } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
 import { crmApi, type CrmSummary } from "../../lib/api";
 import { Card, Badge, LoadingState, ErrorState } from "../ui/ui";
+import { STAGE_LABEL, STAGE_TONE, formatMoney } from "./OpportunitiesPage";
 
 const StatCard: React.FC<{ icon: React.ElementType; label: string; value: React.ReactNode }> = ({ icon: Icon, label, value }) => (
   <Card className="p-4 flex items-center gap-3">
@@ -51,6 +52,7 @@ export const CrmDashboardPage: React.FC = () => {
 
   const leads = summary?.leads;
   const clients = summary?.clients;
+  const opportunities = summary?.opportunities;
 
   return (
     <div className="space-y-6">
@@ -59,7 +61,7 @@ export const CrmDashboardPage: React.FC = () => {
           <TrendingUp className="w-5 h-5" /> CRM Dashboard
         </h1>
         <p className="text-xs" style={{ color: "var(--text-muted)" }}>
-          {user?.role.name} · leads and clients for your organization
+          {user?.role.name} · leads, clients, and pipeline for your organization
         </p>
       </div>
 
@@ -74,6 +76,21 @@ export const CrmDashboardPage: React.FC = () => {
             <StatCard icon={Briefcase} label="Qualified" value={leads.qualified} />
             <StatCard icon={Briefcase} label="Converted" value={leads.converted} />
             <StatCard icon={Briefcase} label="Lost" value={leads.lost} />
+          </div>
+        </div>
+      )}
+
+      {opportunities && (
+        <div>
+          <h2 className="text-xs font-bold uppercase tracking-wide mb-2" style={{ color: "var(--text-muted)" }}>
+            Pipeline
+          </h2>
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+            <StatCard icon={Target} label="Open deals" value={opportunities.openCount} />
+            {/* OMR: the platform's single global currency (server/utils/money.ts DEFAULT_CURRENCY) — no multi-currency arithmetic is performed anywhere in this codebase. */}
+            <StatCard icon={Target} label="Open pipeline value" value={formatMoney(opportunities.openValue, "OMR")} />
+            <StatCard icon={Target} label="Won" value={opportunities.byStage.CLOSED_WON?.count ?? 0} />
+            <StatCard icon={Target} label="Lost" value={opportunities.byStage.CLOSED_LOST?.count ?? 0} />
           </div>
         </div>
       )}
@@ -93,7 +110,7 @@ export const CrmDashboardPage: React.FC = () => {
         </div>
       )}
 
-      <div className="grid lg:grid-cols-2 gap-4">
+      <div className="grid lg:grid-cols-3 gap-4">
         {leads && (
           <Card>
             <div className="px-4 py-3 border-b" style={{ borderColor: "var(--border)" }}>
@@ -145,9 +162,35 @@ export const CrmDashboardPage: React.FC = () => {
             )}
           </Card>
         )}
+
+        {opportunities && (
+          <Card>
+            <div className="px-4 py-3 border-b" style={{ borderColor: "var(--border)" }}>
+              <h2 className="text-sm font-bold" style={{ color: "var(--text-primary)" }}>
+                Recent opportunities
+              </h2>
+            </div>
+            {opportunities.recent.length === 0 ? (
+              <p className="p-4 text-xs" style={{ color: "var(--text-muted)" }}>
+                No opportunities yet.
+              </p>
+            ) : (
+              <ul className="divide-y" style={{ borderColor: "var(--border)" }}>
+                {opportunities.recent.map((o) => (
+                  <li key={o.id} className="px-4 py-2.5 text-xs flex items-center justify-between gap-3">
+                    <span style={{ color: "var(--text-primary)" }} className="font-semibold truncate">
+                      {o.name}
+                    </span>
+                    <Badge tone={STAGE_TONE[o.stage]}>{STAGE_LABEL[o.stage]}</Badge>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Card>
+        )}
       </div>
 
-      {!leads && !clients && (
+      {!leads && !clients && !opportunities && (
         <Card className="p-8 text-center">
           <p className="text-sm" style={{ color: "var(--text-muted)" }}>
             You don't have permission to view lead or client metrics.

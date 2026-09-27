@@ -11,7 +11,7 @@ gap remains. MISSING = confirmed absent by grep, not just "not seen yet."
 |---|---|---|
 | CMS (Post/Page/Category/Tag/Author/ContentRevision/MediaAsset) | EXISTS | Full stack per entity in `server/services/`, `server/repositories/`, `server/routes/v1/`, `server/schemas/`; RBAC `content.*`/`authors.*`/`media.*` (`domain.ts:82-93`). |
 | SEO (dedicated module) | **Redirects + audit done (Phase 5)** | `Redirect` model + CRUD + auto-create-on-slug-change + public lookup, and a rule-based `seo.audit.read` issue detector — see `docs/SEO_ARCHITECTURE.md`. Sitemap/robots.txt generation still lives in `artifysolscom` (not duplicated here); its `?limit=50` pagination-cap bug was found and fixed in the same phase. |
-| CRM | PARTIAL | `Lead` (status pipeline NEW→CONTACTED→QUALIFIED→CONVERTED/LOST, `leadService.ts:17-26`) converts to `Client`; `Contact` belongs to `Client`, not a generic Company. No `Opportunity`/deal-stage model at all. `Organization` is a tenant construct, not a CRM company record. |
+| CRM | **Opportunity/pipeline done (Phase 7)** | `Lead` (status pipeline NEW→CONTACTED→QUALIFIED→CONVERTED/LOST) converts to `Client`; `Contact` belongs to `Client`, not a generic Company. `Opportunity` model + CRUD + win/lose lifecycle + CRM-dashboard pipeline stats now exist — see `docs/CRM_ARCHITECTURE.md`'s "Phase 7" section. `Organization` remains a tenant construct, not a CRM company record — still a gap if a future need for a generic "Company" entity distinct from both `Organization` and `Client` emerges. |
 | Client management/onboarding | EXISTS | `clientService`, `onboardingService` (`ClientOnboarding` model, checklist + currentStep), `workspaceService`, `invitationService`, `portalRoutes`/`clientPortalService` (read-only portal). Fully wired. |
 | Commerce (Contracts/Subscriptions/Invoices/Payments/Products) | EXISTS | Full CRUD + lifecycle actions (activate/suspend/void/reverse), RBAC per domain. |
 | Marketing (forms/landing pages/campaigns/UTM) | MISSING | `grep -rliE "form.?builder|landingpage|campaign|utm"` across `server/`+`prisma/` returns nothing. |
@@ -37,7 +37,7 @@ avoid drift.
 | Notification bell | MISSING | No user-facing notification UI — consistent with the backend gap above; nothing to wire it to yet. |
 | Design system / DataTable | PARTIAL | Real shared primitives exist (`ui/ui.tsx`); no shared `DataTable` — Leads/Contacts/Posts/etc. each hand-roll their own `<table>`. |
 | Theme | EXISTS | `.dark` class on `<html>`, CSS variables, `ThemeContext`. |
-| CRM UI | PARTIAL | Leads/Clients/Contacts/CRM-dashboard pages exist; no Opportunity/Pipeline UI (matches backend gap). |
+| CRM UI | **Opportunity/pipeline UI done (Phase 7)** | Leads/Clients/Contacts/CRM-dashboard pages exist; new "Opportunities" page (search/filter/stage/win-lose) added under the existing CRM nav section, plus pipeline stats on the CRM dashboard. |
 | Mobile responsiveness | EXISTS | Real mobile drawer (`Sidebar.tsx:126-136`), not just reflow. |
 | Code-splitting | MISSING | No `React.lazy`/`import()` anywhere; `permissions.ts` statically imports all ~30 page components — the whole Control Center ships as one bundle (confirmed again post-changes: single ~1.07 MB main chunk). |
 

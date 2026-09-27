@@ -2,6 +2,7 @@
 import { Router } from "express";
 import { leadService } from "../../services/leadService";
 import { clientService } from "../../services/clientService";
+import { opportunityService } from "../../services/opportunityService";
 import { authenticateToken } from "../../middleware/auth";
 import { asyncHandler } from "../../utils/asyncHandler";
 import { sendSuccess } from "../../core/apiResponse";
@@ -16,12 +17,18 @@ router.get(
     const permissions = req.user!.role.permissions;
     const organizationId = req.user!.organizationId;
 
-    const [leadCounts, leadRecent, clientCounts, clientRecent] = await Promise.all([
+    const [leadCounts, leadRecent, clientCounts, clientRecent, opportunityStats] = await Promise.all([
       permissions.includes("leads.read") ? leadService.dashboardCounts(organizationId) : Promise.resolve(null),
       permissions.includes("leads.read") ? leadService.recent(organizationId, 5) : Promise.resolve([]),
       permissions.includes("clients.read") ? clientService.dashboardCounts(organizationId) : Promise.resolve(null),
       permissions.includes("clients.read") ? clientService.recent(organizationId, 5) : Promise.resolve([]),
+      permissions.includes("opportunities.read") ? opportunityService.dashboardStats(organizationId) : Promise.resolve(null),
     ]);
+
+    const OPEN_STAGES = ["PROSPECTING", "QUALIFICATION", "PROPOSAL", "NEGOTIATION"] as const;
+    const byStage = opportunityStats?.byStage ?? {};
+    const openValue = OPEN_STAGES.reduce((sum, stage) => sum + Number(byStage[stage]?.value ?? 0), 0);
+    const openCount = OPEN_STAGES.reduce((sum, stage) => sum + (byStage[stage]?.count ?? 0), 0);
 
     sendSuccess(res, {
       leads: leadCounts && {
@@ -41,6 +48,12 @@ router.get(
         suspended: clientCounts.SUSPENDED ?? 0,
         archived: clientCounts.ARCHIVED ?? 0,
         recent: clientRecent,
+      },
+      opportunities: opportunityStats && {
+        openCount,
+        openValue: openValue.toString(),
+        byStage,
+        recent: opportunityStats.recent,
       },
     });
   })

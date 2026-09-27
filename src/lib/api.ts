@@ -297,6 +297,31 @@ export interface CrmContact {
   updatedAt: string;
 }
 
+export type OpportunityStageValue = "PROSPECTING" | "QUALIFICATION" | "PROPOSAL" | "NEGOTIATION" | "CLOSED_WON" | "CLOSED_LOST";
+/** The subset PATCH may set directly — CLOSED_WON/CLOSED_LOST are reachable only via opportunitiesApi.win/lose. */
+export type NonTerminalOpportunityStage = "PROSPECTING" | "QUALIFICATION" | "PROPOSAL" | "NEGOTIATION";
+
+export interface Opportunity {
+  id: string;
+  organizationId: string;
+  clientId: string;
+  leadId: string | null;
+  name: string;
+  stage: OpportunityStageValue;
+  value: string;
+  currency: string;
+  expectedCloseDate: string | null;
+  actualCloseDate: string | null;
+  lostReason: string | null;
+  notes: string | null;
+  assignedTo: string | null;
+  createdById: string | null;
+  createdAt: string;
+  updatedAt: string;
+  client: { id: string; name: string; clientCode: string };
+  lead: { id: string; companyName: string } | null;
+}
+
 export interface CrmSummary {
   leads: {
     total: number;
@@ -315,6 +340,12 @@ export interface CrmSummary {
     suspended: number;
     archived: number;
     recent: CrmClient[];
+  } | null;
+  opportunities: {
+    openCount: number;
+    openValue: string;
+    byStage: Record<string, { count: number; value: string }>;
+    recent: Opportunity[];
   } | null;
 }
 
@@ -392,6 +423,48 @@ export const contactsApi = {
 
 export const crmApi = {
   summary: () => apiClient.get<CrmSummary>("/crm/summary"),
+};
+
+export const opportunitiesApi = {
+  list: (
+    params: {
+      page?: number;
+      limit?: number;
+      search?: string;
+      stage?: OpportunityStageValue;
+      clientId?: string;
+      assignedTo?: string;
+      sort?: string;
+      order?: "asc" | "desc";
+    } = {}
+  ) => paginatedGet<Opportunity>("/opportunities", "opportunities", params),
+  get: (id: string) => apiClient.get<{ opportunity: Opportunity }>(`/opportunities/${id}`),
+  create: (payload: {
+    clientId: string;
+    leadId?: string;
+    name: string;
+    stage?: NonTerminalOpportunityStage;
+    value: number;
+    currency?: string;
+    expectedCloseDate?: string;
+    notes?: string;
+    assignedTo?: string;
+  }) => apiClient.post<{ opportunity: Opportunity }>("/opportunities", payload),
+  update: (
+    id: string,
+    payload: Partial<{
+      name: string;
+      stage: NonTerminalOpportunityStage;
+      value: number;
+      currency: string;
+      expectedCloseDate: string | null;
+      notes: string | null;
+      assignedTo: string | null;
+    }>
+  ) => apiClient.patch<{ opportunity: Opportunity }>(`/opportunities/${id}`, payload),
+  remove: (id: string) => apiClient.delete<{ message: string }>(`/opportunities/${id}`),
+  win: (id: string) => apiClient.post<{ opportunity: Opportunity }>(`/opportunities/${id}/win`),
+  lose: (id: string, lostReason?: string) => apiClient.post<{ opportunity: Opportunity }>(`/opportunities/${id}/lose`, { lostReason }),
 };
 
 // ---------------------------------------------------------------------------

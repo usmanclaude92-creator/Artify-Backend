@@ -72,6 +72,57 @@ Reuses the existing Phase 2/3 append-only `auditLogRepository.record()` unchange
 
 ## Known limitations
 
-- No product catalog, billing, contracts, or subscription data is wired to clients yet (Phase 2 has the tables; Phase 5 does not build on them) — a client's detail view shows only CRM fields, deliberately not a "Billing" tab with nothing behind it.
 - The frontend router has no URL-parameter support (`src/lib/router.tsx`), so Lead/Client detail views are in-page master-detail/modal state, not deep-linkable `/clients/:id` routes.
-- Assigning a lead to a specific user (`assignedTo`) is stored and filterable but has no notification/reminder system behind it (explicitly out of Phase 5 scope).
+- Assigning a lead to a specific user (`assignedTo`) is stored and filterable but has no notification/reminder system behind it (explicitly out of Phase 5 scope; still out of scope after Phase 7).
+
+---
+
+# Phase 7 — Opportunity / sales pipeline
+
+Closes the CRM gap named in `docs/control-center-gap-analysis.md`: no deal-stage/pipeline concept existed
+beyond `Lead.status`. `Opportunity` (`prisma/schema.prisma`) is a deliberately separate entity from `Client`/
+`Lead`, not a new status column on either — a `Client` (which can itself still be `status=PROSPECT`) is "who,"
+an `Opportunity` is "this specific deal, its value, and where it stands." An `Opportunity` always belongs to a
+`Client`; `leadId` is optional provenance only (which `Lead`, if any, this deal originated from) — never used
+for authorization or the stage state machine.
+
+## Stage state machine
+
+`OpportunityStage`: `PROSPECTING → QUALIFICATION → PROPOSAL → NEGOTIATION`, freely movable between each other
+in any order (including backward) via the generic `PATCH /opportunities/:id`, plus two terminal stages —
+`CLOSED_WON` and `CLOSED_LOST` — reachable only through their own dedicated endpoints
+(`POST /opportunities/:id/win` / `/lose`), mirroring `Lead.CONVERTED`'s precedent exactly
+(`server/services/opportunityService.ts`'s `assertValidStageTransition`). Unlike `Lead.LOST` (which stays
+reopenable), a closed `Opportunity` is **not** un-terminated: re-pursuing a lost deal means creating a new
+`Opportunity`, keeping the closed one an honest, immutable record of what actually happened and when. Once
+`CLOSED_WON` or `CLOSED_LOST`, every field is frozen — the same "terminal state blocks the generic update"
+rule already used for `Lead.CONVERTED`.
+
+## Money
+
+`value`/`currency` follow the Phase 10 billing convention exactly (`server/utils/money.ts`): `Decimal(18,3)`,
+rounded `ROUND_HALF_UP`, defaulting to the platform's single global currency (`DEFAULT_CURRENCY = "OMR"`) when
+not specified — never a JS `number` used for the authoritative value.
+
+## Permissions
+
+`opportunities.read/create/update/delete/close` (`server/types/domain.ts`). `close` deliberately covers both
+win and lose — they're symmetric terminal transitions (unlike `contracts.activate/suspend/terminate`, which
+differ enough in blast radius to warrant separate keys), so one permission is enough rather than adding
+win/lose granularity nothing asked for. Grants mirror the `leads.*` distribution exactly: ADMIN gets all five,
+MANAGER gets read/create/update/close (no delete), USER gets read/create/update (no close/delete), VIEWER
+gets read only.
+
+## CRM dashboard integration
+
+`GET /crm/summary` (`server/routes/v1/crmRoutes.ts`) gained an `opportunities` section alongside the existing
+`leads`/`clients` ones, following the same permission-gated degrade pattern: open deal count, open pipeline
+value (sum of non-terminal-stage values), a by-stage count+value breakdown, and the 5 most recent
+opportunities. Surfaced in `CrmDashboardPage.tsx`'s existing stat-card/recent-list layout, not a separate page.
+
+## Known gap: single-client search only
+
+The Control Center's `OpportunityFormModal` populates its Client/Lead pickers from a single `?limit=100` list
+fetch on mount, not a search-as-you-type combobox — fine for the CRM's current scale, a real limitation if an
+organization's client count grows well past 100. Flagged here rather than silently working only for small
+organizations.

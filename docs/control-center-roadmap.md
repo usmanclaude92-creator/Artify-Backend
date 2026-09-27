@@ -12,7 +12,7 @@ shippable units — it does not restate what's already built.
 | 4 | **Website Management** — homepage/header/footer/navigation/landing pages/reusable sections | **Not started, and not scoped yet** — the public site (`artifysolscom`) is a hand-authored React SPA, not a section-driven renderer. Making its homepage/nav backend-configurable is a larger architectural change than a CMS field addition; needs its own design pass before implementation. |
 | 5 | **SEO Control Center** — dashboard, technical SEO, sitemap, redirects, schema, issue detection | **Done.** Redirects (auto-created on Post slug change, chain-collapsing, open-redirect-hardened) + a rule-based `seo.audit.read` issue detector, both with Control Center UI (new "SEO" nav section) — see `docs/SEO_ARCHITECTURE.md`. Also fixed a real bug found during this phase: `artifysolscom`'s sitemap generator capped at the first 50 posts/products. Remaining SEO-adjacent gap, explicitly out of this phase's scope: CMS Pages still have no public route to render at (Website Management, Phase 4 below) — the audit still scores them, but redirects/lookup are Post-only until that exists. |
 | 6 | **Products & Services** — catalog, relationships, SEO, content integration | **Mostly complete** (Product/ProductModule exist with full CRUD). Gap: no Industries/Solutions/Case-Study relationship model — defer until a real content need names one, rather than pre-building relations nothing populates. |
-| 7 | **CRM** — leads, contacts, organizations, opportunities, pipeline | **Partial, real gap.** Lead→Client conversion and Contact-per-Client exist. Missing: an `Opportunity` model (stage enum, value, close date, linked Lead/Client) and pipeline UI (kanban or stage-grouped table). This is a schema change — needs a migration, which needs a reachable Postgres to generate and verify (now available in this environment; previously blocked). |
+| 7 | **CRM** — leads, contacts, organizations, opportunities, pipeline | **Done.** `Opportunity` model (stage enum, `Decimal` value/currency, close dates, linked Client + optional Lead) + full CRUD + win/lose lifecycle + RBAC + pipeline stats on the CRM dashboard + a stage-filterable "Opportunities" Control Center page — see `docs/CRM_ARCHITECTURE.md`'s "Phase 7" section. Remaining, explicitly out of scope: no generic "Company" entity distinct from `Organization`/`Client` (not a confirmed need yet), and the Client/Lead pickers in the create form don't scale past ~100 records (noted in the doc). |
 | 8 | **Client Management** — clients, onboarding, documents, portal | **Already complete.** No new work. |
 | 9 | **Marketing** — forms, campaigns, landing pages, attribution | **Real gap, zero backend today.** Minimum viable slice: a `Form`/`FormSubmission` model reusing the existing Lead-intake pattern (`publicLeadService.ts`) instead of a parallel one, UTM capture on the existing lead source field, and a Forms list in Control Center. Landing-page authoring depends on Phase 4's section-driven renderer — sequence after it, not before. |
 | 10 | **Analytics** — website, SEO, content, CRM, business | **Real gap.** Per spec's own instruction ("avoid building redundant analytics infrastructure if an existing provider already supplies the underlying data") — first confirm whether Artify already has (or intends) a hosted analytics provider (e.g. Plausible/GA4) before building a first-party pageview pipeline. If yes, this phase is an *integration* (pull via provider API into CRM/content dashboards), not new tracking infrastructure. If no provider is decided, this phase is blocked on that product decision, not an engineering one. |
@@ -22,9 +22,12 @@ shippable units — it does not restate what's already built.
 
 ## Immediate next phase recommendation
 
-With Phase 5 done, **Phase 7 (CRM — Opportunity/pipeline)** is the next highest-leverage step by the same
-criteria: a real, confirmed gap (no `Opportunity` model or pipeline-stage concept exists at all today) with no
-architectural prerequisite, extending a CRM domain that's already substantially built (Lead→Client conversion,
-Contact-per-Client) rather than starting a new one. Concretely: an `Opportunity` model (stage enum, value,
-close date, linked Lead/Client) + CRUD + RBAC, and a pipeline view (kanban or stage-grouped table) in the
-existing CRM nav section.
+With Phases 5 and 7 done, **Phase 11 (user-facing Notifications)** is the next highest-leverage step by the
+same criteria: a real, confirmed gap with no architectural prerequisite and no external product decision
+blocking it (unlike Phase 9/Marketing's design-pass dependency on Phase 4, or Phase 10/Analytics' dependency
+on choosing an analytics provider). The `Notification`/`NotificationPreference` tables already exist in the
+schema from an earlier phase but have zero service/route/repository wired to them — this phase is "finish
+wiring something that's already half-built," not "start a new domain." Concretely: a `notificationService.ts`
++ `notificationRoutes.ts` reusing the existing `AutomationNotification` pattern's shape, a bell icon in
+`Header.tsx`, and deciding which existing events (lead created, content published, AI approval pending,
+opportunity won/lost) should emit one.

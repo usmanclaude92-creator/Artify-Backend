@@ -91,6 +91,7 @@ model Organization {
   tags                       Tag[]
   mediaAssets                MediaAsset[]
   redirects                  Redirect[]
+  opportunities              Opportunity[]
   mediaUploadSessions        MediaUploadSession[]
   notifications              Notification[]
   systemSettings             SystemSetting[]
@@ -172,6 +173,8 @@ model User {
   author                      Author?
   assignedLeads               Lead[]                      @relation("LeadAssignee")
   managedClients              Client[]                    @relation("ClientAccountManager")
+  assignedOpportunities       Opportunity[]               @relation("OpportunityAssignee")
+  createdOpportunities        Opportunity[]               @relation("OpportunityCreatedBy")
   createdPages                Page[]                      @relation("PageCreatedBy")
   createdPosts                Post[]                      @relation("PostCreatedBy")
   createdRedirects            Redirect[]                  @relation("RedirectCreatedBy")
@@ -474,9 +477,10 @@ model Lead {
   updatedAt         DateTime   @updatedAt @map("updated_at")
   deletedAt         DateTime?  @map("deleted_at")
 
-  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  assignee        User?        @relation("LeadAssignee", fields: [assignedTo], references: [id], onDelete: SetNull)
-  convertedClient Client?      @relation("LeadConvertedClient", fields: [convertedClientId], references: [id], onDelete: SetNull)
+  organization    Organization  @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  assignee        User?         @relation("LeadAssignee", fields: [assignedTo], references: [id], onDelete: SetNull)
+  convertedClient Client?       @relation("LeadConvertedClient", fields: [convertedClientId], references: [id], onDelete: SetNull)
+  opportunities   Opportunity[] @relation("LeadOpportunities")
 
   @@index([organizationId])
   @@index([status])
@@ -492,6 +496,58 @@ enum ClientStatus {
   INACTIVE
   SUSPENDED
   ARCHIVED
+}
+
+enum OpportunityStage {
+  PROSPECTING
+  QUALIFICATION
+  PROPOSAL
+  NEGOTIATION
+  CLOSED_WON
+  CLOSED_LOST
+}
+
+// Phase 7 (CRM pipeline, docs/CRM_ARCHITECTURE.md). A deal in progress
+// against a Client (which may itself still be status=PROSPECT — the two
+// concepts are deliberately separate: Client is "who," Opportunity is
+// "this specific deal, its value, and where it stands"). `leadId` is
+// optional provenance only (which Lead, if any, this deal originated
+// from) — never used for authorization or the stage state machine.
+// CLOSED_WON/CLOSED_LOST are both terminal and reachable only through
+// their own service methods (never the generic update), matching the
+// Lead.CONVERTED precedent; a lost deal is reopened by creating a new
+// Opportunity, not by un-terminating this one.
+model Opportunity {
+  id                String           @id @default(uuid())
+  organizationId    String           @map("organization_id")
+  clientId          String           @map("client_id")
+  leadId            String?          @map("lead_id")
+  name              String
+  stage             OpportunityStage @default(PROSPECTING)
+  value             Decimal          @db.Decimal(18, 3)
+  currency          String           @db.Char(3)
+  expectedCloseDate DateTime?        @map("expected_close_date") @db.Date
+  actualCloseDate   DateTime?        @map("actual_close_date")
+  lostReason        String?          @map("lost_reason")
+  notes             String?
+  assignedTo        String?          @map("assigned_to")
+  createdById       String?          @map("created_by")
+  createdAt         DateTime         @default(now()) @map("created_at")
+  updatedAt         DateTime         @updatedAt @map("updated_at")
+  deletedAt         DateTime?        @map("deleted_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  client       Client       @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  lead         Lead?        @relation("LeadOpportunities", fields: [leadId], references: [id], onDelete: SetNull)
+  assignee     User?        @relation("OpportunityAssignee", fields: [assignedTo], references: [id], onDelete: SetNull)
+  createdBy    User?        @relation("OpportunityCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([organizationId])
+  @@index([stage])
+  @@index([clientId])
+  @@index([assignedTo])
+  @@index([createdAt])
+  @@map("opportunities")
 }
 
 // organizationId = owning tenant scope (see Lead's doc comment — same
@@ -539,6 +595,7 @@ model Client {
   subscriptions         Subscription[]
   invoices              Invoice[]
   onboarding            ClientOnboarding?
+  opportunities         Opportunity[]
 
   @@unique([organizationId, clientCode])
   @@index([organizationId])
