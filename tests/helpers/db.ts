@@ -43,6 +43,10 @@ export async function resetDb(): Promise<void> {
   // turn points back via pageId/postId) before deleting either side.
   await prisma.page.updateMany({ data: { currentRevisionId: null } });
   await prisma.post.updateMany({ data: { currentRevisionId: null } });
+  // Phase 1 (Website module) — same currentRevisionId <-> revisions cycle
+  // as pages/posts above, broken the same way before either side is deleted.
+  await prisma.template.updateMany({ data: { currentRevisionId: null } });
+  await prisma.templatePart.updateMany({ data: { currentRevisionId: null } });
 
   // Delete in FK-dependency order, leaves first. organization_memberships
   // and sessions cascade automatically when their user/organization is
@@ -96,6 +100,15 @@ export async function resetDb(): Promise<void> {
   await prisma.postTag.deleteMany();
   await prisma.post.deleteMany();
   await prisma.page.deleteMany();
+  // Phase 1 (Website module) — templates.organization_id RESTRICTs (same
+  // convention as pages/posts above), so must go before the organization
+  // cascade below. Page.templateId is already null (page.deleteMany()
+  // above removes the rows entirely), so order relative to page is moot,
+  // but listed right after it for locality with the rest of this section.
+  await prisma.templateRevision.deleteMany();
+  await prisma.template.deleteMany();
+  await prisma.templatePartRevision.deleteMany();
+  await prisma.templatePart.deleteMany();
   await prisma.category.deleteMany();
   await prisma.tag.deleteMany();
   // redirects CASCADEs on organization_id, but delete explicitly for
