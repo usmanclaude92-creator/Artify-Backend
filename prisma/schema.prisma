@@ -91,6 +91,8 @@ model Organization {
   tags                       Tag[]
   mediaAssets                MediaAsset[]
   redirects                  Redirect[]
+  templates                  Template[]
+  templateParts              TemplatePart[]
   opportunities              Opportunity[]
   forms                      Form[]
   formSubmissions            FormSubmission[]
@@ -167,65 +169,69 @@ model User {
   deletedAt           DateTime?  @map("deleted_at")
   version             Int        @default(1)
 
-  organization                Organization                @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  role                        Role                        @relation(fields: [roleId], references: [id], onDelete: Restrict)
-  memberships                 OrganizationMembership[]
-  sessions                    Session[]
-  passwordResetTokens         PasswordResetToken[]
-  author                      Author?
-  assignedLeads               Lead[]                      @relation("LeadAssignee")
-  managedClients              Client[]                    @relation("ClientAccountManager")
-  assignedOpportunities       Opportunity[]               @relation("OpportunityAssignee")
-  createdOpportunities        Opportunity[]               @relation("OpportunityCreatedBy")
-  createdForms                Form[]                      @relation("FormCreatedBy")
-  createdPages                Page[]                      @relation("PageCreatedBy")
-  createdPosts                Post[]                      @relation("PostCreatedBy")
-  createdRedirects            Redirect[]                  @relation("RedirectCreatedBy")
-  createdRevisions            ContentRevision[]           @relation("RevisionCreatedBy")
-  uploadedMedia               MediaAsset[]                @relation("MediaUploadedBy")
-  uploadSessions              MediaUploadSession[]        @relation("UploadSessionUploadedBy")
-  notifications               Notification[]
-  notificationPreferences     NotificationPreference[]
-  updatedSystemSettings       SystemSetting[]             @relation("SettingUpdatedBy")
-  auditLogs                   AuditLog[]                  @relation("AuditActor")
-  createdOnboardings          ClientOnboarding[]          @relation("OnboardingCreatedBy")
-  completedOnboardings        ClientOnboarding[]          @relation("OnboardingCompletedBy")
-  sentInvitations             WorkspaceInvitation[]       @relation("InvitationInvitedBy")
-  acceptedInvitations         WorkspaceInvitation[]       @relation("InvitationAcceptedUser")
-  createdProducts             Product[]                   @relation("ProductCreatedBy")
-  updatedProducts             Product[]                   @relation("ProductUpdatedBy")
-  createdContracts            Contract[]                  @relation("ContractCreatedBy")
-  createdContractVariations   ContractVariation[]         @relation("ContractVariationCreatedBy")
-  createdSubscriptions        Subscription[]              @relation("SubscriptionCreatedBy")
-  cancelledSubscriptions      Subscription[]              @relation("SubscriptionCancelledBy")
-  createdInvoices             Invoice[]                   @relation("InvoiceCreatedBy")
-  createdPayments             Payment[]                   @relation("PaymentCreatedBy")
-  reversedPayments            Payment[]                   @relation("PaymentReversedBy")
-  createdAIPromptTemplates    AIPromptTemplate[]          @relation("AIPromptTemplateCreatedBy")
-  updatedAIPromptTemplates    AIPromptTemplate[]          @relation("AIPromptTemplateUpdatedBy")
-  createdAIPromptVersions     AIPromptVersion[]           @relation("AIPromptVersionCreatedBy")
-  createdAIWorkflows          AIWorkflow[]                @relation("AIWorkflowCreatedBy")
-  updatedAIWorkflows          AIWorkflow[]                @relation("AIWorkflowUpdatedBy")
-  aiExecutions                AIExecution[]               @relation("AIExecutionUser")
-  requestedAIApprovals        AIApprovalRequest[]         @relation("AIApprovalRequestedBy")
-  approvedAIApprovals         AIApprovalRequest[]         @relation("AIApprovalApprovedBy")
+  organization                 Organization                @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  role                         Role                        @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  memberships                  OrganizationMembership[]
+  sessions                     Session[]
+  passwordResetTokens          PasswordResetToken[]
+  author                       Author?
+  assignedLeads                Lead[]                      @relation("LeadAssignee")
+  managedClients               Client[]                    @relation("ClientAccountManager")
+  assignedOpportunities        Opportunity[]               @relation("OpportunityAssignee")
+  createdOpportunities         Opportunity[]               @relation("OpportunityCreatedBy")
+  createdForms                 Form[]                      @relation("FormCreatedBy")
+  createdPages                 Page[]                      @relation("PageCreatedBy")
+  createdPosts                 Post[]                      @relation("PostCreatedBy")
+  createdRedirects             Redirect[]                  @relation("RedirectCreatedBy")
+  createdRevisions             ContentRevision[]           @relation("RevisionCreatedBy")
+  createdTemplates             Template[]                  @relation("TemplateCreatedBy")
+  createdTemplateRevisions     TemplateRevision[]          @relation("TemplateRevisionCreatedBy")
+  createdTemplateParts         TemplatePart[]              @relation("TemplatePartCreatedBy")
+  createdTemplatePartRevisions TemplatePartRevision[]      @relation("TemplatePartRevisionCreatedBy")
+  uploadedMedia                MediaAsset[]                @relation("MediaUploadedBy")
+  uploadSessions               MediaUploadSession[]        @relation("UploadSessionUploadedBy")
+  notifications                Notification[]
+  notificationPreferences      NotificationPreference[]
+  updatedSystemSettings        SystemSetting[]             @relation("SettingUpdatedBy")
+  auditLogs                    AuditLog[]                  @relation("AuditActor")
+  createdOnboardings           ClientOnboarding[]          @relation("OnboardingCreatedBy")
+  completedOnboardings         ClientOnboarding[]          @relation("OnboardingCompletedBy")
+  sentInvitations              WorkspaceInvitation[]       @relation("InvitationInvitedBy")
+  acceptedInvitations          WorkspaceInvitation[]       @relation("InvitationAcceptedUser")
+  createdProducts              Product[]                   @relation("ProductCreatedBy")
+  updatedProducts              Product[]                   @relation("ProductUpdatedBy")
+  createdContracts             Contract[]                  @relation("ContractCreatedBy")
+  createdContractVariations    ContractVariation[]         @relation("ContractVariationCreatedBy")
+  createdSubscriptions         Subscription[]              @relation("SubscriptionCreatedBy")
+  cancelledSubscriptions       Subscription[]              @relation("SubscriptionCancelledBy")
+  createdInvoices              Invoice[]                   @relation("InvoiceCreatedBy")
+  createdPayments              Payment[]                   @relation("PaymentCreatedBy")
+  reversedPayments             Payment[]                   @relation("PaymentReversedBy")
+  createdAIPromptTemplates     AIPromptTemplate[]          @relation("AIPromptTemplateCreatedBy")
+  updatedAIPromptTemplates     AIPromptTemplate[]          @relation("AIPromptTemplateUpdatedBy")
+  createdAIPromptVersions      AIPromptVersion[]           @relation("AIPromptVersionCreatedBy")
+  createdAIWorkflows           AIWorkflow[]                @relation("AIWorkflowCreatedBy")
+  updatedAIWorkflows           AIWorkflow[]                @relation("AIWorkflowUpdatedBy")
+  aiExecutions                 AIExecution[]               @relation("AIExecutionUser")
+  requestedAIApprovals         AIApprovalRequest[]         @relation("AIApprovalRequestedBy")
+  approvedAIApprovals          AIApprovalRequest[]         @relation("AIApprovalApprovedBy")
   // Phase 13 — Autonomous AI Workflows & Business Automation (imported)
-  createdAutomationWorkflows  AutomationWorkflow[]        @relation("AutomationWorkflowCreatedBy")
-  updatedAutomationWorkflows  AutomationWorkflow[]        @relation("AutomationWorkflowUpdatedBy")
-  publishedWorkflowVersions   AutomationWorkflowVersion[] @relation("WorkflowVersionPublishedBy")
-  decidedAutomationApprovals  AutomationApproval[]        @relation("AutomationApprovalDecidedBy")
-  assignedAutomationTasks     AutomationTask[]            @relation("AutomationTaskAssignedUser")
-  automationNotifications     AutomationNotification[]    @relation("AutomationNotificationUser")
+  createdAutomationWorkflows   AutomationWorkflow[]        @relation("AutomationWorkflowCreatedBy")
+  updatedAutomationWorkflows   AutomationWorkflow[]        @relation("AutomationWorkflowUpdatedBy")
+  publishedWorkflowVersions    AutomationWorkflowVersion[] @relation("WorkflowVersionPublishedBy")
+  decidedAutomationApprovals   AutomationApproval[]        @relation("AutomationApprovalDecidedBy")
+  assignedAutomationTasks      AutomationTask[]            @relation("AutomationTaskAssignedUser")
+  automationNotifications      AutomationNotification[]    @relation("AutomationNotificationUser")
   // Phase 14 — Enterprise Knowledge, Document Intelligence & RAG (imported)
-  createdKnowledgeCollections KnowledgeCollection[]       @relation("KnowledgeCollectionCreatedBy")
-  createdKnowledgeDocuments   KnowledgeDocument[]         @relation("KnowledgeDocumentCreatedBy")
-  uploadedKnowledgeVersions   KnowledgeDocumentVersion[]  @relation("KnowledgeVersionCreatedBy")
-  searchedKnowledgeLogs       KnowledgeSearchLog[]        @relation("KnowledgeSearchUser")
+  createdKnowledgeCollections  KnowledgeCollection[]       @relation("KnowledgeCollectionCreatedBy")
+  createdKnowledgeDocuments    KnowledgeDocument[]         @relation("KnowledgeDocumentCreatedBy")
+  uploadedKnowledgeVersions    KnowledgeDocumentVersion[]  @relation("KnowledgeVersionCreatedBy")
+  searchedKnowledgeLogs        KnowledgeSearchLog[]        @relation("KnowledgeSearchUser")
   // Phase 15 — AI Copilot & Conversational Workspace (imported)
-  createdCopilotWorkspaces    CopilotWorkspace[]          @relation("CopilotWorkspaceCreatedBy")
-  copilotConversations        CopilotConversation[]       @relation("CopilotConversationUser")
-  confirmedCopilotActions     CopilotActionPreview[]      @relation("CopilotActionConfirmedBy")
-  copilotUsages               CopilotUsage[]              @relation("CopilotUsageUser")
+  createdCopilotWorkspaces     CopilotWorkspace[]          @relation("CopilotWorkspaceCreatedBy")
+  copilotConversations         CopilotConversation[]       @relation("CopilotConversationUser")
+  confirmedCopilotActions      CopilotActionPreview[]      @relation("CopilotActionConfirmedBy")
+  copilotUsages                CopilotUsage[]              @relation("CopilotUsageUser")
 
   @@index([organizationId])
   @@map("users")
@@ -1205,6 +1211,51 @@ enum ContentStatus {
   ARCHIVED
 }
 
+// Phase 1 of the Control Center replacement initiative
+// (docs/control-center-replacement-roadmap.md). STANDARD is every Page as
+// it exists today (default, zero-migration-impact); LANDING marks a page
+// as conversion-focused for the future Landing Page renderer (roadmap
+// Phase 9) — purely a classification, no behavioral difference yet.
+enum PageType {
+  STANDARD
+  LANDING
+}
+
+// The 15 template types named in the Phase 1 brief. A Template's `type`
+// is descriptive/organizational only in this phase (which kind of page it
+// was built for) — it does not yet drive any automatic template
+// assignment; that's the future Site Editor / template-resolution work.
+enum TemplateType {
+  HOMEPAGE
+  STANDARD_PAGE
+  BLOG_INDEX
+  SINGLE_POST
+  CATEGORY
+  TAG
+  SEARCH
+  ARCHIVE
+  AUTHOR
+  NOT_FOUND
+  PRODUCT
+  SERVICE
+  SOLUTION
+  CASE_STUDY
+  LANDING_PAGE
+}
+
+enum TemplatePartType {
+  HEADER
+  FOOTER
+  PRIMARY_NAVIGATION
+  MOBILE_HEADER
+  SIDEBAR
+  ANNOUNCEMENT_BAR
+  CTA_SECTION
+  NEWSLETTER_SECTION
+  CONTACT_SECTION
+  SOCIAL_SECTION
+}
+
 // A thin public-facing profile over a User (bio/avatar), not a duplicate
 // identity — every author is a user, not every user is an author.
 model Author {
@@ -1251,6 +1302,10 @@ model Tag {
   @@map("tags")
 }
 
+// A hand-added partial unique index (pages_one_homepage_per_org, see the
+// Phase 1 migration SQL) guarantees at most one non-deleted homepage per
+// organization — same "Prisma's schema DSL cannot express a filtered
+// unique constraint" pattern as WorkspaceInvitation's own comment above.
 model Page {
   id                String        @id @default(uuid())
   organizationId    String        @map("organization_id")
@@ -1266,14 +1321,25 @@ model Page {
   updatedAt         DateTime      @updatedAt @map("updated_at")
   deletedAt         DateTime?     @map("deleted_at")
 
+  // Phase 1 of the Control Center replacement initiative — additive,
+  // nullable/defaulted columns only (docs/control-center-data-preservation-plan.md).
+  // Every existing row gets templateId=null/pageType=STANDARD/isHomepage=false,
+  // so existing pages, their URLs, and their rendering are unaffected.
+  // A null templateId means "render exactly as before" (see publicSiteService).
+  templateId String?  @map("template_id")
+  pageType   PageType @default(STANDARD) @map("page_type")
+  isHomepage Boolean  @default(false) @map("is_homepage")
+
   organization    Organization      @relation(fields: [organizationId], references: [id], onDelete: Restrict)
   createdBy       User?             @relation("PageCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
   currentRevision ContentRevision?  @relation("PageCurrentRevision", fields: [currentRevisionId], references: [id], onDelete: SetNull)
   revisions       ContentRevision[] @relation("PageRevisions")
   featuredMedia   MediaAsset?       @relation("PageFeaturedMedia", fields: [featuredMediaId], references: [id], onDelete: SetNull)
+  template        Template?         @relation("PageTemplate", fields: [templateId], references: [id], onDelete: SetNull)
 
   @@unique([organizationId, slug])
   @@index([organizationId, status])
+  @@index([templateId])
   @@map("pages")
 }
 
@@ -1380,6 +1446,118 @@ model ContentRevision {
   @@index([pageId])
   @@index([postId])
   @@map("content_revisions")
+}
+
+// =============================================================================
+// WEBSITE: Templates + Template Parts — Phase 1 of the Control Center
+// replacement initiative (docs/control-center-replacement-roadmap.md).
+// Deliberately mirrors Post/Page/ContentRevision's own draft->publish
+// revision pattern rather than inventing a new one (see
+// docs/control-center-replacement-architecture.md's anti-patterns list):
+// a Template/TemplatePart row is the stable identity + slot for a
+// `currentRevisionId`; each edit either mutates the current revision (if
+// it isn't PUBLISHED yet) or forks a new one (if it is) — publishing means
+// flipping that revision's own status to PUBLISHED, never deleting an
+// older one. Rollback is `revertPost`'s exact shape: clone an old
+// revision's content into a new one, never resurrect or mutate the old
+// row in place.
+// =============================================================================
+
+model Template {
+  id                String        @id @default(uuid())
+  organizationId    String        @map("organization_id")
+  type              TemplateType
+  name              String
+  slug              String
+  description       String?
+  status            ContentStatus @default(DRAFT)
+  // A small number of seeded, non-organization-authored templates (e.g. a
+  // default 404) that must survive even a careless cleanup — protected in
+  // templateService (Part J of the brief), not just documented here.
+  isSystem          Boolean       @default(false) @map("is_system")
+  currentRevisionId String?       @unique @map("current_revision_id")
+  createdById       String?       @map("created_by")
+  createdAt         DateTime      @default(now()) @map("created_at")
+  updatedAt         DateTime      @updatedAt @map("updated_at")
+  deletedAt         DateTime?     @map("deleted_at")
+
+  organization    Organization       @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  createdBy       User?              @relation("TemplateCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  currentRevision TemplateRevision?  @relation("TemplateCurrentRevision", fields: [currentRevisionId], references: [id], onDelete: SetNull)
+  revisions       TemplateRevision[] @relation("TemplateRevisions")
+  pages           Page[]             @relation("PageTemplate")
+
+  @@unique([organizationId, slug])
+  @@index([organizationId, status])
+  @@index([organizationId, type])
+  @@map("templates")
+}
+
+model TemplateRevision {
+  id          String        @id @default(uuid())
+  templateId  String        @map("template_id")
+  version     Int
+  status      ContentStatus
+  name        String
+  // Slot/region + template-part assignment. This phase does not fix the
+  // shape (deliberately, per Phase 0's data-preservation plan — the shape
+  // should be proven against one real page type before being generalized
+  // in a later phase, not committed to prematurely here).
+  structure   Json          @default("{}")
+  createdById String?       @map("created_by")
+  createdAt   DateTime      @default(now()) @map("created_at")
+  publishedAt DateTime?     @map("published_at")
+
+  template           Template  @relation("TemplateRevisions", fields: [templateId], references: [id], onDelete: Cascade)
+  createdBy          User?     @relation("TemplateRevisionCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  templateCurrentFor Template? @relation("TemplateCurrentRevision")
+
+  @@index([templateId])
+  @@map("template_revisions")
+}
+
+model TemplatePart {
+  id                String           @id @default(uuid())
+  organizationId    String           @map("organization_id")
+  type              TemplatePartType
+  name              String
+  slug              String
+  status            ContentStatus    @default(DRAFT)
+  isSystem          Boolean          @default(false) @map("is_system")
+  currentRevisionId String?          @unique @map("current_revision_id")
+  createdById       String?          @map("created_by")
+  createdAt         DateTime         @default(now()) @map("created_at")
+  updatedAt         DateTime         @updatedAt @map("updated_at")
+  deletedAt         DateTime?        @map("deleted_at")
+
+  organization    Organization           @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  createdBy       User?                  @relation("TemplatePartCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  currentRevision TemplatePartRevision?  @relation("TemplatePartCurrentRevision", fields: [currentRevisionId], references: [id], onDelete: SetNull)
+  revisions       TemplatePartRevision[] @relation("TemplatePartRevisions")
+
+  @@unique([organizationId, slug])
+  @@index([organizationId, status])
+  @@index([organizationId, type])
+  @@map("template_parts")
+}
+
+model TemplatePartRevision {
+  id             String        @id @default(uuid())
+  templatePartId String        @map("template_part_id")
+  version        Int
+  status         ContentStatus
+  name           String
+  content        Json          @default("{}")
+  createdById    String?       @map("created_by")
+  createdAt      DateTime      @default(now()) @map("created_at")
+  publishedAt    DateTime?     @map("published_at")
+
+  templatePart           TemplatePart  @relation("TemplatePartRevisions", fields: [templatePartId], references: [id], onDelete: Cascade)
+  createdBy              User?         @relation("TemplatePartRevisionCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  templatePartCurrentFor TemplatePart? @relation("TemplatePartCurrentRevision")
+
+  @@index([templatePartId])
+  @@map("template_part_revisions")
 }
 
 // =============================================================================

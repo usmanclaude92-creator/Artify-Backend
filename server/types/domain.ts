@@ -101,6 +101,22 @@ export const PERMISSION_KEYS = [
   "media.upload",
   "media.update",
   "media.delete",
+  // Website module (Phase 1 of the Control Center replacement initiative —
+  // docs/control-center-replacement-roadmap.md). Same {read,create,update,
+  // publish,delete} shape as content.* above, on purpose: Templates/
+  // Template Parts are content-shaped resources following the exact same
+  // draft->publish workflow as Post/Page, so they get the exact same
+  // permission shape rather than inventing a new one.
+  "templates.read",
+  "templates.create",
+  "templates.update",
+  "templates.publish",
+  "templates.delete",
+  "template_parts.read",
+  "template_parts.create",
+  "template_parts.update",
+  "template_parts.publish",
+  "template_parts.delete",
   "reports.read",
   "reports.export",
   "settings.read",

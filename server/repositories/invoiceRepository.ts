@@ -70,7 +70,11 @@ export const invoiceRepository = {
       total: Prisma.Decimal;
       amountDue: Prisma.Decimal;
       notes?: string;
-      createdById: string;
+      // Nullable at the DB level (schema.prisma) — usually a real user
+      // (invoiceService.createInvoice always has one), but the automation
+      // engine's create_invoice_draft action may run unattended with no
+      // triggering user (server/services/automation/ActionRegistry.ts).
+      createdById?: string;
     },
     items: { productModuleId?: string; description: string; quantity: number; unitPrice: Prisma.Decimal; discount: Prisma.Decimal; lineTotal: Prisma.Decimal }[]
   ): Promise<InvoiceWithDetails> {

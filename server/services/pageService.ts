@@ -34,6 +34,7 @@
  * reported as a 409, never silently lost.
  */
 import { pageRepository, type PageWithRevision } from "../repositories/pageRepository";
+import { templateRepository } from "../repositories/templateRepository";
 import { auditLogRepository } from "../repositories/auditLogRepository";
 import { assertFeaturedMediaUsable } from "./mediaService";
 import { sanitizeContentHtml } from "../utils/sanitizeHtml";
@@ -62,6 +63,27 @@ const CONTENT_EDIT_BLOCKED_STATUSES = new Set(["ARCHIVED"]);
 
 function isUniqueConstraintError(err: unknown): boolean {
   return !!err && typeof err === "object" && "code" in err && (err as { code?: string }).code === "P2002";
+}
+
+// The hand-added partial unique index (pages_one_homepage_per_org — see
+// the Phase 1 migration SQL and Page's own schema.prisma doc comment)
+// surfaces as the same P2002 code as an ordinary unique-constraint
+// violation, distinguished only by its constraint name in `meta.target`.
+function isHomepageUniqueViolation(err: unknown): boolean {
+  if (!isUniqueConstraintError(err)) return false;
+  const target = (err as { meta?: { target?: unknown } }).meta?.target;
+  const targetStr = Array.isArray(target) ? target.join(",") : String(target ?? "");
+  return targetStr.includes("pages_one_homepage_per_org");
+}
+
+// Phase 1 (Website module) — a page may only reference a PUBLISHED
+// template in its own organization; an unpublished/archived/cross-org/
+// nonexistent id is rejected up front rather than silently accepted and
+// left to fail at render time.
+async function assertTemplateUsable(templateId: string | null | undefined, organizationId: string): Promise<void> {
+  if (!templateId) return;
+  const template = await templateRepository.findPublishedByIdInOrg(templateId, organizationId);
+  if (!template) throw new ValidationError("templateId must refer to a PUBLISHED template in this organization.");
 }
 
 function assertHasPublishableContent(revision: { title: string; body: string } | null): void {
@@ -106,13 +128,24 @@ export const pageService = {
       if (dup) throw new ConflictError(`A page with slug "${input.slug}" already exists.`, { existingPageId: dup.id });
     }
     if (input.featuredMediaId) await assertFeaturedMediaUsable(input.featuredMediaId, organizationId);
+    await assertTemplateUsable(input.templateId, organizationId);
     const slug = input.slug ?? (await pageRepository.findUniqueSlugInOrg(organizationId, input.title));
 
     let createdId: string;
     try {
       createdId = await prisma.$transaction(async (tx) => {
         const page = await tx.page.create({
-          data: { organizationId, slug, title: input.title, status: "DRAFT", createdById: caller.id, featuredMediaId: input.featuredMediaId },
+          data: {
+            organizationId,
+            slug,
+            title: input.title,
+            status: "DRAFT",
+            createdById: caller.id,
+            featuredMediaId: input.featuredMediaId,
+            templateId: input.templateId,
+            pageType: input.pageType,
+            isHomepage: input.isHomepage ?? false,
+          },
         });
         const revision = await tx.contentRevision.create({
           data: {
@@ -129,6 +162,7 @@ export const pageService = {
         return page.id;
       });
     } catch (err) {
+      if (isHomepageUniqueViolation(err)) throw new ConflictError("This organization already has a homepage assigned. Unset the existing one first.");
       throw isUniqueConstraintError(err) ? new ConflictError("A page with this slug already exists.") : err;
     }
 
@@ -169,6 +203,8 @@ export const pageService = {
       if (dup && dup.id !== id) throw new ConflictError(`A page with slug "${input.slug}" already exists.`, { existingPageId: dup.id });
     }
 
+    if (input.templateId !== undefined) await assertTemplateUsable(input.templateId, organizationId);
+
     // The featured image lives on the Page row, not the revision — it can
     // be changed independently of content edits (e.g. while PUBLISHED),
     // except on ARCHIVED content, which stays fully read-only (§24).
@@ -194,6 +230,9 @@ export const pageService = {
         if (input.slug !== undefined) pagePatch.slug = input.slug;
         if (input.title !== undefined) pagePatch.title = input.title;
         if (hasFeaturedMediaEdit) pagePatch.featuredMediaId = input.featuredMediaId;
+        if (input.templateId !== undefined) pagePatch.templateId = input.templateId;
+        if (input.pageType !== undefined) pagePatch.pageType = input.pageType;
+        if (input.isHomepage !== undefined) pagePatch.isHomepage = input.isHomepage;
         if (unpublishing) pagePatch.publishedAt = null;
 
         if (currentRevision && (unpublishing || liveEditOfPublished || (hasContentEdit && currentRevision.status === "PUBLISHED"))) {
@@ -241,6 +280,7 @@ export const pageService = {
         }
       });
     } catch (err) {
+      if (isHomepageUniqueViolation(err)) throw new ConflictError("This organization already has a homepage assigned. Unset the existing one first.");
       throw isUniqueConstraintError(err) ? new ConflictError("A page with this slug already exists.") : err;
     }
 

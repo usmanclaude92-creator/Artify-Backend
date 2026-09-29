@@ -346,6 +346,73 @@ describe("CMS pages", () => {
     expect(unsafeSort.status).toBe(400);
   });
 
+  // Phase 1 (Website module) — page/template relationship + backward
+  // compatibility (docs/control-center-data-preservation-plan.md,
+  // docs/control-center-public-site-integration.md). A page created with
+  // none of these fields must behave exactly as it did before this phase.
+  it("defaults templateId/pageType/isHomepage to backward-compatible values when omitted", async () => {
+    const res = await request(app).post("/api/v1/pages").set("Authorization", `Bearer ${adminToken}`).send({ title: "Untouched By Phase 1" });
+    expect(res.status).toBe(201);
+    expect(res.body.data.page.templateId).toBeNull();
+    expect(res.body.data.page.pageType).toBe("STANDARD");
+    expect(res.body.data.page.isHomepage).toBe(false);
+  });
+
+  it("rejects assigning a templateId that isn't PUBLISHED, doesn't exist, or belongs to another organization", async () => {
+    const draftTemplate = await request(app).post("/api/v1/templates").set("Authorization", `Bearer ${adminToken}`).send({ type: "STANDARD_PAGE", name: "Draft Only" });
+    const draftReject = await request(app)
+      .post("/api/v1/pages")
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({ title: "Bad Template Page", templateId: draftTemplate.body.data.template.id });
+    expect(draftReject.status).toBe(400);
+
+    const nonexistentReject = await request(app)
+      .post("/api/v1/pages")
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({ title: "Nonexistent Template Page", templateId: "00000000-0000-0000-0000-000000000000" });
+    expect(nonexistentReject.status).toBe(400);
+  });
+
+  it("assigns a PUBLISHED template to a page and the page still renders when that template is later archived (backward-compatible fallback)", async () => {
+    const template = await request(app).post("/api/v1/templates").set("Authorization", `Bearer ${adminToken}`).send({ type: "STANDARD_PAGE", name: "Real Template" });
+    const templateId = template.body.data.template.id;
+    await request(app).post(`/api/v1/templates/${templateId}/publish`).set("Authorization", `Bearer ${adminToken}`).send();
+
+    const page = await request(app).post("/api/v1/pages").set("Authorization", `Bearer ${adminToken}`).send({ title: "Templated Page", templateId });
+    expect(page.status).toBe(201);
+    expect(page.body.data.page.templateId).toBe(templateId);
+
+    await request(app).post(`/api/v1/templates/${templateId}/archive`).set("Authorization", `Bearer ${adminToken}`).send();
+
+    // The page itself is untouched — archiving a template never breaks the
+    // page that references it (Part D's mandatory backward compatibility).
+    const stillFine = await request(app).get(`/api/v1/pages/${page.body.data.page.id}`).set("Authorization", `Bearer ${adminToken}`);
+    expect(stillFine.status).toBe(200);
+    expect(stillFine.body.data.page.templateId).toBe(templateId);
+  });
+
+  it("enforces at most one homepage per organization", async () => {
+    const first = await request(app).post("/api/v1/pages").set("Authorization", `Bearer ${adminToken}`).send({ title: "Homepage One", isHomepage: true });
+    expect(first.status).toBe(201);
+    expect(first.body.data.page.isHomepage).toBe(true);
+
+    const second = await request(app).post("/api/v1/pages").set("Authorization", `Bearer ${adminToken}`).send({ title: "Homepage Two", isHomepage: true });
+    expect(second.status).toBe(409);
+
+    // A second organization is free to have its own homepage — this is
+    // organization-scoped, not global.
+    const otherReg = await request(app).post("/api/v1/auth/register").send({
+      email: "pages-homepage-other@example.com",
+      password: "OriginalPassword123",
+      firstName: "Other",
+      lastName: "Org",
+      organizationName: "Homepage Other Co",
+    });
+    const otherToken = otherReg.body.data.session.token;
+    const otherHomepage = await request(app).post("/api/v1/pages").set("Authorization", `Bearer ${otherToken}`).send({ title: "Their Homepage", isHomepage: true });
+    expect(otherHomepage.status).toBe(201);
+  });
+
   it("concurrency: two simultaneous creates with the same explicit slug produce exactly one success and one clean conflict", async () => {
     const [first, second] = await Promise.all([
       request(app).post("/api/v1/pages").set("Authorization", `Bearer ${adminToken}`).send({ title: "Race A", slug: "race-page" }),

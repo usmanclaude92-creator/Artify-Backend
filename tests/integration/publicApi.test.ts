@@ -109,6 +109,44 @@ describe("public website API", () => {
     expect(res.body.data.page).not.toHaveProperty("createdById");
   });
 
+  // Phase 1 (Website module) — the public page projection additively
+  // surfaces pageType/isHomepage/template
+  // (docs/control-center-public-site-integration.md). A page with no
+  // template assigned (the case above, and every page that existed before
+  // this phase) is completely unaffected: pageType "STANDARD",
+  // isHomepage false, template null.
+  it("a page with no template assigned reports pageType STANDARD, isHomepage false, template null — pre-Phase-1 behavior, unchanged", async () => {
+    const res = await request(app).get(`/api/v1/public/pages/${publishedPageSlug}`);
+    expect(res.status).toBe(200);
+    expect(res.body.data.page.pageType).toBe("STANDARD");
+    expect(res.body.data.page.isHomepage).toBe(false);
+    expect(res.body.data.page.template).toBeNull();
+  });
+
+  it("surfaces template structure only when both the template and its current revision are genuinely PUBLISHED", async () => {
+    const template = await prisma.template.create({ data: { organizationId: PUBLIC_ORG_ID, type: "STANDARD_PAGE", slug: "public-template", name: "Public Template", status: "DRAFT" } });
+    const revision = await prisma.templateRevision.create({ data: { templateId: template.id, version: 1, status: "DRAFT", name: "Public Template", structure: { regions: ["a"] } } });
+    await prisma.template.update({ where: { id: template.id }, data: { currentRevisionId: revision.id } });
+
+    const page = await prisma.page.create({ data: { organizationId: PUBLIC_ORG_ID, slug: "templated-page", title: "Templated Page", status: "DRAFT", templateId: template.id } });
+    const pageRevision = await prisma.contentRevision.create({ data: { pageId: page.id, version: 1, status: "PUBLISHED", title: "Templated Page", body: "<p>x</p>", metadata: {} } });
+    await prisma.page.update({ where: { id: page.id }, data: { status: "PUBLISHED", currentRevisionId: pageRevision.id, publishedAt: new Date() } });
+
+    // Template still DRAFT — must not be surfaced as usable.
+    const draftTemplateRes = await request(app).get("/api/v1/public/pages/templated-page");
+    expect(draftTemplateRes.body.data.page.template).toBeNull();
+
+    // Publish the template's revision but not the template row itself.
+    await prisma.templateRevision.update({ where: { id: revision.id }, data: { status: "PUBLISHED", publishedAt: new Date() } });
+    const halfPublishedRes = await request(app).get("/api/v1/public/pages/templated-page");
+    expect(halfPublishedRes.body.data.page.template).toBeNull();
+
+    // Publish the template row too — now it's genuinely usable.
+    await prisma.template.update({ where: { id: template.id }, data: { status: "PUBLISHED" } });
+    const fullyPublishedRes = await request(app).get("/api/v1/public/pages/templated-page");
+    expect(fullyPublishedRes.body.data.page.template).toEqual({ type: "STANDARD_PAGE", slug: "public-template", structure: { regions: ["a"] } });
+  });
+
   it("rejects a DRAFT page with a clean 404 — never leaks unpublished content", async () => {
     const res = await request(app).get(`/api/v1/public/pages/${draftPageSlug}`);
     expect(res.status).toBe(404);

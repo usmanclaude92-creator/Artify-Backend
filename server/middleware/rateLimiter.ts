@@ -42,7 +42,13 @@ function makeStore(prefix: string): RedisStore | undefined {
   if (!redisClient) return undefined;
   return new RedisStore({
     prefix: `rl:${prefix}:`,
-    sendCommand: (...args: string[]) => redisClient.call(...args) as Promise<never>,
+    // ioredis's `call` overload requires its first parameter typed as a
+    // literal `command: string`, not part of a spread array — spreading a
+    // plain `string[]` into it fails TS2556 ("must have a tuple type").
+    // Splitting the command out fixes the typing without changing the
+    // actual command dispatched (rate-limit-redis always calls this with
+    // at least one element).
+    sendCommand: (...args: string[]) => redisClient.call(args[0]!, ...args.slice(1)) as Promise<never>,
   });
 }
 

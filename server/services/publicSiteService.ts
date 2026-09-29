@@ -51,6 +51,26 @@ function hasPublicWebsiteOrganization(): boolean {
   return config.publicWebsiteOrganizationId.length > 0;
 }
 
+/**
+ * Phase 1 (Website module) — `template` is null unless a genuinely
+ * PUBLISHED template is assigned and its own current revision is
+ * PUBLISHED too (an archived or draft-forked template is treated as "no
+ * template," never surfaced as broken). This is the safe, backward-
+ * compatible rendering strategy required by
+ * docs/control-center-public-site-integration.md: existing pages
+ * (templateId null) are completely unaffected, and artifysolscom does not
+ * yet consume this field — this only makes it available for the future
+ * Site Editor / template-driven renderer to read, without changing how
+ * any page renders today.
+ */
+function projectPageTemplate(page: PageWithPublicRelations) {
+  const template = page.template;
+  if (!template || template.status !== "PUBLISHED") return null;
+  const revision = template.currentRevision;
+  if (!revision || revision.status !== "PUBLISHED") return null;
+  return { type: template.type, slug: template.slug, structure: revision.structure as Record<string, unknown> };
+}
+
 async function projectPage(page: PageWithPublicRelations) {
   const revision = page.currentRevision;
   return {
@@ -59,6 +79,9 @@ async function projectPage(page: PageWithPublicRelations) {
     body: revision?.body ?? "",
     seo: (revision?.metadata as Record<string, unknown> | undefined) ?? {},
     featuredMedia: await projectPublicMedia(page.featuredMedia),
+    pageType: page.pageType,
+    isHomepage: page.isHomepage,
+    template: projectPageTemplate(page),
     publishedAt: page.publishedAt,
     updatedAt: page.updatedAt,
   };

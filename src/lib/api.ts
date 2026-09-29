@@ -818,6 +818,8 @@ export interface ContentRevision {
   publishedAt: string | null;
 }
 
+export type PageTypeValue = "STANDARD" | "LANDING";
+
 export interface CmsPage {
   id: string;
   organizationId: string;
@@ -833,6 +835,11 @@ export interface CmsPage {
   createdAt: string;
   updatedAt: string;
   deletedAt: string | null;
+  // Phase 1 (Website module) — additive; every page created before this
+  // phase reads templateId: null, pageType: "STANDARD", isHomepage: false.
+  templateId: string | null;
+  pageType: PageTypeValue;
+  isHomepage: boolean;
 }
 
 export interface CmsCategory {
@@ -910,6 +917,152 @@ export const pagesApi = {
   archive: (id: string) => apiClient.post<{ page: CmsPage }>(`/pages/${id}/archive`),
   revert: (id: string, revisionId: string) => apiClient.post<{ page: CmsPage }>(`/pages/${id}/revert`, { revisionId }),
   remove: (id: string) => apiClient.delete<{ message: string }>(`/pages/${id}`),
+};
+
+// ---------------------------------------------------------------------------
+// Phase 1 (Website module) — Templates + Template Parts.
+// docs/control-center-replacement-roadmap.md.
+// ---------------------------------------------------------------------------
+
+export type TemplateWorkflowStatus = "DRAFT" | "PUBLISHED" | "ARCHIVED";
+
+export type TemplateTypeValue =
+  | "HOMEPAGE"
+  | "STANDARD_PAGE"
+  | "BLOG_INDEX"
+  | "SINGLE_POST"
+  | "CATEGORY"
+  | "TAG"
+  | "SEARCH"
+  | "ARCHIVE"
+  | "AUTHOR"
+  | "NOT_FOUND"
+  | "PRODUCT"
+  | "SERVICE"
+  | "SOLUTION"
+  | "CASE_STUDY"
+  | "LANDING_PAGE";
+
+export type TemplatePartTypeValue =
+  | "HEADER"
+  | "FOOTER"
+  | "PRIMARY_NAVIGATION"
+  | "MOBILE_HEADER"
+  | "SIDEBAR"
+  | "ANNOUNCEMENT_BAR"
+  | "CTA_SECTION"
+  | "NEWSLETTER_SECTION"
+  | "CONTACT_SECTION"
+  | "SOCIAL_SECTION";
+
+export interface TemplateRevision {
+  id: string;
+  templateId: string;
+  version: number;
+  status: TemplateWorkflowStatus;
+  name: string;
+  structure: Record<string, unknown>;
+  createdById: string | null;
+  createdAt: string;
+  publishedAt: string | null;
+}
+
+export interface Template {
+  id: string;
+  organizationId: string;
+  type: TemplateTypeValue;
+  name: string;
+  slug: string;
+  description: string | null;
+  status: TemplateWorkflowStatus;
+  isSystem: boolean;
+  currentRevisionId: string | null;
+  currentRevision: TemplateRevision | null;
+  _count: { pages: number };
+  createdById: string | null;
+  createdAt: string;
+  updatedAt: string;
+  deletedAt: string | null;
+}
+
+export interface TemplatePartRevision {
+  id: string;
+  templatePartId: string;
+  version: number;
+  status: TemplateWorkflowStatus;
+  name: string;
+  content: Record<string, unknown>;
+  createdById: string | null;
+  createdAt: string;
+  publishedAt: string | null;
+}
+
+export interface TemplatePart {
+  id: string;
+  organizationId: string;
+  type: TemplatePartTypeValue;
+  name: string;
+  slug: string;
+  status: TemplateWorkflowStatus;
+  isSystem: boolean;
+  currentRevisionId: string | null;
+  currentRevision: TemplatePartRevision | null;
+  createdById: string | null;
+  createdAt: string;
+  updatedAt: string;
+  deletedAt: string | null;
+}
+
+export const templatesApi = {
+  list: (
+    params: {
+      page?: number;
+      limit?: number;
+      search?: string;
+      status?: TemplateWorkflowStatus;
+      type?: TemplateTypeValue;
+      sort?: string;
+      order?: "asc" | "desc";
+    } = {}
+  ) => paginatedGet<Template>("/templates", "templates", params),
+  get: (id: string) => apiClient.get<{ template: Template }>(`/templates/${id}`),
+  revisions: (id: string) => apiClient.get<{ revisions: TemplateRevision[] }>(`/templates/${id}/revisions`),
+  create: (payload: { type: TemplateTypeValue; name: string; slug?: string; description?: string; structure?: Record<string, unknown> }) =>
+    apiClient.post<{ template: Template }>("/templates", payload),
+  update: (
+    id: string,
+    payload: Partial<{ name: string; slug: string; description: string | null; structure: Record<string, unknown>; expectedUpdatedAt: string }>
+  ) => apiClient.patch<{ template: Template }>(`/templates/${id}`, payload),
+  publish: (id: string) => apiClient.post<{ template: Template }>(`/templates/${id}/publish`),
+  archive: (id: string) => apiClient.post<{ template: Template }>(`/templates/${id}/archive`),
+  revert: (id: string, revisionId: string) => apiClient.post<{ template: Template }>(`/templates/${id}/revert`, { revisionId }),
+  duplicate: (id: string, name?: string) => apiClient.post<{ template: Template }>(`/templates/${id}/duplicate`, name ? { name } : {}),
+  remove: (id: string) => apiClient.delete<{ message: string }>(`/templates/${id}`),
+};
+
+export const templatePartsApi = {
+  list: (
+    params: {
+      page?: number;
+      limit?: number;
+      search?: string;
+      status?: TemplateWorkflowStatus;
+      type?: TemplatePartTypeValue;
+      sort?: string;
+      order?: "asc" | "desc";
+    } = {}
+  ) => paginatedGet<TemplatePart>("/template-parts", "templateParts", params),
+  get: (id: string) => apiClient.get<{ templatePart: TemplatePart }>(`/template-parts/${id}`),
+  revisions: (id: string) => apiClient.get<{ revisions: TemplatePartRevision[] }>(`/template-parts/${id}/revisions`),
+  create: (payload: { type: TemplatePartTypeValue; name: string; slug?: string; content?: Record<string, unknown> }) =>
+    apiClient.post<{ templatePart: TemplatePart }>("/template-parts", payload),
+  update: (id: string, payload: Partial<{ name: string; slug: string; content: Record<string, unknown>; expectedUpdatedAt: string }>) =>
+    apiClient.patch<{ templatePart: TemplatePart }>(`/template-parts/${id}`, payload),
+  publish: (id: string) => apiClient.post<{ templatePart: TemplatePart }>(`/template-parts/${id}/publish`),
+  archive: (id: string) => apiClient.post<{ templatePart: TemplatePart }>(`/template-parts/${id}/archive`),
+  revert: (id: string, revisionId: string) => apiClient.post<{ templatePart: TemplatePart }>(`/template-parts/${id}/revert`, { revisionId }),
+  duplicate: (id: string, name?: string) => apiClient.post<{ templatePart: TemplatePart }>(`/template-parts/${id}/duplicate`, name ? { name } : {}),
+  remove: (id: string) => apiClient.delete<{ message: string }>(`/template-parts/${id}`),
 };
 
 export const postsApi = {

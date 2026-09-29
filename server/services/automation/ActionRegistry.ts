@@ -19,6 +19,12 @@ import { z } from "zod";
 import crypto from "node:crypto";
 import { prisma } from "../../db/prisma";
 import { auditLogRepository } from "../../repositories/auditLogRepository";
+import { invoiceRepository } from "../../repositories/invoiceRepository";
+import { clientRepository } from "../../repositories/clientRepository";
+import { calculateLineItem, calculateInvoiceTotals, calculateInvoiceBalance } from "../billingCalculations";
+import { toMoney, DEFAULT_CURRENCY } from "../../utils/money";
+import { nextInvoiceNumber } from "../../utils/sequence";
+import { NotImplementedError, ValidationError } from "../../core/errors";
 import { logger } from "../../core/logger";
 import { BusinessActionDefinition } from "./types";
 
@@ -259,10 +265,16 @@ export class ActionRegistry {
       requiresAudit: true,
       inputSchema: z.object({ reportType: z.string(), title: z.string(), parameters: z.record(z.unknown()).optional() }),
       outputSchema: z.object({ reportId: z.string(), generatedAt: z.string(), summary: z.string() }),
-      execute: async (input, context) => {
-        const reportId = crypto.randomUUID();
-        const generatedAt = new Date().toISOString();
-        return { reportId, generatedAt, summary: `Report "${input.title}" (${input.reportType}) generated successfully for workflow ${context.workflowId || "manual"}.` };
+      // Phase 1 audit finding (docs/control-center-module-gap-analysis.md):
+      // this previously fabricated a reportId/summary with no real report
+      // ever generated. No reporting service exists in this codebase
+      // (confirmed: no server/services/*report* file) — per the Phase 1
+      // brief's Part H, a nonexistent capability must throw an explicit
+      // not-implemented error, never fake a successful result.
+      execute: async (): Promise<never> => {
+        throw new NotImplementedError(
+          "generate_report has no real report-generation service to call yet — this action is registered but not implemented. It will not fabricate a result."
+        );
       },
     });
 
@@ -284,10 +296,61 @@ export class ActionRegistry {
         dueDate: z.string().optional(),
         memo: z.string().optional(),
       }),
-      outputSchema: z.object({ draftCreated: z.boolean(), invoiceNumber: z.string(), amountDue: z.number() }),
-      execute: async (input, _context) => {
-        const invoiceNumber = `INV-DRAFT-${Date.now().toString(36).toUpperCase()}`;
-        return { draftCreated: true, invoiceNumber, amountDue: input.amountDue };
+      outputSchema: z.object({ draftCreated: z.boolean(), invoiceId: z.string(), invoiceNumber: z.string(), amountDue: z.number() }),
+      // Phase 1 audit finding (docs/control-center-module-gap-analysis.md):
+      // this previously fabricated an "INV-DRAFT-..." string with no
+      // Invoice row ever created. Fixed by real service integration —
+      // reusing the exact same real utilities invoiceService.createInvoice
+      // itself uses (nextInvoiceNumber, calculateLineItem/
+      // calculateInvoiceTotals/calculateInvoiceBalance, invoiceRepository)
+      // rather than calling invoiceService directly, since this action's
+      // execution context (organizationId + optional userId) is not a full
+      // SanitizedUser caller — going through the same real, audited
+      // primitives is genuine reuse, not a parallel reimplementation, and
+      // does not require redesigning the automation system (Part H).
+      execute: async (input, context) => {
+        const client = await clientRepository.findByIdInOrg(input.clientId, context.organizationId);
+        if (!client) throw new ValidationError("create_invoice_draft: clientId does not refer to a client in this organization.");
+
+        const issueDate = new Date();
+        const dueDate = input.dueDate ? new Date(input.dueDate) : new Date(issueDate.getTime() + 30 * 24 * 60 * 60 * 1000);
+        const currency = input.currency ?? DEFAULT_CURRENCY;
+
+        const line = calculateLineItem({ quantity: 1, unitPrice: toMoney(input.amountDue), discount: toMoney(0) });
+        const { subtotal, total } = calculateInvoiceTotals([line], toMoney(0), toMoney(0));
+        const { amountDue } = calculateInvoiceBalance(total, []);
+
+        const invoiceNumber = await nextInvoiceNumber();
+        const invoice = await invoiceRepository.create(
+          {
+            invoiceNumber,
+            organizationId: context.organizationId,
+            clientId: input.clientId,
+            issueDate,
+            dueDate,
+            currency,
+            subtotal,
+            tax: toMoney(0),
+            discount: toMoney(0),
+            total,
+            amountDue,
+            notes: input.memo,
+            createdById: context.userId,
+          },
+          [{ description: input.memo ?? "Automation-drafted invoice line", quantity: 1, unitPrice: line.unitPrice, discount: line.discount, lineTotal: line.lineTotal }]
+        );
+
+        await auditLogRepository.record({
+          organizationId: context.organizationId,
+          actorUserId: context.userId,
+          actorType: context.userId ? "USER" : "SYSTEM",
+          action: "INVOICE_CREATED",
+          resourceType: "invoice",
+          resourceId: invoice.id,
+          afterData: { invoiceNumber, clientId: input.clientId, total: total.toString(), currency, source: "automation:create_invoice_draft" },
+        });
+
+        return { draftCreated: true, invoiceId: invoice.id, invoiceNumber, amountDue: Number(amountDue.toString()) };
       },
     });
 

@@ -49,6 +49,8 @@ import {
   ArrowRightLeft,
   Target,
   ClipboardList,
+  LayoutTemplate,
+  PanelsTopLeft,
 } from "lucide-react";
 import { DashboardPage } from "../components/modules/DashboardPage";
 
@@ -78,6 +80,8 @@ const ContactsPage = lazyPage(() => import("../components/modules/ContactsPage")
 const OnboardingPage = lazyPage(() => import("../components/modules/OnboardingPage"), "OnboardingPage");
 const WorkspacesPage = lazyPage(() => import("../components/modules/WorkspacesPage"), "WorkspacesPage");
 const ProductsPage = lazyPage(() => import("../components/modules/ProductsPage"), "ProductsPage");
+const TemplatesPage = lazyPage(() => import("../components/modules/TemplatesPage"), "TemplatesPage");
+const TemplatePartsPage = lazyPage(() => import("../components/modules/TemplatePartsPage"), "TemplatePartsPage");
 const PagesPage = lazyPage(() => import("../components/modules/PagesPage"), "PagesPage");
 const PostsPage = lazyPage(() => import("../components/modules/PostsPage"), "PostsPage");
 const CmsTaxonomyPage = lazyPage(() => import("../components/modules/CmsTaxonomyPage"), "CmsTaxonomyPage");
@@ -115,7 +119,7 @@ export interface NavItem {
   requiresAnyPermission?: string[];
   component: ComponentType | LazyExoticComponent<ComponentType>;
   /** Groups items under a heading in the sidebar (§22/§31) — purely presentational. */
-  section: "Platform" | "CRM" | "Onboarding" | "Workspaces" | "Products" | "CMS" | "SEO" | "Marketing" | "Commercial" | "AI" | "Client Portal";
+  section: "Platform" | "CRM" | "Onboarding" | "Workspaces" | "Products" | "Website" | "CMS" | "SEO" | "Marketing" | "Commercial" | "AI" | "Client Portal";
 }
 
 /**
@@ -279,6 +283,24 @@ export const NAV_ITEMS: NavItem[] = [
     requiresAnyPermission: ["product_modules.read"],
     component: ProductsPage,
     section: "Products",
+  },
+  {
+    id: "website-templates",
+    label: "Templates",
+    path: "/website/templates",
+    icon: LayoutTemplate,
+    requiresAnyPermission: ["templates.read"],
+    component: TemplatesPage,
+    section: "Website",
+  },
+  {
+    id: "website-template-parts",
+    label: "Template Parts",
+    path: "/website/template-parts",
+    icon: PanelsTopLeft,
+    requiresAnyPermission: ["template_parts.read"],
+    component: TemplatePartsPage,
+    section: "Website",
   },
   {
     id: "cms-pages",

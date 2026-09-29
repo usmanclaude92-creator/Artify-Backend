@@ -47,7 +47,10 @@ interface PaletteItem {
   label: string;
   sublabel?: string;
   group: string;
-  icon: React.ComponentType<{ className?: string }>;
+  // Rendered with both className and an inline style (see the list below) —
+  // lucide-react icons genuinely accept both, this just widens the local
+  // type to match what's actually passed.
+  icon: React.ComponentType<{ className?: string; style?: React.CSSProperties }>;
   onSelect: () => void;
 }
 

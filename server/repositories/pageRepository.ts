@@ -18,7 +18,11 @@ function slugify(input: string): string {
 const withCurrentRevision = { include: { currentRevision: true } } as const;
 export type PageWithRevision = Prisma.PageGetPayload<typeof withCurrentRevision>;
 
-const withPublicRelations = { include: { currentRevision: true, featuredMedia: true } } as const;
+// Phase 1 (Website module) — the assigned template (if any), with its own
+// current revision, so the public projection can surface template
+// structure only when it's genuinely PUBLISHED (see publicSiteService.ts's
+// projectPage). Purely additive to this query's shape.
+const withPublicRelations = { include: { currentRevision: true, featuredMedia: true, template: { include: { currentRevision: true } } } } as const;
 export type PageWithPublicRelations = Prisma.PageGetPayload<typeof withPublicRelations>;
 
 function buildWhere(organizationId: string, filters: PageFilters): Prisma.PageWhereInput {

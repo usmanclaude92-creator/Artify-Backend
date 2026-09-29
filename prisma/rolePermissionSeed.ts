@@ -64,6 +64,18 @@ const ROLE_PERMISSION_SETS: Record<RoleKey, readonly string[] | "*"> = {
     "content.update",
     "content.publish",
     "content.delete",
+    // Phase 1 (Website module) — ADMIN gets full template/template-part
+    // management, same tiering as content.* above.
+    "templates.read",
+    "templates.create",
+    "templates.update",
+    "templates.publish",
+    "templates.delete",
+    "template_parts.read",
+    "template_parts.create",
+    "template_parts.update",
+    "template_parts.publish",
+    "template_parts.delete",
     "authors.read",
     "authors.create",
     "authors.update",
@@ -202,6 +214,14 @@ const ROLE_PERMISSION_SETS: Record<RoleKey, readonly string[] | "*"> = {
     "content.read",
     "content.create",
     "content.update",
+    // Phase 1 (Website module) — MANAGER can author but not publish/delete
+    // templates/template-parts, same tiering as content.* above.
+    "templates.read",
+    "templates.create",
+    "templates.update",
+    "template_parts.read",
+    "template_parts.create",
+    "template_parts.update",
     "authors.read",
     "authors.update",
     "media.read",
@@ -296,6 +316,12 @@ const ROLE_PERMISSION_SETS: Record<RoleKey, readonly string[] | "*"> = {
     "product_modules.read",
     "content.read",
     "content.create",
+    // Phase 1 (Website module) — USER can read/create but not
+    // publish/update/delete templates/template-parts, same tiering as content.* above.
+    "templates.read",
+    "templates.create",
+    "template_parts.read",
+    "template_parts.create",
     "authors.read",
     "media.read",
     "media.upload",
@@ -348,6 +374,9 @@ const ROLE_PERMISSION_SETS: Record<RoleKey, readonly string[] | "*"> = {
     "products.read",
     "product_modules.read",
     "content.read",
+    // Phase 1 (Website module) — VIEWER is read-only, same convention as everywhere else.
+    "templates.read",
+    "template_parts.read",
     "authors.read",
     "media.read",
     "reports.read",

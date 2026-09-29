@@ -130,6 +130,101 @@ describe("Automation workflows, actions, approvals", () => {
     expect(leadRes.body.data.lead.assignedTo).toBe(assigneeUserId);
   });
 
+  // Phase 1 regression tests (docs/control-center-module-gap-analysis.md's
+  // "Automation's create_invoice_draft and generate_report business
+  // actions are mocked" finding) — proves the fix, not just the bug.
+  it("create_invoice_draft creates a real, persisted Invoice — never a fabricated result", async () => {
+    const clientRes = await request(app)
+      .post("/api/v1/clients")
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({ clientCode: "AUTO-INV-1", name: "Automation Invoice Client" });
+    expect(clientRes.status).toBe(201);
+    const clientId = clientRes.body.data.client.id;
+
+    const createRes = await request(app)
+      .post("/api/v1/automation/workflows")
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({
+        name: "Invoice Draft Workflow",
+        triggerType: "MANUAL",
+        steps: [
+          {
+            id: "draft_step",
+            name: "Draft Invoice",
+            type: "BUSINESS_ACTION",
+            actionId: "create_invoice_draft",
+            parameters: { clientId, amountDue: 500, currency: "USD", memo: "Automation regression test" },
+            requiresApproval: false,
+          },
+        ],
+      });
+    expect(createRes.status).toBe(201);
+    const workflowId = createRes.body.data.workflow.id;
+
+    await request(app).post(`/api/v1/automation/workflows/${workflowId}/publish`).set("Authorization", `Bearer ${adminToken}`).send({});
+    const triggerRes = await request(app).post(`/api/v1/automation/workflows/${workflowId}/trigger`).set("Authorization", `Bearer ${adminToken}`).send({});
+    expect(triggerRes.status).toBe(202);
+    const executionId = triggerRes.body.data.executionId;
+
+    let execution: { status: string } = { status: "QUEUED" };
+    for (let i = 0; i < 20; i++) {
+      const execRes = await request(app).get(`/api/v1/automation/executions/${executionId}`).set("Authorization", `Bearer ${adminToken}`);
+      execution = execRes.body.data.execution;
+      if (execution.status === "COMPLETED" || execution.status === "FAILED" || execution.status === "WAITING_APPROVAL") break;
+      await new Promise((r) => setTimeout(r, 150));
+    }
+
+    expect(execution.status).toBe("COMPLETED");
+
+    // The fabricated version never wrote a row at all — proving a real
+    // Invoice exists for this client is the actual regression proof.
+    const invoicesRes = await request(app).get("/api/v1/invoices").query({ clientId }).set("Authorization", `Bearer ${adminToken}`);
+    expect(invoicesRes.status).toBe(200);
+    expect(invoicesRes.body.data.invoices.length).toBeGreaterThan(0);
+    const created = invoicesRes.body.data.invoices[0];
+    expect(created.status).toBe("DRAFT");
+    expect(created.invoiceNumber).not.toMatch(/^INV-DRAFT-/); // not the old fabricated format
+    expect(Number(created.amountDue)).toBe(500);
+  });
+
+  it("generate_report fails explicitly rather than fabricating a result", async () => {
+    const createRes = await request(app)
+      .post("/api/v1/automation/workflows")
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({
+        name: "Report Workflow",
+        triggerType: "MANUAL",
+        steps: [
+          {
+            id: "report_step",
+            name: "Generate Report",
+            type: "BUSINESS_ACTION",
+            actionId: "generate_report",
+            parameters: { reportType: "pipeline", title: "Automation regression test" },
+          },
+        ],
+      });
+    expect(createRes.status).toBe(201);
+    const workflowId = createRes.body.data.workflow.id;
+
+    await request(app).post(`/api/v1/automation/workflows/${workflowId}/publish`).set("Authorization", `Bearer ${adminToken}`).send({});
+    const triggerRes = await request(app).post(`/api/v1/automation/workflows/${workflowId}/trigger`).set("Authorization", `Bearer ${adminToken}`).send({});
+    expect(triggerRes.status).toBe(202);
+    const executionId = triggerRes.body.data.executionId;
+
+    let execution: { status: string } = { status: "QUEUED" };
+    for (let i = 0; i < 20; i++) {
+      const execRes = await request(app).get(`/api/v1/automation/executions/${executionId}`).set("Authorization", `Bearer ${adminToken}`);
+      execution = execRes.body.data.execution;
+      if (execution.status === "COMPLETED" || execution.status === "FAILED") break;
+      await new Promise((r) => setTimeout(r, 150));
+    }
+
+    // The old, mocked version always reported COMPLETED with a fabricated
+    // summary — the fix must fail visibly instead.
+    expect(execution.status).toBe("FAILED");
+  });
+
   it("enforces tenant isolation on workflows and executions", async () => {
     const listRes = await request(app)
       .get("/api/v1/automation/workflows")
