@@ -58,6 +58,13 @@
     "vite": "^6.2.3",
     "zod": "^3.24.1"
   },
+  "overrides": {
+    "isomorphic-dompurify": {
+      "jsdom": {
+        "html-encoding-sniffer": "4.0.0"
+      }
+    }
+  },
   "devDependencies": {
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.3",
