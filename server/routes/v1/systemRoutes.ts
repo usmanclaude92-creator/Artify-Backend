@@ -14,6 +14,7 @@ import { sendSuccess } from "../../core/apiResponse";
 import { asyncHandler } from "../../utils/asyncHandler";
 import { authenticateToken, requireRole } from "../../middleware/auth";
 import { config } from "../../config/env";
+import { seedRolesAndPermissions } from "../../../prisma/rolePermissionSeed";
 
 const router = Router();
 
@@ -85,6 +86,42 @@ router.get(
         roles: roleCount,
         permissions: permissionCount,
       },
+    });
+  })
+);
+
+/**
+ * SUPER_ADMIN-only. Re-applies the permission/role catalog defined in
+ * prisma/rolePermissionSeed.ts — additive and idempotent (upserts only,
+ * never deletes or mutates existing rows), so it's safe to call any time
+ * a deploy adds new permission keys that an already-provisioned
+ * environment's database hasn't picked up yet (the normal `npm run
+ * db:seed` path only runs against a developer's local database, per its
+ * own doc comment — there is no deploy hook that reseeds a hosted
+ * environment automatically).
+ */
+router.post(
+  "/sync-permissions",
+  authenticateToken,
+  requireRole(["SUPER_ADMIN"]),
+  asyncHandler(async (_req, res) => {
+    const [beforePermissions, beforeRolePermissions] = await Promise.all([
+      prisma.permission.count(),
+      prisma.rolePermission.count(),
+    ]);
+
+    await seedRolesAndPermissions(prisma);
+
+    const [afterPermissions, afterRolePermissions] = await Promise.all([
+      prisma.permission.count(),
+      prisma.rolePermission.count(),
+    ]);
+
+    sendSuccess(res, {
+      permissionsAdded: afterPermissions - beforePermissions,
+      rolePermissionLinksAdded: afterRolePermissions - beforeRolePermissions,
+      totalPermissions: afterPermissions,
+      totalRolePermissionLinks: afterRolePermissions,
     });
   })
 );
