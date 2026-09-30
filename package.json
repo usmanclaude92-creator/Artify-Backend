@@ -60,9 +60,7 @@
   },
   "overrides": {
     "isomorphic-dompurify": {
-      "jsdom": {
-        "html-encoding-sniffer": "4.0.0"
-      }
+      "jsdom": "25.0.1"
     }
   },
   "devDependencies": {
