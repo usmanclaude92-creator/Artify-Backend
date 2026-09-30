@@ -1,0 +1,29 @@
+name: Automation cron tick
+
+# Vercel's Hobby plan caps native Vercel Cron at once per day, which isn't
+# frequent enough for scheduled content publishing / the automation queue
+# (see vercel.json's crons entry and server/routes/v1/automationRoutes.ts).
+# This workflow is the free external scheduler standing in for a
+# per-minute Vercel Cron: it just calls the same internal tick endpoint
+# GitHub's actual minimum cadence is 5 minutes, so that's what's used here.
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call automation tick endpoint
+        run: |
+          status=$(curl -sS -o /tmp/tick-response.json -w "%{http_code}" \
+            -H "Authorization: Bearer ${{ secrets.AUTOMATION_CRON_SECRET }}" \
+            "https://cc.artifysols.com/api/v1/automation/internal/tick")
+          echo "HTTP status: $status"
+          cat /tmp/tick-response.json
+          echo
+          if [ "$status" != "200" ]; then
+            echo "Tick call failed with status $status"
+            exit 1
+          fi
