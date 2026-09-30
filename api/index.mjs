@@ -59,9 +59,25 @@ var envSchema = z.object({
   SUPABASE_STORAGE_URL: z.string().optional().default(""),
   SUPABASE_STORAGE_SERVICE_ROLE_KEY: z.string().optional().default(""),
   LOCAL_STORAGE_DIR: z.string().optional().default(".local-storage"),
+  // s3/r2 only — the bucket's public base URL (a CDN domain, or
+  // `https://<bucket>.s3.<region>.amazonaws.com`/an R2 public bucket
+  // domain), used to compute a stable, non-expiring URL for PUBLIC
+  // media instead of a signed one. Supabase Storage never needs this —
+  // its client SDK computes a public URL from SUPABASE_STORAGE_URL
+  // directly. Left unset, s3/r2 public media falls back to a signed URL
+  // with MEDIA_PUBLIC_SIGNED_URL_TTL_SECONDS instead of failing.
+  OBJECT_STORAGE_PUBLIC_BASE_URL: z.string().optional().default(""),
   MEDIA_MAX_IMAGE_SIZE_BYTES: z.coerce.number().int().positive().default(10 * 1024 * 1024),
   MEDIA_MAX_DOCUMENT_SIZE_BYTES: z.coerce.number().int().positive().default(25 * 1024 * 1024),
   MEDIA_SIGNED_URL_TTL_SECONDS: z.coerce.number().int().positive().default(900),
+  // Only for PUBLIC-visibility media served to anonymous website visitors
+  // (og:image, sitemap image entries, public post/page featured images)
+  // when no stable getPublicUrl() can be computed — a real fix would be
+  // configuring OBJECT_STORAGE_PUBLIC_BASE_URL/a public Supabase bucket
+  // so these URLs never expire at all; this is the fallback, not the
+  // goal. Default 24h, comfortably longer than any cache/CDN TTL that
+  // would otherwise re-request it, without being a permanent link.
+  MEDIA_PUBLIC_SIGNED_URL_TTL_SECONDS: z.coerce.number().int().positive().default(24 * 60 * 60),
   MEDIA_UPLOAD_SESSION_TTL_MINUTES: z.coerce.number().int().positive().default(15),
   // Phase 3 — centralized security tunables (docs/AUTHENTICATION_ARCHITECTURE.md).
   // Never hard-code these values inline in service code; every consumer
@@ -207,9 +223,11 @@ function validateEnv(raw) {
       supabaseStorageUrl: env.SUPABASE_STORAGE_URL,
       supabaseStorageServiceRoleKey: env.SUPABASE_STORAGE_SERVICE_ROLE_KEY,
       localStorageDir: env.LOCAL_STORAGE_DIR,
+      objectStoragePublicBaseUrl: env.OBJECT_STORAGE_PUBLIC_BASE_URL,
       mediaMaxImageSizeBytes: env.MEDIA_MAX_IMAGE_SIZE_BYTES,
       mediaMaxDocumentSizeBytes: env.MEDIA_MAX_DOCUMENT_SIZE_BYTES,
       mediaSignedUrlTtlSeconds: env.MEDIA_SIGNED_URL_TTL_SECONDS,
+      mediaPublicSignedUrlTtlSeconds: env.MEDIA_PUBLIC_SIGNED_URL_TTL_SECONDS,
       mediaUploadSessionTtlMinutes: env.MEDIA_UPLOAD_SESSION_TTL_MINUTES,
       sessionTtlHours: env.SESSION_TTL_HOURS,
       accountLockoutThreshold: env.ACCOUNT_LOCKOUT_THRESHOLD,
@@ -399,7 +417,13 @@ function makeStore(prefix) {
   if (!redisClient) return void 0;
   return new RedisStore({
     prefix: `rl:${prefix}:`,
-    sendCommand: (...args) => redisClient.call(...args)
+    // ioredis's `call` overload requires its first parameter typed as a
+    // literal `command: string`, not part of a spread array — spreading a
+    // plain `string[]` into it fails TS2556 ("must have a tuple type").
+    // Splitting the command out fixes the typing without changing the
+    // actual command dispatched (rate-limit-redis always calls this with
+    // at least one element).
+    sendCommand: (...args) => redisClient.call(args[0], ...args.slice(1))
   });
 }
 function rateLimitHandler(req, res) {
@@ -529,6 +553,13 @@ var ConflictError = class extends AppError {
     this.code = "RESOURCE_CONFLICT" /* RESOURCE_CONFLICT */;
   }
 };
+var NotImplementedError = class extends AppError {
+  constructor(message = "This feature is not implemented yet") {
+    super(message);
+    this.statusCode = 501;
+    this.code = "NOT_IMPLEMENTED" /* NOT_IMPLEMENTED */;
+  }
+};
 var InfrastructureError = class extends AppError {
   constructor(message = "A required infrastructure dependency is unavailable") {
     super(message);
@@ -579,7 +610,7 @@ function errorHandlerMiddleware(err, req, res, _next) {
 }
 
 // server/routes/v1/index.ts
-import { Router as Router40 } from "express";
+import { Router as Router47 } from "express";
 
 // server/routes/v1/authRoutes.ts
 import { Router } from "express";
@@ -950,6 +981,228 @@ function validatePasswordPolicy(password) {
 
 // server/types/domain.ts
 var SYSTEM_ROLE_KEYS = ["SUPER_ADMIN", "ADMIN", "MANAGER", "USER", "VIEWER"];
+var ROLE_DEFINITIONS = {
+  SUPER_ADMIN: {
+    name: "Super Administrator",
+    description: "Full platform access across all organizations. Reserved for Artify's own platform operators."
+  },
+  ADMIN: {
+    name: "Administrator",
+    description: "Full access within the administrator's own organization."
+  },
+  MANAGER: {
+    name: "Manager",
+    description: "Manages day-to-day operations (CRM, content, products) within the organization."
+  },
+  USER: {
+    name: "User",
+    description: "Standard operational access within the organization."
+  },
+  VIEWER: {
+    name: "Viewer",
+    description: "Read-only access within the organization."
+  }
+};
+var PERMISSION_KEYS = [
+  "users.read",
+  "users.create",
+  "users.update",
+  "users.delete",
+  "organizations.read",
+  "organizations.create",
+  "organizations.update",
+  "organizations.delete",
+  "organizations.manage_members",
+  "roles.read",
+  "roles.create",
+  "roles.update",
+  "roles.delete",
+  "roles.assign",
+  "clients.read",
+  "clients.create",
+  "clients.update",
+  "clients.delete",
+  "leads.read",
+  "leads.create",
+  "leads.update",
+  "leads.delete",
+  "leads.convert",
+  "contacts.read",
+  "contacts.create",
+  "contacts.update",
+  "contacts.delete",
+  // Phase 7 — CRM pipeline (docs/CRM_ARCHITECTURE.md). "close" covers both
+  // POST /opportunities/:id/win and /lose — both are symmetric terminal
+  // transitions (unlike contracts.activate/suspend/terminate, which differ
+  // enough in blast radius to warrant separate keys), so one permission
+  // covers both rather than adding win/lose granularity nothing asked for.
+  "opportunities.read",
+  "opportunities.create",
+  "opportunities.update",
+  "opportunities.delete",
+  "opportunities.close",
+  "products.read",
+  "products.create",
+  "products.update",
+  "products.archive",
+  "product_modules.read",
+  "product_modules.create",
+  "product_modules.update",
+  "product_modules.archive",
+  "product_modules.reorder",
+  "content.read",
+  "content.create",
+  "content.update",
+  "content.publish",
+  "content.delete",
+  "authors.read",
+  "authors.create",
+  "authors.update",
+  "media.read",
+  "media.upload",
+  "media.update",
+  "media.delete",
+  // Website module (Phase 1 of the Control Center replacement initiative —
+  // docs/control-center-replacement-roadmap.md). Same {read,create,update,
+  // publish,delete} shape as content.* above, on purpose: Templates/
+  // Template Parts are content-shaped resources following the exact same
+  // draft->publish workflow as Post/Page, so they get the exact same
+  // permission shape rather than inventing a new one.
+  "templates.read",
+  "templates.create",
+  "templates.update",
+  "templates.publish",
+  "templates.delete",
+  "template_parts.read",
+  "template_parts.create",
+  "template_parts.update",
+  "template_parts.publish",
+  "template_parts.delete",
+  "reports.read",
+  "reports.export",
+  "settings.read",
+  "settings.manage",
+  "audit.read",
+  // Phase 12 — AI Control Center governance keys (docs/AI_GOVERNANCE.md).
+  // Deliberately granular: provider/model catalog and tool enablement are
+  // admin-only; prompt/workflow authoring is separate from execution;
+  // approval decisions are separate from viewing what's pending; usage/cost
+  // and AI-specific audit are separate read surfaces from generic
+  // reports.read/audit.read so they can be granted independently.
+  "ai.providers.read",
+  "ai.providers.manage",
+  "ai.models.read",
+  "ai.models.manage",
+  "ai.tools.read",
+  "ai.tools.manage",
+  "ai.prompts.read",
+  "ai.prompts.create",
+  "ai.prompts.update",
+  "ai.prompts.publish",
+  "ai.prompts.delete",
+  "ai.workflows.read",
+  "ai.workflows.create",
+  "ai.workflows.update",
+  "ai.workflows.publish",
+  "ai.workflows.delete",
+  "ai.workflows.execute",
+  "ai.executions.read",
+  "ai.executions.cancel",
+  "ai.usage.read",
+  "ai.approvals.read",
+  "ai.approvals.decide",
+  "ai.audit.read",
+  // Phase 13/14/15 — Automation, Knowledge/RAG, and Copilot (imported from
+  // usmanclaude92-creator/Artify-Backend---Google-AI-Studio-, commit
+  // 4a1d7cd). Separate namespace from ai.* above — that's this repo's own
+  // governed AI-tool/workflow layer (docs/AI_GOVERNANCE.md); these three
+  // are net-new subsystems that didn't exist here before this import.
+  "automation.read",
+  "automation.create",
+  "automation.edit",
+  "automation.publish",
+  "automation.execute",
+  "automation.approve",
+  "automation.manage",
+  "knowledge.read",
+  "knowledge.search",
+  "knowledge.create",
+  "knowledge.upload",
+  "knowledge.edit",
+  "knowledge.archive",
+  "knowledge.reindex",
+  "knowledge.manage",
+  "copilot.read",
+  "copilot.use",
+  "copilot.manage",
+  "copilot.admin",
+  "onboarding.read",
+  "onboarding.create",
+  "onboarding.update",
+  "onboarding.complete",
+  "workspaces.read",
+  "workspaces.create",
+  "workspaces.update",
+  "workspaces.suspend",
+  "invitations.read",
+  "invitations.create",
+  "invitations.revoke",
+  // Phase 10 — commercial/billing (docs/COMMERCIAL_ARCHITECTURE.md,
+  // docs/BILLING_ARCHITECTURE.md). Sensitive financial actions
+  // (activate/suspend/terminate/variations.create, issue/void,
+  // reverse) are deliberately separate from read/create/update — §34.
+  "contracts.read",
+  "contracts.create",
+  "contracts.update",
+  "contracts.activate",
+  "contracts.suspend",
+  "contracts.terminate",
+  "contracts.variations.create",
+  "subscriptions.read",
+  "subscriptions.create",
+  "subscriptions.update",
+  "subscriptions.activate",
+  "subscriptions.pause",
+  "subscriptions.cancel",
+  "invoices.read",
+  "invoices.create",
+  "invoices.update",
+  "invoices.issue",
+  "invoices.void",
+  "payments.read",
+  "payments.create",
+  "payments.reverse",
+  // Client Portal — read-only client-facing capabilities, deliberately
+  // separate from the internal contracts.*/invoices.*/payments.* keys
+  // above (§25/§26). Granted broadly (every internal role too, so an
+  // agency user who switches their session into a client's workspace
+  // organization can see that workspace's own portal) — the real
+  // boundary is portalService resolving the caller's Client record from
+  // their session's own organizationId, never a client-supplied id.
+  "portal.dashboard.read",
+  "portal.contracts.read",
+  "portal.subscriptions.read",
+  "portal.invoices.read",
+  "portal.payments.read",
+  // Phase 5 (SEO Control Center, docs/SEO_ARCHITECTURE.md) — redirects
+  // and the rule-based SEO audit are their own permission domain rather
+  // than folded into content.*, since a redirect isn't itself content
+  // and the audit reads across Posts/Pages without needing content.update.
+  "seo.redirects.read",
+  "seo.redirects.create",
+  "seo.redirects.update",
+  "seo.redirects.delete",
+  "seo.audit.read",
+  // Phase 9 (MVP slice) — Marketing forms (docs/FORMS_ARCHITECTURE.md).
+  // "read" covers both the form definition list and viewing its
+  // submissions — a submission has no independent lifecycle of its own to
+  // gate separately from the form it belongs to, unlike opportunities'
+  // separate "close" key for a real distinct action.
+  "forms.read",
+  "forms.create",
+  "forms.update",
+  "forms.delete"
+];
 function sanitizeUser(user, role) {
   const { passwordHash: _passwordHash, ...rest } = user;
   return { ...rest, role };
@@ -1661,6 +1914,442 @@ async function checkDatabase() {
   }
 }
 
+// prisma/rolePermissionSeed.ts
+function moduleOf(key) {
+  return key.split(".")[0] ?? key;
+}
+function permissionName(key) {
+  const [, action] = key.split(".");
+  return `${moduleOf(key)}: ${action ?? key}`.replace(/\b\w/g, (c) => c.toUpperCase());
+}
+var ROLE_PERMISSION_SETS = {
+  SUPER_ADMIN: "*",
+  ADMIN: [
+    "users.read",
+    "users.create",
+    "users.update",
+    "organizations.read",
+    "organizations.update",
+    "organizations.manage_members",
+    "roles.read",
+    "roles.assign",
+    "clients.read",
+    "clients.create",
+    "clients.update",
+    "clients.delete",
+    "leads.read",
+    "leads.create",
+    "leads.update",
+    "leads.delete",
+    "leads.convert",
+    "contacts.read",
+    "contacts.create",
+    "contacts.update",
+    "contacts.delete",
+    "opportunities.read",
+    "opportunities.create",
+    "opportunities.update",
+    "opportunities.delete",
+    "opportunities.close",
+    "products.read",
+    "products.create",
+    "products.update",
+    "products.archive",
+    "product_modules.read",
+    "product_modules.create",
+    "product_modules.update",
+    "product_modules.archive",
+    "product_modules.reorder",
+    "content.read",
+    "content.create",
+    "content.update",
+    "content.publish",
+    "content.delete",
+    // Phase 1 (Website module) — ADMIN gets full template/template-part
+    // management, same tiering as content.* above.
+    "templates.read",
+    "templates.create",
+    "templates.update",
+    "templates.publish",
+    "templates.delete",
+    "template_parts.read",
+    "template_parts.create",
+    "template_parts.update",
+    "template_parts.publish",
+    "template_parts.delete",
+    "authors.read",
+    "authors.create",
+    "authors.update",
+    "media.read",
+    "media.upload",
+    "media.update",
+    "media.delete",
+    "reports.read",
+    "reports.export",
+    "settings.read",
+    "settings.manage",
+    "audit.read",
+    // Phase 12 — ADMIN gets the full AI governance surface within its own
+    // organization: catalog visibility, tool enablement, prompt/workflow
+    // authoring and publishing, execution, approval decisions, usage/cost
+    // and AI-specific audit (§34-style split, mirrored from Phase 10).
+    "ai.providers.read",
+    "ai.providers.manage",
+    "ai.models.read",
+    "ai.models.manage",
+    "ai.tools.read",
+    "ai.tools.manage",
+    "ai.prompts.read",
+    "ai.prompts.create",
+    "ai.prompts.update",
+    "ai.prompts.publish",
+    "ai.prompts.delete",
+    "ai.workflows.read",
+    "ai.workflows.create",
+    "ai.workflows.update",
+    "ai.workflows.publish",
+    "ai.workflows.delete",
+    "ai.workflows.execute",
+    "ai.executions.read",
+    "ai.executions.cancel",
+    "ai.usage.read",
+    "ai.approvals.read",
+    "ai.approvals.decide",
+    "ai.audit.read",
+    // Phase 13/14/15 — Automation, Knowledge/RAG, Copilot (imported). ADMIN
+    // gets the full set, same tiering the source repo used for this role.
+    "automation.read",
+    "automation.create",
+    "automation.edit",
+    "automation.publish",
+    "automation.execute",
+    "automation.approve",
+    "automation.manage",
+    "knowledge.read",
+    "knowledge.search",
+    "knowledge.create",
+    "knowledge.upload",
+    "knowledge.edit",
+    "knowledge.archive",
+    "knowledge.reindex",
+    "knowledge.manage",
+    "copilot.read",
+    "copilot.use",
+    "copilot.manage",
+    "copilot.admin",
+    "onboarding.read",
+    "onboarding.create",
+    "onboarding.update",
+    "onboarding.complete",
+    "workspaces.read",
+    "workspaces.create",
+    "workspaces.update",
+    "workspaces.suspend",
+    "invitations.read",
+    "invitations.create",
+    "invitations.revoke",
+    // Phase 10 — ADMIN gets the full commercial/billing set, including the
+    // sensitive transitions (activate/suspend/terminate/variations.create,
+    // issue/void, reverse) that MANAGER/USER/VIEWER do not (§34).
+    "contracts.read",
+    "contracts.create",
+    "contracts.update",
+    "contracts.activate",
+    "contracts.suspend",
+    "contracts.terminate",
+    "contracts.variations.create",
+    "subscriptions.read",
+    "subscriptions.create",
+    "subscriptions.update",
+    "subscriptions.activate",
+    "subscriptions.pause",
+    "subscriptions.cancel",
+    "invoices.read",
+    "invoices.create",
+    "invoices.update",
+    "invoices.issue",
+    "invoices.void",
+    "payments.read",
+    "payments.create",
+    "payments.reverse",
+    "portal.dashboard.read",
+    "portal.contracts.read",
+    "portal.subscriptions.read",
+    "portal.invoices.read",
+    "portal.payments.read",
+    // Phase 5 — ADMIN gets full redirect management and the SEO audit.
+    "seo.redirects.read",
+    "seo.redirects.create",
+    "seo.redirects.update",
+    "seo.redirects.delete",
+    "seo.audit.read",
+    // Phase 9 — ADMIN gets full form management.
+    "forms.read",
+    "forms.create",
+    "forms.update",
+    "forms.delete"
+  ],
+  MANAGER: [
+    "users.read",
+    "clients.read",
+    "clients.create",
+    "clients.update",
+    "leads.read",
+    "leads.create",
+    "leads.update",
+    "leads.convert",
+    "contacts.read",
+    "contacts.create",
+    "contacts.update",
+    "opportunities.read",
+    "opportunities.create",
+    "opportunities.update",
+    "opportunities.close",
+    "products.read",
+    "products.create",
+    "products.update",
+    "product_modules.read",
+    "product_modules.create",
+    "product_modules.update",
+    "product_modules.reorder",
+    "content.read",
+    "content.create",
+    "content.update",
+    // Phase 1 (Website module) — MANAGER can author but not publish/delete
+    // templates/template-parts, same tiering as content.* above.
+    "templates.read",
+    "templates.create",
+    "templates.update",
+    "template_parts.read",
+    "template_parts.create",
+    "template_parts.update",
+    "authors.read",
+    "authors.update",
+    "media.read",
+    "media.upload",
+    "media.update",
+    "reports.read",
+    // Phase 12 — MANAGER can use/author AI within its own org (execute
+    // workflows, author prompts/workflows, see executions/usage/approvals)
+    // but cannot touch the provider/model catalog, tool enablement, or
+    // decide approvals — those stay ADMIN-only (mirrors Phase 10's split).
+    "ai.providers.read",
+    "ai.models.read",
+    "ai.tools.read",
+    "ai.prompts.read",
+    "ai.prompts.create",
+    "ai.prompts.update",
+    "ai.workflows.read",
+    "ai.workflows.create",
+    "ai.workflows.update",
+    "ai.workflows.execute",
+    "ai.executions.read",
+    "ai.usage.read",
+    "ai.approvals.read",
+    // Phase 13/14/15 (imported) — MANAGER can author/execute automation and
+    // knowledge/copilot within its own org, but not automation.manage,
+    // copilot.admin, or knowledge.archive (ADMIN-only, source repo's tiering).
+    "automation.read",
+    "automation.create",
+    "automation.edit",
+    "automation.publish",
+    "automation.execute",
+    "automation.approve",
+    "knowledge.read",
+    "knowledge.search",
+    "knowledge.create",
+    "knowledge.upload",
+    "knowledge.edit",
+    "knowledge.reindex",
+    "copilot.read",
+    "copilot.use",
+    "copilot.manage",
+    "onboarding.read",
+    "onboarding.create",
+    "onboarding.update",
+    "workspaces.read",
+    "workspaces.create",
+    "workspaces.update",
+    "invitations.read",
+    "invitations.create",
+    // Phase 10 — MANAGER gets read/create/update plus the reversible
+    // subscription transitions, but not contract termination/variations,
+    // invoice issue/void, or payment reversal (§34, reserved for ADMIN).
+    "contracts.read",
+    "contracts.create",
+    "contracts.update",
+    "subscriptions.read",
+    "subscriptions.create",
+    "subscriptions.update",
+    "subscriptions.activate",
+    "subscriptions.pause",
+    "subscriptions.cancel",
+    "invoices.read",
+    "invoices.create",
+    "invoices.update",
+    "payments.read",
+    "payments.create",
+    "portal.dashboard.read",
+    "portal.contracts.read",
+    "portal.subscriptions.read",
+    "portal.invoices.read",
+    "portal.payments.read",
+    // Phase 5 — MANAGER can manage redirects day-to-day but not delete them (ADMIN-only, §34 pattern).
+    "seo.redirects.read",
+    "seo.redirects.create",
+    "seo.redirects.update",
+    "seo.audit.read",
+    // Phase 9 — MANAGER can manage forms day-to-day but not delete them (ADMIN-only, same pattern).
+    "forms.read",
+    "forms.create",
+    "forms.update"
+  ],
+  USER: [
+    "clients.read",
+    "leads.read",
+    "leads.create",
+    "leads.update",
+    "contacts.read",
+    "opportunities.read",
+    "opportunities.create",
+    "opportunities.update",
+    "products.read",
+    "product_modules.read",
+    "content.read",
+    "content.create",
+    // Phase 1 (Website module) — USER can read/create but not
+    // publish/update/delete templates/template-parts, same tiering as content.* above.
+    "templates.read",
+    "templates.create",
+    "template_parts.read",
+    "template_parts.create",
+    "authors.read",
+    "media.read",
+    "media.upload",
+    "reports.read",
+    // Phase 12 — USER can execute existing workflows/prompts and see their
+    // own executions/usage, but cannot author prompts/workflows or touch
+    // the catalog/approvals (mirrors the read/execute-only Phase 10 split).
+    "ai.tools.read",
+    "ai.prompts.read",
+    "ai.workflows.read",
+    "ai.workflows.execute",
+    "ai.executions.read",
+    "ai.usage.read",
+    // Phase 13/14/15 (imported) — USER can execute existing automations,
+    // search knowledge, and use the copilot, matching the source repo's tiering.
+    "automation.read",
+    "automation.execute",
+    "knowledge.read",
+    "knowledge.search",
+    "copilot.read",
+    "copilot.use",
+    "onboarding.read",
+    "workspaces.read",
+    "invitations.read",
+    // Phase 10 — USER gets read-only commercial access plus the client
+    // portal (§25/§26).
+    "contracts.read",
+    "subscriptions.read",
+    "invoices.read",
+    "payments.read",
+    "portal.dashboard.read",
+    "portal.contracts.read",
+    "portal.subscriptions.read",
+    "portal.invoices.read",
+    "portal.payments.read",
+    // Phase 5 — USER is read-only for SEO, same as most other modules.
+    "seo.redirects.read",
+    "seo.audit.read",
+    // Phase 9 — USER is read-only for forms, same convention.
+    "forms.read"
+  ],
+  VIEWER: [
+    "users.read",
+    "organizations.read",
+    "roles.read",
+    "clients.read",
+    "leads.read",
+    "contacts.read",
+    "opportunities.read",
+    "products.read",
+    "product_modules.read",
+    "content.read",
+    // Phase 1 (Website module) — VIEWER is read-only, same convention as everywhere else.
+    "templates.read",
+    "template_parts.read",
+    "authors.read",
+    "media.read",
+    "reports.read",
+    "settings.read",
+    "audit.read",
+    // Phase 12 — VIEWER is read-only across the AI surface, same as every
+    // other module: no execute, no authoring, no approval decisions.
+    "ai.providers.read",
+    "ai.models.read",
+    "ai.tools.read",
+    "ai.prompts.read",
+    "ai.workflows.read",
+    "ai.executions.read",
+    "ai.usage.read",
+    "ai.approvals.read",
+    "ai.audit.read",
+    // Phase 13/14/15 (imported) — VIEWER is read-only here too, same convention.
+    "automation.read",
+    "knowledge.read",
+    "knowledge.search",
+    "copilot.read",
+    "onboarding.read",
+    "workspaces.read",
+    "invitations.read",
+    // Phase 10 — VIEWER gets read-only commercial access plus the client
+    // portal (§25/§26).
+    "contracts.read",
+    "subscriptions.read",
+    "invoices.read",
+    "payments.read",
+    "portal.dashboard.read",
+    "portal.contracts.read",
+    "portal.subscriptions.read",
+    "portal.invoices.read",
+    "portal.payments.read",
+    // Phase 5 — VIEWER is read-only for SEO, same convention as everywhere else.
+    "seo.redirects.read",
+    "seo.audit.read",
+    // Phase 9 — VIEWER is read-only for forms, same convention.
+    "forms.read"
+  ]
+};
+async function seedRolesAndPermissions(prisma2) {
+  for (const key of PERMISSION_KEYS) {
+    await prisma2.permission.upsert({
+      where: { key },
+      update: {},
+      create: { key, name: permissionName(key), module: moduleOf(key) }
+    });
+  }
+  const roleIds = {};
+  for (const key of SYSTEM_ROLE_KEYS) {
+    const def = ROLE_DEFINITIONS[key];
+    const role = await prisma2.role.upsert({
+      where: { key },
+      update: {},
+      create: { key, name: def.name, description: def.description, isSystem: true }
+    });
+    roleIds[key] = role.id;
+    const grantedKeys = ROLE_PERMISSION_SETS[key] === "*" ? PERMISSION_KEYS : ROLE_PERMISSION_SETS[key];
+    const permissions = await prisma2.permission.findMany({ where: { key: { in: [...grantedKeys] } } });
+    for (const permission of permissions) {
+      await prisma2.rolePermission.upsert({
+        where: { roleId_permissionId: { roleId: role.id, permissionId: permission.id } },
+        update: {},
+        create: { roleId: role.id, permissionId: permission.id }
+      });
+    }
+  }
+  return roleIds;
+}
+
 // server/routes/v1/systemRoutes.ts
 var router3 = Router3();
 router3.get("/live", (_req, res) => {
@@ -1712,6 +2401,28 @@ router3.get(
         roles: roleCount,
         permissions: permissionCount
       }
+    });
+  })
+);
+router3.post(
+  "/sync-permissions",
+  authenticateToken,
+  requireRole(["SUPER_ADMIN"]),
+  asyncHandler(async (_req, res) => {
+    const [beforePermissions, beforeRolePermissions] = await Promise.all([
+      prisma.permission.count(),
+      prisma.rolePermission.count()
+    ]);
+    await seedRolesAndPermissions(prisma);
+    const [afterPermissions, afterRolePermissions] = await Promise.all([
+      prisma.permission.count(),
+      prisma.rolePermission.count()
+    ]);
+    sendSuccess(res, {
+      permissionsAdded: afterPermissions - beforePermissions,
+      rolePermissionLinksAdded: afterRolePermissions - beforeRolePermissions,
+      totalPermissions: afterPermissions,
+      totalRolePermissionLinks: afterRolePermissions
     });
   })
 );
@@ -2546,6 +3257,77 @@ var clientRepository = {
   }
 };
 
+// server/repositories/notificationRepository.ts
+var notificationRepository = {
+  async list(userId, organizationId, filters, page, limit) {
+    const where = { userId, organizationId, ...filters.status ? { status: filters.status } : {} };
+    const [rows, total] = await Promise.all([
+      prisma.notification.findMany({ where, orderBy: { createdAt: "desc" }, skip: (page - 1) * limit, take: limit }),
+      prisma.notification.count({ where })
+    ]);
+    return { rows, total };
+  },
+  async unreadCount(userId, organizationId) {
+    return prisma.notification.count({ where: { userId, organizationId, status: "UNREAD" } });
+  },
+  async findByIdForUser(id, userId) {
+    return prisma.notification.findFirst({ where: { id, userId } });
+  },
+  async create(data) {
+    return prisma.notification.create({ data });
+  },
+  async markRead(id) {
+    return prisma.notification.update({ where: { id }, data: { status: "READ", readAt: /* @__PURE__ */ new Date() } });
+  },
+  async markAllRead(userId, organizationId) {
+    const result = await prisma.notification.updateMany({
+      where: { userId, organizationId, status: "UNREAD" },
+      data: { status: "READ", readAt: /* @__PURE__ */ new Date() }
+    });
+    return result.count;
+  }
+};
+
+// server/services/notificationService.ts
+var notificationService = {
+  async listNotifications(userId, organizationId, status, page, limit) {
+    return notificationRepository.list(userId, organizationId, { status }, page, limit);
+  },
+  async unreadCount(userId, organizationId) {
+    return notificationRepository.unreadCount(userId, organizationId);
+  },
+  async markRead(userId, id) {
+    const existing = await notificationRepository.findByIdForUser(id, userId);
+    if (!existing) throw new NotFoundError("Notification not found.");
+    if (existing.status === "READ") return existing;
+    return notificationRepository.markRead(id);
+  },
+  async markAllRead(userId, organizationId) {
+    return notificationRepository.markAllRead(userId, organizationId);
+  },
+  /**
+   * Internal fire-and-forget helper other services call directly (never
+   * exposed via a public route — a notification always originates from a
+   * real system event, not a user-authored POST body). Never throws: a
+   * notification failing to write must not fail the business operation
+   * that triggered it (e.g. a lead create should still succeed even if
+   * writing its "assigned to you" notification somehow fails).
+   */
+  async notify(params) {
+    if (!params.userId) return;
+    try {
+      await notificationRepository.create({
+        organizationId: params.organizationId,
+        userId: params.userId,
+        type: params.type,
+        title: params.title,
+        message: params.message
+      });
+    } catch {
+    }
+  }
+};
+
 // server/services/leadService.ts
 var TERMINAL_STATUSES = /* @__PURE__ */ new Set(["CONVERTED"]);
 var NON_TERMINAL_STATUSES = /* @__PURE__ */ new Set(["NEW", "CONTACTED", "QUALIFIED", "LOST"]);
@@ -2607,6 +3389,15 @@ var leadService = {
       ipAddress: meta.ip,
       userAgent: meta.userAgent
     });
+    if (lead.assignedTo && lead.assignedTo !== caller.id) {
+      await notificationService.notify({
+        organizationId: caller.organizationId,
+        userId: lead.assignedTo,
+        type: "lead_assigned",
+        title: "New lead assigned to you",
+        message: `${lead.companyName} was assigned to you.`
+      });
+    }
     return lead;
   },
   async updateLead(caller, id, input, meta = {}) {
@@ -2638,6 +3429,15 @@ var leadService = {
       ipAddress: meta.ip,
       userAgent: meta.userAgent
     });
+    if (input.assignedTo !== void 0 && input.assignedTo !== existing.assignedTo && input.assignedTo !== caller.id) {
+      await notificationService.notify({
+        organizationId: caller.organizationId,
+        userId: input.assignedTo,
+        type: "lead_assigned",
+        title: "New lead assigned to you",
+        message: `${updated.companyName} was assigned to you.`
+      });
+    }
     return updated;
   },
   async deleteLead(caller, id, meta = {}) {
@@ -3863,21 +4663,740 @@ router11.delete(
 );
 var contactRoutes_default = router11;
 
-// server/routes/v1/crmRoutes.ts
+// server/routes/v1/opportunityRoutes.ts
 import { Router as Router12 } from "express";
+
+// server/repositories/opportunityRepository.ts
+var withRelations = {
+  include: {
+    client: { select: { id: true, name: true, clientCode: true } },
+    lead: { select: { id: true, companyName: true } }
+  }
+};
+function buildWhere5(organizationId, filters) {
+  const where = { organizationId, deletedAt: null };
+  if (filters.stage) where.stage = filters.stage;
+  if (filters.clientId) where.clientId = filters.clientId;
+  if (filters.assignedTo) where.assignedTo = filters.assignedTo;
+  if (filters.search) where.name = { contains: filters.search, mode: "insensitive" };
+  return where;
+}
+var opportunityRepository = {
+  async list(organizationId, filters, page, limit, sort, order) {
+    const where = buildWhere5(organizationId, filters);
+    const [rows, total] = await Promise.all([
+      prisma.opportunity.findMany({ where, orderBy: { [sort]: order }, skip: (page - 1) * limit, take: limit, ...withRelations }),
+      prisma.opportunity.count({ where })
+    ]);
+    return { rows, total };
+  },
+  async findByIdInOrg(id, organizationId) {
+    return prisma.opportunity.findFirst({ where: { id, organizationId, deletedAt: null }, ...withRelations });
+  },
+  async create(data) {
+    const created = await prisma.opportunity.create({ data });
+    return await this.findByIdInOrg(created.id, data.organizationId);
+  },
+  async update(id, organizationId, data) {
+    await prisma.opportunity.update({ where: { id }, data });
+    return await this.findByIdInOrg(id, organizationId);
+  },
+  async softDelete(id) {
+    await prisma.opportunity.update({ where: { id }, data: { deletedAt: /* @__PURE__ */ new Date() } });
+  },
+  async countByStage(organizationId) {
+    const rows = await prisma.opportunity.groupBy({
+      by: ["stage"],
+      where: { organizationId, deletedAt: null },
+      _count: { _all: true },
+      _sum: { value: true }
+    });
+    const result = {};
+    for (const row of rows) result[row.stage] = { count: row._count._all, value: (row._sum.value ?? 0).toString() };
+    return result;
+  },
+  async recentForOrg(organizationId, limit) {
+    return prisma.opportunity.findMany({ where: { organizationId, deletedAt: null }, orderBy: { createdAt: "desc" }, take: limit, ...withRelations });
+  }
+};
+
+// server/utils/money.ts
+import { Prisma as Prisma3 } from "@prisma/client";
+var MONEY_DECIMALS = 3;
+var DEFAULT_CURRENCY = "OMR";
+function toMoney(value) {
+  return new Prisma3.Decimal(value);
+}
+var ZERO = toMoney(0);
+function roundMoney(value) {
+  return new Prisma3.Decimal(value).toDecimalPlaces(MONEY_DECIMALS, Prisma3.Decimal.ROUND_HALF_UP);
+}
+function addMoney(a, b) {
+  return roundMoney(new Prisma3.Decimal(a).plus(b));
+}
+function subtractMoney(a, b) {
+  return roundMoney(new Prisma3.Decimal(a).minus(b));
+}
+function sumMoney(values) {
+  return roundMoney(values.reduce((acc, v) => acc.plus(v), new Prisma3.Decimal(0)));
+}
+function multiplyMoney(unitPrice, quantity) {
+  return roundMoney(new Prisma3.Decimal(unitPrice).times(quantity));
+}
+function isPositive(value) {
+  return new Prisma3.Decimal(value).greaterThan(0);
+}
+function isNonNegative(value) {
+  return new Prisma3.Decimal(value).greaterThanOrEqualTo(0);
+}
+function assertSameCurrency(a, b, context = "these records") {
+  if (a !== b) {
+    throw new ValidationError(`Currency mismatch: ${context} use different currencies (${a} vs ${b}).`);
+  }
+}
+
+// server/services/opportunityService.ts
+var TERMINAL_STAGES = /* @__PURE__ */ new Set(["CLOSED_WON", "CLOSED_LOST"]);
+var NON_TERMINAL_STAGES = /* @__PURE__ */ new Set(["PROSPECTING", "QUALIFICATION", "PROPOSAL", "NEGOTIATION"]);
+function assertValidStageTransition(current, next) {
+  if (current === next) return;
+  if (TERMINAL_STAGES.has(current)) {
+    throw new ConflictError("This opportunity is closed and can no longer be changed.");
+  }
+  if (!NON_TERMINAL_STAGES.has(next)) {
+    throw new ValidationError("Use POST /opportunities/:id/win or /lose to close an opportunity \u2014 stage cannot be set to a closed value directly.");
+  }
+}
+async function loadOpportunityOrThrow(id, organizationId) {
+  const opportunity = await opportunityRepository.findByIdInOrg(id, organizationId);
+  if (!opportunity) throw new NotFoundError("Opportunity not found.");
+  return opportunity;
+}
+async function notifyClose(params) {
+  const recipients = new Set([params.assignedTo, params.createdById].filter((id) => !!id && id !== params.actorId));
+  await Promise.all(
+    [...recipients].map((userId) => notificationService.notify({ organizationId: params.organizationId, userId, type: params.type, title: params.title, message: params.message }))
+  );
+}
+var opportunityService = {
+  async listOpportunities(organizationId, filters, page, limit, sort, order) {
+    return opportunityRepository.list(organizationId, filters, page, limit, sort, order);
+  },
+  async getOpportunity(organizationId, id) {
+    return loadOpportunityOrThrow(id, organizationId);
+  },
+  async createOpportunity(caller, input, meta = {}) {
+    const organizationId = caller.organizationId;
+    const client3 = await clientRepository.findByIdInOrg(input.clientId, organizationId);
+    if (!client3) throw new ValidationError("clientId does not belong to this organization.");
+    if (input.leadId) {
+      const lead = await leadRepository.findByIdInOrg(input.leadId, organizationId);
+      if (!lead) throw new ValidationError("leadId does not belong to this organization.");
+    }
+    const opportunity = await opportunityRepository.create({
+      organizationId,
+      clientId: input.clientId,
+      leadId: input.leadId,
+      name: input.name,
+      stage: input.stage,
+      value: toMoney(input.value),
+      currency: input.currency ?? DEFAULT_CURRENCY,
+      expectedCloseDate: input.expectedCloseDate,
+      notes: input.notes,
+      assignedTo: input.assignedTo,
+      createdById: caller.id
+    });
+    await auditLogRepository.record({
+      organizationId,
+      actorUserId: caller.id,
+      actorType: "USER",
+      action: "OPPORTUNITY_CREATED",
+      resourceType: "opportunity",
+      resourceId: opportunity.id,
+      afterData: { name: opportunity.name, stage: opportunity.stage, clientId: opportunity.clientId, value: opportunity.value.toString() },
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent
+    });
+    if (opportunity.assignedTo && opportunity.assignedTo !== caller.id) {
+      await notificationService.notify({
+        organizationId,
+        userId: opportunity.assignedTo,
+        type: "opportunity_assigned",
+        title: "New opportunity assigned to you",
+        message: `${opportunity.name} was assigned to you.`
+      });
+    }
+    return opportunity;
+  },
+  async updateOpportunity(caller, id, input, meta = {}) {
+    const organizationId = caller.organizationId;
+    const existing = await loadOpportunityOrThrow(id, organizationId);
+    if (input.stage !== void 0) {
+      assertValidStageTransition(existing.stage, input.stage);
+    } else if (TERMINAL_STAGES.has(existing.stage)) {
+      throw new ConflictError("This opportunity is closed and can no longer be edited.");
+    }
+    const patch = {};
+    if (input.name !== void 0) patch.name = input.name;
+    if (input.stage !== void 0) patch.stage = input.stage;
+    if (input.value !== void 0) patch.value = toMoney(input.value);
+    if (input.currency !== void 0) patch.currency = input.currency;
+    if (input.expectedCloseDate !== void 0) patch.expectedCloseDate = input.expectedCloseDate;
+    if (input.notes !== void 0) patch.notes = input.notes;
+    if (input.assignedTo !== void 0) patch.assignedTo = input.assignedTo;
+    const updated = await opportunityRepository.update(id, organizationId, patch);
+    await auditLogRepository.record({
+      organizationId,
+      actorUserId: caller.id,
+      actorType: "USER",
+      action: "OPPORTUNITY_UPDATED",
+      resourceType: "opportunity",
+      resourceId: id,
+      beforeData: { stage: existing.stage, value: existing.value.toString() },
+      afterData: { ...patch, value: patch.value !== void 0 ? patch.value.toString() : void 0 },
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent
+    });
+    return updated;
+  },
+  async deleteOpportunity(caller, id, meta = {}) {
+    const organizationId = caller.organizationId;
+    await loadOpportunityOrThrow(id, organizationId);
+    await opportunityRepository.softDelete(id);
+    await auditLogRepository.record({
+      organizationId,
+      actorUserId: caller.id,
+      actorType: "USER",
+      action: "OPPORTUNITY_DELETED",
+      resourceType: "opportunity",
+      resourceId: id,
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent
+    });
+  },
+  async winOpportunity(caller, id, meta = {}) {
+    const organizationId = caller.organizationId;
+    const existing = await loadOpportunityOrThrow(id, organizationId);
+    if (TERMINAL_STAGES.has(existing.stage)) {
+      throw new ConflictError("This opportunity is already closed.");
+    }
+    const updated = await opportunityRepository.update(id, organizationId, { stage: "CLOSED_WON", actualCloseDate: /* @__PURE__ */ new Date() });
+    await auditLogRepository.record({
+      organizationId,
+      actorUserId: caller.id,
+      actorType: "USER",
+      action: "OPPORTUNITY_WON",
+      resourceType: "opportunity",
+      resourceId: id,
+      beforeData: { stage: existing.stage },
+      afterData: { stage: "CLOSED_WON", value: existing.value.toString() },
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent
+    });
+    await notifyClose({
+      organizationId,
+      actorId: caller.id,
+      assignedTo: existing.assignedTo,
+      createdById: existing.createdById,
+      type: "opportunity_won",
+      title: "Opportunity won",
+      message: `${existing.name} was marked as won.`
+    });
+    return updated;
+  },
+  async loseOpportunity(caller, id, input, meta = {}) {
+    const organizationId = caller.organizationId;
+    const existing = await loadOpportunityOrThrow(id, organizationId);
+    if (TERMINAL_STAGES.has(existing.stage)) {
+      throw new ConflictError("This opportunity is already closed.");
+    }
+    const updated = await opportunityRepository.update(id, organizationId, {
+      stage: "CLOSED_LOST",
+      actualCloseDate: /* @__PURE__ */ new Date(),
+      lostReason: input.lostReason
+    });
+    await auditLogRepository.record({
+      organizationId,
+      actorUserId: caller.id,
+      actorType: "USER",
+      action: "OPPORTUNITY_LOST",
+      resourceType: "opportunity",
+      resourceId: id,
+      beforeData: { stage: existing.stage },
+      afterData: { stage: "CLOSED_LOST", lostReason: input.lostReason ?? null },
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent
+    });
+    await notifyClose({
+      organizationId,
+      actorId: caller.id,
+      assignedTo: existing.assignedTo,
+      createdById: existing.createdById,
+      type: "opportunity_lost",
+      title: "Opportunity lost",
+      message: `${existing.name} was marked as lost.`
+    });
+    return updated;
+  },
+  async dashboardStats(organizationId) {
+    const [byStage, recent] = await Promise.all([
+      opportunityRepository.countByStage(organizationId),
+      opportunityRepository.recentForOrg(organizationId, 5)
+    ]);
+    return { byStage, recent };
+  }
+};
+
+// server/schemas/opportunitySchemas.ts
+import { z as z12 } from "zod";
+var opportunityStageSchema = z12.enum(["PROSPECTING", "QUALIFICATION", "PROPOSAL", "NEGOTIATION", "CLOSED_WON", "CLOSED_LOST"]);
+var nonTerminalOpportunityStageSchema = z12.enum(["PROSPECTING", "QUALIFICATION", "PROPOSAL", "NEGOTIATION"]);
+var listOpportunitiesQuerySchema = z12.object({
+  page: z12.coerce.number().int().positive().default(1),
+  limit: z12.coerce.number().int().positive().max(100).default(20),
+  search: z12.string().trim().max(200).optional(),
+  stage: opportunityStageSchema.optional(),
+  clientId: z12.string().trim().uuid().optional(),
+  assignedTo: z12.string().trim().uuid().optional(),
+  sort: z12.enum(["createdAt", "updatedAt", "name", "value", "expectedCloseDate", "stage"]).default("createdAt"),
+  order: z12.enum(["asc", "desc"]).default("desc")
+});
+var moneyValueSchema = z12.coerce.number().nonnegative().finite();
+var currencySchema = z12.string().trim().length(3).regex(/^[A-Z]{3}$/, "currency must be a 3-letter ISO 4217 code").optional();
+var createOpportunitySchema = z12.object({
+  clientId: z12.string().trim().uuid(),
+  leadId: z12.string().trim().uuid().optional(),
+  name: z12.string().trim().min(1).max(200),
+  stage: nonTerminalOpportunityStageSchema.optional(),
+  value: moneyValueSchema,
+  currency: currencySchema,
+  expectedCloseDate: z12.coerce.date().optional(),
+  notes: z12.string().trim().max(5e3).optional(),
+  assignedTo: z12.string().trim().uuid().optional()
+});
+var updateOpportunitySchema = z12.object({
+  name: z12.string().trim().min(1).max(200).optional(),
+  stage: nonTerminalOpportunityStageSchema.optional(),
+  value: moneyValueSchema.optional(),
+  currency: currencySchema,
+  expectedCloseDate: z12.coerce.date().nullable().optional(),
+  notes: z12.string().trim().max(5e3).nullable().optional(),
+  assignedTo: z12.string().trim().uuid().nullable().optional()
+}).refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
+var loseOpportunitySchema = z12.object({
+  lostReason: z12.string().trim().max(1e3).optional()
+});
+
+// server/routes/v1/opportunityRoutes.ts
 var router12 = Router12();
 router12.use(authenticateToken);
+function requestMeta5(req) {
+  return { ip: req.ip, userAgent: req.headers["user-agent"] };
+}
 router12.get(
+  "/",
+  requirePermission("opportunities.read"),
+  asyncHandler(async (req, res) => {
+    const query = listOpportunitiesQuerySchema.parse(req.query);
+    const { rows, total } = await opportunityService.listOpportunities(
+      req.user.organizationId,
+      { search: query.search, stage: query.stage, clientId: query.clientId, assignedTo: query.assignedTo },
+      query.page,
+      query.limit,
+      query.sort,
+      query.order
+    );
+    sendSuccess(res, { opportunities: rows }, 200, { page: query.page, limit: query.limit, total });
+  })
+);
+router12.get(
+  "/:id",
+  requirePermission("opportunities.read"),
+  asyncHandler(async (req, res) => {
+    const opportunity = await opportunityService.getOpportunity(req.user.organizationId, req.params.id);
+    sendSuccess(res, { opportunity });
+  })
+);
+router12.post(
+  "/",
+  requirePermission("opportunities.create"),
+  asyncHandler(async (req, res) => {
+    const input = createOpportunitySchema.parse(req.body);
+    const opportunity = await opportunityService.createOpportunity(req.user, input, requestMeta5(req));
+    sendSuccess(res, { opportunity }, 201);
+  })
+);
+router12.patch(
+  "/:id",
+  requirePermission("opportunities.update"),
+  asyncHandler(async (req, res) => {
+    const input = updateOpportunitySchema.parse(req.body);
+    const opportunity = await opportunityService.updateOpportunity(req.user, req.params.id, input, requestMeta5(req));
+    sendSuccess(res, { opportunity });
+  })
+);
+router12.delete(
+  "/:id",
+  requirePermission("opportunities.delete"),
+  asyncHandler(async (req, res) => {
+    await opportunityService.deleteOpportunity(req.user, req.params.id, requestMeta5(req));
+    sendSuccess(res, { message: "Opportunity deleted." });
+  })
+);
+router12.post(
+  "/:id/win",
+  requirePermission("opportunities.close"),
+  asyncHandler(async (req, res) => {
+    const opportunity = await opportunityService.winOpportunity(req.user, req.params.id, requestMeta5(req));
+    sendSuccess(res, { opportunity });
+  })
+);
+router12.post(
+  "/:id/lose",
+  requirePermission("opportunities.close"),
+  asyncHandler(async (req, res) => {
+    const input = loseOpportunitySchema.parse(req.body);
+    const opportunity = await opportunityService.loseOpportunity(req.user, req.params.id, input, requestMeta5(req));
+    sendSuccess(res, { opportunity });
+  })
+);
+var opportunityRoutes_default = router12;
+
+// server/routes/v1/notificationRoutes.ts
+import { Router as Router13 } from "express";
+
+// server/schemas/notificationSchemas.ts
+import { z as z13 } from "zod";
+var listNotificationsQuerySchema = z13.object({
+  page: z13.coerce.number().int().positive().default(1),
+  limit: z13.coerce.number().int().positive().max(100).default(20),
+  status: z13.enum(["UNREAD", "READ", "ARCHIVED"]).optional()
+});
+
+// server/routes/v1/notificationRoutes.ts
+var router13 = Router13();
+router13.use(authenticateToken);
+router13.get(
+  "/",
+  asyncHandler(async (req, res) => {
+    const query = listNotificationsQuerySchema.parse(req.query);
+    const { rows, total } = await notificationService.listNotifications(req.user.id, req.user.organizationId, query.status, query.page, query.limit);
+    sendSuccess(res, { notifications: rows }, 200, { page: query.page, limit: query.limit, total });
+  })
+);
+router13.get(
+  "/unread-count",
+  asyncHandler(async (req, res) => {
+    const count = await notificationService.unreadCount(req.user.id, req.user.organizationId);
+    sendSuccess(res, { count });
+  })
+);
+router13.post(
+  "/:id/read",
+  asyncHandler(async (req, res) => {
+    const notification = await notificationService.markRead(req.user.id, req.params.id);
+    sendSuccess(res, { notification });
+  })
+);
+router13.post(
+  "/read-all",
+  asyncHandler(async (req, res) => {
+    const count = await notificationService.markAllRead(req.user.id, req.user.organizationId);
+    sendSuccess(res, { count });
+  })
+);
+var notificationRoutes_default = router13;
+
+// server/routes/v1/formRoutes.ts
+import { Router as Router14 } from "express";
+
+// server/repositories/formRepository.ts
+function slugify3(input) {
+  return input.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 150);
+}
+function buildWhere6(organizationId, filters) {
+  const where = { organizationId, deletedAt: null };
+  if (filters.status) where.status = filters.status;
+  if (filters.search) where.name = { contains: filters.search, mode: "insensitive" };
+  return where;
+}
+var formRepository = {
+  async list(organizationId, filters, page, limit, sort, order) {
+    const where = buildWhere6(organizationId, filters);
+    const [rows, total] = await Promise.all([
+      prisma.form.findMany({ where, orderBy: { [sort]: order }, skip: (page - 1) * limit, take: limit }),
+      prisma.form.count({ where })
+    ]);
+    return { rows, total };
+  },
+  async findByIdInOrg(id, organizationId) {
+    return prisma.form.findFirst({ where: { id, organizationId, deletedAt: null } });
+  },
+  async findBySlugInOrg(organizationId, slug) {
+    return prisma.form.findFirst({ where: { organizationId, slug, deletedAt: null } });
+  },
+  async findUniqueSlugInOrg(organizationId, base) {
+    const baseSlug = slugify3(base) || "form";
+    let slug = baseSlug;
+    let attempt = 1;
+    while (await this.findBySlugInOrg(organizationId, slug)) {
+      attempt += 1;
+      slug = `${baseSlug}-${attempt}`;
+      if (attempt > 50) break;
+    }
+    return slug;
+  },
+  async create(data) {
+    return prisma.form.create({ data });
+  },
+  async update(id, data) {
+    return prisma.form.update({ where: { id }, data });
+  },
+  async softDelete(id) {
+    await prisma.form.update({ where: { id }, data: { deletedAt: /* @__PURE__ */ new Date() } });
+  },
+  async countSubmissions(formId) {
+    return prisma.formSubmission.count({ where: { formId } });
+  },
+  async listSubmissions(formId, organizationId, page, limit) {
+    const where = { formId, organizationId };
+    const [rows, total] = await Promise.all([
+      prisma.formSubmission.findMany({ where, orderBy: { createdAt: "desc" }, skip: (page - 1) * limit, take: limit }),
+      prisma.formSubmission.count({ where })
+    ]);
+    return { rows, total };
+  },
+  async createSubmission(data) {
+    return prisma.formSubmission.create({ data });
+  }
+};
+
+// server/services/formService.ts
+async function loadFormOrThrow(id, organizationId) {
+  const form = await formRepository.findByIdInOrg(id, organizationId);
+  if (!form) throw new NotFoundError("Form not found.");
+  return form;
+}
+var formService = {
+  async listForms(organizationId, filters, page, limit, sort, order) {
+    return formRepository.list(organizationId, filters, page, limit, sort, order);
+  },
+  async getForm(organizationId, id) {
+    return loadFormOrThrow(id, organizationId);
+  },
+  async createForm(caller, input, meta = {}) {
+    const organizationId = caller.organizationId;
+    if (input.slug) {
+      const dup = await formRepository.findBySlugInOrg(organizationId, input.slug);
+      if (dup) throw new ConflictError(`A form with slug "${input.slug}" already exists.`, { existingFormId: dup.id });
+    }
+    const slug = input.slug ?? await formRepository.findUniqueSlugInOrg(organizationId, input.name);
+    const form = await formRepository.create({
+      organizationId,
+      name: input.name,
+      slug,
+      fields: input.fields,
+      successMessage: input.successMessage,
+      createdById: caller.id
+    });
+    await auditLogRepository.record({
+      organizationId,
+      actorUserId: caller.id,
+      actorType: "USER",
+      action: "FORM_CREATED",
+      resourceType: "form",
+      resourceId: form.id,
+      afterData: { name: form.name, slug: form.slug },
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent
+    });
+    return form;
+  },
+  async updateForm(caller, id, input, meta = {}) {
+    const organizationId = caller.organizationId;
+    const existing = await loadFormOrThrow(id, organizationId);
+    if (input.slug !== void 0 && input.slug !== existing.slug) {
+      const dup = await formRepository.findBySlugInOrg(organizationId, input.slug);
+      if (dup && dup.id !== id) throw new ConflictError(`A form with slug "${input.slug}" already exists.`, { existingFormId: dup.id });
+    }
+    const patch = {};
+    if (input.name !== void 0) patch.name = input.name;
+    if (input.slug !== void 0) patch.slug = input.slug;
+    if (input.fields !== void 0) patch.fields = input.fields;
+    if (input.successMessage !== void 0) patch.successMessage = input.successMessage;
+    if (input.status !== void 0) patch.status = input.status;
+    const updated = await formRepository.update(id, patch);
+    await auditLogRepository.record({
+      organizationId,
+      actorUserId: caller.id,
+      actorType: "USER",
+      action: "FORM_UPDATED",
+      resourceType: "form",
+      resourceId: id,
+      beforeData: { name: existing.name, slug: existing.slug, status: existing.status },
+      afterData: { name: input.name, slug: input.slug, status: input.status },
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent
+    });
+    return updated;
+  },
+  async deleteForm(caller, id, meta = {}) {
+    const organizationId = caller.organizationId;
+    await loadFormOrThrow(id, organizationId);
+    await formRepository.softDelete(id);
+    await auditLogRepository.record({
+      organizationId,
+      actorUserId: caller.id,
+      actorType: "USER",
+      action: "FORM_DELETED",
+      resourceType: "form",
+      resourceId: id,
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent
+    });
+  },
+  async listSubmissions(organizationId, formId, page, limit) {
+    await loadFormOrThrow(formId, organizationId);
+    return formRepository.listSubmissions(formId, organizationId, page, limit);
+  }
+};
+
+// server/schemas/formSchemas.ts
+import { z as z14 } from "zod";
+var formFieldTypeSchema = z14.enum(["text", "email", "tel", "textarea"]);
+var formFieldSchema = z14.object({
+  key: z14.string().trim().min(1).max(40).regex(/^[a-z][a-z0-9_]*$/, "key must start with a lowercase letter and contain only lowercase letters, digits, and underscores"),
+  label: z14.string().trim().min(1).max(100),
+  type: formFieldTypeSchema.default("text"),
+  required: z14.boolean().default(false)
+});
+var formFieldsSchema = z14.array(formFieldSchema).min(1, "A form needs at least one field.").max(20, "A form may define at most 20 fields.").refine((fields) => new Set(fields.map((f) => f.key)).size === fields.length, { message: "Field keys must be unique." }).refine((fields) => fields.some((f) => f.key === "name" || f.key === "email"), {
+  message: 'At least one field must use key "name" or "email" so a submission has an identity to attach to a CRM Lead.'
+});
+var listFormsQuerySchema = z14.object({
+  page: z14.coerce.number().int().positive().default(1),
+  limit: z14.coerce.number().int().positive().max(100).default(20),
+  search: z14.string().trim().max(200).optional(),
+  status: z14.enum(["ACTIVE", "ARCHIVED"]).optional(),
+  sort: z14.enum(["createdAt", "updatedAt", "name"]).default("createdAt"),
+  order: z14.enum(["asc", "desc"]).default("desc")
+});
+var slugSchema = z14.string().trim().min(1).max(150).regex(/^[a-z0-9]+(-[a-z0-9]+)*$/, "slug must be lowercase, alphanumeric, and hyphen-separated");
+var createFormSchema = z14.object({
+  name: z14.string().trim().min(1).max(200),
+  slug: slugSchema.optional(),
+  fields: formFieldsSchema,
+  successMessage: z14.string().trim().max(500).optional()
+});
+var updateFormSchema = z14.object({
+  name: z14.string().trim().min(1).max(200).optional(),
+  slug: slugSchema.optional(),
+  fields: formFieldsSchema.optional(),
+  successMessage: z14.string().trim().max(500).nullable().optional(),
+  status: z14.enum(["ACTIVE", "ARCHIVED"]).optional()
+}).refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
+var listFormSubmissionsQuerySchema = z14.object({
+  page: z14.coerce.number().int().positive().default(1),
+  limit: z14.coerce.number().int().positive().max(100).default(20)
+});
+var publicFormSubmitSchema = z14.object({
+  data: z14.record(z14.string().trim().max(2e3)).refine((obj) => Object.keys(obj).length <= 30, { message: "Too many fields submitted." }),
+  utmSource: z14.string().trim().max(200).optional(),
+  utmMedium: z14.string().trim().max(200).optional(),
+  utmCampaign: z14.string().trim().max(200).optional(),
+  utmTerm: z14.string().trim().max(200).optional(),
+  utmContent: z14.string().trim().max(200).optional(),
+  /** Honeypot — must stay empty; never render this field visibly to a real visitor (mirrors createPublicLeadSchema's `website`). */
+  website: z14.string().trim().max(200).optional()
+});
+
+// server/routes/v1/formRoutes.ts
+var router14 = Router14();
+router14.use(authenticateToken);
+function requestMeta6(req) {
+  return { ip: req.ip, userAgent: req.headers["user-agent"] };
+}
+router14.get(
+  "/",
+  requirePermission("forms.read"),
+  asyncHandler(async (req, res) => {
+    const query = listFormsQuerySchema.parse(req.query);
+    const { rows, total } = await formService.listForms(
+      req.user.organizationId,
+      { search: query.search, status: query.status },
+      query.page,
+      query.limit,
+      query.sort,
+      query.order
+    );
+    sendSuccess(res, { forms: rows }, 200, { page: query.page, limit: query.limit, total });
+  })
+);
+router14.get(
+  "/:id",
+  requirePermission("forms.read"),
+  asyncHandler(async (req, res) => {
+    const form = await formService.getForm(req.user.organizationId, req.params.id);
+    sendSuccess(res, { form });
+  })
+);
+router14.post(
+  "/",
+  requirePermission("forms.create"),
+  asyncHandler(async (req, res) => {
+    const input = createFormSchema.parse(req.body);
+    const form = await formService.createForm(req.user, input, requestMeta6(req));
+    sendSuccess(res, { form }, 201);
+  })
+);
+router14.patch(
+  "/:id",
+  requirePermission("forms.update"),
+  asyncHandler(async (req, res) => {
+    const input = updateFormSchema.parse(req.body);
+    const form = await formService.updateForm(req.user, req.params.id, input, requestMeta6(req));
+    sendSuccess(res, { form });
+  })
+);
+router14.delete(
+  "/:id",
+  requirePermission("forms.delete"),
+  asyncHandler(async (req, res) => {
+    await formService.deleteForm(req.user, req.params.id, requestMeta6(req));
+    sendSuccess(res, { message: "Form deleted." });
+  })
+);
+router14.get(
+  "/:id/submissions",
+  requirePermission("forms.read"),
+  asyncHandler(async (req, res) => {
+    const query = listFormSubmissionsQuerySchema.parse(req.query);
+    const { rows, total } = await formService.listSubmissions(req.user.organizationId, req.params.id, query.page, query.limit);
+    sendSuccess(res, { submissions: rows }, 200, { page: query.page, limit: query.limit, total });
+  })
+);
+var formRoutes_default = router14;
+
+// server/routes/v1/crmRoutes.ts
+import { Router as Router15 } from "express";
+var router15 = Router15();
+router15.use(authenticateToken);
+router15.get(
   "/summary",
   asyncHandler(async (req, res) => {
     const permissions = req.user.role.permissions;
     const organizationId = req.user.organizationId;
-    const [leadCounts, leadRecent, clientCounts, clientRecent] = await Promise.all([
+    const [leadCounts, leadRecent, clientCounts, clientRecent, opportunityStats] = await Promise.all([
       permissions.includes("leads.read") ? leadService.dashboardCounts(organizationId) : Promise.resolve(null),
       permissions.includes("leads.read") ? leadService.recent(organizationId, 5) : Promise.resolve([]),
       permissions.includes("clients.read") ? clientService.dashboardCounts(organizationId) : Promise.resolve(null),
-      permissions.includes("clients.read") ? clientService.recent(organizationId, 5) : Promise.resolve([])
+      permissions.includes("clients.read") ? clientService.recent(organizationId, 5) : Promise.resolve([]),
+      permissions.includes("opportunities.read") ? opportunityService.dashboardStats(organizationId) : Promise.resolve(null)
     ]);
+    const OPEN_STAGES = ["PROSPECTING", "QUALIFICATION", "PROPOSAL", "NEGOTIATION"];
+    const byStage = opportunityStats?.byStage ?? {};
+    const openValue = OPEN_STAGES.reduce((sum, stage) => sum + Number(byStage[stage]?.value ?? 0), 0);
+    const openCount = OPEN_STAGES.reduce((sum, stage) => sum + (byStage[stage]?.count ?? 0), 0);
     sendSuccess(res, {
       leads: leadCounts && {
         total: Object.values(leadCounts).reduce((a, b) => a + b, 0),
@@ -3896,20 +5415,26 @@ router12.get(
         suspended: clientCounts.SUSPENDED ?? 0,
         archived: clientCounts.ARCHIVED ?? 0,
         recent: clientRecent
+      },
+      opportunities: opportunityStats && {
+        openCount,
+        openValue: openValue.toString(),
+        byStage,
+        recent: opportunityStats.recent
       }
     });
   })
 );
-var crmRoutes_default = router12;
+var crmRoutes_default = router15;
 
 // server/routes/v1/onboardingRoutes.ts
-import { Router as Router13 } from "express";
-var router13 = Router13();
-router13.use(authenticateToken);
-function requestMeta5(req) {
+import { Router as Router16 } from "express";
+var router16 = Router16();
+router16.use(authenticateToken);
+function requestMeta7(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router13.get(
+router16.get(
   "/",
   requirePermission("onboarding.read"),
   asyncHandler(async (req, res) => {
@@ -3923,7 +5448,7 @@ router13.get(
     sendSuccess(res, { onboarding: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router13.get(
+router16.get(
   "/:id",
   requirePermission("onboarding.read"),
   asyncHandler(async (req, res) => {
@@ -3931,27 +5456,27 @@ router13.get(
     sendSuccess(res, { onboarding: record });
   })
 );
-router13.patch(
+router16.patch(
   "/:id",
   requirePermission("onboarding.update"),
   asyncHandler(async (req, res) => {
     const input = updateOnboardingSchema.parse(req.body);
-    const record = await onboardingService.updateOnboarding(req.user, req.params.id, input, requestMeta5(req));
+    const record = await onboardingService.updateOnboarding(req.user, req.params.id, input, requestMeta7(req));
     sendSuccess(res, { onboarding: record });
   })
 );
-router13.post(
+router16.post(
   "/:id/complete",
   requirePermission("onboarding.complete"),
   asyncHandler(async (req, res) => {
-    const record = await onboardingService.completeOnboarding(req.user, req.params.id, requestMeta5(req));
+    const record = await onboardingService.completeOnboarding(req.user, req.params.id, requestMeta7(req));
     sendSuccess(res, { onboarding: record });
   })
 );
-var onboardingRoutes_default = router13;
+var onboardingRoutes_default = router16;
 
 // server/routes/v1/workspaceRoutes.ts
-import { Router as Router14 } from "express";
+import { Router as Router17 } from "express";
 
 // server/repositories/workspaceInvitationRepository.ts
 var workspaceInvitationRepository = {
@@ -4010,7 +5535,7 @@ var workspaceInvitationRepository = {
 };
 
 // server/services/invitationService.ts
-import { Prisma as Prisma3 } from "@prisma/client";
+import { Prisma as Prisma4 } from "@prisma/client";
 var CLIENT_ADMIN_ROLE_KEY = "ADMIN";
 function computeInvitationStatus(invite) {
   if (invite.acceptedAt) return "ACCEPTED";
@@ -4162,7 +5687,7 @@ var invitationService = {
         return user;
       });
     } catch (err) {
-      if (err instanceof Prisma3.PrismaClientKnownRequestError && err.code === "P2002") {
+      if (err instanceof Prisma4.PrismaClientKnownRequestError && err.code === "P2002") {
         throw new ConflictError("This invitation has already been accepted.");
       }
       throw err;
@@ -4200,31 +5725,31 @@ var invitationService = {
 };
 
 // server/schemas/invitationSchemas.ts
-import { z as z12 } from "zod";
-var createInvitationSchema = z12.object({
-  email: z12.string().trim().min(1).email()
+import { z as z15 } from "zod";
+var createInvitationSchema = z15.object({
+  email: z15.string().trim().min(1).email()
 });
-var listInvitationsQuerySchema = z12.object({
-  page: z12.coerce.number().int().positive().default(1),
-  limit: z12.coerce.number().int().positive().max(100).default(20)
+var listInvitationsQuerySchema = z15.object({
+  page: z15.coerce.number().int().positive().default(1),
+  limit: z15.coerce.number().int().positive().max(100).default(20)
 });
-var newPasswordSchema3 = z12.string().superRefine((password, ctx) => {
+var newPasswordSchema3 = z15.string().superRefine((password, ctx) => {
   const issue = validatePasswordPolicy(password);
-  if (issue) ctx.addIssue({ code: z12.ZodIssueCode.custom, message: issue });
+  if (issue) ctx.addIssue({ code: z15.ZodIssueCode.custom, message: issue });
 });
-var acceptInvitationSchema = z12.object({
-  firstName: z12.string().trim().min(1).max(100).optional(),
-  lastName: z12.string().trim().min(1).max(100).optional(),
+var acceptInvitationSchema = z15.object({
+  firstName: z15.string().trim().min(1).max(100).optional(),
+  lastName: z15.string().trim().min(1).max(100).optional(),
   password: newPasswordSchema3.optional()
 });
 
 // server/routes/v1/workspaceRoutes.ts
-var router14 = Router14();
-router14.use(authenticateToken);
-function requestMeta6(req) {
+var router17 = Router17();
+router17.use(authenticateToken);
+function requestMeta8(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router14.get(
+router17.get(
   "/",
   requirePermission("workspaces.read"),
   asyncHandler(async (req, res) => {
@@ -4238,7 +5763,7 @@ router14.get(
     sendSuccess(res, { workspaces: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router14.get(
+router17.get(
   "/:id",
   requirePermission("workspaces.read"),
   asyncHandler(async (req, res) => {
@@ -4246,16 +5771,16 @@ router14.get(
     sendSuccess(res, { workspace });
   })
 );
-router14.patch(
+router17.patch(
   "/:id",
   requirePermission("workspaces.update"),
   asyncHandler(async (req, res) => {
     const input = updateWorkspaceSchema.parse(req.body);
-    const workspace = await workspaceService.updateWorkspace(req.user, req.params.id, input, req.user.role.permissions, requestMeta6(req));
+    const workspace = await workspaceService.updateWorkspace(req.user, req.params.id, input, req.user.role.permissions, requestMeta8(req));
     sendSuccess(res, { workspace });
   })
 );
-router14.get(
+router17.get(
   "/:id/members",
   requirePermission("workspaces.read"),
   asyncHandler(async (req, res) => {
@@ -4276,7 +5801,7 @@ router14.get(
     sendSuccess(res, { members }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router14.get(
+router17.get(
   "/:id/invitations",
   requirePermission("invitations.read"),
   asyncHandler(async (req, res) => {
@@ -4285,58 +5810,58 @@ router14.get(
     sendSuccess(res, { invitations: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router14.post(
+router17.post(
   "/:id/invitations",
   requirePermission("invitations.create"),
   asyncHandler(async (req, res) => {
     const input = createInvitationSchema.parse(req.body);
-    const { invitation, devToken } = await invitationService.createInvitation(req.user, req.params.id, input, requestMeta6(req));
+    const { invitation, devToken } = await invitationService.createInvitation(req.user, req.params.id, input, requestMeta8(req));
     const { tokenHash: _tokenHash, ...safeInvitation } = invitation;
     sendSuccess(res, { invitation: safeInvitation, devToken }, 201);
   })
 );
-var workspaceRoutes_default = router14;
+var workspaceRoutes_default = router17;
 
 // server/routes/v1/invitationRoutes.ts
-import { Router as Router15 } from "express";
-var router15 = Router15();
-function requestMeta7(req) {
+import { Router as Router18 } from "express";
+var router18 = Router18();
+function requestMeta9(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router15.post(
+router18.post(
   "/:id/revoke",
   authenticateToken,
   requirePermission("invitations.revoke"),
   asyncHandler(async (req, res) => {
-    await invitationService.revokeInvitation(req.user, req.params.id, requestMeta7(req));
+    await invitationService.revokeInvitation(req.user, req.params.id, requestMeta9(req));
     sendSuccess(res, { message: "Invitation revoked." });
   })
 );
-router15.get(
+router18.get(
   "/:token",
   asyncHandler(async (req, res) => {
     const preview = await invitationService.previewInvitation(req.params.token);
     sendSuccess(res, preview);
   })
 );
-router15.post(
+router18.post(
   "/:token/accept",
   asyncHandler(async (req, res) => {
     const input = acceptInvitationSchema.parse(req.body);
-    const result = await invitationService.acceptInvitation(req.params.token, input, requestMeta7(req));
+    const result = await invitationService.acceptInvitation(req.params.token, input, requestMeta9(req));
     sendSuccess(res, result, 201);
   })
 );
-var invitationRoutes_default = router15;
+var invitationRoutes_default = router18;
 
 // server/routes/v1/productRoutes.ts
-import { Router as Router16 } from "express";
+import { Router as Router19 } from "express";
 
 // server/repositories/productRepository.ts
-function slugify3(input) {
+function slugify4(input) {
   return input.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 100);
 }
-function buildWhere5(filters) {
+function buildWhere7(filters) {
   const where = {};
   if (filters.type) where.type = filters.type;
   if (filters.status) where.status = filters.status;
@@ -4353,7 +5878,7 @@ function buildWhere5(filters) {
 }
 var productRepository = {
   async list(filters, page, limit, sort, order) {
-    const where = buildWhere5(filters);
+    const where = buildWhere7(filters);
     const [rows, total] = await Promise.all([
       prisma.product.findMany({
         where,
@@ -4376,7 +5901,7 @@ var productRepository = {
   },
   /** Server-generated, collision-safe (§7) — never trusts a frontend-supplied slug for uniqueness beyond a caller-requested starting point. */
   async findUniqueSlug(base) {
-    const baseSlug = slugify3(base) || "product";
+    const baseSlug = slugify4(base) || "product";
     let slug = baseSlug;
     let attempt = 1;
     while (await this.findBySlug(slug)) {
@@ -4542,7 +6067,7 @@ function isUniqueConstraintError(err) {
 }
 
 // server/repositories/productModuleRepository.ts
-function slugify4(input) {
+function slugify5(input) {
   return input.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 100);
 }
 var productModuleRepository = {
@@ -4574,7 +6099,7 @@ var productModuleRepository = {
     return prisma.productModule.findFirst({ where: { productId, slug } });
   },
   async findUniqueSlugForProduct(productId, base) {
-    const baseSlug = slugify4(base) || "module";
+    const baseSlug = slugify5(base) || "module";
     let slug = baseSlug;
     let attempt = 1;
     while (await this.findBySlugForProduct(productId, slug)) {
@@ -4758,81 +6283,81 @@ var productModuleService = {
 };
 
 // server/schemas/productSchemas.ts
-import { z as z13 } from "zod";
-var productTypeSchema = z13.enum(["PRODUCT", "SERVICE"]);
-var productStatusSchema = z13.enum(["DRAFT", "ACTIVE", "INACTIVE", "ARCHIVED"]);
+import { z as z16 } from "zod";
+var productTypeSchema = z16.enum(["PRODUCT", "SERVICE"]);
+var productStatusSchema = z16.enum(["DRAFT", "ACTIVE", "INACTIVE", "ARCHIVED"]);
 var SORT_FIELDS = ["name", "code", "type", "status", "displayOrder", "createdAt", "updatedAt"];
-var listProductsQuerySchema = z13.object({
-  page: z13.coerce.number().int().positive().default(1),
-  limit: z13.coerce.number().int().positive().max(100).default(20),
-  search: z13.string().trim().max(200).optional(),
+var listProductsQuerySchema = z16.object({
+  page: z16.coerce.number().int().positive().default(1),
+  limit: z16.coerce.number().int().positive().max(100).default(20),
+  search: z16.string().trim().max(200).optional(),
   type: productTypeSchema.optional(),
   status: productStatusSchema.optional(),
-  isFeatured: z13.coerce.boolean().optional(),
-  sort: z13.enum(SORT_FIELDS).default("displayOrder"),
-  order: z13.enum(["asc", "desc"]).default("asc")
+  isFeatured: z16.coerce.boolean().optional(),
+  sort: z16.enum(SORT_FIELDS).default("displayOrder"),
+  order: z16.enum(["asc", "desc"]).default("asc")
 });
-var codeSchema = z13.string().trim().min(1).max(50).regex(/^[A-Za-z0-9._-]+$/, "code may only contain letters, numbers, dots, underscores, and hyphens").transform((v) => v.toUpperCase());
-var createProductSchema = z13.object({
+var codeSchema = z16.string().trim().min(1).max(50).regex(/^[A-Za-z0-9._-]+$/, "code may only contain letters, numbers, dots, underscores, and hyphens").transform((v) => v.toUpperCase());
+var createProductSchema = z16.object({
   code: codeSchema,
-  name: z13.string().trim().min(1).max(200),
-  slug: z13.string().trim().min(1).max(100).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)").optional(),
+  name: z16.string().trim().min(1).max(200),
+  slug: z16.string().trim().min(1).max(100).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)").optional(),
   type: productTypeSchema,
-  shortDescription: z13.string().trim().max(300).optional(),
-  description: z13.string().trim().max(1e4).optional(),
+  shortDescription: z16.string().trim().max(300).optional(),
+  description: z16.string().trim().max(1e4).optional(),
   status: productStatusSchema.optional(),
-  isFeatured: z13.boolean().optional(),
-  displayOrder: z13.number().int().min(0).optional()
+  isFeatured: z16.boolean().optional(),
+  displayOrder: z16.number().int().min(0).optional()
 });
-var updateProductSchema = z13.object({
-  name: z13.string().trim().min(1).max(200).optional(),
-  slug: z13.string().trim().min(1).max(100).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)").optional(),
+var updateProductSchema = z16.object({
+  name: z16.string().trim().min(1).max(200).optional(),
+  slug: z16.string().trim().min(1).max(100).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)").optional(),
   type: productTypeSchema.optional(),
-  shortDescription: z13.string().trim().max(300).nullable().optional(),
-  description: z13.string().trim().max(1e4).nullable().optional(),
+  shortDescription: z16.string().trim().max(300).nullable().optional(),
+  description: z16.string().trim().max(1e4).nullable().optional(),
   status: productStatusSchema.optional(),
-  isFeatured: z13.boolean().optional(),
-  displayOrder: z13.number().int().min(0).optional()
+  isFeatured: z16.boolean().optional(),
+  displayOrder: z16.number().int().min(0).optional()
 }).refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
 
 // server/schemas/productModuleSchemas.ts
-import { z as z14 } from "zod";
-var productModuleStatusSchema = z14.enum(["DRAFT", "ACTIVE", "INACTIVE"]);
-var listProductModulesQuerySchema = z14.object({
-  page: z14.coerce.number().int().positive().default(1),
-  limit: z14.coerce.number().int().positive().max(100).default(50),
+import { z as z17 } from "zod";
+var productModuleStatusSchema = z17.enum(["DRAFT", "ACTIVE", "INACTIVE"]);
+var listProductModulesQuerySchema = z17.object({
+  page: z17.coerce.number().int().positive().default(1),
+  limit: z17.coerce.number().int().positive().max(100).default(50),
   status: productModuleStatusSchema.optional()
 });
-var codeSchema2 = z14.string().trim().min(1).max(50).regex(/^[A-Za-z0-9._-]+$/, "code may only contain letters, numbers, dots, underscores, and hyphens").transform((v) => v.toUpperCase());
-var slugSchema = z14.string().trim().min(1).max(100).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)");
-var createProductModuleSchema = z14.object({
+var codeSchema2 = z17.string().trim().min(1).max(50).regex(/^[A-Za-z0-9._-]+$/, "code may only contain letters, numbers, dots, underscores, and hyphens").transform((v) => v.toUpperCase());
+var slugSchema2 = z17.string().trim().min(1).max(100).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)");
+var createProductModuleSchema = z17.object({
   code: codeSchema2,
-  name: z14.string().trim().min(1).max(200),
-  slug: slugSchema.optional(),
-  description: z14.string().trim().max(1e4).optional(),
+  name: z17.string().trim().min(1).max(200),
+  slug: slugSchema2.optional(),
+  description: z17.string().trim().max(1e4).optional(),
   status: productModuleStatusSchema.optional(),
-  isCore: z14.boolean().optional(),
-  displayOrder: z14.number().int().min(0).optional()
+  isCore: z17.boolean().optional(),
+  displayOrder: z17.number().int().min(0).optional()
 });
-var updateProductModuleSchema = z14.object({
-  name: z14.string().trim().min(1).max(200).optional(),
-  slug: slugSchema.optional(),
-  description: z14.string().trim().max(1e4).nullable().optional(),
+var updateProductModuleSchema = z17.object({
+  name: z17.string().trim().min(1).max(200).optional(),
+  slug: slugSchema2.optional(),
+  description: z17.string().trim().max(1e4).nullable().optional(),
   status: productModuleStatusSchema.optional(),
-  isCore: z14.boolean().optional(),
-  displayOrder: z14.number().int().min(0).optional()
+  isCore: z17.boolean().optional(),
+  displayOrder: z17.number().int().min(0).optional()
 }).refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
-var reorderProductModulesSchema = z14.object({
-  moduleIds: z14.array(z14.string().trim().uuid()).min(1).max(200)
+var reorderProductModulesSchema = z17.object({
+  moduleIds: z17.array(z17.string().trim().uuid()).min(1).max(200)
 });
 
 // server/routes/v1/productRoutes.ts
-var router16 = Router16();
-router16.use(authenticateToken);
-function requestMeta8(req) {
+var router19 = Router19();
+router19.use(authenticateToken);
+function requestMeta10(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router16.get(
+router19.get(
   "/",
   requirePermission("products.read"),
   asyncHandler(async (req, res) => {
@@ -4847,7 +6372,7 @@ router16.get(
     sendSuccess(res, { products: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router16.get(
+router19.get(
   "/:id",
   requirePermission("products.read"),
   asyncHandler(async (req, res) => {
@@ -4855,33 +6380,33 @@ router16.get(
     sendSuccess(res, { product });
   })
 );
-router16.post(
+router19.post(
   "/",
   requirePermission("products.create"),
   asyncHandler(async (req, res) => {
     const input = createProductSchema.parse(req.body);
-    const product = await productService.createProduct(req.user, input, requestMeta8(req));
+    const product = await productService.createProduct(req.user, input, requestMeta10(req));
     sendSuccess(res, { product }, 201);
   })
 );
-router16.patch(
+router19.patch(
   "/:id",
   requirePermission("products.update"),
   asyncHandler(async (req, res) => {
     const input = updateProductSchema.parse(req.body);
-    const product = await productService.updateProduct(req.user, req.params.id, input, requestMeta8(req));
+    const product = await productService.updateProduct(req.user, req.params.id, input, requestMeta10(req));
     sendSuccess(res, { product });
   })
 );
-router16.post(
+router19.post(
   "/:id/archive",
   requirePermission("products.archive"),
   asyncHandler(async (req, res) => {
-    const product = await productService.archiveProduct(req.user, req.params.id, requestMeta8(req));
+    const product = await productService.archiveProduct(req.user, req.params.id, requestMeta10(req));
     sendSuccess(res, { product });
   })
 );
-router16.get(
+router19.get(
   "/:id/modules",
   requirePermission("product_modules.read"),
   asyncHandler(async (req, res) => {
@@ -4890,34 +6415,34 @@ router16.get(
     sendSuccess(res, { modules: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router16.post(
+router19.post(
   "/:id/modules",
   requirePermission("product_modules.create"),
   asyncHandler(async (req, res) => {
     const input = createProductModuleSchema.parse(req.body);
-    const module_ = await productModuleService.createModule(req.user, req.params.id, input, requestMeta8(req));
+    const module_ = await productModuleService.createModule(req.user, req.params.id, input, requestMeta10(req));
     sendSuccess(res, { module: module_ }, 201);
   })
 );
-router16.post(
+router19.post(
   "/:id/modules/reorder",
   requirePermission("product_modules.reorder"),
   asyncHandler(async (req, res) => {
     const input = reorderProductModulesSchema.parse(req.body);
-    await productModuleService.reorderModules(req.user, req.params.id, input.moduleIds, requestMeta8(req));
+    await productModuleService.reorderModules(req.user, req.params.id, input.moduleIds, requestMeta10(req));
     sendSuccess(res, { message: "Modules reordered." });
   })
 );
-var productRoutes_default = router16;
+var productRoutes_default = router19;
 
 // server/routes/v1/productModuleRoutes.ts
-import { Router as Router17 } from "express";
-var router17 = Router17();
-router17.use(authenticateToken);
-function requestMeta9(req) {
+import { Router as Router20 } from "express";
+var router20 = Router20();
+router20.use(authenticateToken);
+function requestMeta11(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router17.get(
+router20.get(
   "/:id",
   requirePermission("product_modules.read"),
   asyncHandler(async (req, res) => {
@@ -4925,35 +6450,35 @@ router17.get(
     sendSuccess(res, { module: module_ });
   })
 );
-router17.patch(
+router20.patch(
   "/:id",
   requirePermission("product_modules.update"),
   asyncHandler(async (req, res) => {
     const input = updateProductModuleSchema.parse(req.body);
-    const module_ = await productModuleService.updateModule(req.user, req.params.id, input, requestMeta9(req));
+    const module_ = await productModuleService.updateModule(req.user, req.params.id, input, requestMeta11(req));
     sendSuccess(res, { module: module_ });
   })
 );
-router17.post(
+router20.post(
   "/:id/archive",
   requirePermission("product_modules.archive"),
   asyncHandler(async (req, res) => {
-    const module_ = await productModuleService.archiveModule(req.user, req.params.id, requestMeta9(req));
+    const module_ = await productModuleService.archiveModule(req.user, req.params.id, requestMeta11(req));
     sendSuccess(res, { module: module_ });
   })
 );
-var productModuleRoutes_default = router17;
+var productModuleRoutes_default = router20;
 
 // server/routes/v1/pageRoutes.ts
-import { Router as Router18 } from "express";
+import { Router as Router21 } from "express";
 
 // server/repositories/pageRepository.ts
-function slugify5(input) {
+function slugify6(input) {
   return input.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 150);
 }
 var withCurrentRevision = { include: { currentRevision: true } };
-var withPublicRelations = { include: { currentRevision: true, featuredMedia: true } };
-function buildWhere6(organizationId, filters) {
+var withPublicRelations = { include: { currentRevision: true, featuredMedia: true, template: { include: { currentRevision: true } } } };
+function buildWhere8(organizationId, filters) {
   const where = { organizationId, deletedAt: null };
   if (filters.status) where.status = filters.status;
   if (filters.search) {
@@ -4963,7 +6488,7 @@ function buildWhere6(organizationId, filters) {
 }
 var pageRepository = {
   async list(organizationId, filters, page, limit, sort, order) {
-    const where = buildWhere6(organizationId, filters);
+    const where = buildWhere8(organizationId, filters);
     const [rows, total] = await Promise.all([
       prisma.page.findMany({ where, orderBy: { [sort]: order }, skip: (page - 1) * limit, take: limit }),
       prisma.page.count({ where })
@@ -4980,8 +6505,34 @@ var pageRepository = {
   async findPublishedBySlugWithMedia(organizationId, slug) {
     return prisma.page.findFirst({ where: { organizationId, slug, status: "PUBLISHED", deletedAt: null }, ...withPublicRelations });
   },
+  /**
+   * Cross-organization by design (see postRepository.findDueScheduled) —
+   * backs the system cron job that promotes SCHEDULED pages to PUBLISHED.
+   */
+  async findDueScheduled(now, limit = 20) {
+    return prisma.page.findMany({
+      where: { status: "SCHEDULED", scheduledAt: { lte: now }, deletedAt: null },
+      take: limit,
+      orderBy: { scheduledAt: "asc" },
+      ...withCurrentRevision
+    });
+  },
+  /** Phase 5 SEO audit — every live-or-about-to-be-live page (not ARCHIVED, not soft-deleted), with exactly the fields the rule-based checks need. */
+  async listForSeoAudit(organizationId) {
+    return prisma.page.findMany({
+      where: { organizationId, deletedAt: null, status: { not: "ARCHIVED" } },
+      select: {
+        id: true,
+        slug: true,
+        title: true,
+        status: true,
+        currentRevision: { select: { title: true, metadata: true } },
+        featuredMedia: { select: { altText: true } }
+      }
+    });
+  },
   async findUniqueSlugInOrg(organizationId, base) {
-    const baseSlug = slugify5(base) || "page";
+    const baseSlug = slugify6(base) || "page";
     let slug = baseSlug;
     let attempt = 1;
     while (await this.findBySlugInOrg(organizationId, slug)) {
@@ -4999,6 +6550,63 @@ var pageRepository = {
   }
 };
 
+// server/repositories/templateRepository.ts
+function slugify7(input) {
+  return input.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 150);
+}
+var withUsage = {
+  include: {
+    currentRevision: true,
+    _count: { select: { pages: true } }
+  }
+};
+function buildWhere9(organizationId, filters) {
+  const where = { organizationId, deletedAt: null };
+  if (filters.status) where.status = filters.status;
+  if (filters.type) where.type = filters.type;
+  if (filters.search) {
+    where.OR = [{ name: { contains: filters.search, mode: "insensitive" } }, { slug: { contains: filters.search, mode: "insensitive" } }];
+  }
+  return where;
+}
+var templateRepository = {
+  async list(organizationId, filters, page, limit, sort, order) {
+    const where = buildWhere9(organizationId, filters);
+    const [rows, total] = await Promise.all([
+      prisma.template.findMany({ where, orderBy: { [sort]: order }, skip: (page - 1) * limit, take: limit, ...withUsage }),
+      prisma.template.count({ where })
+    ]);
+    return { rows, total };
+  },
+  async findByIdInOrg(id, organizationId) {
+    return prisma.template.findFirst({ where: { id, organizationId, deletedAt: null }, ...withUsage });
+  },
+  async findBySlugInOrg(organizationId, slug) {
+    return prisma.template.findFirst({ where: { organizationId, slug, deletedAt: null } });
+  },
+  /** Only PUBLISHED, non-deleted templates may be assigned to a page (pageService's job to enforce). */
+  async findPublishedByIdInOrg(id, organizationId) {
+    return prisma.template.findFirst({ where: { id, organizationId, status: "PUBLISHED", deletedAt: null } });
+  },
+  async findUniqueSlugInOrg(organizationId, base) {
+    const baseSlug = slugify7(base) || "template";
+    let slug = baseSlug;
+    let attempt = 1;
+    while (await this.findBySlugInOrg(organizationId, slug)) {
+      attempt += 1;
+      slug = `${baseSlug}-${attempt}`;
+      if (attempt > 50) break;
+    }
+    return slug;
+  },
+  async listRevisions(templateId) {
+    return prisma.templateRevision.findMany({ where: { templateId }, orderBy: { version: "desc" } });
+  },
+  async softDelete(id) {
+    await prisma.template.update({ where: { id }, data: { deletedAt: /* @__PURE__ */ new Date() } });
+  }
+};
+
 // server/services/mediaService.ts
 import { randomUUID as randomUUID2 } from "node:crypto";
 
@@ -5006,7 +6614,7 @@ import { randomUUID as randomUUID2 } from "node:crypto";
 function toApiMedia(row) {
   return { ...row, sizeBytes: Number(row.sizeBytes) };
 }
-function buildWhere7(organizationId, filters) {
+function buildWhere10(organizationId, filters) {
   const where = { organizationId, deletedAt: null };
   if (filters.status) where.status = filters.status;
   if (filters.mimeType) where.mimeType = filters.mimeType;
@@ -5027,7 +6635,7 @@ function buildWhere7(organizationId, filters) {
 }
 var mediaRepository = {
   async list(organizationId, filters, page, limit, sort, order) {
-    const where = buildWhere7(organizationId, filters);
+    const where = buildWhere10(organizationId, filters);
     const [rows, total] = await Promise.all([
       prisma.mediaAsset.findMany({ where, orderBy: { [sort]: order }, skip: (page - 1) * limit, take: limit }),
       prisma.mediaAsset.count({ where })
@@ -5142,6 +6750,10 @@ var LocalFilesystemStorageProvider = class {
     const sig = signLocalStorageToken("read", params.key, expiresAt);
     return `/api/v1/media/local-object?key=${encodeURIComponent(params.key)}&exp=${expiresAt.getTime()}&sig=${sig}`;
   }
+  /** Dev-only provider — there is no public web server for local files, so a stable public URL is never computable. Callers fall back to a (longer-TTL) signed URL, which is fine here since this provider never runs in production/staging (server/config/env.ts rejects OBJECT_STORAGE_PROVIDER=none there). */
+  getPublicUrl(_key) {
+    return null;
+  }
   async headObject(key) {
     try {
       const s = await stat(resolvePath(key));
@@ -5214,6 +6826,10 @@ var S3CompatibleStorageProvider = class {
     const command = new GetObjectCommand({ Bucket: config.objectStorageBucket, Key: params.key });
     return getSignedUrl(getClient(), command, { expiresIn: params.expiresInSeconds });
   }
+  getPublicUrl(key) {
+    if (!config.objectStoragePublicBaseUrl) return null;
+    return `${config.objectStoragePublicBaseUrl.replace(/\/+$/, "")}/${key.replace(/^\/+/, "")}`;
+  }
   async headObject(key) {
     try {
       const res = await getClient().send(new HeadObjectCommand({ Bucket: config.objectStorageBucket, Key: key }));
@@ -5271,6 +6887,19 @@ var SupabaseStorageProvider = class {
     if (error || !data) throw new Error(`Supabase Storage: failed to create a signed read URL (${error?.message ?? "unknown error"})`);
     return data.signedUrl;
   }
+  /**
+   * Synchronous by the Supabase JS SDK's own design — `getPublicUrl` just
+   * string-templates `${SUPABASE_STORAGE_URL}/storage/v1/object/public/
+   * {bucket}/{key}`, it makes no network call. That URL only actually
+   * serves the object if the bucket itself is configured public in
+   * Supabase; if it isn't, the object 404s/403s at that URL regardless of
+   * what this method returns — this is a stable computed URL, not proof
+   * the bucket is public.
+   */
+  getPublicUrl(key) {
+    const { data } = getClient2().storage.from(config.objectStorageBucket).getPublicUrl(key);
+    return data?.publicUrl ?? null;
+  }
   async headObject(key) {
     const dir = key.includes("/") ? key.slice(0, key.lastIndexOf("/")) : "";
     const name = key.includes("/") ? key.slice(key.lastIndexOf("/") + 1) : key;
@@ -5300,6 +6929,8 @@ var TestStorageProvider = class {
     this.objects = /* @__PURE__ */ new Map();
     /** Test-only hook: keys in this set report `headObject`/`readHeadBytes` as if the object never arrived — simulates an abandoned/failed upload (§20 orphan handling). */
     this.missingKeys = /* @__PURE__ */ new Set();
+    /** Test-only hook: keys in this set report a computable public URL, exercising the getPublicUrl-preferred path; every other key returns null, exercising the signed-URL fallback path. */
+    this.publicKeys = /* @__PURE__ */ new Set();
   }
   /** Test helper — simulates the browser's PUT to the signed URL succeeding, without a real HTTP round-trip. */
   seedObject(key, bytes, contentType) {
@@ -5308,6 +6939,7 @@ var TestStorageProvider = class {
   reset() {
     this.objects.clear();
     this.missingKeys.clear();
+    this.publicKeys.clear();
   }
   async createSignedUploadUrl(params) {
     return {
@@ -5319,6 +6951,10 @@ var TestStorageProvider = class {
   }
   async createSignedReadUrl(params) {
     return `https://test-storage.invalid/read/${encodeURIComponent(params.key)}?exp=${Date.now() + params.expiresInSeconds * 1e3}`;
+  }
+  getPublicUrl(key) {
+    if (!this.publicKeys.has(key)) return null;
+    return `https://test-storage.invalid/public/${encodeURIComponent(key)}`;
   }
   async headObject(key) {
     if (this.missingKeys.has(key)) return { exists: false };
@@ -5425,6 +7061,19 @@ async function assertFeaturedMediaUsable(mediaId, organizationId) {
   if (!media) throw new ValidationError("featuredMediaId does not refer to a media asset in this organization.");
   if (media.status !== "ACTIVE") throw new ValidationError("featuredMediaId must refer to an ACTIVE media asset.");
   if (!isImageMimeType(media.mimeType)) throw new ValidationError("featuredMediaId must refer to an image.");
+  if (media.visibility !== "PUBLIC") {
+    await mediaRepository.update(mediaId, { visibility: "PUBLIC" });
+    await auditLogRepository.record({
+      organizationId,
+      actorType: "SYSTEM",
+      actorName: "featured-media-auto-publish",
+      action: "MEDIA_METADATA_UPDATED",
+      resourceType: "media",
+      resourceId: mediaId,
+      beforeData: { visibility: media.visibility },
+      afterData: { visibility: "PUBLIC" }
+    });
+  }
 }
 var mediaService = {
   async listMedia(organizationId, filters, page, limit, sort, order) {
@@ -5530,6 +7179,41 @@ var mediaService = {
     });
     return toApiMedia(activated);
   },
+  /**
+   * Phase 3 — a stable URL for embedding an image inline in a Post/Page
+   * body (TipTap editor "insert from Media Library"). Unlike getReadUrl,
+   * this is never short-lived: the returned URL is baked directly into
+   * `ContentRevision.body` HTML and re-served verbatim by
+   * publicSiteService for as long as the content stays published — a
+   * 15-minute signed URL would go dead long before that. Reuses the same
+   * auto-promote-to-PUBLIC reasoning as `assertFeaturedMediaUsable`: a
+   * caller with media.update can choose to make this specific image
+   * public by embedding it, audited like any other visibility change.
+   */
+  async getEmbedUrl(caller, id, meta = {}) {
+    const organizationId = caller.organizationId;
+    const media = await loadMediaOrThrow(id, organizationId);
+    if (media.status !== "ACTIVE") throw new ConflictError("This media has no readable object yet.");
+    if (!isImageMimeType(media.mimeType)) throw new ValidationError("Only images can be embedded in content.");
+    if (media.visibility !== "PUBLIC") {
+      await mediaRepository.update(id, { visibility: "PUBLIC" });
+      await auditLogRepository.record({
+        organizationId,
+        actorUserId: caller.id,
+        actorType: "USER",
+        action: "MEDIA_METADATA_UPDATED",
+        resourceType: "media",
+        resourceId: id,
+        beforeData: { visibility: media.visibility },
+        afterData: { visibility: "PUBLIC" },
+        ipAddress: meta.ip,
+        userAgent: meta.userAgent
+      });
+    }
+    const provider = getStorageProvider();
+    const url = provider.getPublicUrl(media.storageKey) ?? await provider.createSignedReadUrl({ key: media.storageKey, expiresInSeconds: config.mediaPublicSignedUrlTtlSeconds });
+    return { url };
+  },
   async getReadUrl(caller, id, meta = {}) {
     const organizationId = caller.organizationId;
     const media = await loadMediaOrThrow(id, organizationId);
@@ -5619,10 +7303,213 @@ var mediaService = {
   }
 };
 
-// server/services/pageService.ts
-var CONTENT_EDIT_BLOCKED_STATUSES = /* @__PURE__ */ new Set(["PUBLISHED", "ARCHIVED"]);
+// server/utils/sanitizeHtml.ts
+import DOMPurify from "isomorphic-dompurify";
+var ALLOWED_TAGS = [
+  "p",
+  "br",
+  "hr",
+  "strong",
+  "b",
+  "em",
+  "i",
+  "u",
+  "s",
+  "strike",
+  "sub",
+  "sup",
+  "a",
+  "ul",
+  "ol",
+  "li",
+  "blockquote",
+  "pre",
+  "code",
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "h5",
+  "h6",
+  "img",
+  "figure",
+  "figcaption",
+  "table",
+  "thead",
+  "tbody",
+  "tr",
+  "th",
+  "td",
+  "span"
+];
+var ALLOWED_ATTR = ["href", "title", "target", "rel", "src", "alt", "width", "height", "class", "colspan", "rowspan"];
+function sanitizeContentHtml(html) {
+  return DOMPurify.sanitize(html, {
+    ALLOWED_TAGS,
+    ALLOWED_ATTR,
+    ALLOW_DATA_ATTR: false
+  }).trim();
+}
+
+// server/repositories/redirectRepository.ts
+function buildWhere11(organizationId, filters) {
+  const where = { organizationId };
+  if (filters.search) {
+    const term = filters.search;
+    where.OR = [{ fromPath: { contains: term, mode: "insensitive" } }, { toPath: { contains: term, mode: "insensitive" } }];
+  }
+  return where;
+}
+var redirectRepository = {
+  async list(organizationId, filters, page, limit, sort, order) {
+    const where = buildWhere11(organizationId, filters);
+    const [rows, total] = await Promise.all([
+      prisma.redirect.findMany({ where, orderBy: { [sort]: order }, skip: (page - 1) * limit, take: limit }),
+      prisma.redirect.count({ where })
+    ]);
+    return { rows, total };
+  },
+  async findByIdInOrg(id, organizationId) {
+    return prisma.redirect.findFirst({ where: { id, organizationId } });
+  },
+  async findByFromPathInOrg(organizationId, fromPath) {
+    return prisma.redirect.findUnique({ where: { organizationId_fromPath: { organizationId, fromPath } } });
+  },
+  async create(data) {
+    return prisma.redirect.create({ data });
+  },
+  /** Used by the auto-create-on-slug-change path: replaces an existing auto-created redirect for the same resource rather than piling up chains (old -> mid -> new). */
+  async upsertForResource(data) {
+    return prisma.redirect.upsert({
+      where: { organizationId_fromPath: { organizationId: data.organizationId, fromPath: data.fromPath } },
+      create: { ...data, statusCode: 301 },
+      update: { toPath: data.toPath, resourceType: data.resourceType, resourceId: data.resourceId }
+    });
+  },
+  /** Repoints any redirect that pointed at `oldToPath` so a chain (A->B, then B->C) collapses to A->C instead of breaking at B. */
+  async repointChainedRedirects(organizationId, oldToPath, newToPath) {
+    await prisma.redirect.updateMany({ where: { organizationId, toPath: oldToPath }, data: { toPath: newToPath } });
+  },
+  async update(id, data) {
+    return prisma.redirect.update({ where: { id }, data });
+  },
+  async delete(id) {
+    await prisma.redirect.delete({ where: { id } });
+  }
+};
+
+// server/services/redirectService.ts
 function isUniqueConstraintError3(err) {
   return !!err && typeof err === "object" && "code" in err && err.code === "P2002";
+}
+async function loadRedirectOrThrow(id, organizationId) {
+  const redirect = await redirectRepository.findByIdInOrg(id, organizationId);
+  if (!redirect) throw new NotFoundError("Redirect not found.");
+  return redirect;
+}
+var redirectService = {
+  async listRedirects(organizationId, filters, page, limit, sort, order) {
+    return redirectRepository.list(organizationId, filters, page, limit, sort, order);
+  },
+  async getRedirect(organizationId, id) {
+    return loadRedirectOrThrow(id, organizationId);
+  },
+  async createRedirect(caller, input, meta = {}) {
+    const organizationId = caller.organizationId;
+    const dup = await redirectRepository.findByFromPathInOrg(organizationId, input.fromPath);
+    if (dup) throw new ConflictError(`A redirect from "${input.fromPath}" already exists.`, { existingRedirectId: dup.id });
+    let redirect;
+    try {
+      redirect = await redirectRepository.create({
+        organizationId,
+        fromPath: input.fromPath,
+        toPath: input.toPath,
+        statusCode: input.statusCode,
+        createdById: caller.id
+      });
+    } catch (err) {
+      throw isUniqueConstraintError3(err) ? new ConflictError("A redirect from this path already exists.") : err;
+    }
+    await auditLogRepository.record({
+      organizationId,
+      actorUserId: caller.id,
+      actorType: "USER",
+      action: "REDIRECT_CREATED",
+      resourceType: "redirect",
+      resourceId: redirect.id,
+      afterData: { fromPath: redirect.fromPath, toPath: redirect.toPath, statusCode: redirect.statusCode },
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent
+    });
+    return redirect;
+  },
+  async updateRedirect(caller, id, input, meta = {}) {
+    const organizationId = caller.organizationId;
+    const existing = await loadRedirectOrThrow(id, organizationId);
+    const patch = {};
+    if (input.toPath !== void 0) patch.toPath = input.toPath;
+    if (input.statusCode !== void 0) patch.statusCode = input.statusCode;
+    const updated = await redirectRepository.update(id, patch);
+    await auditLogRepository.record({
+      organizationId,
+      actorUserId: caller.id,
+      actorType: "USER",
+      action: "REDIRECT_UPDATED",
+      resourceType: "redirect",
+      resourceId: id,
+      beforeData: { toPath: existing.toPath, statusCode: existing.statusCode },
+      afterData: patch,
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent
+    });
+    return updated;
+  },
+  async deleteRedirect(caller, id, meta = {}) {
+    const organizationId = caller.organizationId;
+    const existing = await loadRedirectOrThrow(id, organizationId);
+    await redirectRepository.delete(id);
+    await auditLogRepository.record({
+      organizationId,
+      actorUserId: caller.id,
+      actorType: "USER",
+      action: "REDIRECT_DELETED",
+      resourceType: "redirect",
+      resourceId: id,
+      beforeData: { fromPath: existing.fromPath, toPath: existing.toPath },
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent
+    });
+  },
+  /**
+   * Called by postService/pageService when a live (ever-published) piece
+   * of content's slug changes. Auto-created redirects are attributed to
+   * SYSTEM in the audit log (the caller already gets a POST_UPDATED/
+   * PAGE_UPDATED entry for the slug change itself) and chain-collapse: if
+   * some other redirect already pointed at the old path, it's repointed
+   * straight at the new one instead of hopping through a dead link.
+   */
+  async autoRedirectOnSlugChange(params) {
+    if (params.fromPath === params.toPath) return;
+    await redirectRepository.upsertForResource(params);
+    await redirectRepository.repointChainedRedirects(params.organizationId, params.fromPath, params.toPath);
+  }
+};
+
+// server/services/pageService.ts
+var CONTENT_EDIT_BLOCKED_STATUSES = /* @__PURE__ */ new Set(["ARCHIVED"]);
+function isUniqueConstraintError4(err) {
+  return !!err && typeof err === "object" && "code" in err && err.code === "P2002";
+}
+function isHomepageUniqueViolation(err) {
+  if (!isUniqueConstraintError4(err)) return false;
+  const target = err.meta?.target;
+  const targetStr = Array.isArray(target) ? target.join(",") : String(target ?? "");
+  return targetStr.includes("pages_one_homepage_per_org");
+}
+async function assertTemplateUsable(templateId, organizationId) {
+  if (!templateId) return;
+  const template = await templateRepository.findPublishedByIdInOrg(templateId, organizationId);
+  if (!template) throw new ValidationError("templateId must refer to a PUBLISHED template in this organization.");
 }
 function assertHasPublishableContent(revision) {
   if (!revision || !revision.title.trim() || !revision.body.trim()) {
@@ -5647,17 +7534,29 @@ var pageService = {
   },
   async createPage(caller, input, meta = {}) {
     const organizationId = caller.organizationId;
+    const body = sanitizeContentHtml(input.body);
     if (input.slug) {
       const dup = await pageRepository.findBySlugInOrg(organizationId, input.slug);
       if (dup) throw new ConflictError(`A page with slug "${input.slug}" already exists.`, { existingPageId: dup.id });
     }
     if (input.featuredMediaId) await assertFeaturedMediaUsable(input.featuredMediaId, organizationId);
+    await assertTemplateUsable(input.templateId, organizationId);
     const slug = input.slug ?? await pageRepository.findUniqueSlugInOrg(organizationId, input.title);
     let createdId;
     try {
       createdId = await prisma.$transaction(async (tx) => {
         const page = await tx.page.create({
-          data: { organizationId, slug, title: input.title, status: "DRAFT", createdById: caller.id, featuredMediaId: input.featuredMediaId }
+          data: {
+            organizationId,
+            slug,
+            title: input.title,
+            status: "DRAFT",
+            createdById: caller.id,
+            featuredMediaId: input.featuredMediaId,
+            templateId: input.templateId,
+            pageType: input.pageType,
+            isHomepage: input.isHomepage ?? false
+          }
         });
         const revision = await tx.contentRevision.create({
           data: {
@@ -5665,7 +7564,7 @@ var pageService = {
             version: 1,
             status: "DRAFT",
             title: input.title,
-            body: input.body,
+            body,
             metadata: input.metadata ?? {},
             createdById: caller.id
           }
@@ -5674,7 +7573,8 @@ var pageService = {
         return page.id;
       });
     } catch (err) {
-      throw isUniqueConstraintError3(err) ? new ConflictError("A page with this slug already exists.") : err;
+      if (isHomepageUniqueViolation(err)) throw new ConflictError("This organization already has a homepage assigned. Unset the existing one first.");
+      throw isUniqueConstraintError4(err) ? new ConflictError("A page with this slug already exists.") : err;
     }
     await auditLogRepository.record({
       organizationId,
@@ -5692,21 +7592,23 @@ var pageService = {
   async updatePage(caller, id, input, meta = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadPageOrThrow(id, organizationId);
-    const effectiveStatus = input.status ?? existing.status;
+    const sanitizedBody = input.body !== void 0 ? sanitizeContentHtml(input.body) : void 0;
     const hasContentEdit = input.title !== void 0 || input.body !== void 0 || input.metadata !== void 0 || input.slug !== void 0;
-    if (hasContentEdit && CONTENT_EDIT_BLOCKED_STATUSES.has(effectiveStatus)) {
-      throw new ConflictError(`Page content cannot be edited while status is ${effectiveStatus}.`);
+    if (hasContentEdit && input.status === void 0 && CONTENT_EDIT_BLOCKED_STATUSES.has(existing.status)) {
+      throw new ConflictError(`Page content cannot be edited while status is ${existing.status}. Restore it to draft first.`);
     }
     if (input.slug !== void 0 && input.slug !== existing.slug) {
       const dup = await pageRepository.findBySlugInOrg(organizationId, input.slug);
       if (dup && dup.id !== id) throw new ConflictError(`A page with slug "${input.slug}" already exists.`, { existingPageId: dup.id });
     }
+    if (input.templateId !== void 0) await assertTemplateUsable(input.templateId, organizationId);
     const hasFeaturedMediaEdit = input.featuredMediaId !== void 0;
     if (hasFeaturedMediaEdit) {
       if (existing.status === "ARCHIVED") throw new ConflictError("Page content cannot be edited while status is ARCHIVED.");
       if (input.featuredMediaId) await assertFeaturedMediaUsable(input.featuredMediaId, organizationId);
     }
     const unpublishing = existing.status === "PUBLISHED" && input.status === "DRAFT";
+    const liveEditOfPublished = hasContentEdit && input.status === void 0 && existing.status === "PUBLISHED";
     const currentRevision = existing.currentRevision;
     try {
       await prisma.$transaction(async (tx) => {
@@ -5715,24 +7617,28 @@ var pageService = {
         if (input.slug !== void 0) pagePatch.slug = input.slug;
         if (input.title !== void 0) pagePatch.title = input.title;
         if (hasFeaturedMediaEdit) pagePatch.featuredMediaId = input.featuredMediaId;
+        if (input.templateId !== void 0) pagePatch.templateId = input.templateId;
+        if (input.pageType !== void 0) pagePatch.pageType = input.pageType;
+        if (input.isHomepage !== void 0) pagePatch.isHomepage = input.isHomepage;
         if (unpublishing) pagePatch.publishedAt = null;
-        if (currentRevision && (unpublishing || hasContentEdit && currentRevision.status === "PUBLISHED")) {
+        if (currentRevision && (unpublishing || liveEditOfPublished || hasContentEdit && currentRevision.status === "PUBLISHED")) {
           const newRevision = await tx.contentRevision.create({
             data: {
               pageId: id,
               version: currentRevision.version + 1,
-              status: "DRAFT",
+              status: liveEditOfPublished ? "PUBLISHED" : "DRAFT",
               title: input.title ?? currentRevision.title,
-              body: input.body ?? currentRevision.body,
+              body: sanitizedBody ?? currentRevision.body,
               metadata: input.metadata ?? currentRevision.metadata,
-              createdById: caller.id
+              createdById: caller.id,
+              publishedAt: liveEditOfPublished ? /* @__PURE__ */ new Date() : null
             }
           });
           pagePatch.currentRevisionId = newRevision.id;
         } else if (hasContentEdit && currentRevision) {
           const revisionPatch = {};
           if (input.title !== void 0) revisionPatch.title = input.title;
-          if (input.body !== void 0) revisionPatch.body = input.body;
+          if (sanitizedBody !== void 0) revisionPatch.body = sanitizedBody;
           if (input.metadata !== void 0) revisionPatch.metadata = input.metadata;
           if (Object.keys(revisionPatch).length > 0) {
             await tx.contentRevision.update({ where: { id: currentRevision.id }, data: revisionPatch });
@@ -5750,7 +7656,8 @@ var pageService = {
         }
       });
     } catch (err) {
-      throw isUniqueConstraintError3(err) ? new ConflictError("A page with this slug already exists.") : err;
+      if (isHomepageUniqueViolation(err)) throw new ConflictError("This organization already has a homepage assigned. Unset the existing one first.");
+      throw isUniqueConstraintError4(err) ? new ConflictError("A page with this slug already exists.") : err;
     }
     await auditLogRepository.record({
       organizationId,
@@ -5777,6 +7684,18 @@ var pageService = {
         ipAddress: meta.ip,
         userAgent: meta.userAgent
       });
+    }
+    if (input.slug !== void 0 && input.slug !== existing.slug) {
+      const finalStatus = input.status ?? existing.status;
+      if (finalStatus === "PUBLISHED") {
+        await redirectService.autoRedirectOnSlugChange({
+          organizationId,
+          fromPath: `/${existing.slug}`,
+          toPath: `/${input.slug}`,
+          resourceType: "page",
+          resourceId: id
+        });
+      }
     }
     return loadPageOrThrow(id, organizationId);
   },
@@ -5826,6 +7745,15 @@ var pageService = {
       ipAddress: meta.ip,
       userAgent: meta.userAgent
     });
+    if (existing.createdById && existing.createdById !== caller.id) {
+      await notificationService.notify({
+        organizationId,
+        userId: existing.createdById,
+        type: "content_published",
+        title: "Your page was published",
+        message: `"${existing.title}" is now live.`
+      });
+    }
     return loadPageOrThrow(id, organizationId);
   },
   async schedulePage(caller, id, input, meta = {}) {
@@ -5882,19 +7810,17 @@ var pageService = {
         data: {
           pageId: id,
           version: nextVersion,
-          status: "DRAFT",
+          status: wasPublished ? "PUBLISHED" : "DRAFT",
           title: target.title,
           body: target.body,
           metadata: target.metadata,
-          createdById: caller.id
+          createdById: caller.id,
+          publishedAt: wasPublished ? /* @__PURE__ */ new Date() : null
         }
       });
       await tx.page.update({
         where: { id },
-        data: {
-          currentRevisionId: newRevision.id,
-          ...wasPublished ? { status: "DRAFT", publishedAt: null } : {}
-        }
+        data: { currentRevisionId: newRevision.id }
       });
     });
     await auditLogRepository.record({
@@ -5930,74 +7856,97 @@ var pageService = {
 };
 
 // server/schemas/pageSchemas.ts
-import { z as z16 } from "zod";
+import { z as z19 } from "zod";
 
 // server/schemas/contentSchemas.ts
-import { z as z15 } from "zod";
-var contentStatusSchema = z15.enum(["DRAFT", "IN_REVIEW", "SCHEDULED", "PUBLISHED", "ARCHIVED"]);
-var patchableContentStatusSchema = z15.enum(["DRAFT"]);
-var expectedUpdatedAtSchema = z15.coerce.date().optional();
-var revertContentSchema = z15.object({
-  revisionId: z15.string().trim().uuid()
+import { z as z18 } from "zod";
+var contentStatusSchema = z18.enum(["DRAFT", "IN_REVIEW", "SCHEDULED", "PUBLISHED", "ARCHIVED"]);
+var patchableContentStatusSchema = z18.enum(["DRAFT"]);
+var expectedUpdatedAtSchema = z18.coerce.date().optional();
+var seoMetadataSchema = z18.object({
+  metaTitle: z18.string().trim().min(1).max(70).optional(),
+  metaDescription: z18.string().trim().min(1).max(320).optional(),
+  focusKeywords: z18.array(z18.string().trim().min(1).max(60)).max(10).optional(),
+  canonicalUrl: z18.string().trim().url().max(500).optional(),
+  ogTitle: z18.string().trim().min(1).max(95).optional(),
+  ogDescription: z18.string().trim().min(1).max(320).optional(),
+  ogImage: z18.string().trim().url().max(1e3).optional(),
+  twitterImage: z18.string().trim().url().max(1e3).optional(),
+  ogType: z18.enum(["article", "website", "news"]).optional(),
+  twitterCard: z18.enum(["summary_large_image", "summary"]).optional(),
+  robotsDirective: z18.enum(["index, follow", "noindex, nofollow", "noindex, follow"]).optional(),
+  schemaType: z18.enum(["TechArticle", "NewsArticle", "BlogPosting", "Report"]).optional()
+}).strict();
+var revertContentSchema = z18.object({
+  revisionId: z18.string().trim().uuid()
 });
 var SORT_FIELDS2 = ["title", "slug", "status", "createdAt", "updatedAt", "publishedAt"];
-var listContentQuerySchema = z15.object({
-  page: z15.coerce.number().int().positive().default(1),
-  limit: z15.coerce.number().int().positive().max(100).default(20),
-  search: z15.string().trim().max(200).optional(),
+var listContentQuerySchema = z18.object({
+  page: z18.coerce.number().int().positive().default(1),
+  limit: z18.coerce.number().int().positive().max(100).default(20),
+  search: z18.string().trim().max(200).optional(),
   status: contentStatusSchema.optional(),
-  sort: z15.enum(SORT_FIELDS2).default("updatedAt"),
-  order: z15.enum(["asc", "desc"]).default("desc")
+  sort: z18.enum(SORT_FIELDS2).default("updatedAt"),
+  order: z18.enum(["asc", "desc"]).default("desc")
 });
-var scheduleContentSchema = z15.object({
-  scheduledAt: z15.coerce.date().refine((d) => d.getTime() > Date.now(), { message: "scheduledAt must be in the future" })
+var scheduleContentSchema = z18.object({
+  scheduledAt: z18.coerce.date().refine((d) => d.getTime() > Date.now(), { message: "scheduledAt must be in the future" })
 });
-var slugSchema2 = z15.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)");
-var createCategorySchema = z15.object({
-  name: z15.string().trim().min(1).max(150),
-  slug: slugSchema2.optional(),
-  description: z15.string().trim().max(2e3).optional()
+var slugSchema3 = z18.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)");
+var createCategorySchema = z18.object({
+  name: z18.string().trim().min(1).max(150),
+  slug: slugSchema3.optional(),
+  description: z18.string().trim().max(2e3).optional()
 });
-var updateCategorySchema = z15.object({
-  name: z15.string().trim().min(1).max(150).optional(),
-  slug: slugSchema2.optional(),
-  description: z15.string().trim().max(2e3).nullable().optional()
+var updateCategorySchema = z18.object({
+  name: z18.string().trim().min(1).max(150).optional(),
+  slug: slugSchema3.optional(),
+  description: z18.string().trim().max(2e3).nullable().optional()
 }).refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
-var createTagSchema = z15.object({
-  name: z15.string().trim().min(1).max(100),
-  slug: slugSchema2.optional()
+var createTagSchema = z18.object({
+  name: z18.string().trim().min(1).max(100),
+  slug: slugSchema3.optional()
 });
-var updateTagSchema = z15.object({
-  name: z15.string().trim().min(1).max(100).optional(),
-  slug: slugSchema2.optional()
+var updateTagSchema = z18.object({
+  name: z18.string().trim().min(1).max(100).optional(),
+  slug: slugSchema3.optional()
 }).refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
 
 // server/schemas/pageSchemas.ts
-var slugSchema3 = z16.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)");
-var createPageSchema = z16.object({
-  title: z16.string().trim().min(1).max(200),
-  slug: slugSchema3.optional(),
-  body: z16.string().trim().max(5e5).default(""),
-  metadata: z16.record(z16.unknown()).optional(),
-  featuredMediaId: z16.string().trim().uuid().optional()
+var slugSchema4 = z19.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)");
+var pageTypeSchema = z19.enum(["STANDARD", "LANDING"]);
+var createPageSchema = z19.object({
+  title: z19.string().trim().min(1).max(200),
+  slug: slugSchema4.optional(),
+  body: z19.string().trim().max(5e5).default(""),
+  metadata: seoMetadataSchema.optional(),
+  featuredMediaId: z19.string().trim().uuid().optional(),
+  templateId: z19.string().trim().uuid().optional(),
+  pageType: pageTypeSchema.optional(),
+  isHomepage: z19.boolean().optional()
 });
-var updatePageSchema = z16.object({
-  title: z16.string().trim().min(1).max(200).optional(),
-  slug: slugSchema3.optional(),
-  body: z16.string().trim().max(5e5).optional(),
-  metadata: z16.record(z16.unknown()).optional(),
+var updatePageSchema = z19.object({
+  title: z19.string().trim().min(1).max(200).optional(),
+  slug: slugSchema4.optional(),
+  body: z19.string().trim().max(5e5).optional(),
+  metadata: seoMetadataSchema.optional(),
   status: patchableContentStatusSchema.optional(),
-  featuredMediaId: z16.string().trim().uuid().nullable().optional(),
+  featuredMediaId: z19.string().trim().uuid().nullable().optional(),
+  // null explicitly unassigns the template (falls back to default
+  // rendering — see publicSiteService.ts); omitted leaves it unchanged.
+  templateId: z19.string().trim().uuid().nullable().optional(),
+  pageType: pageTypeSchema.optional(),
+  isHomepage: z19.boolean().optional(),
   expectedUpdatedAt: expectedUpdatedAtSchema
 }).refine((v) => Object.keys(v).filter((k) => k !== "expectedUpdatedAt").length > 0, { message: "At least one field must be provided." });
 
 // server/routes/v1/pageRoutes.ts
-var router18 = Router18();
-router18.use(authenticateToken);
-function requestMeta10(req) {
+var router21 = Router21();
+router21.use(authenticateToken);
+function requestMeta12(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router18.get(
+router21.get(
   "/",
   requirePermission("content.read"),
   asyncHandler(async (req, res) => {
@@ -6013,7 +7962,7 @@ router18.get(
     sendSuccess(res, { pages: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router18.get(
+router21.get(
   "/:id",
   requirePermission("content.read"),
   asyncHandler(async (req, res) => {
@@ -6021,7 +7970,7 @@ router18.get(
     sendSuccess(res, { page });
   })
 );
-router18.get(
+router21.get(
   "/:id/revisions",
   requirePermission("content.read"),
   asyncHandler(async (req, res) => {
@@ -6029,84 +7978,1002 @@ router18.get(
     sendSuccess(res, { revisions });
   })
 );
-router18.post(
+router21.post(
   "/",
   requirePermission("content.create"),
   asyncHandler(async (req, res) => {
     const input = createPageSchema.parse(req.body);
-    const page = await pageService.createPage(req.user, input, requestMeta10(req));
+    const page = await pageService.createPage(req.user, input, requestMeta12(req));
     sendSuccess(res, { page }, 201);
   })
 );
-router18.patch(
+router21.patch(
   "/:id",
   requirePermission("content.update"),
   asyncHandler(async (req, res) => {
     const input = updatePageSchema.parse(req.body);
-    const page = await pageService.updatePage(req.user, req.params.id, input, requestMeta10(req));
+    const page = await pageService.updatePage(req.user, req.params.id, input, requestMeta12(req));
     sendSuccess(res, { page });
   })
 );
-router18.post(
+router21.post(
   "/:id/submit-review",
   requirePermission("content.update"),
   asyncHandler(async (req, res) => {
-    const page = await pageService.submitForReview(req.user, req.params.id, requestMeta10(req));
+    const page = await pageService.submitForReview(req.user, req.params.id, requestMeta12(req));
     sendSuccess(res, { page });
   })
 );
-router18.post(
+router21.post(
   "/:id/publish",
   requirePermission("content.publish"),
   asyncHandler(async (req, res) => {
-    const page = await pageService.publishPage(req.user, req.params.id, requestMeta10(req));
+    const page = await pageService.publishPage(req.user, req.params.id, requestMeta12(req));
     sendSuccess(res, { page });
   })
 );
-router18.post(
+router21.post(
   "/:id/schedule",
   requirePermission("content.publish"),
   asyncHandler(async (req, res) => {
     const input = scheduleContentSchema.parse(req.body);
-    const page = await pageService.schedulePage(req.user, req.params.id, input, requestMeta10(req));
+    const page = await pageService.schedulePage(req.user, req.params.id, input, requestMeta12(req));
     sendSuccess(res, { page });
   })
 );
-router18.post(
+router21.post(
   "/:id/archive",
   requirePermission("content.delete"),
   asyncHandler(async (req, res) => {
-    const page = await pageService.archivePage(req.user, req.params.id, requestMeta10(req));
+    const page = await pageService.archivePage(req.user, req.params.id, requestMeta12(req));
     sendSuccess(res, { page });
   })
 );
-router18.post(
+router21.post(
   "/:id/revert",
   requirePermission("content.update"),
   asyncHandler(async (req, res) => {
     const input = revertContentSchema.parse(req.body);
-    const page = await pageService.revertPage(req.user, req.params.id, input, requestMeta10(req));
+    const page = await pageService.revertPage(req.user, req.params.id, input, requestMeta12(req));
     sendSuccess(res, { page });
   })
 );
-router18.delete(
+router21.delete(
   "/:id",
   requirePermission("content.delete"),
   asyncHandler(async (req, res) => {
-    await pageService.deletePage(req.user, req.params.id, requestMeta10(req));
+    await pageService.deletePage(req.user, req.params.id, requestMeta12(req));
     sendSuccess(res, { message: "Page deleted." });
   })
 );
-var pageRoutes_default = router18;
+var pageRoutes_default = router21;
 
-// server/routes/v1/postRoutes.ts
-import { Router as Router19 } from "express";
+// server/routes/v1/templateRoutes.ts
+import { Router as Router22 } from "express";
 
-// server/repositories/postRepository.ts
-function slugify6(input) {
+// server/services/templateService.ts
+function isUniqueConstraintError5(err) {
+  return !!err && typeof err === "object" && "code" in err && err.code === "P2002";
+}
+async function loadTemplateOrThrow(id, organizationId) {
+  const template = await templateRepository.findByIdInOrg(id, organizationId);
+  if (!template) throw new NotFoundError("Template not found.");
+  return template;
+}
+function assertNotSystem(template, action) {
+  if (template.isSystem) {
+    throw new AuthorizationError(`This is a protected system template and cannot be ${action}.`);
+  }
+}
+var templateService = {
+  async listTemplates(organizationId, filters, page, limit, sort, order) {
+    return templateRepository.list(organizationId, filters, page, limit, sort, order);
+  },
+  async getTemplate(organizationId, id) {
+    return loadTemplateOrThrow(id, organizationId);
+  },
+  async listRevisions(organizationId, id) {
+    await loadTemplateOrThrow(id, organizationId);
+    return templateRepository.listRevisions(id);
+  },
+  async createTemplate(caller, input, meta = {}) {
+    const organizationId = caller.organizationId;
+    if (input.slug) {
+      const dup = await templateRepository.findBySlugInOrg(organizationId, input.slug);
+      if (dup) throw new ConflictError(`A template with slug "${input.slug}" already exists.`, { existingTemplateId: dup.id });
+    }
+    const slug = input.slug ?? await templateRepository.findUniqueSlugInOrg(organizationId, input.name);
+    let createdId;
+    try {
+      createdId = await prisma.$transaction(async (tx) => {
+        const template = await tx.template.create({
+          data: {
+            organizationId,
+            type: input.type,
+            name: input.name,
+            slug,
+            description: input.description,
+            status: "DRAFT",
+            createdById: caller.id
+          }
+        });
+        const revision = await tx.templateRevision.create({
+          data: {
+            templateId: template.id,
+            version: 1,
+            status: "DRAFT",
+            name: input.name,
+            structure: input.structure,
+            createdById: caller.id
+          }
+        });
+        await tx.template.update({ where: { id: template.id }, data: { currentRevisionId: revision.id } });
+        return template.id;
+      });
+    } catch (err) {
+      throw isUniqueConstraintError5(err) ? new ConflictError("A template with this slug already exists.") : err;
+    }
+    await auditLogRepository.record({
+      organizationId,
+      actorUserId: caller.id,
+      actorType: "USER",
+      action: "TEMPLATE_CREATED",
+      resourceType: "template",
+      resourceId: createdId,
+      afterData: { name: input.name, slug, type: input.type },
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent
+    });
+    return loadTemplateOrThrow(createdId, organizationId);
+  },
+  async updateTemplate(caller, id, input, meta = {}) {
+    const organizationId = caller.organizationId;
+    const existing = await loadTemplateOrThrow(id, organizationId);
+    assertNotSystem(existing, "edited");
+    const hasContentEdit = input.name !== void 0 || input.slug !== void 0 || input.structure !== void 0;
+    if (input.slug !== void 0 && input.slug !== existing.slug) {
+      const dup = await templateRepository.findBySlugInOrg(organizationId, input.slug);
+      if (dup && dup.id !== id) throw new ConflictError(`A template with slug "${input.slug}" already exists.`, { existingTemplateId: dup.id });
+    }
+    const currentRevision = existing.currentRevision;
+    try {
+      await prisma.$transaction(async (tx) => {
+        const templatePatch = {};
+        if (input.name !== void 0) templatePatch.name = input.name;
+        if (input.slug !== void 0) templatePatch.slug = input.slug;
+        if (input.description !== void 0) templatePatch.description = input.description;
+        if (currentRevision && hasContentEdit && currentRevision.status === "PUBLISHED") {
+          const newRevision = await tx.templateRevision.create({
+            data: {
+              templateId: id,
+              version: currentRevision.version + 1,
+              status: "DRAFT",
+              name: input.name ?? currentRevision.name,
+              structure: input.structure ?? currentRevision.structure,
+              createdById: caller.id
+            }
+          });
+          templatePatch.currentRevisionId = newRevision.id;
+        } else if (hasContentEdit && currentRevision) {
+          const revisionPatch = {};
+          if (input.name !== void 0) revisionPatch.name = input.name;
+          if (input.structure !== void 0) revisionPatch.structure = input.structure;
+          if (Object.keys(revisionPatch).length > 0) {
+            await tx.templateRevision.update({ where: { id: currentRevision.id }, data: revisionPatch });
+          }
+        }
+        if (hasContentEdit && Object.keys(templatePatch).length === 0) {
+          templatePatch.updatedAt = /* @__PURE__ */ new Date();
+        }
+        if (Object.keys(templatePatch).length > 0) {
+          const where = { id, ...input.expectedUpdatedAt !== void 0 ? { updatedAt: input.expectedUpdatedAt } : {} };
+          const result = await tx.template.updateMany({ where, data: templatePatch });
+          if (result.count === 0) {
+            throw new ConflictError("This template was changed by someone else since you loaded it. Reload and try again.");
+          }
+        }
+      });
+    } catch (err) {
+      throw isUniqueConstraintError5(err) ? new ConflictError("A template with this slug already exists.") : err;
+    }
+    await auditLogRepository.record({
+      organizationId,
+      actorUserId: caller.id,
+      actorType: "USER",
+      action: "TEMPLATE_UPDATED",
+      resourceType: "template",
+      resourceId: id,
+      beforeData: { name: existing.name, slug: existing.slug },
+      afterData: { name: input.name, slug: input.slug },
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent
+    });
+    return loadTemplateOrThrow(id, organizationId);
+  },
+  async publishTemplate(caller, id, meta = {}) {
+    const organizationId = caller.organizationId;
+    const existing = await loadTemplateOrThrow(id, organizationId);
+    assertNotSystem(existing, "published");
+    if (existing.status === "ARCHIVED") throw new ConflictError("An archived template must be restored before it can be published.");
+    if (!existing.currentRevisionId) throw new ConflictError("This template has no revision to publish.");
+    const now = /* @__PURE__ */ new Date();
+    await prisma.$transaction([
+      prisma.templateRevision.update({ where: { id: existing.currentRevisionId }, data: { status: "PUBLISHED", publishedAt: now } }),
+      prisma.template.update({ where: { id }, data: { status: "PUBLISHED" } })
+    ]);
+    await auditLogRepository.record({
+      organizationId,
+      actorUserId: caller.id,
+      actorType: "USER",
+      action: "TEMPLATE_PUBLISHED",
+      resourceType: "template",
+      resourceId: id,
+      beforeData: { status: existing.status },
+      afterData: { status: "PUBLISHED" },
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent
+    });
+    return loadTemplateOrThrow(id, organizationId);
+  },
+  async archiveTemplate(caller, id, meta = {}) {
+    const organizationId = caller.organizationId;
+    const existing = await loadTemplateOrThrow(id, organizationId);
+    assertNotSystem(existing, "archived");
+    if (existing.status === "ARCHIVED") throw new ConflictError("This template is already archived.");
+    await prisma.template.update({ where: { id }, data: { status: "ARCHIVED" } });
+    await auditLogRepository.record({
+      organizationId,
+      actorUserId: caller.id,
+      actorType: "USER",
+      action: "TEMPLATE_ARCHIVED",
+      resourceType: "template",
+      resourceId: id,
+      beforeData: { status: existing.status },
+      afterData: { status: "ARCHIVED" },
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent
+    });
+    return loadTemplateOrThrow(id, organizationId);
+  },
+  async revertTemplate(caller, id, input, meta = {}) {
+    const organizationId = caller.organizationId;
+    const existing = await loadTemplateOrThrow(id, organizationId);
+    assertNotSystem(existing, "rolled back");
+    const target = await prisma.templateRevision.findFirst({ where: { id: input.revisionId, templateId: id } });
+    if (!target) throw new NotFoundError("Revision not found on this template.");
+    const current = existing.currentRevision;
+    const nextVersion = (current?.version ?? 0) + 1;
+    const wasPublished = existing.status === "PUBLISHED";
+    await prisma.$transaction(async (tx) => {
+      const newRevision = await tx.templateRevision.create({
+        data: {
+          templateId: id,
+          version: nextVersion,
+          status: wasPublished ? "PUBLISHED" : "DRAFT",
+          name: target.name,
+          structure: target.structure,
+          createdById: caller.id,
+          publishedAt: wasPublished ? /* @__PURE__ */ new Date() : null
+        }
+      });
+      await tx.template.update({ where: { id }, data: { currentRevisionId: newRevision.id } });
+    });
+    await auditLogRepository.record({
+      organizationId,
+      actorUserId: caller.id,
+      actorType: "USER",
+      action: "TEMPLATE_REVERTED",
+      resourceType: "template",
+      resourceId: id,
+      beforeData: { fromVersion: current?.version, revertedToRevisionId: target.id, revertedToVersion: target.version },
+      afterData: { newVersion: nextVersion },
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent
+    });
+    return loadTemplateOrThrow(id, organizationId);
+  },
+  async duplicateTemplate(caller, id, input, meta = {}) {
+    const organizationId = caller.organizationId;
+    const existing = await loadTemplateOrThrow(id, organizationId);
+    const baseName = input.name ?? `${existing.name} (Copy)`;
+    const slug = await templateRepository.findUniqueSlugInOrg(organizationId, baseName);
+    const sourceStructure = existing.currentRevision?.structure ?? {};
+    const createdId = await prisma.$transaction(async (tx) => {
+      const template = await tx.template.create({
+        data: {
+          organizationId,
+          type: existing.type,
+          name: baseName,
+          slug,
+          description: existing.description,
+          status: "DRAFT",
+          isSystem: false,
+          createdById: caller.id
+        }
+      });
+      const revision = await tx.templateRevision.create({
+        data: {
+          templateId: template.id,
+          version: 1,
+          status: "DRAFT",
+          name: baseName,
+          structure: sourceStructure,
+          createdById: caller.id
+        }
+      });
+      await tx.template.update({ where: { id: template.id }, data: { currentRevisionId: revision.id } });
+      return template.id;
+    });
+    await auditLogRepository.record({
+      organizationId,
+      actorUserId: caller.id,
+      actorType: "USER",
+      action: "TEMPLATE_DUPLICATED",
+      resourceType: "template",
+      resourceId: createdId,
+      afterData: { duplicatedFromId: id, name: baseName },
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent
+    });
+    return loadTemplateOrThrow(createdId, organizationId);
+  },
+  async deleteTemplate(caller, id, meta = {}) {
+    const organizationId = caller.organizationId;
+    const existing = await loadTemplateOrThrow(id, organizationId);
+    assertNotSystem(existing, "deleted");
+    if (existing._count.pages > 0) {
+      throw new ValidationError("This template is still assigned to one or more pages. Reassign or unassign them before deleting it.");
+    }
+    await templateRepository.softDelete(id);
+    await auditLogRepository.record({
+      organizationId,
+      actorUserId: caller.id,
+      actorType: "USER",
+      action: "TEMPLATE_DELETED",
+      resourceType: "template",
+      resourceId: id,
+      beforeData: { name: existing.name, status: existing.status },
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent
+    });
+  }
+};
+
+// server/schemas/templateSchemas.ts
+import { z as z20 } from "zod";
+var templateTypeSchema = z20.enum([
+  "HOMEPAGE",
+  "STANDARD_PAGE",
+  "BLOG_INDEX",
+  "SINGLE_POST",
+  "CATEGORY",
+  "TAG",
+  "SEARCH",
+  "ARCHIVE",
+  "AUTHOR",
+  "NOT_FOUND",
+  "PRODUCT",
+  "SERVICE",
+  "SOLUTION",
+  "CASE_STUDY",
+  "LANDING_PAGE"
+]);
+var templatePartTypeSchema = z20.enum([
+  "HEADER",
+  "FOOTER",
+  "PRIMARY_NAVIGATION",
+  "MOBILE_HEADER",
+  "SIDEBAR",
+  "ANNOUNCEMENT_BAR",
+  "CTA_SECTION",
+  "NEWSLETTER_SECTION",
+  "CONTACT_SECTION",
+  "SOCIAL_SECTION"
+]);
+var templateWorkflowStatusSchema = z20.enum(["DRAFT", "PUBLISHED", "ARCHIVED"]);
+var slugSchema5 = z20.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)");
+var SORT_FIELDS3 = ["name", "slug", "type", "status", "createdAt", "updatedAt"];
+var listTemplatesQuerySchema = z20.object({
+  page: z20.coerce.number().int().positive().default(1),
+  limit: z20.coerce.number().int().positive().max(100).default(20),
+  search: z20.string().trim().max(200).optional(),
+  status: templateWorkflowStatusSchema.optional(),
+  type: templateTypeSchema.optional(),
+  sort: z20.enum(SORT_FIELDS3).default("updatedAt"),
+  order: z20.enum(["asc", "desc"]).default("desc")
+});
+var createTemplateSchema = z20.object({
+  type: templateTypeSchema,
+  name: z20.string().trim().min(1).max(150),
+  slug: slugSchema5.optional(),
+  description: z20.string().trim().max(2e3).optional(),
+  structure: z20.record(z20.unknown()).default({})
+});
+var updateTemplateSchema = z20.object({
+  name: z20.string().trim().min(1).max(150).optional(),
+  slug: slugSchema5.optional(),
+  description: z20.string().trim().max(2e3).nullable().optional(),
+  structure: z20.record(z20.unknown()).optional(),
+  expectedUpdatedAt: expectedUpdatedAtSchema
+}).refine((v) => Object.keys(v).filter((k) => k !== "expectedUpdatedAt").length > 0, { message: "At least one field must be provided." });
+var duplicateTemplateSchema = z20.object({
+  name: z20.string().trim().min(1).max(150).optional()
+});
+var revertTemplateSchema = z20.object({
+  revisionId: z20.string().trim().uuid()
+});
+var listTemplatePartsQuerySchema = z20.object({
+  page: z20.coerce.number().int().positive().default(1),
+  limit: z20.coerce.number().int().positive().max(100).default(20),
+  search: z20.string().trim().max(200).optional(),
+  status: templateWorkflowStatusSchema.optional(),
+  type: templatePartTypeSchema.optional(),
+  sort: z20.enum(SORT_FIELDS3).default("updatedAt"),
+  order: z20.enum(["asc", "desc"]).default("desc")
+});
+var createTemplatePartSchema = z20.object({
+  type: templatePartTypeSchema,
+  name: z20.string().trim().min(1).max(150),
+  slug: slugSchema5.optional(),
+  content: z20.record(z20.unknown()).default({})
+});
+var updateTemplatePartSchema = z20.object({
+  name: z20.string().trim().min(1).max(150).optional(),
+  slug: slugSchema5.optional(),
+  content: z20.record(z20.unknown()).optional(),
+  expectedUpdatedAt: expectedUpdatedAtSchema
+}).refine((v) => Object.keys(v).filter((k) => k !== "expectedUpdatedAt").length > 0, { message: "At least one field must be provided." });
+var duplicateTemplatePartSchema = z20.object({
+  name: z20.string().trim().min(1).max(150).optional()
+});
+var revertTemplatePartSchema = z20.object({
+  revisionId: z20.string().trim().uuid()
+});
+
+// server/routes/v1/templateRoutes.ts
+var router22 = Router22();
+router22.use(authenticateToken);
+function requestMeta13(req) {
+  return { ip: req.ip, userAgent: req.headers["user-agent"] };
+}
+router22.get(
+  "/",
+  requirePermission("templates.read"),
+  asyncHandler(async (req, res) => {
+    const query = listTemplatesQuerySchema.parse(req.query);
+    const { rows, total } = await templateService.listTemplates(
+      req.user.organizationId,
+      { search: query.search, status: query.status, type: query.type },
+      query.page,
+      query.limit,
+      query.sort,
+      query.order
+    );
+    sendSuccess(res, { templates: rows }, 200, { page: query.page, limit: query.limit, total });
+  })
+);
+router22.get(
+  "/:id",
+  requirePermission("templates.read"),
+  asyncHandler(async (req, res) => {
+    const template = await templateService.getTemplate(req.user.organizationId, req.params.id);
+    sendSuccess(res, { template });
+  })
+);
+router22.get(
+  "/:id/revisions",
+  requirePermission("templates.read"),
+  asyncHandler(async (req, res) => {
+    const revisions = await templateService.listRevisions(req.user.organizationId, req.params.id);
+    sendSuccess(res, { revisions });
+  })
+);
+router22.post(
+  "/",
+  requirePermission("templates.create"),
+  asyncHandler(async (req, res) => {
+    const input = createTemplateSchema.parse(req.body);
+    const template = await templateService.createTemplate(req.user, input, requestMeta13(req));
+    sendSuccess(res, { template }, 201);
+  })
+);
+router22.post(
+  "/:id/duplicate",
+  requirePermission("templates.create"),
+  asyncHandler(async (req, res) => {
+    const input = duplicateTemplateSchema.parse(req.body ?? {});
+    const template = await templateService.duplicateTemplate(req.user, req.params.id, input, requestMeta13(req));
+    sendSuccess(res, { template }, 201);
+  })
+);
+router22.patch(
+  "/:id",
+  requirePermission("templates.update"),
+  asyncHandler(async (req, res) => {
+    const input = updateTemplateSchema.parse(req.body);
+    const template = await templateService.updateTemplate(req.user, req.params.id, input, requestMeta13(req));
+    sendSuccess(res, { template });
+  })
+);
+router22.post(
+  "/:id/publish",
+  requirePermission("templates.publish"),
+  asyncHandler(async (req, res) => {
+    const template = await templateService.publishTemplate(req.user, req.params.id, requestMeta13(req));
+    sendSuccess(res, { template });
+  })
+);
+router22.post(
+  "/:id/archive",
+  requirePermission("templates.delete"),
+  asyncHandler(async (req, res) => {
+    const template = await templateService.archiveTemplate(req.user, req.params.id, requestMeta13(req));
+    sendSuccess(res, { template });
+  })
+);
+router22.post(
+  "/:id/revert",
+  requirePermission("templates.update"),
+  asyncHandler(async (req, res) => {
+    const input = revertTemplateSchema.parse(req.body);
+    const template = await templateService.revertTemplate(req.user, req.params.id, input, requestMeta13(req));
+    sendSuccess(res, { template });
+  })
+);
+router22.delete(
+  "/:id",
+  requirePermission("templates.delete"),
+  asyncHandler(async (req, res) => {
+    await templateService.deleteTemplate(req.user, req.params.id, requestMeta13(req));
+    sendSuccess(res, { message: "Template deleted." });
+  })
+);
+var templateRoutes_default = router22;
+
+// server/routes/v1/templatePartRoutes.ts
+import { Router as Router23 } from "express";
+
+// server/repositories/templatePartRepository.ts
+function slugify8(input) {
   return input.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 150);
 }
-var withRelations = { include: { currentRevision: true, category: true, author: true, tags: { include: { tag: true } } } };
+var withCurrentRevision2 = { include: { currentRevision: true } };
+function buildWhere12(organizationId, filters) {
+  const where = { organizationId, deletedAt: null };
+  if (filters.status) where.status = filters.status;
+  if (filters.type) where.type = filters.type;
+  if (filters.search) {
+    where.OR = [{ name: { contains: filters.search, mode: "insensitive" } }, { slug: { contains: filters.search, mode: "insensitive" } }];
+  }
+  return where;
+}
+var templatePartRepository = {
+  async list(organizationId, filters, page, limit, sort, order) {
+    const where = buildWhere12(organizationId, filters);
+    const [rows, total] = await Promise.all([
+      prisma.templatePart.findMany({ where, orderBy: { [sort]: order }, skip: (page - 1) * limit, take: limit, ...withCurrentRevision2 }),
+      prisma.templatePart.count({ where })
+    ]);
+    return { rows, total };
+  },
+  async findByIdInOrg(id, organizationId) {
+    return prisma.templatePart.findFirst({ where: { id, organizationId, deletedAt: null }, ...withCurrentRevision2 });
+  },
+  async findBySlugInOrg(organizationId, slug) {
+    return prisma.templatePart.findFirst({ where: { organizationId, slug, deletedAt: null } });
+  },
+  async findPublishedByIdInOrg(id, organizationId) {
+    return prisma.templatePart.findFirst({ where: { id, organizationId, status: "PUBLISHED", deletedAt: null } });
+  },
+  async findUniqueSlugInOrg(organizationId, base) {
+    const baseSlug = slugify8(base) || "part";
+    let slug = baseSlug;
+    let attempt = 1;
+    while (await this.findBySlugInOrg(organizationId, slug)) {
+      attempt += 1;
+      slug = `${baseSlug}-${attempt}`;
+      if (attempt > 50) break;
+    }
+    return slug;
+  },
+  async listRevisions(templatePartId) {
+    return prisma.templatePartRevision.findMany({ where: { templatePartId }, orderBy: { version: "desc" } });
+  },
+  async softDelete(id) {
+    await prisma.templatePart.update({ where: { id }, data: { deletedAt: /* @__PURE__ */ new Date() } });
+  }
+};
+
+// server/services/templatePartService.ts
+function isUniqueConstraintError6(err) {
+  return !!err && typeof err === "object" && "code" in err && err.code === "P2002";
+}
+async function loadTemplatePartOrThrow(id, organizationId) {
+  const part = await templatePartRepository.findByIdInOrg(id, organizationId);
+  if (!part) throw new NotFoundError("Template part not found.");
+  return part;
+}
+function assertNotSystem2(part, action) {
+  if (part.isSystem) {
+    throw new AuthorizationError(`This is a protected system template part and cannot be ${action}.`);
+  }
+}
+var templatePartService = {
+  async listParts(organizationId, filters, page, limit, sort, order) {
+    return templatePartRepository.list(organizationId, filters, page, limit, sort, order);
+  },
+  async getPart(organizationId, id) {
+    return loadTemplatePartOrThrow(id, organizationId);
+  },
+  async listRevisions(organizationId, id) {
+    await loadTemplatePartOrThrow(id, organizationId);
+    return templatePartRepository.listRevisions(id);
+  },
+  async createPart(caller, input, meta = {}) {
+    const organizationId = caller.organizationId;
+    if (input.slug) {
+      const dup = await templatePartRepository.findBySlugInOrg(organizationId, input.slug);
+      if (dup) throw new ConflictError(`A template part with slug "${input.slug}" already exists.`, { existingTemplatePartId: dup.id });
+    }
+    const slug = input.slug ?? await templatePartRepository.findUniqueSlugInOrg(organizationId, input.name);
+    let createdId;
+    try {
+      createdId = await prisma.$transaction(async (tx) => {
+        const part = await tx.templatePart.create({
+          data: {
+            organizationId,
+            type: input.type,
+            name: input.name,
+            slug,
+            status: "DRAFT",
+            createdById: caller.id
+          }
+        });
+        const revision = await tx.templatePartRevision.create({
+          data: {
+            templatePartId: part.id,
+            version: 1,
+            status: "DRAFT",
+            name: input.name,
+            content: input.content,
+            createdById: caller.id
+          }
+        });
+        await tx.templatePart.update({ where: { id: part.id }, data: { currentRevisionId: revision.id } });
+        return part.id;
+      });
+    } catch (err) {
+      throw isUniqueConstraintError6(err) ? new ConflictError("A template part with this slug already exists.") : err;
+    }
+    await auditLogRepository.record({
+      organizationId,
+      actorUserId: caller.id,
+      actorType: "USER",
+      action: "TEMPLATE_PART_CREATED",
+      resourceType: "template_part",
+      resourceId: createdId,
+      afterData: { name: input.name, slug, type: input.type },
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent
+    });
+    return loadTemplatePartOrThrow(createdId, organizationId);
+  },
+  async updatePart(caller, id, input, meta = {}) {
+    const organizationId = caller.organizationId;
+    const existing = await loadTemplatePartOrThrow(id, organizationId);
+    assertNotSystem2(existing, "edited");
+    const hasContentEdit = input.name !== void 0 || input.slug !== void 0 || input.content !== void 0;
+    if (input.slug !== void 0 && input.slug !== existing.slug) {
+      const dup = await templatePartRepository.findBySlugInOrg(organizationId, input.slug);
+      if (dup && dup.id !== id) throw new ConflictError(`A template part with slug "${input.slug}" already exists.`, { existingTemplatePartId: dup.id });
+    }
+    const currentRevision = existing.currentRevision;
+    try {
+      await prisma.$transaction(async (tx) => {
+        const partPatch = {};
+        if (input.name !== void 0) partPatch.name = input.name;
+        if (input.slug !== void 0) partPatch.slug = input.slug;
+        if (currentRevision && hasContentEdit && currentRevision.status === "PUBLISHED") {
+          const newRevision = await tx.templatePartRevision.create({
+            data: {
+              templatePartId: id,
+              version: currentRevision.version + 1,
+              status: "DRAFT",
+              name: input.name ?? currentRevision.name,
+              content: input.content ?? currentRevision.content,
+              createdById: caller.id
+            }
+          });
+          partPatch.currentRevisionId = newRevision.id;
+        } else if (hasContentEdit && currentRevision) {
+          const revisionPatch = {};
+          if (input.name !== void 0) revisionPatch.name = input.name;
+          if (input.content !== void 0) revisionPatch.content = input.content;
+          if (Object.keys(revisionPatch).length > 0) {
+            await tx.templatePartRevision.update({ where: { id: currentRevision.id }, data: revisionPatch });
+          }
+        }
+        if (hasContentEdit && Object.keys(partPatch).length === 0) {
+          partPatch.updatedAt = /* @__PURE__ */ new Date();
+        }
+        if (Object.keys(partPatch).length > 0) {
+          const where = { id, ...input.expectedUpdatedAt !== void 0 ? { updatedAt: input.expectedUpdatedAt } : {} };
+          const result = await tx.templatePart.updateMany({ where, data: partPatch });
+          if (result.count === 0) {
+            throw new ConflictError("This template part was changed by someone else since you loaded it. Reload and try again.");
+          }
+        }
+      });
+    } catch (err) {
+      throw isUniqueConstraintError6(err) ? new ConflictError("A template part with this slug already exists.") : err;
+    }
+    await auditLogRepository.record({
+      organizationId,
+      actorUserId: caller.id,
+      actorType: "USER",
+      action: "TEMPLATE_PART_UPDATED",
+      resourceType: "template_part",
+      resourceId: id,
+      beforeData: { name: existing.name, slug: existing.slug },
+      afterData: { name: input.name, slug: input.slug },
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent
+    });
+    return loadTemplatePartOrThrow(id, organizationId);
+  },
+  async publishPart(caller, id, meta = {}) {
+    const organizationId = caller.organizationId;
+    const existing = await loadTemplatePartOrThrow(id, organizationId);
+    assertNotSystem2(existing, "published");
+    if (existing.status === "ARCHIVED") throw new ConflictError("An archived template part must be restored before it can be published.");
+    if (!existing.currentRevisionId) throw new ConflictError("This template part has no revision to publish.");
+    const now = /* @__PURE__ */ new Date();
+    await prisma.$transaction([
+      prisma.templatePartRevision.update({ where: { id: existing.currentRevisionId }, data: { status: "PUBLISHED", publishedAt: now } }),
+      prisma.templatePart.update({ where: { id }, data: { status: "PUBLISHED" } })
+    ]);
+    await auditLogRepository.record({
+      organizationId,
+      actorUserId: caller.id,
+      actorType: "USER",
+      action: "TEMPLATE_PART_PUBLISHED",
+      resourceType: "template_part",
+      resourceId: id,
+      beforeData: { status: existing.status },
+      afterData: { status: "PUBLISHED" },
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent
+    });
+    return loadTemplatePartOrThrow(id, organizationId);
+  },
+  async archivePart(caller, id, meta = {}) {
+    const organizationId = caller.organizationId;
+    const existing = await loadTemplatePartOrThrow(id, organizationId);
+    assertNotSystem2(existing, "archived");
+    if (existing.status === "ARCHIVED") throw new ConflictError("This template part is already archived.");
+    await prisma.templatePart.update({ where: { id }, data: { status: "ARCHIVED" } });
+    await auditLogRepository.record({
+      organizationId,
+      actorUserId: caller.id,
+      actorType: "USER",
+      action: "TEMPLATE_PART_ARCHIVED",
+      resourceType: "template_part",
+      resourceId: id,
+      beforeData: { status: existing.status },
+      afterData: { status: "ARCHIVED" },
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent
+    });
+    return loadTemplatePartOrThrow(id, organizationId);
+  },
+  async revertPart(caller, id, input, meta = {}) {
+    const organizationId = caller.organizationId;
+    const existing = await loadTemplatePartOrThrow(id, organizationId);
+    assertNotSystem2(existing, "rolled back");
+    const target = await prisma.templatePartRevision.findFirst({ where: { id: input.revisionId, templatePartId: id } });
+    if (!target) throw new NotFoundError("Revision not found on this template part.");
+    const current = existing.currentRevision;
+    const nextVersion = (current?.version ?? 0) + 1;
+    const wasPublished = existing.status === "PUBLISHED";
+    await prisma.$transaction(async (tx) => {
+      const newRevision = await tx.templatePartRevision.create({
+        data: {
+          templatePartId: id,
+          version: nextVersion,
+          status: wasPublished ? "PUBLISHED" : "DRAFT",
+          name: target.name,
+          content: target.content,
+          createdById: caller.id,
+          publishedAt: wasPublished ? /* @__PURE__ */ new Date() : null
+        }
+      });
+      await tx.templatePart.update({ where: { id }, data: { currentRevisionId: newRevision.id } });
+    });
+    await auditLogRepository.record({
+      organizationId,
+      actorUserId: caller.id,
+      actorType: "USER",
+      action: "TEMPLATE_PART_REVERTED",
+      resourceType: "template_part",
+      resourceId: id,
+      beforeData: { fromVersion: current?.version, revertedToRevisionId: target.id, revertedToVersion: target.version },
+      afterData: { newVersion: nextVersion },
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent
+    });
+    return loadTemplatePartOrThrow(id, organizationId);
+  },
+  async duplicatePart(caller, id, input, meta = {}) {
+    const organizationId = caller.organizationId;
+    const existing = await loadTemplatePartOrThrow(id, organizationId);
+    const baseName = input.name ?? `${existing.name} (Copy)`;
+    const slug = await templatePartRepository.findUniqueSlugInOrg(organizationId, baseName);
+    const sourceContent = existing.currentRevision?.content ?? {};
+    const createdId = await prisma.$transaction(async (tx) => {
+      const part = await tx.templatePart.create({
+        data: {
+          organizationId,
+          type: existing.type,
+          name: baseName,
+          slug,
+          status: "DRAFT",
+          isSystem: false,
+          createdById: caller.id
+        }
+      });
+      const revision = await tx.templatePartRevision.create({
+        data: {
+          templatePartId: part.id,
+          version: 1,
+          status: "DRAFT",
+          name: baseName,
+          content: sourceContent,
+          createdById: caller.id
+        }
+      });
+      await tx.templatePart.update({ where: { id: part.id }, data: { currentRevisionId: revision.id } });
+      return part.id;
+    });
+    await auditLogRepository.record({
+      organizationId,
+      actorUserId: caller.id,
+      actorType: "USER",
+      action: "TEMPLATE_PART_DUPLICATED",
+      resourceType: "template_part",
+      resourceId: createdId,
+      afterData: { duplicatedFromId: id, name: baseName },
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent
+    });
+    return loadTemplatePartOrThrow(createdId, organizationId);
+  },
+  async deletePart(caller, id, meta = {}) {
+    const organizationId = caller.organizationId;
+    const existing = await loadTemplatePartOrThrow(id, organizationId);
+    assertNotSystem2(existing, "deleted");
+    await templatePartRepository.softDelete(id);
+    await auditLogRepository.record({
+      organizationId,
+      actorUserId: caller.id,
+      actorType: "USER",
+      action: "TEMPLATE_PART_DELETED",
+      resourceType: "template_part",
+      resourceId: id,
+      beforeData: { name: existing.name, status: existing.status },
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent
+    });
+  }
+};
+
+// server/routes/v1/templatePartRoutes.ts
+var router23 = Router23();
+router23.use(authenticateToken);
+function requestMeta14(req) {
+  return { ip: req.ip, userAgent: req.headers["user-agent"] };
+}
+router23.get(
+  "/",
+  requirePermission("template_parts.read"),
+  asyncHandler(async (req, res) => {
+    const query = listTemplatePartsQuerySchema.parse(req.query);
+    const { rows, total } = await templatePartService.listParts(
+      req.user.organizationId,
+      { search: query.search, status: query.status, type: query.type },
+      query.page,
+      query.limit,
+      query.sort,
+      query.order
+    );
+    sendSuccess(res, { templateParts: rows }, 200, { page: query.page, limit: query.limit, total });
+  })
+);
+router23.get(
+  "/:id",
+  requirePermission("template_parts.read"),
+  asyncHandler(async (req, res) => {
+    const templatePart = await templatePartService.getPart(req.user.organizationId, req.params.id);
+    sendSuccess(res, { templatePart });
+  })
+);
+router23.get(
+  "/:id/revisions",
+  requirePermission("template_parts.read"),
+  asyncHandler(async (req, res) => {
+    const revisions = await templatePartService.listRevisions(req.user.organizationId, req.params.id);
+    sendSuccess(res, { revisions });
+  })
+);
+router23.post(
+  "/",
+  requirePermission("template_parts.create"),
+  asyncHandler(async (req, res) => {
+    const input = createTemplatePartSchema.parse(req.body);
+    const templatePart = await templatePartService.createPart(req.user, input, requestMeta14(req));
+    sendSuccess(res, { templatePart }, 201);
+  })
+);
+router23.post(
+  "/:id/duplicate",
+  requirePermission("template_parts.create"),
+  asyncHandler(async (req, res) => {
+    const input = duplicateTemplatePartSchema.parse(req.body ?? {});
+    const templatePart = await templatePartService.duplicatePart(req.user, req.params.id, input, requestMeta14(req));
+    sendSuccess(res, { templatePart }, 201);
+  })
+);
+router23.patch(
+  "/:id",
+  requirePermission("template_parts.update"),
+  asyncHandler(async (req, res) => {
+    const input = updateTemplatePartSchema.parse(req.body);
+    const templatePart = await templatePartService.updatePart(req.user, req.params.id, input, requestMeta14(req));
+    sendSuccess(res, { templatePart });
+  })
+);
+router23.post(
+  "/:id/publish",
+  requirePermission("template_parts.publish"),
+  asyncHandler(async (req, res) => {
+    const templatePart = await templatePartService.publishPart(req.user, req.params.id, requestMeta14(req));
+    sendSuccess(res, { templatePart });
+  })
+);
+router23.post(
+  "/:id/archive",
+  requirePermission("template_parts.delete"),
+  asyncHandler(async (req, res) => {
+    const templatePart = await templatePartService.archivePart(req.user, req.params.id, requestMeta14(req));
+    sendSuccess(res, { templatePart });
+  })
+);
+router23.post(
+  "/:id/revert",
+  requirePermission("template_parts.update"),
+  asyncHandler(async (req, res) => {
+    const input = revertTemplatePartSchema.parse(req.body);
+    const templatePart = await templatePartService.revertPart(req.user, req.params.id, input, requestMeta14(req));
+    sendSuccess(res, { templatePart });
+  })
+);
+router23.delete(
+  "/:id",
+  requirePermission("template_parts.delete"),
+  asyncHandler(async (req, res) => {
+    await templatePartService.deletePart(req.user, req.params.id, requestMeta14(req));
+    sendSuccess(res, { message: "Template part deleted." });
+  })
+);
+var templatePartRoutes_default = router23;
+
+// server/routes/v1/postRoutes.ts
+import { Router as Router24 } from "express";
+
+// server/repositories/postRepository.ts
+function slugify9(input) {
+  return input.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 150);
+}
+var withRelations2 = { include: { currentRevision: true, category: true, author: true, tags: { include: { tag: true } } } };
 var withPublicRelations2 = {
   include: {
     currentRevision: true,
@@ -6116,7 +8983,7 @@ var withPublicRelations2 = {
     featuredMedia: true
   }
 };
-function buildWhere8(organizationId, filters) {
+function buildWhere13(organizationId, filters) {
   const where = { organizationId, deletedAt: null };
   if (filters.status) where.status = filters.status;
   if (filters.categoryId) where.categoryId = filters.categoryId;
@@ -6128,7 +8995,7 @@ function buildWhere8(organizationId, filters) {
 }
 var postRepository = {
   async list(organizationId, filters, page, limit, sort, order) {
-    const where = buildWhere8(organizationId, filters);
+    const where = buildWhere13(organizationId, filters);
     const [rows, total] = await Promise.all([
       prisma.post.findMany({ where, orderBy: { [sort]: order }, skip: (page - 1) * limit, take: limit }),
       prisma.post.count({ where })
@@ -6136,7 +9003,7 @@ var postRepository = {
     return { rows, total };
   },
   async findByIdInOrg(id, organizationId) {
-    return prisma.post.findFirst({ where: { id, organizationId, deletedAt: null }, ...withRelations });
+    return prisma.post.findFirst({ where: { id, organizationId, deletedAt: null }, ...withRelations2 });
   },
   async findBySlugInOrg(organizationId, slug) {
     return prisma.post.findFirst({ where: { organizationId, slug, deletedAt: null } });
@@ -6147,15 +9014,44 @@ var postRepository = {
   },
   /** Phase 11 public projection — PUBLISHED only, paginated, with the same relations as findPublishedBySlugWithMedia. */
   async listPublished(organizationId, filters, page, limit, sort, order) {
-    const where = buildWhere8(organizationId, { ...filters, status: "PUBLISHED" });
+    const where = buildWhere13(organizationId, { ...filters, status: "PUBLISHED" });
     const [rows, total] = await Promise.all([
       prisma.post.findMany({ where, orderBy: { [sort]: order }, skip: (page - 1) * limit, take: limit, ...withPublicRelations2 }),
       prisma.post.count({ where })
     ]);
     return { rows, total };
   },
+  /**
+   * Cross-organization by design (docs/AUTOMATION_ARCHITECTURE.md's
+   * scheduler tick uses the same pattern) — this backs the system cron
+   * job that promotes SCHEDULED posts to PUBLISHED, which has no single
+   * caller organization to scope to. Never used by an organization-scoped
+   * request handler.
+   */
+  async findDueScheduled(now, limit = 20) {
+    return prisma.post.findMany({
+      where: { status: "SCHEDULED", scheduledAt: { lte: now }, deletedAt: null },
+      take: limit,
+      orderBy: { scheduledAt: "asc" },
+      ...withRelations2
+    });
+  },
+  /** Phase 5 SEO audit — every live-or-about-to-be-live post (not ARCHIVED, not soft-deleted), with exactly the fields the rule-based checks need. */
+  async listForSeoAudit(organizationId) {
+    return prisma.post.findMany({
+      where: { organizationId, deletedAt: null, status: { not: "ARCHIVED" } },
+      select: {
+        id: true,
+        slug: true,
+        title: true,
+        status: true,
+        currentRevision: { select: { title: true, metadata: true } },
+        featuredMedia: { select: { altText: true } }
+      }
+    });
+  },
   async findUniqueSlugInOrg(organizationId, base) {
-    const baseSlug = slugify6(base) || "post";
+    const baseSlug = slugify9(base) || "post";
     let slug = baseSlug;
     let attempt = 1;
     while (await this.findBySlugInOrg(organizationId, slug)) {
@@ -6180,7 +9076,7 @@ var postRepository = {
 };
 
 // server/repositories/categoryRepository.ts
-function slugify7(input) {
+function slugify10(input) {
   return input.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 150);
 }
 var categoryRepository = {
@@ -6194,7 +9090,7 @@ var categoryRepository = {
     return prisma.category.findFirst({ where: { organizationId, slug } });
   },
   async findUniqueSlugInOrg(organizationId, base) {
-    const baseSlug = slugify7(base) || "category";
+    const baseSlug = slugify10(base) || "category";
     let slug = baseSlug;
     let attempt = 1;
     while (await this.findBySlugInOrg(organizationId, slug)) {
@@ -6216,7 +9112,7 @@ var categoryRepository = {
 };
 
 // server/repositories/tagRepository.ts
-function slugify8(input) {
+function slugify11(input) {
   return input.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 150);
 }
 var tagRepository = {
@@ -6230,7 +9126,7 @@ var tagRepository = {
     return prisma.tag.findFirst({ where: { organizationId, slug } });
   },
   async findUniqueSlugInOrg(organizationId, base) {
-    const baseSlug = slugify8(base) || "tag";
+    const baseSlug = slugify11(base) || "tag";
     let slug = baseSlug;
     let attempt = 1;
     while (await this.findBySlugInOrg(organizationId, slug)) {
@@ -6256,8 +9152,8 @@ var tagRepository = {
 };
 
 // server/services/postService.ts
-var CONTENT_EDIT_BLOCKED_STATUSES2 = /* @__PURE__ */ new Set(["PUBLISHED", "ARCHIVED"]);
-function isUniqueConstraintError4(err) {
+var CONTENT_EDIT_BLOCKED_STATUSES2 = /* @__PURE__ */ new Set(["ARCHIVED"]);
+function isUniqueConstraintError7(err) {
   return !!err && typeof err === "object" && "code" in err && err.code === "P2002";
 }
 function assertHasPublishableContent2(revision) {
@@ -6295,6 +9191,7 @@ var postService = {
   },
   async createPost(caller, input, meta = {}) {
     const organizationId = caller.organizationId;
+    const body = sanitizeContentHtml(input.body);
     await assertCategoryInOrg(input.categoryId, organizationId);
     await assertTagsInOrg(input.tagIds, organizationId);
     if (input.featuredMediaId) await assertFeaturedMediaUsable(input.featuredMediaId, organizationId);
@@ -6324,7 +9221,7 @@ var postService = {
             version: 1,
             status: "DRAFT",
             title: input.title,
-            body: input.body,
+            body,
             metadata: input.metadata ?? {},
             createdById: caller.id
           }
@@ -6336,7 +9233,7 @@ var postService = {
         return post.id;
       });
     } catch (err) {
-      throw isUniqueConstraintError4(err) ? new ConflictError("A post with this slug already exists.") : err;
+      throw isUniqueConstraintError7(err) ? new ConflictError("A post with this slug already exists.") : err;
     }
     await auditLogRepository.record({
       organizationId,
@@ -6354,10 +9251,10 @@ var postService = {
   async updatePost(caller, id, input, meta = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadPostOrThrow(id, organizationId);
-    const effectiveStatus = input.status ?? existing.status;
+    const sanitizedBody = input.body !== void 0 ? sanitizeContentHtml(input.body) : void 0;
     const hasContentEdit = input.title !== void 0 || input.body !== void 0 || input.metadata !== void 0 || input.slug !== void 0;
-    if (hasContentEdit && CONTENT_EDIT_BLOCKED_STATUSES2.has(effectiveStatus)) {
-      throw new ConflictError(`Post content cannot be edited while status is ${effectiveStatus}.`);
+    if (hasContentEdit && input.status === void 0 && CONTENT_EDIT_BLOCKED_STATUSES2.has(existing.status)) {
+      throw new ConflictError(`Post content cannot be edited while status is ${existing.status}. Restore it to draft first.`);
     }
     if (input.slug !== void 0 && input.slug !== existing.slug) {
       const dup = await postRepository.findBySlugInOrg(organizationId, input.slug);
@@ -6371,6 +9268,7 @@ var postService = {
       if (input.featuredMediaId) await assertFeaturedMediaUsable(input.featuredMediaId, organizationId);
     }
     const unpublishing = existing.status === "PUBLISHED" && input.status === "DRAFT";
+    const liveEditOfPublished = hasContentEdit && input.status === void 0 && existing.status === "PUBLISHED";
     const currentRevision = existing.currentRevision;
     try {
       await prisma.$transaction(async (tx) => {
@@ -6382,23 +9280,24 @@ var postService = {
         if (input.authorId !== void 0) postPatch.authorId = input.authorId;
         if (hasFeaturedMediaEdit) postPatch.featuredMediaId = input.featuredMediaId;
         if (unpublishing) postPatch.publishedAt = null;
-        if (currentRevision && (unpublishing || hasContentEdit && currentRevision.status === "PUBLISHED")) {
+        if (currentRevision && (unpublishing || liveEditOfPublished || hasContentEdit && currentRevision.status === "PUBLISHED")) {
           const newRevision = await tx.contentRevision.create({
             data: {
               postId: id,
               version: currentRevision.version + 1,
-              status: "DRAFT",
+              status: liveEditOfPublished ? "PUBLISHED" : "DRAFT",
               title: input.title ?? currentRevision.title,
-              body: input.body ?? currentRevision.body,
+              body: sanitizedBody ?? currentRevision.body,
               metadata: input.metadata ?? currentRevision.metadata,
-              createdById: caller.id
+              createdById: caller.id,
+              publishedAt: liveEditOfPublished ? /* @__PURE__ */ new Date() : null
             }
           });
           postPatch.currentRevisionId = newRevision.id;
         } else if (hasContentEdit && currentRevision) {
           const revisionPatch = {};
           if (input.title !== void 0) revisionPatch.title = input.title;
-          if (input.body !== void 0) revisionPatch.body = input.body;
+          if (sanitizedBody !== void 0) revisionPatch.body = sanitizedBody;
           if (input.metadata !== void 0) revisionPatch.metadata = input.metadata;
           if (Object.keys(revisionPatch).length > 0) {
             await tx.contentRevision.update({ where: { id: currentRevision.id }, data: revisionPatch });
@@ -6423,7 +9322,7 @@ var postService = {
         }
       });
     } catch (err) {
-      throw isUniqueConstraintError4(err) ? new ConflictError("A post with this slug already exists.") : err;
+      throw isUniqueConstraintError7(err) ? new ConflictError("A post with this slug already exists.") : err;
     }
     await auditLogRepository.record({
       organizationId,
@@ -6437,6 +9336,18 @@ var postService = {
       ipAddress: meta.ip,
       userAgent: meta.userAgent
     });
+    if (input.slug !== void 0 && input.slug !== existing.slug) {
+      const finalStatus = input.status ?? existing.status;
+      if (finalStatus === "PUBLISHED") {
+        await redirectService.autoRedirectOnSlugChange({
+          organizationId,
+          fromPath: `/blog/${existing.slug}`,
+          toPath: `/blog/${input.slug}`,
+          resourceType: "post",
+          resourceId: id
+        });
+      }
+    }
     if (hasFeaturedMediaEdit && input.featuredMediaId !== existing.featuredMediaId) {
       await auditLogRepository.record({
         organizationId,
@@ -6499,6 +9410,15 @@ var postService = {
       ipAddress: meta.ip,
       userAgent: meta.userAgent
     });
+    if (existing.createdById && existing.createdById !== caller.id) {
+      await notificationService.notify({
+        organizationId,
+        userId: existing.createdById,
+        type: "content_published",
+        title: "Your post was published",
+        message: `"${existing.title}" is now live.`
+      });
+    }
     return loadPostOrThrow(id, organizationId);
   },
   async schedulePost(caller, id, input, meta = {}) {
@@ -6555,19 +9475,17 @@ var postService = {
         data: {
           postId: id,
           version: nextVersion,
-          status: "DRAFT",
+          status: wasPublished ? "PUBLISHED" : "DRAFT",
           title: target.title,
           body: target.body,
           metadata: target.metadata,
-          createdById: caller.id
+          createdById: caller.id,
+          publishedAt: wasPublished ? /* @__PURE__ */ new Date() : null
         }
       });
       await tx.post.update({
         where: { id },
-        data: {
-          currentRevisionId: newRevision.id,
-          ...wasPublished ? { status: "DRAFT", publishedAt: null } : {}
-        }
+        data: { currentRevisionId: newRevision.id }
       });
     });
     await auditLogRepository.record({
@@ -6603,48 +9521,48 @@ var postService = {
 };
 
 // server/schemas/postSchemas.ts
-import { z as z17 } from "zod";
-var slugSchema4 = z17.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)");
-var createPostSchema = z17.object({
-  title: z17.string().trim().min(1).max(200),
-  slug: slugSchema4.optional(),
-  body: z17.string().trim().max(5e5).default(""),
-  metadata: z17.record(z17.unknown()).optional(),
-  categoryId: z17.string().trim().uuid().optional(),
-  authorId: z17.string().trim().uuid().optional(),
-  tagIds: z17.array(z17.string().trim().uuid()).max(50).optional(),
-  featuredMediaId: z17.string().trim().uuid().optional()
+import { z as z21 } from "zod";
+var slugSchema6 = z21.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)");
+var createPostSchema = z21.object({
+  title: z21.string().trim().min(1).max(200),
+  slug: slugSchema6.optional(),
+  body: z21.string().trim().max(5e5).default(""),
+  metadata: seoMetadataSchema.optional(),
+  categoryId: z21.string().trim().uuid().optional(),
+  authorId: z21.string().trim().uuid().optional(),
+  tagIds: z21.array(z21.string().trim().uuid()).max(50).optional(),
+  featuredMediaId: z21.string().trim().uuid().optional()
 });
-var updatePostSchema = z17.object({
-  title: z17.string().trim().min(1).max(200).optional(),
-  slug: slugSchema4.optional(),
-  body: z17.string().trim().max(5e5).optional(),
-  metadata: z17.record(z17.unknown()).optional(),
+var updatePostSchema = z21.object({
+  title: z21.string().trim().min(1).max(200).optional(),
+  slug: slugSchema6.optional(),
+  body: z21.string().trim().max(5e5).optional(),
+  metadata: seoMetadataSchema.optional(),
   status: patchableContentStatusSchema.optional(),
-  categoryId: z17.string().trim().uuid().nullable().optional(),
-  authorId: z17.string().trim().uuid().nullable().optional(),
-  tagIds: z17.array(z17.string().trim().uuid()).max(50).optional(),
-  featuredMediaId: z17.string().trim().uuid().nullable().optional(),
+  categoryId: z21.string().trim().uuid().nullable().optional(),
+  authorId: z21.string().trim().uuid().nullable().optional(),
+  tagIds: z21.array(z21.string().trim().uuid()).max(50).optional(),
+  featuredMediaId: z21.string().trim().uuid().nullable().optional(),
   expectedUpdatedAt: expectedUpdatedAtSchema
 }).refine((v) => Object.keys(v).filter((k) => k !== "expectedUpdatedAt").length > 0, { message: "At least one field must be provided." });
-var listPostsQuerySchema = z17.object({
-  page: z17.coerce.number().int().positive().default(1),
-  limit: z17.coerce.number().int().positive().max(100).default(20),
-  search: z17.string().trim().max(200).optional(),
-  status: z17.enum(["DRAFT", "IN_REVIEW", "SCHEDULED", "PUBLISHED", "ARCHIVED"]).optional(),
-  categoryId: z17.string().trim().uuid().optional(),
-  tagId: z17.string().trim().uuid().optional(),
-  sort: z17.enum(["title", "slug", "status", "createdAt", "updatedAt", "publishedAt"]).default("updatedAt"),
-  order: z17.enum(["asc", "desc"]).default("desc")
+var listPostsQuerySchema = z21.object({
+  page: z21.coerce.number().int().positive().default(1),
+  limit: z21.coerce.number().int().positive().max(100).default(20),
+  search: z21.string().trim().max(200).optional(),
+  status: z21.enum(["DRAFT", "IN_REVIEW", "SCHEDULED", "PUBLISHED", "ARCHIVED"]).optional(),
+  categoryId: z21.string().trim().uuid().optional(),
+  tagId: z21.string().trim().uuid().optional(),
+  sort: z21.enum(["title", "slug", "status", "createdAt", "updatedAt", "publishedAt"]).default("updatedAt"),
+  order: z21.enum(["asc", "desc"]).default("desc")
 });
 
 // server/routes/v1/postRoutes.ts
-var router19 = Router19();
-router19.use(authenticateToken);
-function requestMeta11(req) {
+var router24 = Router24();
+router24.use(authenticateToken);
+function requestMeta15(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router19.get(
+router24.get(
   "/",
   requirePermission("content.read"),
   asyncHandler(async (req, res) => {
@@ -6660,7 +9578,7 @@ router19.get(
     sendSuccess(res, { posts: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router19.get(
+router24.get(
   "/:id",
   requirePermission("content.read"),
   asyncHandler(async (req, res) => {
@@ -6668,7 +9586,7 @@ router19.get(
     sendSuccess(res, { post });
   })
 );
-router19.get(
+router24.get(
   "/:id/revisions",
   requirePermission("content.read"),
   asyncHandler(async (req, res) => {
@@ -6676,81 +9594,81 @@ router19.get(
     sendSuccess(res, { revisions });
   })
 );
-router19.post(
+router24.post(
   "/",
   requirePermission("content.create"),
   asyncHandler(async (req, res) => {
     const input = createPostSchema.parse(req.body);
-    const post = await postService.createPost(req.user, input, requestMeta11(req));
+    const post = await postService.createPost(req.user, input, requestMeta15(req));
     sendSuccess(res, { post }, 201);
   })
 );
-router19.patch(
+router24.patch(
   "/:id",
   requirePermission("content.update"),
   asyncHandler(async (req, res) => {
     const input = updatePostSchema.parse(req.body);
-    const post = await postService.updatePost(req.user, req.params.id, input, requestMeta11(req));
+    const post = await postService.updatePost(req.user, req.params.id, input, requestMeta15(req));
     sendSuccess(res, { post });
   })
 );
-router19.post(
+router24.post(
   "/:id/submit-review",
   requirePermission("content.update"),
   asyncHandler(async (req, res) => {
-    const post = await postService.submitForReview(req.user, req.params.id, requestMeta11(req));
+    const post = await postService.submitForReview(req.user, req.params.id, requestMeta15(req));
     sendSuccess(res, { post });
   })
 );
-router19.post(
+router24.post(
   "/:id/publish",
   requirePermission("content.publish"),
   asyncHandler(async (req, res) => {
-    const post = await postService.publishPost(req.user, req.params.id, requestMeta11(req));
+    const post = await postService.publishPost(req.user, req.params.id, requestMeta15(req));
     sendSuccess(res, { post });
   })
 );
-router19.post(
+router24.post(
   "/:id/schedule",
   requirePermission("content.publish"),
   asyncHandler(async (req, res) => {
     const input = scheduleContentSchema.parse(req.body);
-    const post = await postService.schedulePost(req.user, req.params.id, input, requestMeta11(req));
+    const post = await postService.schedulePost(req.user, req.params.id, input, requestMeta15(req));
     sendSuccess(res, { post });
   })
 );
-router19.post(
+router24.post(
   "/:id/archive",
   requirePermission("content.delete"),
   asyncHandler(async (req, res) => {
-    const post = await postService.archivePost(req.user, req.params.id, requestMeta11(req));
+    const post = await postService.archivePost(req.user, req.params.id, requestMeta15(req));
     sendSuccess(res, { post });
   })
 );
-router19.post(
+router24.post(
   "/:id/revert",
   requirePermission("content.update"),
   asyncHandler(async (req, res) => {
     const input = revertContentSchema.parse(req.body);
-    const post = await postService.revertPost(req.user, req.params.id, input, requestMeta11(req));
+    const post = await postService.revertPost(req.user, req.params.id, input, requestMeta15(req));
     sendSuccess(res, { post });
   })
 );
-router19.delete(
+router24.delete(
   "/:id",
   requirePermission("content.delete"),
   asyncHandler(async (req, res) => {
-    await postService.deletePost(req.user, req.params.id, requestMeta11(req));
+    await postService.deletePost(req.user, req.params.id, requestMeta15(req));
     sendSuccess(res, { message: "Post deleted." });
   })
 );
-var postRoutes_default = router19;
+var postRoutes_default = router24;
 
 // server/routes/v1/categoryRoutes.ts
-import { Router as Router20 } from "express";
+import { Router as Router25 } from "express";
 
 // server/services/categoryService.ts
-function isUniqueConstraintError5(err) {
+function isUniqueConstraintError8(err) {
   return !!err && typeof err === "object" && "code" in err && err.code === "P2002";
 }
 async function loadCategoryOrThrow(id, organizationId) {
@@ -6776,7 +9694,7 @@ var categoryService = {
     try {
       category = await categoryRepository.create({ organizationId, name: input.name, slug, description: input.description });
     } catch (err) {
-      throw isUniqueConstraintError5(err) ? new ConflictError("A category with this slug already exists.") : err;
+      throw isUniqueConstraintError8(err) ? new ConflictError("A category with this slug already exists.") : err;
     }
     await auditLogRepository.record({
       organizationId,
@@ -6806,7 +9724,7 @@ var categoryService = {
     try {
       updated = await categoryRepository.update(id, patch);
     } catch (err) {
-      throw isUniqueConstraintError5(err) ? new ConflictError("A category with this slug already exists.") : err;
+      throw isUniqueConstraintError8(err) ? new ConflictError("A category with this slug already exists.") : err;
     }
     await auditLogRepository.record({
       organizationId,
@@ -6841,12 +9759,12 @@ var categoryService = {
 };
 
 // server/routes/v1/categoryRoutes.ts
-var router20 = Router20();
-router20.use(authenticateToken);
-function requestMeta12(req) {
+var router25 = Router25();
+router25.use(authenticateToken);
+function requestMeta16(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router20.get(
+router25.get(
   "/",
   requirePermission("content.read"),
   asyncHandler(async (req, res) => {
@@ -6854,7 +9772,7 @@ router20.get(
     sendSuccess(res, { categories });
   })
 );
-router20.get(
+router25.get(
   "/:id",
   requirePermission("content.read"),
   asyncHandler(async (req, res) => {
@@ -6862,39 +9780,212 @@ router20.get(
     sendSuccess(res, { category });
   })
 );
-router20.post(
+router25.post(
   "/",
   requirePermission("content.create"),
   asyncHandler(async (req, res) => {
     const input = createCategorySchema.parse(req.body);
-    const category = await categoryService.createCategory(req.user, input, requestMeta12(req));
+    const category = await categoryService.createCategory(req.user, input, requestMeta16(req));
     sendSuccess(res, { category }, 201);
   })
 );
-router20.patch(
+router25.patch(
   "/:id",
   requirePermission("content.update"),
   asyncHandler(async (req, res) => {
     const input = updateCategorySchema.parse(req.body);
-    const category = await categoryService.updateCategory(req.user, req.params.id, input, requestMeta12(req));
+    const category = await categoryService.updateCategory(req.user, req.params.id, input, requestMeta16(req));
     sendSuccess(res, { category });
   })
 );
-router20.delete(
+router25.delete(
   "/:id",
   requirePermission("content.delete"),
   asyncHandler(async (req, res) => {
-    await categoryService.deleteCategory(req.user, req.params.id, requestMeta12(req));
+    await categoryService.deleteCategory(req.user, req.params.id, requestMeta16(req));
     sendSuccess(res, { message: "Category deleted." });
   })
 );
-var categoryRoutes_default = router20;
+var categoryRoutes_default = router25;
+
+// server/routes/v1/redirectRoutes.ts
+import { Router as Router26 } from "express";
+
+// server/schemas/redirectSchemas.ts
+import { z as z22 } from "zod";
+var sitePathSchema = z22.string().trim().min(1).max(2048).refine((v) => v.startsWith("/") && !v.startsWith("//"), { message: "Must be a site-relative path starting with a single /." }).refine((v) => !/[a-z][a-z0-9+.-]*:/i.test(v), { message: "Must not contain a URL scheme." });
+var listRedirectsQuerySchema = z22.object({
+  page: z22.coerce.number().int().positive().default(1),
+  limit: z22.coerce.number().int().positive().max(100).default(20),
+  search: z22.string().trim().max(200).optional(),
+  sort: z22.enum(["createdAt", "updatedAt", "fromPath", "toPath"]).default("createdAt"),
+  order: z22.enum(["asc", "desc"]).default("desc")
+});
+var createRedirectSchema = z22.object({
+  fromPath: sitePathSchema,
+  toPath: sitePathSchema,
+  statusCode: z22.union([z22.literal(301), z22.literal(302), z22.literal(307), z22.literal(308)]).default(301)
+}).strict().refine((v) => v.fromPath !== v.toPath, { message: "fromPath and toPath must differ.", path: ["toPath"] });
+var updateRedirectSchema = z22.object({
+  toPath: sitePathSchema.optional(),
+  statusCode: z22.union([z22.literal(301), z22.literal(302), z22.literal(307), z22.literal(308)]).optional()
+}).strict().refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
+
+// server/routes/v1/redirectRoutes.ts
+var router26 = Router26();
+router26.use(authenticateToken);
+function requestMeta17(req) {
+  return { ip: req.ip, userAgent: req.headers["user-agent"] };
+}
+router26.get(
+  "/",
+  requirePermission("seo.redirects.read"),
+  asyncHandler(async (req, res) => {
+    const query = listRedirectsQuerySchema.parse(req.query);
+    const { rows, total } = await redirectService.listRedirects(
+      req.user.organizationId,
+      { search: query.search },
+      query.page,
+      query.limit,
+      query.sort,
+      query.order
+    );
+    sendSuccess(res, { redirects: rows }, 200, { page: query.page, limit: query.limit, total });
+  })
+);
+router26.get(
+  "/:id",
+  requirePermission("seo.redirects.read"),
+  asyncHandler(async (req, res) => {
+    const redirect = await redirectService.getRedirect(req.user.organizationId, req.params.id);
+    sendSuccess(res, { redirect });
+  })
+);
+router26.post(
+  "/",
+  requirePermission("seo.redirects.create"),
+  asyncHandler(async (req, res) => {
+    const input = createRedirectSchema.parse(req.body);
+    const redirect = await redirectService.createRedirect(req.user, input, requestMeta17(req));
+    sendSuccess(res, { redirect }, 201);
+  })
+);
+router26.patch(
+  "/:id",
+  requirePermission("seo.redirects.update"),
+  asyncHandler(async (req, res) => {
+    const input = updateRedirectSchema.parse(req.body);
+    const redirect = await redirectService.updateRedirect(req.user, req.params.id, input, requestMeta17(req));
+    sendSuccess(res, { redirect });
+  })
+);
+router26.delete(
+  "/:id",
+  requirePermission("seo.redirects.delete"),
+  asyncHandler(async (req, res) => {
+    await redirectService.deleteRedirect(req.user, req.params.id, requestMeta17(req));
+    sendSuccess(res, { message: "Redirect deleted." });
+  })
+);
+var redirectRoutes_default = router26;
+
+// server/routes/v1/seoRoutes.ts
+import { Router as Router27 } from "express";
+
+// server/services/seoAuditService.ts
+var LIVE_STATUSES = /* @__PURE__ */ new Set(["PUBLISHED", "SCHEDULED"]);
+var META_TITLE_IDEAL_MAX = 60;
+var META_DESCRIPTION_IDEAL_MIN = 50;
+var META_DESCRIPTION_IDEAL_MAX = 160;
+function checkRecord(resourceType, record) {
+  const issues = [];
+  const isLive = LIVE_STATUSES.has(record.status);
+  const meta = record.currentRevision?.metadata ?? {};
+  const displayTitle = record.currentRevision?.title || record.title;
+  function push(severity, code, message) {
+    issues.push({ resourceType, resourceId: record.id, resourceTitle: displayTitle, slug: record.slug, status: record.status, severity, code, message });
+  }
+  if (!meta.metaTitle) {
+    push(isLive ? "critical" : "warning", "missing_meta_title", "No SEO title set \u2014 search engines will fall back to the content title, which may not be optimized.");
+  } else if (meta.metaTitle.length > META_TITLE_IDEAL_MAX) {
+    push("warning", "meta_title_too_long", `SEO title is ${meta.metaTitle.length} characters \u2014 search engines typically truncate titles beyond ~${META_TITLE_IDEAL_MAX}.`);
+  }
+  if (!meta.metaDescription) {
+    push(isLive ? "critical" : "warning", "missing_meta_description", "No meta description set \u2014 search engines will auto-generate a snippet from the page content instead.");
+  } else if (meta.metaDescription.length > META_DESCRIPTION_IDEAL_MAX) {
+    push("warning", "meta_description_too_long", `Meta description is ${meta.metaDescription.length} characters \u2014 likely to be truncated beyond ~${META_DESCRIPTION_IDEAL_MAX}.`);
+  } else if (meta.metaDescription.length < META_DESCRIPTION_IDEAL_MIN) {
+    push("warning", "meta_description_too_short", `Meta description is only ${meta.metaDescription.length} characters \u2014 likely too short to be a useful search-result snippet.`);
+  }
+  if (record.featuredMedia && !record.featuredMedia.altText) {
+    push("warning", "missing_featured_image_alt_text", "Featured image has no alt text \u2014 hurts accessibility and image search visibility.");
+  }
+  return issues;
+}
+function findDuplicateTitles(records) {
+  const byTitle = /* @__PURE__ */ new Map();
+  for (const r of records) {
+    const key = r.metaTitle.trim().toLowerCase();
+    if (!key) continue;
+    if (!byTitle.has(key)) byTitle.set(key, []);
+    byTitle.get(key).push(r);
+  }
+  const issues = [];
+  for (const group of byTitle.values()) {
+    if (group.length < 2) continue;
+    for (const r of group) {
+      issues.push({
+        resourceType: r.resourceType,
+        resourceId: r.id,
+        resourceTitle: r.title,
+        slug: r.slug,
+        status: r.status,
+        severity: "warning",
+        code: "duplicate_meta_title",
+        message: `SEO title is identical to ${group.length - 1} other post/page in this organization \u2014 duplicate titles compete with each other in search results.`
+      });
+    }
+  }
+  return issues;
+}
+var seoAuditService = {
+  async runAudit(organizationId) {
+    const [posts, pages] = await Promise.all([postRepository.listForSeoAudit(organizationId), pageRepository.listForSeoAudit(organizationId)]);
+    const issues = [];
+    const titleIndex = [];
+    for (const post of posts) {
+      issues.push(...checkRecord("post", post));
+      const meta = post.currentRevision?.metadata ?? {};
+      if (meta.metaTitle) titleIndex.push({ resourceType: "post", id: post.id, slug: post.slug, title: post.currentRevision?.title || post.title, status: post.status, metaTitle: meta.metaTitle });
+    }
+    for (const page of pages) {
+      issues.push(...checkRecord("page", page));
+      const meta = page.currentRevision?.metadata ?? {};
+      if (meta.metaTitle) titleIndex.push({ resourceType: "page", id: page.id, slug: page.slug, title: page.currentRevision?.title || page.title, status: page.status, metaTitle: meta.metaTitle });
+    }
+    issues.push(...findDuplicateTitles(titleIndex));
+    return issues.sort((a, b) => a.severity === b.severity ? 0 : a.severity === "critical" ? -1 : 1);
+  }
+};
+
+// server/routes/v1/seoRoutes.ts
+var router27 = Router27();
+router27.use(authenticateToken);
+router27.get(
+  "/issues",
+  requirePermission("seo.audit.read"),
+  asyncHandler(async (req, res) => {
+    const issues = await seoAuditService.runAudit(req.user.organizationId);
+    sendSuccess(res, { issues });
+  })
+);
+var seoRoutes_default = router27;
 
 // server/routes/v1/tagRoutes.ts
-import { Router as Router21 } from "express";
+import { Router as Router28 } from "express";
 
 // server/services/tagService.ts
-function isUniqueConstraintError6(err) {
+function isUniqueConstraintError9(err) {
   return !!err && typeof err === "object" && "code" in err && err.code === "P2002";
 }
 async function loadTagOrThrow(id, organizationId) {
@@ -6920,7 +10011,7 @@ var tagService = {
     try {
       tag = await tagRepository.create({ organizationId, name: input.name, slug });
     } catch (err) {
-      throw isUniqueConstraintError6(err) ? new ConflictError("A tag with this slug already exists.") : err;
+      throw isUniqueConstraintError9(err) ? new ConflictError("A tag with this slug already exists.") : err;
     }
     await auditLogRepository.record({
       organizationId,
@@ -6949,7 +10040,7 @@ var tagService = {
     try {
       updated = await tagRepository.update(id, patch);
     } catch (err) {
-      throw isUniqueConstraintError6(err) ? new ConflictError("A tag with this slug already exists.") : err;
+      throw isUniqueConstraintError9(err) ? new ConflictError("A tag with this slug already exists.") : err;
     }
     await auditLogRepository.record({
       organizationId,
@@ -6984,12 +10075,12 @@ var tagService = {
 };
 
 // server/routes/v1/tagRoutes.ts
-var router21 = Router21();
-router21.use(authenticateToken);
-function requestMeta13(req) {
+var router28 = Router28();
+router28.use(authenticateToken);
+function requestMeta18(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router21.get(
+router28.get(
   "/",
   requirePermission("content.read"),
   asyncHandler(async (req, res) => {
@@ -6997,7 +10088,7 @@ router21.get(
     sendSuccess(res, { tags });
   })
 );
-router21.get(
+router28.get(
   "/:id",
   requirePermission("content.read"),
   asyncHandler(async (req, res) => {
@@ -7005,36 +10096,36 @@ router21.get(
     sendSuccess(res, { tag });
   })
 );
-router21.post(
+router28.post(
   "/",
   requirePermission("content.create"),
   asyncHandler(async (req, res) => {
     const input = createTagSchema.parse(req.body);
-    const tag = await tagService.createTag(req.user, input, requestMeta13(req));
+    const tag = await tagService.createTag(req.user, input, requestMeta18(req));
     sendSuccess(res, { tag }, 201);
   })
 );
-router21.patch(
+router28.patch(
   "/:id",
   requirePermission("content.update"),
   asyncHandler(async (req, res) => {
     const input = updateTagSchema.parse(req.body);
-    const tag = await tagService.updateTag(req.user, req.params.id, input, requestMeta13(req));
+    const tag = await tagService.updateTag(req.user, req.params.id, input, requestMeta18(req));
     sendSuccess(res, { tag });
   })
 );
-router21.delete(
+router28.delete(
   "/:id",
   requirePermission("content.delete"),
   asyncHandler(async (req, res) => {
-    await tagService.deleteTag(req.user, req.params.id, requestMeta13(req));
+    await tagService.deleteTag(req.user, req.params.id, requestMeta18(req));
     sendSuccess(res, { message: "Tag deleted." });
   })
 );
-var tagRoutes_default = router21;
+var tagRoutes_default = router28;
 
 // server/routes/v1/authorRoutes.ts
-import { Router as Router22 } from "express";
+import { Router as Router29 } from "express";
 
 // server/repositories/authorRepository.ts
 var withUser = { include: { user: { select: { id: true, email: true, firstName: true, lastName: true, displayName: true, status: true } } } };
@@ -7109,24 +10200,24 @@ var authorService = {
 };
 
 // server/schemas/authorSchemas.ts
-import { z as z18 } from "zod";
-var createAuthorSchema = z18.object({
-  userId: z18.string().trim().uuid(),
-  bio: z18.string().trim().max(2e3).optional(),
-  avatarUrl: z18.string().trim().url().max(500).optional()
+import { z as z23 } from "zod";
+var createAuthorSchema = z23.object({
+  userId: z23.string().trim().uuid(),
+  bio: z23.string().trim().max(2e3).optional(),
+  avatarUrl: z23.string().trim().url().max(500).optional()
 });
-var updateAuthorSchema = z18.object({
-  bio: z18.string().trim().max(2e3).nullable().optional(),
-  avatarUrl: z18.string().trim().url().max(500).nullable().optional()
+var updateAuthorSchema = z23.object({
+  bio: z23.string().trim().max(2e3).nullable().optional(),
+  avatarUrl: z23.string().trim().url().max(500).nullable().optional()
 }).refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
 
 // server/routes/v1/authorRoutes.ts
-var router22 = Router22();
-router22.use(authenticateToken);
-function requestMeta14(req) {
+var router29 = Router29();
+router29.use(authenticateToken);
+function requestMeta19(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router22.get(
+router29.get(
   "/",
   requirePermission("authors.read"),
   asyncHandler(async (_req, res) => {
@@ -7134,7 +10225,7 @@ router22.get(
     sendSuccess(res, { authors });
   })
 );
-router22.get(
+router29.get(
   "/:id",
   requirePermission("authors.read"),
   asyncHandler(async (req, res) => {
@@ -7142,69 +10233,69 @@ router22.get(
     sendSuccess(res, { author });
   })
 );
-router22.post(
+router29.post(
   "/",
   requirePermission("authors.create"),
   asyncHandler(async (req, res) => {
     const input = createAuthorSchema.parse(req.body);
-    const author = await authorService.createAuthor(req.user, input, requestMeta14(req));
+    const author = await authorService.createAuthor(req.user, input, requestMeta19(req));
     sendSuccess(res, { author }, 201);
   })
 );
-router22.patch(
+router29.patch(
   "/:id",
   requirePermission("authors.update"),
   asyncHandler(async (req, res) => {
     const input = updateAuthorSchema.parse(req.body);
-    const author = await authorService.updateAuthor(req.user, req.params.id, input, requestMeta14(req));
+    const author = await authorService.updateAuthor(req.user, req.params.id, input, requestMeta19(req));
     sendSuccess(res, { author });
   })
 );
-var authorRoutes_default = router22;
+var authorRoutes_default = router29;
 
 // server/routes/v1/mediaRoutes.ts
-import { Router as Router23 } from "express";
+import { Router as Router30 } from "express";
 import express2 from "express";
 
 // server/schemas/mediaSchemas.ts
-import { z as z19 } from "zod";
-var SORT_FIELDS3 = ["originalFilename", "displayName", "mimeType", "sizeBytes", "status", "createdAt", "updatedAt"];
-var listMediaQuerySchema = z19.object({
-  page: z19.coerce.number().int().positive().default(1),
-  limit: z19.coerce.number().int().positive().max(100).default(20),
-  search: z19.string().trim().max(200).optional(),
-  status: z19.enum(["PENDING", "ACTIVE", "FAILED", "ARCHIVED"]).optional(),
-  mimeType: z19.enum(ALLOWED_MIME_TYPES).optional(),
-  uploadedById: z19.string().trim().uuid().optional(),
-  dateFrom: z19.coerce.date().optional(),
-  dateTo: z19.coerce.date().optional(),
-  sort: z19.enum(SORT_FIELDS3).default("createdAt"),
-  order: z19.enum(["asc", "desc"]).default("desc")
+import { z as z24 } from "zod";
+var SORT_FIELDS4 = ["originalFilename", "displayName", "mimeType", "sizeBytes", "status", "createdAt", "updatedAt"];
+var listMediaQuerySchema = z24.object({
+  page: z24.coerce.number().int().positive().default(1),
+  limit: z24.coerce.number().int().positive().max(100).default(20),
+  search: z24.string().trim().max(200).optional(),
+  status: z24.enum(["PENDING", "ACTIVE", "FAILED", "ARCHIVED"]).optional(),
+  mimeType: z24.enum(ALLOWED_MIME_TYPES).optional(),
+  uploadedById: z24.string().trim().uuid().optional(),
+  dateFrom: z24.coerce.date().optional(),
+  dateTo: z24.coerce.date().optional(),
+  sort: z24.enum(SORT_FIELDS4).default("createdAt"),
+  order: z24.enum(["asc", "desc"]).default("desc")
 });
-var createUploadSessionSchema = z19.object({
-  filename: z19.string().trim().min(1).max(255),
-  mimeType: z19.enum(ALLOWED_MIME_TYPES),
-  sizeBytes: z19.number().int().positive(),
-  displayName: z19.string().trim().max(255).optional(),
-  altText: z19.string().trim().max(500).optional(),
-  caption: z19.string().trim().max(1e3).optional()
+var createUploadSessionSchema = z24.object({
+  filename: z24.string().trim().min(1).max(255),
+  mimeType: z24.enum(ALLOWED_MIME_TYPES),
+  sizeBytes: z24.number().int().positive(),
+  displayName: z24.string().trim().max(255).optional(),
+  altText: z24.string().trim().max(500).optional(),
+  caption: z24.string().trim().max(1e3).optional()
 });
-var completeUploadSchema = z19.object({
-  token: z19.string().trim().min(1)
+var completeUploadSchema = z24.object({
+  token: z24.string().trim().min(1)
 });
-var updateMediaSchema = z19.object({
-  displayName: z19.string().trim().max(255).nullable().optional(),
-  altText: z19.string().trim().max(500).nullable().optional(),
-  caption: z19.string().trim().max(1e3).nullable().optional(),
-  visibility: z19.enum(["PRIVATE", "PUBLIC"]).optional()
+var updateMediaSchema = z24.object({
+  displayName: z24.string().trim().max(255).nullable().optional(),
+  altText: z24.string().trim().max(500).nullable().optional(),
+  caption: z24.string().trim().max(1e3).nullable().optional(),
+  visibility: z24.enum(["PRIVATE", "PUBLIC"]).optional()
 }).refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
 
 // server/routes/v1/mediaRoutes.ts
-var router23 = Router23();
-function requestMeta15(req) {
+var router30 = Router30();
+function requestMeta20(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router23.put(
+router30.put(
   "/local-object",
   express2.raw({ type: () => true, limit: Math.max(config.mediaMaxImageSizeBytes, config.mediaMaxDocumentSizeBytes) }),
   asyncHandler(async (req, res) => {
@@ -7224,7 +10315,7 @@ router23.put(
     res.status(200).json({ ok: true });
   })
 );
-router23.get(
+router30.get(
   "/local-object",
   asyncHandler(async (req, res) => {
     if (getStorageProvider().name !== "local") {
@@ -7246,8 +10337,8 @@ router23.get(
     }
   })
 );
-router23.use(authenticateToken);
-router23.get(
+router30.use(authenticateToken);
+router30.get(
   "/",
   requirePermission("media.read"),
   asyncHandler(async (req, res) => {
@@ -7263,7 +10354,7 @@ router23.get(
     sendSuccess(res, { media: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router23.get(
+router30.get(
   "/:id",
   requirePermission("media.read"),
   asyncHandler(async (req, res) => {
@@ -7271,66 +10362,74 @@ router23.get(
     sendSuccess(res, { media });
   })
 );
-router23.get(
+router30.get(
   "/:id/url",
   requirePermission("media.read"),
   asyncHandler(async (req, res) => {
-    const result = await mediaService.getReadUrl(req.user, req.params.id, requestMeta15(req));
+    const result = await mediaService.getReadUrl(req.user, req.params.id, requestMeta20(req));
     sendSuccess(res, result);
   })
 );
-router23.post(
+router30.get(
+  "/:id/embed-url",
+  requirePermission("media.update"),
+  asyncHandler(async (req, res) => {
+    const result = await mediaService.getEmbedUrl(req.user, req.params.id, requestMeta20(req));
+    sendSuccess(res, result);
+  })
+);
+router30.post(
   "/upload-session",
   requirePermission("media.upload"),
   asyncHandler(async (req, res) => {
     const input = createUploadSessionSchema.parse(req.body);
-    const result = await mediaService.createUploadSession(req.user, input, requestMeta15(req));
+    const result = await mediaService.createUploadSession(req.user, input, requestMeta20(req));
     sendSuccess(res, result, 201);
   })
 );
-router23.post(
+router30.post(
   "/:id/complete",
   requirePermission("media.upload"),
   asyncHandler(async (req, res) => {
     const input = completeUploadSchema.parse(req.body);
     if (!input.token) throw new ValidationError("token is required.");
-    const media = await mediaService.completeUpload(req.user, req.params.id, input.token, requestMeta15(req));
+    const media = await mediaService.completeUpload(req.user, req.params.id, input.token, requestMeta20(req));
     sendSuccess(res, { media });
   })
 );
-router23.patch(
+router30.patch(
   "/:id",
   requirePermission("media.update"),
   asyncHandler(async (req, res) => {
     const input = updateMediaSchema.parse(req.body);
-    const media = await mediaService.updateMedia(req.user, req.params.id, input, requestMeta15(req));
+    const media = await mediaService.updateMedia(req.user, req.params.id, input, requestMeta20(req));
     sendSuccess(res, { media });
   })
 );
-router23.post(
+router30.post(
   "/:id/archive",
   requirePermission("media.delete"),
   asyncHandler(async (req, res) => {
-    const media = await mediaService.archiveMedia(req.user, req.params.id, requestMeta15(req));
+    const media = await mediaService.archiveMedia(req.user, req.params.id, requestMeta20(req));
     sendSuccess(res, { media });
   })
 );
-router23.delete(
+router30.delete(
   "/:id",
   requirePermission("media.delete"),
   asyncHandler(async (req, res) => {
-    await mediaService.deleteMedia(req.user, req.params.id, requestMeta15(req));
+    await mediaService.deleteMedia(req.user, req.params.id, requestMeta20(req));
     sendSuccess(res, { message: "Media deleted." });
   })
 );
-var mediaRoutes_default = router23;
+var mediaRoutes_default = router30;
 
 // server/routes/v1/contractRoutes.ts
-import { Router as Router24 } from "express";
+import { Router as Router31 } from "express";
 
 // server/repositories/contractRepository.ts
 var withVariations = { include: { variations: { orderBy: { variationNumber: "asc" } } } };
-function buildWhere9(organizationId, filters) {
+function buildWhere14(organizationId, filters) {
   const where = { organizationId };
   if (filters.status) where.status = filters.status;
   if (filters.clientId) where.clientId = filters.clientId;
@@ -7344,7 +10443,7 @@ function buildWhere9(organizationId, filters) {
 }
 var contractRepository = {
   async list(organizationId, filters, page, limit, sort, order) {
-    const where = buildWhere9(organizationId, filters);
+    const where = buildWhere14(organizationId, filters);
     const [rows, total] = await Promise.all([
       prisma.contract.findMany({ where, orderBy: { [sort]: order }, skip: (page - 1) * limit, take: limit, ...withVariations }),
       prisma.contract.count({ where })
@@ -7391,41 +10490,6 @@ var contractRepository = {
     await tx.$queryRaw`SELECT id FROM contracts WHERE id = ${id} FOR UPDATE`;
   }
 };
-
-// server/utils/money.ts
-import { Prisma as Prisma4 } from "@prisma/client";
-var MONEY_DECIMALS = 3;
-var DEFAULT_CURRENCY = "OMR";
-function toMoney(value) {
-  return new Prisma4.Decimal(value);
-}
-var ZERO = toMoney(0);
-function roundMoney(value) {
-  return new Prisma4.Decimal(value).toDecimalPlaces(MONEY_DECIMALS, Prisma4.Decimal.ROUND_HALF_UP);
-}
-function addMoney(a, b) {
-  return roundMoney(new Prisma4.Decimal(a).plus(b));
-}
-function subtractMoney(a, b) {
-  return roundMoney(new Prisma4.Decimal(a).minus(b));
-}
-function sumMoney(values) {
-  return roundMoney(values.reduce((acc, v) => acc.plus(v), new Prisma4.Decimal(0)));
-}
-function multiplyMoney(unitPrice, quantity) {
-  return roundMoney(new Prisma4.Decimal(unitPrice).times(quantity));
-}
-function isPositive(value) {
-  return new Prisma4.Decimal(value).greaterThan(0);
-}
-function isNonNegative(value) {
-  return new Prisma4.Decimal(value).greaterThanOrEqualTo(0);
-}
-function assertSameCurrency(a, b, context = "these records") {
-  if (a !== b) {
-    throw new ValidationError(`Currency mismatch: ${context} use different currencies (${a} vs ${b}).`);
-  }
-}
 
 // server/services/billingCalculations.ts
 function calculateLineItem(input) {
@@ -7660,66 +10724,66 @@ var contractService = {
 };
 
 // server/schemas/contractSchemas.ts
-import { z as z21 } from "zod";
+import { z as z26 } from "zod";
 
 // server/schemas/commercialSchemas.ts
-import { z as z20 } from "zod";
-var expectedUpdatedAtSchema2 = z20.coerce.date().optional();
-var currencyCodeSchema = z20.string().trim().toUpperCase().regex(/^[A-Z]{3}$/, "currency must be a 3-letter ISO 4217 code").default(DEFAULT_CURRENCY);
-var moneyAmountSchema = z20.union([z20.string(), z20.number()]).transform((v) => String(v).trim()).refine((v) => /^\d+(\.\d{1,3})?$/.test(v), { message: "amount must be a non-negative number with at most 3 decimal places" });
-var signedMoneyAmountSchema = z20.union([z20.string(), z20.number()]).transform((v) => String(v).trim()).refine((v) => /^-?\d+(\.\d{1,3})?$/.test(v), { message: "amount must be a number with at most 3 decimal places" });
+import { z as z25 } from "zod";
+var expectedUpdatedAtSchema2 = z25.coerce.date().optional();
+var currencyCodeSchema = z25.string().trim().toUpperCase().regex(/^[A-Z]{3}$/, "currency must be a 3-letter ISO 4217 code").default(DEFAULT_CURRENCY);
+var moneyAmountSchema = z25.union([z25.string(), z25.number()]).transform((v) => String(v).trim()).refine((v) => /^\d+(\.\d{1,3})?$/.test(v), { message: "amount must be a non-negative number with at most 3 decimal places" });
+var signedMoneyAmountSchema = z25.union([z25.string(), z25.number()]).transform((v) => String(v).trim()).refine((v) => /^-?\d+(\.\d{1,3})?$/.test(v), { message: "amount must be a number with at most 3 decimal places" });
 var SORT_ORDER = ["asc", "desc"];
 function paginationQuerySchema(sortFields, defaultSort, defaultOrder = "desc") {
   return {
-    page: z20.coerce.number().int().positive().default(1),
-    limit: z20.coerce.number().int().positive().max(100).default(20),
-    search: z20.string().trim().max(200).optional(),
-    sort: z20.enum(sortFields).default(defaultSort),
-    order: z20.enum(SORT_ORDER).default(defaultOrder)
+    page: z25.coerce.number().int().positive().default(1),
+    limit: z25.coerce.number().int().positive().max(100).default(20),
+    search: z25.string().trim().max(200).optional(),
+    sort: z25.enum(sortFields).default(defaultSort),
+    order: z25.enum(SORT_ORDER).default(defaultOrder)
   };
 }
 
 // server/schemas/contractSchemas.ts
-var contractStatusSchema = z21.enum(["DRAFT", "ACTIVE", "SUSPENDED", "EXPIRED", "TERMINATED"]);
-var SORT_FIELDS4 = ["contractNumber", "title", "status", "startDate", "endDate", "createdAt", "updatedAt"];
-var listContractsQuerySchema = z21.object({
-  ...paginationQuerySchema(SORT_FIELDS4, "createdAt"),
+var contractStatusSchema = z26.enum(["DRAFT", "ACTIVE", "SUSPENDED", "EXPIRED", "TERMINATED"]);
+var SORT_FIELDS5 = ["contractNumber", "title", "status", "startDate", "endDate", "createdAt", "updatedAt"];
+var listContractsQuerySchema = z26.object({
+  ...paginationQuerySchema(SORT_FIELDS5, "createdAt"),
   status: contractStatusSchema.optional(),
-  clientId: z21.string().trim().uuid().optional()
+  clientId: z26.string().trim().uuid().optional()
 });
-var createContractSchema = z21.object({
-  clientId: z21.string().trim().uuid(),
-  title: z21.string().trim().min(1).max(200),
-  description: z21.string().trim().max(5e3).optional(),
-  startDate: z21.coerce.date(),
-  endDate: z21.coerce.date().optional(),
+var createContractSchema = z26.object({
+  clientId: z26.string().trim().uuid(),
+  title: z26.string().trim().min(1).max(200),
+  description: z26.string().trim().max(5e3).optional(),
+  startDate: z26.coerce.date(),
+  endDate: z26.coerce.date().optional(),
   contractValue: moneyAmountSchema,
   currency: currencyCodeSchema.optional(),
-  notes: z21.string().trim().max(5e3).optional()
+  notes: z26.string().trim().max(5e3).optional()
 });
-var updateContractSchema = z21.object({
-  title: z21.string().trim().min(1).max(200).optional(),
-  description: z21.string().trim().max(5e3).nullable().optional(),
-  endDate: z21.coerce.date().nullable().optional(),
-  notes: z21.string().trim().max(5e3).nullable().optional(),
+var updateContractSchema = z26.object({
+  title: z26.string().trim().min(1).max(200).optional(),
+  description: z26.string().trim().max(5e3).nullable().optional(),
+  endDate: z26.coerce.date().nullable().optional(),
+  notes: z26.string().trim().max(5e3).nullable().optional(),
   expectedUpdatedAt: expectedUpdatedAtSchema2
 }).refine((v) => Object.keys(v).some((k) => k !== "expectedUpdatedAt"), { message: "At least one field must be provided." });
-var terminateContractSchema = z21.object({
-  reason: z21.string().trim().min(1).max(1e3)
+var terminateContractSchema = z26.object({
+  reason: z26.string().trim().min(1).max(1e3)
 });
-var createContractVariationSchema = z21.object({
+var createContractVariationSchema = z26.object({
   amount: signedMoneyAmountSchema,
-  effectiveDate: z21.coerce.date(),
-  reason: z21.string().trim().min(1).max(1e3)
+  effectiveDate: z26.coerce.date(),
+  reason: z26.string().trim().min(1).max(1e3)
 });
 
 // server/routes/v1/contractRoutes.ts
-var router24 = Router24();
-router24.use(authenticateToken);
-function requestMeta16(req) {
+var router31 = Router31();
+router31.use(authenticateToken);
+function requestMeta21(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router24.get(
+router31.get(
   "/",
   requirePermission("contracts.read"),
   asyncHandler(async (req, res) => {
@@ -7735,7 +10799,7 @@ router24.get(
     sendSuccess(res, { contracts: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router24.get(
+router31.get(
   "/:id",
   requirePermission("contracts.read"),
   asyncHandler(async (req, res) => {
@@ -7743,66 +10807,66 @@ router24.get(
     sendSuccess(res, { contract });
   })
 );
-router24.post(
+router31.post(
   "/",
   requirePermission("contracts.create"),
   asyncHandler(async (req, res) => {
     const input = createContractSchema.parse(req.body);
-    const contract = await contractService.createContract(req.user, input, requestMeta16(req));
+    const contract = await contractService.createContract(req.user, input, requestMeta21(req));
     sendSuccess(res, { contract }, 201);
   })
 );
-router24.patch(
+router31.patch(
   "/:id",
   requirePermission("contracts.update"),
   asyncHandler(async (req, res) => {
     const input = updateContractSchema.parse(req.body);
-    const contract = await contractService.updateContract(req.user, req.params.id, input, requestMeta16(req));
+    const contract = await contractService.updateContract(req.user, req.params.id, input, requestMeta21(req));
     sendSuccess(res, { contract });
   })
 );
-router24.post(
+router31.post(
   "/:id/activate",
   requirePermission("contracts.activate"),
   asyncHandler(async (req, res) => {
-    const contract = await contractService.activateContract(req.user, req.params.id, requestMeta16(req));
+    const contract = await contractService.activateContract(req.user, req.params.id, requestMeta21(req));
     sendSuccess(res, { contract });
   })
 );
-router24.post(
+router31.post(
   "/:id/suspend",
   requirePermission("contracts.suspend"),
   asyncHandler(async (req, res) => {
-    const contract = await contractService.suspendContract(req.user, req.params.id, requestMeta16(req));
+    const contract = await contractService.suspendContract(req.user, req.params.id, requestMeta21(req));
     sendSuccess(res, { contract });
   })
 );
-router24.post(
+router31.post(
   "/:id/terminate",
   requirePermission("contracts.terminate"),
   asyncHandler(async (req, res) => {
     const input = terminateContractSchema.parse(req.body);
-    const contract = await contractService.terminateContract(req.user, req.params.id, input, requestMeta16(req));
+    const contract = await contractService.terminateContract(req.user, req.params.id, input, requestMeta21(req));
     sendSuccess(res, { contract });
   })
 );
-router24.post(
+router31.post(
   "/:id/variations",
   requirePermission("contracts.variations.create"),
   asyncHandler(async (req, res) => {
     const input = createContractVariationSchema.parse(req.body);
-    const contract = await contractService.createVariation(req.user, req.params.id, input, requestMeta16(req));
+    const contract = await contractService.createVariation(req.user, req.params.id, input, requestMeta21(req));
     sendSuccess(res, { contract }, 201);
   })
 );
-var contractRoutes_default = router24;
+var contractRoutes_default = router31;
 
 // server/routes/v1/subscriptionRoutes.ts
-import { Router as Router25 } from "express";
+import { Router as Router32 } from "express";
 
 // server/repositories/subscriptionRepository.ts
 var withItems = { include: { items: true } };
-function buildWhere10(organizationId, filters) {
+function buildWhere15(organizationId, filters) {
   const where = { organizationId };
   if (filters.status) where.status = filters.status;
   if (filters.clientId) where.clientId = filters.clientId;
@@ -7812,7 +10876,7 @@ function buildWhere10(organizationId, filters) {
 }
 var subscriptionRepository = {
   async list(organizationId, filters, page, limit, sort, order) {
-    const where = buildWhere10(organizationId, filters);
+    const where = buildWhere15(organizationId, filters);
     const [rows, total] = await Promise.all([
       prisma.subscription.findMany({ where, orderBy: { [sort]: order }, skip: (page - 1) * limit, take: limit }),
       prisma.subscription.count({ where })
@@ -8016,50 +11080,50 @@ var subscriptionService = {
 };
 
 // server/schemas/subscriptionSchemas.ts
-import { z as z22 } from "zod";
-var subscriptionStatusSchema = z22.enum(["DRAFT", "TRIALING", "ACTIVE", "PAST_DUE", "PAUSED", "CANCELLED", "EXPIRED"]);
-var billingCycleSchema = z22.enum(["ONE_TIME", "MONTHLY", "QUARTERLY", "ANNUAL"]);
-var SORT_FIELDS5 = ["subscriptionNumber", "status", "startDate", "renewalDate", "createdAt", "updatedAt"];
-var listSubscriptionsQuerySchema = z22.object({
-  ...paginationQuerySchema(SORT_FIELDS5, "createdAt"),
+import { z as z27 } from "zod";
+var subscriptionStatusSchema = z27.enum(["DRAFT", "TRIALING", "ACTIVE", "PAST_DUE", "PAUSED", "CANCELLED", "EXPIRED"]);
+var billingCycleSchema = z27.enum(["ONE_TIME", "MONTHLY", "QUARTERLY", "ANNUAL"]);
+var SORT_FIELDS6 = ["subscriptionNumber", "status", "startDate", "renewalDate", "createdAt", "updatedAt"];
+var listSubscriptionsQuerySchema = z27.object({
+  ...paginationQuerySchema(SORT_FIELDS6, "createdAt"),
   status: subscriptionStatusSchema.optional(),
-  clientId: z22.string().trim().uuid().optional(),
-  productId: z22.string().trim().uuid().optional()
+  clientId: z27.string().trim().uuid().optional(),
+  productId: z27.string().trim().uuid().optional()
 });
-var subscriptionItemInputSchema = z22.object({
-  productModuleId: z22.string().trim().uuid().optional(),
-  description: z22.string().trim().min(1).max(500),
-  quantity: z22.number().int().positive().default(1),
+var subscriptionItemInputSchema = z27.object({
+  productModuleId: z27.string().trim().uuid().optional(),
+  description: z27.string().trim().min(1).max(500),
+  quantity: z27.number().int().positive().default(1),
   unitPrice: moneyAmountSchema
 });
-var createSubscriptionSchema = z22.object({
-  clientId: z22.string().trim().uuid(),
-  productId: z22.string().trim().uuid(),
-  startDate: z22.coerce.date(),
+var createSubscriptionSchema = z27.object({
+  clientId: z27.string().trim().uuid(),
+  productId: z27.string().trim().uuid(),
+  startDate: z27.coerce.date(),
   billingCycle: billingCycleSchema,
-  quantity: z22.number().int().positive().default(1),
+  quantity: z27.number().int().positive().default(1),
   price: moneyAmountSchema,
   currency: currencyCodeSchema.optional(),
-  items: z22.array(subscriptionItemInputSchema).default([])
+  items: z27.array(subscriptionItemInputSchema).default([])
 });
-var updateSubscriptionSchema = z22.object({
-  renewalDate: z22.coerce.date().nullable().optional(),
-  endDate: z22.coerce.date().nullable().optional(),
-  quantity: z22.number().int().positive().optional(),
+var updateSubscriptionSchema = z27.object({
+  renewalDate: z27.coerce.date().nullable().optional(),
+  endDate: z27.coerce.date().nullable().optional(),
+  quantity: z27.number().int().positive().optional(),
   price: moneyAmountSchema.optional(),
   expectedUpdatedAt: expectedUpdatedAtSchema2
 }).refine((v) => Object.keys(v).some((k) => k !== "expectedUpdatedAt"), { message: "At least one field must be provided." });
-var cancelSubscriptionSchema = z22.object({
-  reason: z22.string().trim().min(1).max(1e3)
+var cancelSubscriptionSchema = z27.object({
+  reason: z27.string().trim().min(1).max(1e3)
 });
 
 // server/routes/v1/subscriptionRoutes.ts
-var router25 = Router25();
-router25.use(authenticateToken);
-function requestMeta17(req) {
+var router32 = Router32();
+router32.use(authenticateToken);
+function requestMeta22(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router25.get(
+router32.get(
   "/",
   requirePermission("subscriptions.read"),
   asyncHandler(async (req, res) => {
@@ -8075,7 +11139,7 @@ router25.get(
     sendSuccess(res, { subscriptions: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router25.get(
+router32.get(
   "/:id",
   requirePermission("subscriptions.read"),
   asyncHandler(async (req, res) => {
@@ -8083,57 +11147,57 @@ router25.get(
     sendSuccess(res, { subscription });
   })
 );
-router25.post(
+router32.post(
   "/",
   requirePermission("subscriptions.create"),
   asyncHandler(async (req, res) => {
     const input = createSubscriptionSchema.parse(req.body);
-    const subscription = await subscriptionService.createSubscription(req.user, input, requestMeta17(req));
+    const subscription = await subscriptionService.createSubscription(req.user, input, requestMeta22(req));
     sendSuccess(res, { subscription }, 201);
   })
 );
-router25.patch(
+router32.patch(
   "/:id",
   requirePermission("subscriptions.update"),
   asyncHandler(async (req, res) => {
     const input = updateSubscriptionSchema.parse(req.body);
-    const subscription = await subscriptionService.updateSubscription(req.user, req.params.id, input, requestMeta17(req));
+    const subscription = await subscriptionService.updateSubscription(req.user, req.params.id, input, requestMeta22(req));
     sendSuccess(res, { subscription });
   })
 );
-router25.post(
+router32.post(
   "/:id/activate",
   requirePermission("subscriptions.activate"),
   asyncHandler(async (req, res) => {
-    const subscription = await subscriptionService.activateSubscription(req.user, req.params.id, requestMeta17(req));
+    const subscription = await subscriptionService.activateSubscription(req.user, req.params.id, requestMeta22(req));
     sendSuccess(res, { subscription });
   })
 );
-router25.post(
+router32.post(
   "/:id/pause",
   requirePermission("subscriptions.pause"),
   asyncHandler(async (req, res) => {
-    const subscription = await subscriptionService.pauseSubscription(req.user, req.params.id, requestMeta17(req));
+    const subscription = await subscriptionService.pauseSubscription(req.user, req.params.id, requestMeta22(req));
     sendSuccess(res, { subscription });
   })
 );
-router25.post(
+router32.post(
   "/:id/cancel",
   requirePermission("subscriptions.cancel"),
   asyncHandler(async (req, res) => {
     const input = cancelSubscriptionSchema.parse(req.body);
-    const subscription = await subscriptionService.cancelSubscription(req.user, req.params.id, input, requestMeta17(req));
+    const subscription = await subscriptionService.cancelSubscription(req.user, req.params.id, input, requestMeta22(req));
     sendSuccess(res, { subscription });
   })
 );
-var subscriptionRoutes_default = router25;
+var subscriptionRoutes_default = router32;
 
 // server/routes/v1/invoiceRoutes.ts
-import { Router as Router26 } from "express";
+import { Router as Router33 } from "express";
 
 // server/repositories/invoiceRepository.ts
 var withItemsAndPayments = { include: { items: true, payments: { orderBy: { createdAt: "asc" } } } };
-function buildWhere11(organizationId, filters) {
+function buildWhere16(organizationId, filters) {
   const where = { organizationId };
   if (filters.status) where.status = filters.status;
   if (filters.clientId) where.clientId = filters.clientId;
@@ -8150,7 +11214,7 @@ function buildWhere11(organizationId, filters) {
 }
 var invoiceRepository = {
   async list(organizationId, filters, page, limit, sort, order) {
-    const where = buildWhere11(organizationId, filters);
+    const where = buildWhere16(organizationId, filters);
     const [rows, total] = await Promise.all([
       prisma.invoice.findMany({ where, orderBy: { [sort]: order }, skip: (page - 1) * limit, take: limit }),
       prisma.invoice.count({ where })
@@ -8195,7 +11259,7 @@ var invoiceRepository = {
 };
 
 // server/repositories/paymentRepository.ts
-function buildWhere12(organizationId, filters) {
+function buildWhere17(organizationId, filters) {
   const where = { organizationId };
   if (filters.status) where.status = filters.status;
   if (filters.method) where.method = filters.method;
@@ -8211,7 +11275,7 @@ function buildWhere12(organizationId, filters) {
 }
 var paymentRepository = {
   async list(organizationId, filters, page, limit, sort, order) {
-    const where = buildWhere12(organizationId, filters);
+    const where = buildWhere17(organizationId, filters);
     const [rows, total] = await Promise.all([
       prisma.payment.findMany({ where, orderBy: { [sort]: order }, skip: (page - 1) * limit, take: limit }),
       prisma.payment.count({ where })
@@ -8560,68 +11624,68 @@ var paymentService = {
 };
 
 // server/schemas/invoiceSchemas.ts
-import { z as z23 } from "zod";
-var invoiceStatusSchema = z23.enum(["DRAFT", "ISSUED", "PARTIALLY_PAID", "PAID", "OVERDUE", "VOID", "CANCELLED"]);
-var paymentMethodSchema = z23.enum(["BANK_TRANSFER", "CARD", "CASH", "CHEQUE", "ONLINE", "OTHER"]);
-var paymentStatusSchema = z23.enum(["PENDING", "COMPLETED", "FAILED", "REVERSED"]);
-var SORT_FIELDS6 = ["invoiceNumber", "status", "issueDate", "dueDate", "total", "amountDue", "createdAt", "updatedAt"];
-var listInvoicesQuerySchema = z23.object({
-  ...paginationQuerySchema(SORT_FIELDS6, "issueDate"),
+import { z as z28 } from "zod";
+var invoiceStatusSchema = z28.enum(["DRAFT", "ISSUED", "PARTIALLY_PAID", "PAID", "OVERDUE", "VOID", "CANCELLED"]);
+var paymentMethodSchema = z28.enum(["BANK_TRANSFER", "CARD", "CASH", "CHEQUE", "ONLINE", "OTHER"]);
+var paymentStatusSchema = z28.enum(["PENDING", "COMPLETED", "FAILED", "REVERSED"]);
+var SORT_FIELDS7 = ["invoiceNumber", "status", "issueDate", "dueDate", "total", "amountDue", "createdAt", "updatedAt"];
+var listInvoicesQuerySchema = z28.object({
+  ...paginationQuerySchema(SORT_FIELDS7, "issueDate"),
   status: invoiceStatusSchema.optional(),
-  clientId: z23.string().trim().uuid().optional(),
-  contractId: z23.string().trim().uuid().optional(),
-  subscriptionId: z23.string().trim().uuid().optional(),
-  dateFrom: z23.coerce.date().optional(),
-  dateTo: z23.coerce.date().optional()
+  clientId: z28.string().trim().uuid().optional(),
+  contractId: z28.string().trim().uuid().optional(),
+  subscriptionId: z28.string().trim().uuid().optional(),
+  dateFrom: z28.coerce.date().optional(),
+  dateTo: z28.coerce.date().optional()
 });
-var invoiceItemInputSchema = z23.object({
-  productModuleId: z23.string().trim().uuid().optional(),
-  description: z23.string().trim().min(1).max(500),
-  quantity: z23.number().int().positive().default(1),
+var invoiceItemInputSchema = z28.object({
+  productModuleId: z28.string().trim().uuid().optional(),
+  description: z28.string().trim().min(1).max(500),
+  quantity: z28.number().int().positive().default(1),
   unitPrice: moneyAmountSchema,
   discount: moneyAmountSchema.default("0")
 });
-var createInvoiceSchema = z23.object({
-  clientId: z23.string().trim().uuid(),
-  contractId: z23.string().trim().uuid().optional(),
-  subscriptionId: z23.string().trim().uuid().optional(),
-  issueDate: z23.coerce.date(),
-  dueDate: z23.coerce.date(),
+var createInvoiceSchema = z28.object({
+  clientId: z28.string().trim().uuid(),
+  contractId: z28.string().trim().uuid().optional(),
+  subscriptionId: z28.string().trim().uuid().optional(),
+  issueDate: z28.coerce.date(),
+  dueDate: z28.coerce.date(),
   currency: currencyCodeSchema.optional(),
   discount: moneyAmountSchema.default("0"),
   tax: moneyAmountSchema.default("0"),
-  notes: z23.string().trim().max(5e3).optional(),
-  items: z23.array(invoiceItemInputSchema).min(1, "An invoice needs at least one line item.")
+  notes: z28.string().trim().max(5e3).optional(),
+  items: z28.array(invoiceItemInputSchema).min(1, "An invoice needs at least one line item.")
 });
-var updateInvoiceSchema = z23.object({
-  issueDate: z23.coerce.date().optional(),
-  dueDate: z23.coerce.date().optional(),
+var updateInvoiceSchema = z28.object({
+  issueDate: z28.coerce.date().optional(),
+  dueDate: z28.coerce.date().optional(),
   discount: moneyAmountSchema.optional(),
   tax: moneyAmountSchema.optional(),
-  notes: z23.string().trim().max(5e3).nullable().optional(),
-  items: z23.array(invoiceItemInputSchema).min(1).optional(),
+  notes: z28.string().trim().max(5e3).nullable().optional(),
+  items: z28.array(invoiceItemInputSchema).min(1).optional(),
   expectedUpdatedAt: expectedUpdatedAtSchema2
 }).refine((v) => Object.keys(v).some((k) => k !== "expectedUpdatedAt"), { message: "At least one field must be provided." });
-var issueInvoiceSchema = z23.object({ expectedUpdatedAt: expectedUpdatedAtSchema2 });
-var voidInvoiceSchema = z23.object({
-  reason: z23.string().trim().min(1).max(1e3)
+var issueInvoiceSchema = z28.object({ expectedUpdatedAt: expectedUpdatedAtSchema2 });
+var voidInvoiceSchema = z28.object({
+  reason: z28.string().trim().min(1).max(1e3)
 });
-var recordPaymentSchema = z23.object({
+var recordPaymentSchema = z28.object({
   amount: moneyAmountSchema,
   currency: currencyCodeSchema.optional(),
-  paymentDate: z23.coerce.date(),
+  paymentDate: z28.coerce.date(),
   method: paymentMethodSchema,
-  reference: z23.string().trim().max(200).optional(),
-  notes: z23.string().trim().max(2e3).optional()
+  reference: z28.string().trim().max(200).optional(),
+  notes: z28.string().trim().max(2e3).optional()
 });
 
 // server/routes/v1/invoiceRoutes.ts
-var router26 = Router26();
-router26.use(authenticateToken);
-function requestMeta18(req) {
+var router33 = Router33();
+router33.use(authenticateToken);
+function requestMeta23(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router26.get(
+router33.get(
   "/",
   requirePermission("invoices.read"),
   asyncHandler(async (req, res) => {
@@ -8645,7 +11709,7 @@ router26.get(
     sendSuccess(res, { invoices: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router26.get(
+router33.get(
   "/:id",
   requirePermission("invoices.read"),
   asyncHandler(async (req, res) => {
@@ -8653,43 +11717,43 @@ router26.get(
     sendSuccess(res, { invoice });
   })
 );
-router26.post(
+router33.post(
   "/",
   requirePermission("invoices.create"),
   asyncHandler(async (req, res) => {
     const input = createInvoiceSchema.parse(req.body);
-    const invoice = await invoiceService.createInvoice(req.user, input, requestMeta18(req));
+    const invoice = await invoiceService.createInvoice(req.user, input, requestMeta23(req));
     sendSuccess(res, { invoice }, 201);
   })
 );
-router26.patch(
+router33.patch(
   "/:id",
   requirePermission("invoices.update"),
   asyncHandler(async (req, res) => {
     const input = updateInvoiceSchema.parse(req.body);
-    const invoice = await invoiceService.updateInvoice(req.user, req.params.id, input, requestMeta18(req));
+    const invoice = await invoiceService.updateInvoice(req.user, req.params.id, input, requestMeta23(req));
     sendSuccess(res, { invoice });
   })
 );
-router26.post(
+router33.post(
   "/:id/issue",
   requirePermission("invoices.issue"),
   asyncHandler(async (req, res) => {
     const input = issueInvoiceSchema.parse(req.body ?? {});
-    const invoice = await invoiceService.issueInvoice(req.user, req.params.id, input, requestMeta18(req));
+    const invoice = await invoiceService.issueInvoice(req.user, req.params.id, input, requestMeta23(req));
     sendSuccess(res, { invoice });
   })
 );
-router26.post(
+router33.post(
   "/:id/void",
   requirePermission("invoices.void"),
   asyncHandler(async (req, res) => {
     const input = voidInvoiceSchema.parse(req.body);
-    const invoice = await invoiceService.voidInvoice(req.user, req.params.id, input, requestMeta18(req));
+    const invoice = await invoiceService.voidInvoice(req.user, req.params.id, input, requestMeta23(req));
     sendSuccess(res, { invoice });
   })
 );
-router26.get(
+router33.get(
   "/:id/payments",
   requirePermission("payments.read"),
   asyncHandler(async (req, res) => {
@@ -8697,43 +11761,43 @@ router26.get(
     sendSuccess(res, { payments: rows }, 200, { page: 1, limit: 100, total });
   })
 );
-router26.post(
+router33.post(
   "/:id/payments",
   requirePermission("payments.create"),
   asyncHandler(async (req, res) => {
     const input = recordPaymentSchema.parse(req.body);
-    const payment = await invoiceService.recordPayment(req.user, req.params.id, input, requestMeta18(req));
+    const payment = await invoiceService.recordPayment(req.user, req.params.id, input, requestMeta23(req));
     sendSuccess(res, { payment }, 201);
   })
 );
-var invoiceRoutes_default = router26;
+var invoiceRoutes_default = router33;
 
 // server/routes/v1/paymentRoutes.ts
-import { Router as Router27 } from "express";
+import { Router as Router34 } from "express";
 
 // server/schemas/paymentSchemas.ts
-import { z as z24 } from "zod";
-var SORT_FIELDS7 = ["paymentDate", "amount", "status", "createdAt"];
-var listPaymentsQuerySchema = z24.object({
-  ...paginationQuerySchema(SORT_FIELDS7, "paymentDate"),
+import { z as z29 } from "zod";
+var SORT_FIELDS8 = ["paymentDate", "amount", "status", "createdAt"];
+var listPaymentsQuerySchema = z29.object({
+  ...paginationQuerySchema(SORT_FIELDS8, "paymentDate"),
   status: paymentStatusSchema.optional(),
   method: paymentMethodSchema.optional(),
-  invoiceId: z24.string().trim().uuid().optional(),
-  clientId: z24.string().trim().uuid().optional(),
-  dateFrom: z24.coerce.date().optional(),
-  dateTo: z24.coerce.date().optional()
+  invoiceId: z29.string().trim().uuid().optional(),
+  clientId: z29.string().trim().uuid().optional(),
+  dateFrom: z29.coerce.date().optional(),
+  dateTo: z29.coerce.date().optional()
 });
-var reversePaymentSchema = z24.object({
-  reason: z24.string().trim().min(1).max(1e3)
+var reversePaymentSchema = z29.object({
+  reason: z29.string().trim().min(1).max(1e3)
 });
 
 // server/routes/v1/paymentRoutes.ts
-var router27 = Router27();
-router27.use(authenticateToken);
-function requestMeta19(req) {
+var router34 = Router34();
+router34.use(authenticateToken);
+function requestMeta24(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router27.get(
+router34.get(
   "/",
   requirePermission("payments.read"),
   asyncHandler(async (req, res) => {
@@ -8749,7 +11813,7 @@ router27.get(
     sendSuccess(res, { payments: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router27.get(
+router34.get(
   "/:id",
   requirePermission("payments.read"),
   asyncHandler(async (req, res) => {
@@ -8757,20 +11821,20 @@ router27.get(
     sendSuccess(res, { payment });
   })
 );
-router27.post(
+router34.post(
   "/:id/reverse",
   requirePermission("payments.reverse"),
   asyncHandler(async (req, res) => {
     const input = reversePaymentSchema.parse(req.body);
-    const payment = await paymentService.reversePayment(req.user, req.params.id, input, requestMeta19(req));
+    const payment = await paymentService.reversePayment(req.user, req.params.id, input, requestMeta24(req));
     sendSuccess(res, { payment });
   })
 );
-var paymentRoutes_default = router27;
+var paymentRoutes_default = router34;
 
 // server/routes/v1/portalRoutes.ts
-import { Router as Router28 } from "express";
-import { z as z25 } from "zod";
+import { Router as Router35 } from "express";
+import { z as z30 } from "zod";
 
 // server/services/clientPortalService.ts
 async function resolveClientForCaller(caller) {
@@ -8838,13 +11902,13 @@ var clientPortalService = {
 };
 
 // server/routes/v1/portalRoutes.ts
-var router28 = Router28();
-router28.use(authenticateToken);
-var pageQuerySchema = z25.object({
-  page: z25.coerce.number().int().positive().default(1),
-  limit: z25.coerce.number().int().positive().max(100).default(20)
+var router35 = Router35();
+router35.use(authenticateToken);
+var pageQuerySchema = z30.object({
+  page: z30.coerce.number().int().positive().default(1),
+  limit: z30.coerce.number().int().positive().max(100).default(20)
 });
-router28.get(
+router35.get(
   "/dashboard",
   requirePermission("portal.dashboard.read"),
   asyncHandler(async (req, res) => {
@@ -8852,7 +11916,7 @@ router28.get(
     sendSuccess(res, { dashboard });
   })
 );
-router28.get(
+router35.get(
   "/contracts",
   requirePermission("portal.contracts.read"),
   asyncHandler(async (req, res) => {
@@ -8861,7 +11925,7 @@ router28.get(
     sendSuccess(res, { contracts: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router28.get(
+router35.get(
   "/contracts/:id",
   requirePermission("portal.contracts.read"),
   asyncHandler(async (req, res) => {
@@ -8869,7 +11933,7 @@ router28.get(
     sendSuccess(res, { contract });
   })
 );
-router28.get(
+router35.get(
   "/subscriptions",
   requirePermission("portal.subscriptions.read"),
   asyncHandler(async (req, res) => {
@@ -8878,7 +11942,7 @@ router28.get(
     sendSuccess(res, { subscriptions: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router28.get(
+router35.get(
   "/subscriptions/:id",
   requirePermission("portal.subscriptions.read"),
   asyncHandler(async (req, res) => {
@@ -8886,7 +11950,7 @@ router28.get(
     sendSuccess(res, { subscription });
   })
 );
-router28.get(
+router35.get(
   "/invoices",
   requirePermission("portal.invoices.read"),
   asyncHandler(async (req, res) => {
@@ -8895,7 +11959,7 @@ router28.get(
     sendSuccess(res, { invoices: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router28.get(
+router35.get(
   "/invoices/:id",
   requirePermission("portal.invoices.read"),
   asyncHandler(async (req, res) => {
@@ -8903,7 +11967,7 @@ router28.get(
     sendSuccess(res, { invoice });
   })
 );
-router28.get(
+router35.get(
   "/payments",
   requirePermission("portal.payments.read"),
   asyncHandler(async (req, res) => {
@@ -8912,20 +11976,27 @@ router28.get(
     sendSuccess(res, { payments: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-var portalRoutes_default = router28;
+var portalRoutes_default = router35;
 
 // server/routes/v1/publicRoutes.ts
-import { Router as Router29 } from "express";
+import { Router as Router36 } from "express";
 
 // server/services/publicSiteService.ts
 async function projectPublicMedia(media) {
   if (!media || media.status !== "ACTIVE" || media.visibility !== "PUBLIC") return null;
   const provider = getStorageProvider();
-  const url = await provider.createSignedReadUrl({ key: media.storageKey, expiresInSeconds: config.mediaSignedUrlTtlSeconds });
+  const url = provider.getPublicUrl(media.storageKey) ?? await provider.createSignedReadUrl({ key: media.storageKey, expiresInSeconds: config.mediaPublicSignedUrlTtlSeconds });
   return { url, altText: media.altText, caption: media.caption, width: media.width, height: media.height };
 }
 function hasPublicWebsiteOrganization() {
   return config.publicWebsiteOrganizationId.length > 0;
+}
+function projectPageTemplate(page) {
+  const template = page.template;
+  if (!template || template.status !== "PUBLISHED") return null;
+  const revision = template.currentRevision;
+  if (!revision || revision.status !== "PUBLISHED") return null;
+  return { type: template.type, slug: template.slug, structure: revision.structure };
 }
 async function projectPage(page) {
   const revision = page.currentRevision;
@@ -8935,6 +12006,9 @@ async function projectPage(page) {
     body: revision?.body ?? "",
     seo: revision?.metadata ?? {},
     featuredMedia: await projectPublicMedia(page.featuredMedia),
+    pageType: page.pageType,
+    isHomepage: page.isHomepage,
+    template: projectPageTemplate(page),
     publishedAt: page.publishedAt,
     updatedAt: page.updatedAt
   };
@@ -8999,6 +12073,18 @@ var publicSiteService = {
     if (!hasPublicWebsiteOrganization()) return [];
     const tags = await tagRepository.list(config.publicWebsiteOrganizationId);
     return tags.map((t) => ({ slug: t.slug, name: t.name }));
+  },
+  /**
+   * Phase 5 — called by the public site when a slug it's rendering (e.g.
+   * `/blog/old-slug`) 404s, before it shows a hard not-found page. Returns
+   * null rather than throwing on a miss — "no redirect exists" is not an
+   * error, it's the common case.
+   */
+  async getRedirectForPath(path) {
+    if (!hasPublicWebsiteOrganization()) return null;
+    const redirect = await redirectRepository.findByFromPathInOrg(config.publicWebsiteOrganizationId, path);
+    if (!redirect) return null;
+    return { toPath: redirect.toPath, statusCode: redirect.statusCode };
   }
 };
 
@@ -9091,57 +12177,146 @@ var publicLeadService = {
   }
 };
 
+// server/services/publicFormService.ts
+var DEFAULT_SUCCESS_MESSAGE = "Thank you \u2014 your submission has been received. We'll be in touch shortly.";
+function buildNotes2(form, fields, data, utm) {
+  const lines = [`Submitted via form: ${form.name}`, ""];
+  for (const field of fields) {
+    const value = data[field.key];
+    if (value) lines.push(`${field.label}: ${value}`);
+  }
+  const utmParts = [
+    utm.utmSource && `source=${utm.utmSource}`,
+    utm.utmMedium && `medium=${utm.utmMedium}`,
+    utm.utmCampaign && `campaign=${utm.utmCampaign}`,
+    utm.utmTerm && `term=${utm.utmTerm}`,
+    utm.utmContent && `content=${utm.utmContent}`
+  ].filter(Boolean);
+  if (utmParts.length > 0) lines.push("", `UTM: ${utmParts.join(", ")}`);
+  return lines.join("\n");
+}
+var publicFormService = {
+  /**
+   * A non-empty `website` field (the honeypot) means the caller is almost
+   * certainly a bot — still resolves and returns the form's real
+   * successMessage (§8's "accepted-but-discarded" contract from
+   * publicLeadService), but writes nothing.
+   */
+  async submit(slug, input, meta = {}) {
+    const organizationId = config.publicWebsiteOrganizationId;
+    if (!organizationId) {
+      throw new InfrastructureError("Public form intake is not configured.");
+    }
+    const form = await formRepository.findBySlugInOrg(organizationId, slug);
+    if (!form || form.status !== "ACTIVE") {
+      throw new NotFoundError("Form not found.");
+    }
+    const successMessage = form.successMessage || DEFAULT_SUCCESS_MESSAGE;
+    if (input.website) {
+      return { successMessage };
+    }
+    const fields = form.fields;
+    for (const field of fields) {
+      const value = input.data[field.key];
+      if (field.required && (!value || !value.trim())) {
+        throw new ValidationError(`"${field.label}" is required.`);
+      }
+    }
+    const emailValue = input.data.email?.trim() || void 0;
+    const nameValue = input.data.name?.trim() || void 0;
+    const companyValue = input.data.company?.trim() || void 0;
+    const phoneValue = input.data.phone?.trim() || void 0;
+    const lead = await leadRepository.create({
+      organizationId,
+      companyName: companyValue || nameValue || emailValue || "Website form submission",
+      contactName: nameValue,
+      email: emailValue,
+      phone: phoneValue,
+      source: `form:${form.slug}${input.utmSource ? `:${input.utmSource}` : ""}`,
+      notes: buildNotes2(form, fields, input.data, input)
+    });
+    const submission = await formRepository.createSubmission({
+      formId: form.id,
+      organizationId,
+      data: input.data,
+      utmSource: input.utmSource,
+      utmMedium: input.utmMedium,
+      utmCampaign: input.utmCampaign,
+      utmTerm: input.utmTerm,
+      utmContent: input.utmContent,
+      leadId: lead.id,
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent
+    });
+    await auditLogRepository.record({
+      organizationId,
+      actorType: "SYSTEM",
+      actorName: "Public Website",
+      action: "FORM_SUBMITTED",
+      resourceType: "form_submission",
+      resourceId: submission.id,
+      afterData: { formId: form.id, formSlug: form.slug, leadId: lead.id },
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent
+    });
+    return { successMessage };
+  }
+};
+
 // server/schemas/publicSchemas.ts
-import { z as z26 } from "zod";
-var SORT_FIELDS8 = ["publishedAt", "createdAt", "title"];
-var listPublicPostsQuerySchema = z26.object({
-  page: z26.coerce.number().int().positive().default(1),
-  limit: z26.coerce.number().int().positive().max(50).default(12),
-  search: z26.string().trim().max(200).optional(),
-  category: z26.string().trim().max(150).optional(),
-  tag: z26.string().trim().max(150).optional(),
-  sort: z26.enum(SORT_FIELDS8).default("publishedAt"),
-  order: z26.enum(["asc", "desc"]).default("desc")
+import { z as z31 } from "zod";
+var SORT_FIELDS9 = ["publishedAt", "createdAt", "title"];
+var listPublicPostsQuerySchema = z31.object({
+  page: z31.coerce.number().int().positive().default(1),
+  limit: z31.coerce.number().int().positive().max(50).default(12),
+  search: z31.string().trim().max(200).optional(),
+  category: z31.string().trim().max(150).optional(),
+  tag: z31.string().trim().max(150).optional(),
+  sort: z31.enum(SORT_FIELDS9).default("publishedAt"),
+  order: z31.enum(["asc", "desc"]).default("desc")
 });
-var listPublicProductsQuerySchema = z26.object({
-  page: z26.coerce.number().int().positive().default(1),
-  limit: z26.coerce.number().int().positive().max(50).default(20),
-  search: z26.string().trim().max(200).optional(),
-  type: z26.enum(["PRODUCT", "SERVICE"]).optional()
+var listPublicProductsQuerySchema = z31.object({
+  page: z31.coerce.number().int().positive().default(1),
+  limit: z31.coerce.number().int().positive().max(50).default(20),
+  search: z31.string().trim().max(200).optional(),
+  type: z31.enum(["PRODUCT", "SERVICE"]).optional()
 });
-var nonEmptyTrimmed = (max) => z26.string().trim().min(1).max(max);
-var createPublicLeadSchema = z26.object({
+var publicRedirectLookupQuerySchema = z31.object({
+  path: z31.string().trim().min(1).max(2048).refine((v) => v.startsWith("/") && !v.startsWith("//"), { message: "Must be a site-relative path starting with a single /." })
+});
+var nonEmptyTrimmed = (max) => z31.string().trim().min(1).max(max);
+var createPublicLeadSchema = z31.object({
   name: nonEmptyTrimmed(200),
-  company: z26.string().trim().max(200).optional(),
-  email: z26.string().trim().email().max(320),
-  phone: z26.string().trim().max(50).optional(),
-  subject: z26.string().trim().max(200).optional(),
+  company: z31.string().trim().max(200).optional(),
+  email: z31.string().trim().email().max(320),
+  phone: z31.string().trim().max(50).optional(),
+  subject: z31.string().trim().max(200).optional(),
   message: nonEmptyTrimmed(5e3),
-  productInterest: z26.string().trim().max(200).optional(),
-  source: z26.enum(["contact_form", "product_inquiry", "project_brief", "other"]).default("contact_form"),
-  consent: z26.literal(true, { errorMap: () => ({ message: "Consent is required to submit this form." }) }),
-  website: z26.string().trim().max(200).optional()
+  productInterest: z31.string().trim().max(200).optional(),
+  source: z31.enum(["contact_form", "product_inquiry", "project_brief", "other"]).default("contact_form"),
+  consent: z31.literal(true, { errorMap: () => ({ message: "Consent is required to submit this form." }) }),
+  website: z31.string().trim().max(200).optional()
 });
 
 // server/routes/v1/publicRoutes.ts
-var router29 = Router29();
-function requestMeta20(req) {
+var router36 = Router36();
+function requestMeta25(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router29.get(
+router36.get(
   "/site",
   asyncHandler(async (_req, res) => {
     sendSuccess(res, { configured: publicSiteService.isConfigured() });
   })
 );
-router29.get(
+router36.get(
   "/pages/:slug",
   asyncHandler(async (req, res) => {
     const page = await publicSiteService.getPageBySlug(req.params.slug);
     sendSuccess(res, { page });
   })
 );
-router29.get(
+router36.get(
   "/posts",
   asyncHandler(async (req, res) => {
     const query = listPublicPostsQuerySchema.parse(req.query);
@@ -9155,28 +12330,28 @@ router29.get(
     sendSuccess(res, { posts: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router29.get(
+router36.get(
   "/posts/:slug",
   asyncHandler(async (req, res) => {
     const post = await publicSiteService.getPostBySlug(req.params.slug);
     sendSuccess(res, { post });
   })
 );
-router29.get(
+router36.get(
   "/categories",
   asyncHandler(async (_req, res) => {
     const categories = await publicSiteService.listCategories();
     sendSuccess(res, { categories });
   })
 );
-router29.get(
+router36.get(
   "/tags",
   asyncHandler(async (_req, res) => {
     const tags = await publicSiteService.listTags();
     sendSuccess(res, { tags });
   })
 );
-router29.get(
+router36.get(
   "/products",
   asyncHandler(async (req, res) => {
     const query = listPublicProductsQuerySchema.parse(req.query);
@@ -9184,33 +12359,50 @@ router29.get(
     sendSuccess(res, { products: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router29.get(
+router36.get(
   "/products/:slug",
   asyncHandler(async (req, res) => {
     const product = await publicProductService.getProductBySlug(req.params.slug);
     sendSuccess(res, { product });
   })
 );
-router29.get(
+router36.get(
   "/products/:slug/modules",
   asyncHandler(async (req, res) => {
     const modules = await publicProductService.getProductModules(req.params.slug);
     sendSuccess(res, { modules });
   })
 );
-router29.post(
+router36.get(
+  "/redirects",
+  asyncHandler(async (req, res) => {
+    const query = publicRedirectLookupQuerySchema.parse(req.query);
+    const redirect = await publicSiteService.getRedirectForPath(query.path);
+    sendSuccess(res, { redirect });
+  })
+);
+router36.post(
   "/leads",
   publicLeadLimiter,
   asyncHandler(async (req, res) => {
     const input = createPublicLeadSchema.parse(req.body);
-    await publicLeadService.createLead(input, requestMeta20(req));
+    await publicLeadService.createLead(input, requestMeta25(req));
     sendSuccess(res, { message: "Thank you \u2014 your message has been received. We'll be in touch shortly." }, 201);
   })
 );
-var publicRoutes_default = router29;
+router36.post(
+  "/forms/:slug/submit",
+  publicLeadLimiter,
+  asyncHandler(async (req, res) => {
+    const input = publicFormSubmitSchema.parse(req.body);
+    const { successMessage } = await publicFormService.submit(req.params.slug, input, requestMeta25(req));
+    sendSuccess(res, { message: successMessage }, 201);
+  })
+);
+var publicRoutes_default = router36;
 
 // server/routes/v1/aiProviderRoutes.ts
-import { Router as Router30 } from "express";
+import { Router as Router37 } from "express";
 
 // server/repositories/aiProviderRepository.ts
 var aiProviderRepository = {
@@ -9350,116 +12542,116 @@ var aiProviderService = {
 };
 
 // server/schemas/aiSchemas.ts
-import { z as z27 } from "zod";
-var createAiProviderSchema = z27.object({
-  code: z27.string().trim().min(1).max(50),
-  name: z27.string().trim().min(1).max(200),
-  status: z27.enum(["ACTIVE", "INACTIVE"]).optional(),
-  isDefault: z27.boolean().optional()
+import { z as z32 } from "zod";
+var createAiProviderSchema = z32.object({
+  code: z32.string().trim().min(1).max(50),
+  name: z32.string().trim().min(1).max(200),
+  status: z32.enum(["ACTIVE", "INACTIVE"]).optional(),
+  isDefault: z32.boolean().optional()
 });
-var updateAiProviderSchema = z27.object({
-  name: z27.string().trim().min(1).max(200).optional(),
-  status: z27.enum(["ACTIVE", "INACTIVE"]).optional(),
-  isDefault: z27.boolean().optional()
+var updateAiProviderSchema = z32.object({
+  name: z32.string().trim().min(1).max(200).optional(),
+  status: z32.enum(["ACTIVE", "INACTIVE"]).optional(),
+  isDefault: z32.boolean().optional()
 });
-var createAiModelSchema = z27.object({
-  providerId: z27.string().uuid(),
-  modelId: z27.string().trim().min(1).max(100),
-  displayName: z27.string().trim().min(1).max(200),
-  contextWindow: z27.number().int().positive().optional(),
-  supportsStructuredOutput: z27.boolean().optional(),
-  supportsToolCalling: z27.boolean().optional(),
-  inputPricePerMillionTokens: z27.number().nonnegative().optional(),
-  outputPricePerMillionTokens: z27.number().nonnegative().optional(),
-  isActive: z27.boolean().optional(),
-  isDefault: z27.boolean().optional()
+var createAiModelSchema = z32.object({
+  providerId: z32.string().uuid(),
+  modelId: z32.string().trim().min(1).max(100),
+  displayName: z32.string().trim().min(1).max(200),
+  contextWindow: z32.number().int().positive().optional(),
+  supportsStructuredOutput: z32.boolean().optional(),
+  supportsToolCalling: z32.boolean().optional(),
+  inputPricePerMillionTokens: z32.number().nonnegative().optional(),
+  outputPricePerMillionTokens: z32.number().nonnegative().optional(),
+  isActive: z32.boolean().optional(),
+  isDefault: z32.boolean().optional()
 });
 var updateAiModelSchema = createAiModelSchema.partial().omit({ providerId: true, modelId: true });
-var updateAiOrgToolSettingSchema = z27.object({
-  enabled: z27.boolean().optional(),
-  requireApprovalOverride: z27.boolean().nullable().optional()
+var updateAiOrgToolSettingSchema = z32.object({
+  enabled: z32.boolean().optional(),
+  requireApprovalOverride: z32.boolean().nullable().optional()
 });
 var PROMPT_SORT_FIELDS = ["key", "name", "status", "createdAt", "updatedAt"];
-var listAiPromptsQuerySchema = z27.object(paginationQuerySchema(PROMPT_SORT_FIELDS, "createdAt", "desc"));
-var createAiPromptTemplateSchema = z27.object({
-  key: z27.string().trim().min(1).max(100).regex(/^[a-z0-9._-]+$/, "key must be lowercase, URL-safe (letters, numbers, dots, hyphens, underscores)"),
-  name: z27.string().trim().min(1).max(200),
-  purpose: z27.string().trim().max(1e3).optional(),
-  systemInstructions: z27.string().trim().min(1).max(2e4),
-  userTemplate: z27.string().trim().min(1).max(2e4),
-  variablesSchema: z27.record(z27.unknown()).optional()
+var listAiPromptsQuerySchema = z32.object(paginationQuerySchema(PROMPT_SORT_FIELDS, "createdAt", "desc"));
+var createAiPromptTemplateSchema = z32.object({
+  key: z32.string().trim().min(1).max(100).regex(/^[a-z0-9._-]+$/, "key must be lowercase, URL-safe (letters, numbers, dots, hyphens, underscores)"),
+  name: z32.string().trim().min(1).max(200),
+  purpose: z32.string().trim().max(1e3).optional(),
+  systemInstructions: z32.string().trim().min(1).max(2e4),
+  userTemplate: z32.string().trim().min(1).max(2e4),
+  variablesSchema: z32.record(z32.unknown()).optional()
 });
-var createAiPromptVersionSchema = z27.object({
-  systemInstructions: z27.string().trim().min(1).max(2e4),
-  userTemplate: z27.string().trim().min(1).max(2e4),
-  variablesSchema: z27.record(z27.unknown()).optional()
+var createAiPromptVersionSchema = z32.object({
+  systemInstructions: z32.string().trim().min(1).max(2e4),
+  userTemplate: z32.string().trim().min(1).max(2e4),
+  variablesSchema: z32.record(z32.unknown()).optional()
 });
-var updateAiPromptTemplateSchema = z27.object({
-  name: z27.string().trim().min(1).max(200).optional(),
-  purpose: z27.string().trim().max(1e3).nullable().optional(),
-  status: z27.enum(["DRAFT", "ACTIVE", "ARCHIVED"]).optional()
+var updateAiPromptTemplateSchema = z32.object({
+  name: z32.string().trim().min(1).max(200).optional(),
+  purpose: z32.string().trim().max(1e3).nullable().optional(),
+  status: z32.enum(["DRAFT", "ACTIVE", "ARCHIVED"]).optional()
 });
-var publishAiPromptVersionSchema = z27.object({
-  versionId: z27.string().uuid()
+var publishAiPromptVersionSchema = z32.object({
+  versionId: z32.string().uuid()
 });
 var WORKFLOW_SORT_FIELDS = ["key", "name", "status", "createdAt", "updatedAt"];
-var listAiWorkflowsQuerySchema = z27.object(paginationQuerySchema(WORKFLOW_SORT_FIELDS, "createdAt", "desc"));
-var workflowStepSchema = z27.object({
-  order: z27.number().int().nonnegative(),
-  toolCode: z27.string().trim().min(1).max(100),
-  description: z27.string().trim().max(500).optional()
+var listAiWorkflowsQuerySchema = z32.object(paginationQuerySchema(WORKFLOW_SORT_FIELDS, "createdAt", "desc"));
+var workflowStepSchema = z32.object({
+  order: z32.number().int().nonnegative(),
+  toolCode: z32.string().trim().min(1).max(100),
+  description: z32.string().trim().max(500).optional()
 });
-var createAiWorkflowSchema = z27.object({
-  key: z27.string().trim().min(1).max(100).regex(/^[a-z0-9._-]+$/, "key must be lowercase, URL-safe (letters, numbers, dots, hyphens, underscores)"),
-  name: z27.string().trim().min(1).max(200),
-  description: z27.string().trim().max(2e3).optional(),
-  steps: z27.array(workflowStepSchema).min(1).max(10),
-  maxSteps: z27.number().int().positive().max(10).optional(),
-  timeoutMs: z27.number().int().positive().max(12e4).optional()
+var createAiWorkflowSchema = z32.object({
+  key: z32.string().trim().min(1).max(100).regex(/^[a-z0-9._-]+$/, "key must be lowercase, URL-safe (letters, numbers, dots, hyphens, underscores)"),
+  name: z32.string().trim().min(1).max(200),
+  description: z32.string().trim().max(2e3).optional(),
+  steps: z32.array(workflowStepSchema).min(1).max(10),
+  maxSteps: z32.number().int().positive().max(10).optional(),
+  timeoutMs: z32.number().int().positive().max(12e4).optional()
 });
-var updateAiWorkflowSchema = z27.object({
-  name: z27.string().trim().min(1).max(200).optional(),
-  description: z27.string().trim().max(2e3).nullable().optional(),
-  steps: z27.array(workflowStepSchema).min(1).max(10).optional(),
-  maxSteps: z27.number().int().positive().max(10).optional(),
-  timeoutMs: z27.number().int().positive().max(12e4).optional(),
+var updateAiWorkflowSchema = z32.object({
+  name: z32.string().trim().min(1).max(200).optional(),
+  description: z32.string().trim().max(2e3).nullable().optional(),
+  steps: z32.array(workflowStepSchema).min(1).max(10).optional(),
+  maxSteps: z32.number().int().positive().max(10).optional(),
+  timeoutMs: z32.number().int().positive().max(12e4).optional(),
   expectedUpdatedAt: expectedUpdatedAtSchema2
 });
-var executeAiWorkflowSchema = z27.object({
+var executeAiWorkflowSchema = z32.object({
   /** Keyed by step order — each step's tool input, supplied by the caller (Phase 12 has no autonomous planning, see AIWorkflow's schema.prisma doc comment). */
-  stepInputs: z27.record(z27.string(), z27.record(z27.unknown())).default({})
+  stepInputs: z32.record(z32.string(), z32.record(z32.unknown())).default({})
 });
-var executeAiToolSchema = z27.object({
-  toolCode: z27.string().trim().min(1).max(100),
-  input: z27.record(z27.unknown()).default({})
+var executeAiToolSchema = z32.object({
+  toolCode: z32.string().trim().min(1).max(100),
+  input: z32.record(z32.unknown()).default({})
 });
 var EXECUTION_SORT_FIELDS = ["createdAt", "startedAt", "status"];
-var listAiExecutionsQuerySchema = z27.object({
+var listAiExecutionsQuerySchema = z32.object({
   ...paginationQuerySchema(EXECUTION_SORT_FIELDS, "createdAt", "desc"),
-  kind: z27.enum(["TOOL_CALL", "WORKFLOW"]).optional(),
-  status: z27.enum(["PENDING", "RUNNING", "AWAITING_APPROVAL", "COMPLETED", "FAILED", "CANCELLED"]).optional()
+  kind: z32.enum(["TOOL_CALL", "WORKFLOW"]).optional(),
+  status: z32.enum(["PENDING", "RUNNING", "AWAITING_APPROVAL", "COMPLETED", "FAILED", "CANCELLED"]).optional()
 });
-var usageSummaryQuerySchema = z27.object({
-  dateFrom: z27.coerce.date().optional(),
-  dateTo: z27.coerce.date().optional()
+var usageSummaryQuerySchema = z32.object({
+  dateFrom: z32.coerce.date().optional(),
+  dateTo: z32.coerce.date().optional()
 });
 var APPROVAL_SORT_FIELDS = ["createdAt", "expiresAt", "status"];
-var listAiApprovalsQuerySchema = z27.object({
+var listAiApprovalsQuerySchema = z32.object({
   ...paginationQuerySchema(APPROVAL_SORT_FIELDS, "createdAt", "desc"),
-  status: z27.enum(["PENDING", "APPROVED", "REJECTED", "EXPIRED"]).optional()
+  status: z32.enum(["PENDING", "APPROVED", "REJECTED", "EXPIRED"]).optional()
 });
-var decideAiApprovalSchema = z27.object({
-  decision: z27.enum(["APPROVE", "REJECT"]),
-  rejectionReason: z27.string().trim().max(2e3).optional()
+var decideAiApprovalSchema = z32.object({
+  decision: z32.enum(["APPROVE", "REJECT"]),
+  rejectionReason: z32.string().trim().max(2e3).optional()
 });
 
 // server/routes/v1/aiProviderRoutes.ts
-var router30 = Router30();
-router30.use(authenticateToken);
-function requestMeta21(req) {
+var router37 = Router37();
+router37.use(authenticateToken);
+function requestMeta26(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"], requestId: req.requestId };
 }
-router30.get(
+router37.get(
   "/",
   requirePermission("ai.providers.read"),
   asyncHandler(async (_req, res) => {
@@ -9467,25 +12659,25 @@ router30.get(
     sendSuccess(res, { providers });
   })
 );
-router30.post(
+router37.post(
   "/",
   requirePermission("ai.providers.manage"),
   asyncHandler(async (req, res) => {
     const input = createAiProviderSchema.parse(req.body);
-    const provider = await aiProviderService.createProvider(req.user, input, requestMeta21(req));
+    const provider = await aiProviderService.createProvider(req.user, input, requestMeta26(req));
     sendSuccess(res, { provider }, 201);
   })
 );
-router30.patch(
+router37.patch(
   "/:id",
   requirePermission("ai.providers.manage"),
   asyncHandler(async (req, res) => {
     const input = updateAiProviderSchema.parse(req.body);
-    const provider = await aiProviderService.updateProvider(req.user, req.params.id, input, requestMeta21(req));
+    const provider = await aiProviderService.updateProvider(req.user, req.params.id, input, requestMeta26(req));
     sendSuccess(res, { provider });
   })
 );
-router30.get(
+router37.get(
   "/models",
   requirePermission("ai.models.read"),
   asyncHandler(async (req, res) => {
@@ -9494,28 +12686,28 @@ router30.get(
     sendSuccess(res, { models });
   })
 );
-router30.post(
+router37.post(
   "/models",
   requirePermission("ai.models.manage"),
   asyncHandler(async (req, res) => {
     const input = createAiModelSchema.parse(req.body);
-    const model = await aiProviderService.createModel(req.user, input, requestMeta21(req));
+    const model = await aiProviderService.createModel(req.user, input, requestMeta26(req));
     sendSuccess(res, { model }, 201);
   })
 );
-router30.patch(
+router37.patch(
   "/models/:id",
   requirePermission("ai.models.manage"),
   asyncHandler(async (req, res) => {
     const input = updateAiModelSchema.parse(req.body);
-    const model = await aiProviderService.updateModel(req.user, req.params.id, input, requestMeta21(req));
+    const model = await aiProviderService.updateModel(req.user, req.params.id, input, requestMeta26(req));
     sendSuccess(res, { model });
   })
 );
-var aiProviderRoutes_default = router30;
+var aiProviderRoutes_default = router37;
 
 // server/routes/v1/aiToolRoutes.ts
-import { Router as Router31 } from "express";
+import { Router as Router38 } from "express";
 
 // server/repositories/aiToolRepository.ts
 var aiToolRepository = {
@@ -9576,12 +12768,12 @@ var aiToolService = {
 };
 
 // server/routes/v1/aiToolRoutes.ts
-var router31 = Router31();
-router31.use(authenticateToken);
-function requestMeta22(req) {
+var router38 = Router38();
+router38.use(authenticateToken);
+function requestMeta27(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"], requestId: req.requestId };
 }
-router31.get(
+router38.get(
   "/",
   requirePermission("ai.tools.read"),
   asyncHandler(async (req, res) => {
@@ -9589,19 +12781,19 @@ router31.get(
     sendSuccess(res, { tools });
   })
 );
-router31.patch(
+router38.patch(
   "/:code/settings",
   requirePermission("ai.tools.manage"),
   asyncHandler(async (req, res) => {
     const input = updateAiOrgToolSettingSchema.parse(req.body);
-    const setting = await aiToolService.updateOrgSetting(req.user, req.params.code, input, requestMeta22(req));
+    const setting = await aiToolService.updateOrgSetting(req.user, req.params.code, input, requestMeta27(req));
     sendSuccess(res, { setting });
   })
 );
-var aiToolRoutes_default = router31;
+var aiToolRoutes_default = router38;
 
 // server/routes/v1/aiPromptRoutes.ts
-import { Router as Router32 } from "express";
+import { Router as Router39 } from "express";
 
 // server/repositories/aiPromptRepository.ts
 var aiPromptRepository = {
@@ -9696,7 +12888,7 @@ var aiPromptRepository = {
 };
 
 // server/services/aiPromptService.ts
-async function loadTemplateOrThrow(id, organizationId) {
+async function loadTemplateOrThrow2(id, organizationId) {
   const template = await aiPromptRepository.findByIdInOrg(id, organizationId);
   if (!template) throw new NotFoundError("Prompt template not found.");
   return template;
@@ -9706,7 +12898,7 @@ var aiPromptService = {
     return aiPromptRepository.list(organizationId, filters, page, limit, sort, order);
   },
   async getTemplate(organizationId, id) {
-    return loadTemplateOrThrow(id, organizationId);
+    return loadTemplateOrThrow2(id, organizationId);
   },
   async createTemplate(caller, input, meta = {}) {
     const existing = await aiPromptRepository.findByKeyInOrg(input.key, caller.organizationId);
@@ -9726,7 +12918,7 @@ var aiPromptService = {
     return template;
   },
   async createVersion(caller, templateId, input, meta = {}) {
-    await loadTemplateOrThrow(templateId, caller.organizationId);
+    await loadTemplateOrThrow2(templateId, caller.organizationId);
     const version = await aiPromptRepository.createVersion(templateId, caller.id, input);
     await auditLogRepository.record({
       organizationId: caller.organizationId,
@@ -9742,7 +12934,7 @@ var aiPromptService = {
     return version;
   },
   async updateTemplate(caller, id, input, meta = {}) {
-    await loadTemplateOrThrow(id, caller.organizationId);
+    await loadTemplateOrThrow2(id, caller.organizationId);
     const template = await aiPromptRepository.update(id, caller.id, input);
     await auditLogRepository.record({
       organizationId: caller.organizationId,
@@ -9758,7 +12950,7 @@ var aiPromptService = {
     return template;
   },
   async publishVersion(caller, templateId, versionId, meta = {}) {
-    await loadTemplateOrThrow(templateId, caller.organizationId);
+    await loadTemplateOrThrow2(templateId, caller.organizationId);
     const version = await aiPromptRepository.findVersionInTemplate(templateId, versionId);
     if (!version) throw new ValidationError("versionId does not refer to a version of this prompt template.");
     const template = await aiPromptRepository.setCurrentVersion(templateId, versionId, caller.id);
@@ -9779,7 +12971,7 @@ var aiPromptService = {
     return aiPromptRepository.findByIdInOrg(templateId, caller.organizationId);
   },
   async deleteTemplate(caller, id, meta = {}) {
-    await loadTemplateOrThrow(id, caller.organizationId);
+    await loadTemplateOrThrow2(id, caller.organizationId);
     await aiPromptRepository.update(id, caller.id, { status: "ARCHIVED" });
     await auditLogRepository.record({
       organizationId: caller.organizationId,
@@ -9795,12 +12987,12 @@ var aiPromptService = {
 };
 
 // server/routes/v1/aiPromptRoutes.ts
-var router32 = Router32();
-router32.use(authenticateToken);
-function requestMeta23(req) {
+var router39 = Router39();
+router39.use(authenticateToken);
+function requestMeta28(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"], requestId: req.requestId };
 }
-router32.get(
+router39.get(
   "/",
   requirePermission("ai.prompts.read"),
   asyncHandler(async (req, res) => {
@@ -9816,7 +13008,7 @@ router32.get(
     sendSuccess(res, { promptTemplates: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router32.get(
+router39.get(
   "/:id",
   requirePermission("ai.prompts.read"),
   asyncHandler(async (req, res) => {
@@ -9824,54 +13016,54 @@ router32.get(
     sendSuccess(res, { promptTemplate });
   })
 );
-router32.post(
+router39.post(
   "/",
   requirePermission("ai.prompts.create"),
   asyncHandler(async (req, res) => {
     const input = createAiPromptTemplateSchema.parse(req.body);
-    const promptTemplate = await aiPromptService.createTemplate(req.user, input, requestMeta23(req));
+    const promptTemplate = await aiPromptService.createTemplate(req.user, input, requestMeta28(req));
     sendSuccess(res, { promptTemplate }, 201);
   })
 );
-router32.patch(
+router39.patch(
   "/:id",
   requirePermission("ai.prompts.update"),
   asyncHandler(async (req, res) => {
     const input = updateAiPromptTemplateSchema.parse(req.body);
-    const promptTemplate = await aiPromptService.updateTemplate(req.user, req.params.id, input, requestMeta23(req));
+    const promptTemplate = await aiPromptService.updateTemplate(req.user, req.params.id, input, requestMeta28(req));
     sendSuccess(res, { promptTemplate });
   })
 );
-router32.post(
+router39.post(
   "/:id/versions",
   requirePermission("ai.prompts.update"),
   asyncHandler(async (req, res) => {
     const input = createAiPromptVersionSchema.parse(req.body);
-    const version = await aiPromptService.createVersion(req.user, req.params.id, input, requestMeta23(req));
+    const version = await aiPromptService.createVersion(req.user, req.params.id, input, requestMeta28(req));
     sendSuccess(res, { version }, 201);
   })
 );
-router32.post(
+router39.post(
   "/:id/publish",
   requirePermission("ai.prompts.publish"),
   asyncHandler(async (req, res) => {
     const input = publishAiPromptVersionSchema.parse(req.body);
-    const promptTemplate = await aiPromptService.publishVersion(req.user, req.params.id, input.versionId, requestMeta23(req));
+    const promptTemplate = await aiPromptService.publishVersion(req.user, req.params.id, input.versionId, requestMeta28(req));
     sendSuccess(res, { promptTemplate });
   })
 );
-router32.delete(
+router39.delete(
   "/:id",
   requirePermission("ai.prompts.delete"),
   asyncHandler(async (req, res) => {
-    await aiPromptService.deleteTemplate(req.user, req.params.id, requestMeta23(req));
+    await aiPromptService.deleteTemplate(req.user, req.params.id, requestMeta28(req));
     sendSuccess(res, { archived: true });
   })
 );
-var aiPromptRoutes_default = router32;
+var aiPromptRoutes_default = router39;
 
 // server/routes/v1/aiWorkflowRoutes.ts
-import { Router as Router33 } from "express";
+import { Router as Router40 } from "express";
 
 // server/repositories/aiWorkflowRepository.ts
 var aiWorkflowRepository = {
@@ -9978,66 +13170,66 @@ import crypto from "crypto";
 import { Prisma as Prisma5 } from "@prisma/client";
 
 // server/ai/toolRegistry.ts
-import { z as z28 } from "zod";
+import { z as z33 } from "zod";
 function tool(def) {
   return def;
 }
-var listLeadsInput = z28.object({
-  search: z28.string().trim().max(200).optional(),
-  status: z28.enum(["NEW", "CONTACTED", "QUALIFIED", "CONVERTED", "LOST"]).optional(),
-  page: z28.number().int().positive().default(1),
-  limit: z28.number().int().positive().max(50).default(20)
+var listLeadsInput = z33.object({
+  search: z33.string().trim().max(200).optional(),
+  status: z33.enum(["NEW", "CONTACTED", "QUALIFIED", "CONVERTED", "LOST"]).optional(),
+  page: z33.number().int().positive().default(1),
+  limit: z33.number().int().positive().max(50).default(20)
 });
-var createLeadInput = z28.object({
-  companyName: z28.string().trim().min(1).max(200),
-  contactName: z28.string().trim().max(200).optional(),
-  email: z28.string().trim().email().max(255).optional(),
-  phone: z28.string().trim().max(50).optional(),
-  source: z28.string().trim().max(100).optional(),
-  notes: z28.string().trim().max(5e3).optional()
+var createLeadInput = z33.object({
+  companyName: z33.string().trim().min(1).max(200),
+  contactName: z33.string().trim().max(200).optional(),
+  email: z33.string().trim().email().max(255).optional(),
+  phone: z33.string().trim().max(50).optional(),
+  source: z33.string().trim().max(100).optional(),
+  notes: z33.string().trim().max(5e3).optional()
 });
-var convertLeadInput = z28.object({
-  leadId: z28.string().uuid(),
-  clientCode: z28.string().trim().min(1).max(50).regex(/^[A-Za-z0-9._-]+$/),
-  name: z28.string().trim().max(200).optional(),
-  createContact: z28.boolean().default(true)
+var convertLeadInput = z33.object({
+  leadId: z33.string().uuid(),
+  clientCode: z33.string().trim().min(1).max(50).regex(/^[A-Za-z0-9._-]+$/),
+  name: z33.string().trim().max(200).optional(),
+  createContact: z33.boolean().default(true)
 });
-var listClientsInput = z28.object({
-  search: z28.string().trim().max(200).optional(),
-  status: z28.enum(["ACTIVE", "INACTIVE", "ARCHIVED"]).optional(),
-  page: z28.number().int().positive().default(1),
-  limit: z28.number().int().positive().max(50).default(20)
+var listClientsInput = z33.object({
+  search: z33.string().trim().max(200).optional(),
+  status: z33.enum(["ACTIVE", "INACTIVE", "ARCHIVED"]).optional(),
+  page: z33.number().int().positive().default(1),
+  limit: z33.number().int().positive().max(50).default(20)
 });
-var createClientInput = z28.object({
-  clientCode: z28.string().trim().min(1).max(50).regex(/^[A-Za-z0-9._-]+$/),
-  name: z28.string().trim().min(1).max(200),
-  email: z28.string().trim().email().max(255).optional(),
-  phone: z28.string().trim().max(50).optional(),
-  notes: z28.string().trim().max(5e3).optional()
+var createClientInput = z33.object({
+  clientCode: z33.string().trim().min(1).max(50).regex(/^[A-Za-z0-9._-]+$/),
+  name: z33.string().trim().min(1).max(200),
+  email: z33.string().trim().email().max(255).optional(),
+  phone: z33.string().trim().max(50).optional(),
+  notes: z33.string().trim().max(5e3).optional()
 });
-var listPostsInput = z28.object({
-  search: z28.string().trim().max(200).optional(),
-  status: z28.enum(["DRAFT", "IN_REVIEW", "SCHEDULED", "PUBLISHED", "ARCHIVED"]).optional(),
-  page: z28.number().int().positive().default(1),
-  limit: z28.number().int().positive().max(50).default(20)
+var listPostsInput = z33.object({
+  search: z33.string().trim().max(200).optional(),
+  status: z33.enum(["DRAFT", "IN_REVIEW", "SCHEDULED", "PUBLISHED", "ARCHIVED"]).optional(),
+  page: z33.number().int().positive().default(1),
+  limit: z33.number().int().positive().max(50).default(20)
 });
-var createDraftPostInput = z28.object({
-  title: z28.string().trim().min(1).max(200),
-  body: z28.string().trim().max(5e5).default(""),
-  categoryId: z28.string().trim().uuid().optional()
+var createDraftPostInput = z33.object({
+  title: z33.string().trim().min(1).max(200),
+  body: z33.string().trim().max(5e5).default(""),
+  categoryId: z33.string().trim().uuid().optional()
 });
-var listProductsInput = z28.object({
-  search: z28.string().trim().max(200).optional(),
-  type: z28.enum(["PRODUCT", "SERVICE"]).optional(),
-  status: z28.enum(["DRAFT", "ACTIVE", "INACTIVE", "ARCHIVED"]).optional(),
-  page: z28.number().int().positive().default(1),
-  limit: z28.number().int().positive().max(50).default(20)
+var listProductsInput = z33.object({
+  search: z33.string().trim().max(200).optional(),
+  type: z33.enum(["PRODUCT", "SERVICE"]).optional(),
+  status: z33.enum(["DRAFT", "ACTIVE", "INACTIVE", "ARCHIVED"]).optional(),
+  page: z33.number().int().positive().default(1),
+  limit: z33.number().int().positive().max(50).default(20)
 });
-var issueInvoiceInput = z28.object({
-  invoiceId: z28.string().uuid()
+var issueInvoiceInput = z33.object({
+  invoiceId: z33.string().uuid()
 });
-var activateContractInput = z28.object({
-  contractId: z28.string().uuid()
+var activateContractInput = z33.object({
+  contractId: z33.string().uuid()
 });
 var AI_TOOL_REGISTRY = Object.freeze({
   "leads.list": tool({
@@ -10481,12 +13673,12 @@ var aiWorkflowService = {
 };
 
 // server/routes/v1/aiWorkflowRoutes.ts
-var router33 = Router33();
-router33.use(authenticateToken);
-function requestMeta24(req) {
+var router40 = Router40();
+router40.use(authenticateToken);
+function requestMeta29(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"], requestId: req.requestId };
 }
-router33.get(
+router40.get(
   "/",
   requirePermission("ai.workflows.read"),
   asyncHandler(async (req, res) => {
@@ -10502,7 +13694,7 @@ router33.get(
     sendSuccess(res, { workflows: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router33.get(
+router40.get(
   "/:id",
   requirePermission("ai.workflows.read"),
   asyncHandler(async (req, res) => {
@@ -10510,54 +13702,54 @@ router33.get(
     sendSuccess(res, { workflow });
   })
 );
-router33.post(
+router40.post(
   "/",
   requirePermission("ai.workflows.create"),
   asyncHandler(async (req, res) => {
     const input = createAiWorkflowSchema.parse(req.body);
-    const workflow = await aiWorkflowService.createWorkflow(req.user, input, requestMeta24(req));
+    const workflow = await aiWorkflowService.createWorkflow(req.user, input, requestMeta29(req));
     sendSuccess(res, { workflow }, 201);
   })
 );
-router33.patch(
+router40.patch(
   "/:id",
   requirePermission("ai.workflows.update"),
   asyncHandler(async (req, res) => {
     const input = updateAiWorkflowSchema.parse(req.body);
-    const workflow = await aiWorkflowService.updateWorkflow(req.user, req.params.id, input, requestMeta24(req));
+    const workflow = await aiWorkflowService.updateWorkflow(req.user, req.params.id, input, requestMeta29(req));
     sendSuccess(res, { workflow });
   })
 );
-router33.post(
+router40.post(
   "/:id/publish",
   requirePermission("ai.workflows.publish"),
   asyncHandler(async (req, res) => {
-    const workflow = await aiWorkflowService.publishWorkflow(req.user, req.params.id, requestMeta24(req));
+    const workflow = await aiWorkflowService.publishWorkflow(req.user, req.params.id, requestMeta29(req));
     sendSuccess(res, { workflow });
   })
 );
-router33.delete(
+router40.delete(
   "/:id",
   requirePermission("ai.workflows.delete"),
   asyncHandler(async (req, res) => {
-    const workflow = await aiWorkflowService.archiveWorkflow(req.user, req.params.id, requestMeta24(req));
+    const workflow = await aiWorkflowService.archiveWorkflow(req.user, req.params.id, requestMeta29(req));
     sendSuccess(res, { workflow });
   })
 );
-router33.post(
+router40.post(
   "/:id/execute",
   requirePermission("ai.workflows.execute"),
   aiExecutionLimiter,
   asyncHandler(async (req, res) => {
     const input = executeAiWorkflowSchema.parse(req.body);
-    const execution = await aiWorkflowService.executeWorkflow(req.user, req.params.id, input, requestMeta24(req));
+    const execution = await aiWorkflowService.executeWorkflow(req.user, req.params.id, input, requestMeta29(req));
     sendSuccess(res, { execution }, 202);
   })
 );
-var aiWorkflowRoutes_default = router33;
+var aiWorkflowRoutes_default = router40;
 
 // server/routes/v1/aiExecutionRoutes.ts
-import { Router as Router34 } from "express";
+import { Router as Router41 } from "express";
 
 // server/services/aiExecutionService.ts
 var aiExecutionService = {
@@ -10597,12 +13789,12 @@ var aiExecutionService = {
 };
 
 // server/routes/v1/aiExecutionRoutes.ts
-var router34 = Router34();
-router34.use(authenticateToken);
-function requestMeta25(req) {
+var router41 = Router41();
+router41.use(authenticateToken);
+function requestMeta30(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"], requestId: req.requestId };
 }
-router34.get(
+router41.get(
   "/",
   requirePermission("ai.executions.read"),
   asyncHandler(async (req, res) => {
@@ -10618,7 +13810,7 @@ router34.get(
     sendSuccess(res, { executions: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router34.get(
+router41.get(
   "/:id",
   requirePermission("ai.executions.read"),
   asyncHandler(async (req, res) => {
@@ -10626,7 +13818,7 @@ router34.get(
     sendSuccess(res, { execution });
   })
 );
-router34.post(
+router41.post(
   "/tool-call",
   // Reuses ai.workflows.execute — "can invoke governed AI actions" is one
   // capability whether the call is wrapped in a workflow or made directly;
@@ -10636,14 +13828,14 @@ router34.post(
   aiExecutionLimiter,
   asyncHandler(async (req, res) => {
     const input = executeAiToolSchema.parse(req.body);
-    const execution = await aiExecutionService.executeTool(req.user, input, requestMeta25(req));
+    const execution = await aiExecutionService.executeTool(req.user, input, requestMeta30(req));
     sendSuccess(res, { execution }, 202);
   })
 );
-var aiExecutionRoutes_default = router34;
+var aiExecutionRoutes_default = router41;
 
 // server/routes/v1/aiUsageRoutes.ts
-import { Router as Router35 } from "express";
+import { Router as Router42 } from "express";
 
 // server/repositories/aiUsageRepository.ts
 var aiUsageRepository = {
@@ -10704,10 +13896,10 @@ var aiUsageService = {
 };
 
 // server/routes/v1/aiUsageRoutes.ts
-var router35 = Router35();
-router35.use(authenticateToken);
-router35.use(requirePermission("ai.usage.read"));
-router35.get(
+var router42 = Router42();
+router42.use(authenticateToken);
+router42.use(requirePermission("ai.usage.read"));
+router42.get(
   "/",
   asyncHandler(async (req, res) => {
     const query = usageSummaryQuerySchema.parse(req.query);
@@ -10715,7 +13907,7 @@ router35.get(
     sendSuccess(res, { usageRecords: records });
   })
 );
-router35.get(
+router42.get(
   "/summary",
   asyncHandler(async (req, res) => {
     const query = usageSummaryQuerySchema.parse(req.query);
@@ -10723,10 +13915,10 @@ router35.get(
     sendSuccess(res, { summary });
   })
 );
-var aiUsageRoutes_default = router35;
+var aiUsageRoutes_default = router42;
 
 // server/routes/v1/aiApprovalRoutes.ts
-import { Router as Router36 } from "express";
+import { Router as Router43 } from "express";
 
 // server/services/aiApprovalService.ts
 import crypto2 from "crypto";
@@ -10852,12 +14044,12 @@ var aiApprovalService = {
 };
 
 // server/routes/v1/aiApprovalRoutes.ts
-var router36 = Router36();
-router36.use(authenticateToken);
-function requestMeta26(req) {
+var router43 = Router43();
+router43.use(authenticateToken);
+function requestMeta31(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"], requestId: req.requestId };
 }
-router36.get(
+router43.get(
   "/",
   requirePermission("ai.approvals.read"),
   asyncHandler(async (req, res) => {
@@ -10873,7 +14065,7 @@ router36.get(
     sendSuccess(res, { approvals: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router36.get(
+router43.get(
   "/:id",
   requirePermission("ai.approvals.read"),
   asyncHandler(async (req, res) => {
@@ -10881,20 +14073,20 @@ router36.get(
     sendSuccess(res, { approval });
   })
 );
-router36.post(
+router43.post(
   "/:id/decide",
   requirePermission("ai.approvals.decide"),
   asyncHandler(async (req, res) => {
     const input = decideAiApprovalSchema.parse(req.body);
-    const approval = await aiApprovalService.decide(req.user, req.params.id, input, requestMeta26(req));
+    const approval = await aiApprovalService.decide(req.user, req.params.id, input, requestMeta31(req));
     sendSuccess(res, { approval });
   })
 );
-var aiApprovalRoutes_default = router36;
+var aiApprovalRoutes_default = router43;
 
 // server/routes/v1/automationRoutes.ts
-import { Router as Router37 } from "express";
-import { z as z31 } from "zod";
+import { Router as Router44 } from "express";
+import { z as z36 } from "zod";
 
 // server/services/automation/AutomationService.ts
 import crypto11 from "node:crypto";
@@ -11227,7 +14419,7 @@ var EventEngine = class _EventEngine {
 var eventEngine = EventEngine.getInstance();
 
 // server/services/automation/ActionRegistry.ts
-import { z as z29 } from "zod";
+import { z as z34 } from "zod";
 import crypto4 from "node:crypto";
 var ActionRegistry = class _ActionRegistry {
   constructor() {
@@ -11266,19 +14458,19 @@ var ActionRegistry = class _ActionRegistry {
       riskLevel: "LOW",
       requiresApproval: false,
       requiresAudit: true,
-      inputSchema: z29.object({
-        title: z29.string().min(1),
-        description: z29.string().optional(),
-        assignedUserId: z29.string().optional(),
-        assignedRole: z29.string().optional(),
-        priority: z29.enum(["LOW", "MEDIUM", "HIGH", "URGENT"]).default("MEDIUM"),
-        dueDate: z29.string().optional(),
-        sourceEntityType: z29.string().optional(),
-        sourceEntityId: z29.string().optional(),
-        isAiGenerated: z29.boolean().default(true),
-        metadata: z29.record(z29.unknown()).optional()
+      inputSchema: z34.object({
+        title: z34.string().min(1),
+        description: z34.string().optional(),
+        assignedUserId: z34.string().optional(),
+        assignedRole: z34.string().optional(),
+        priority: z34.enum(["LOW", "MEDIUM", "HIGH", "URGENT"]).default("MEDIUM"),
+        dueDate: z34.string().optional(),
+        sourceEntityType: z34.string().optional(),
+        sourceEntityId: z34.string().optional(),
+        isAiGenerated: z34.boolean().default(true),
+        metadata: z34.record(z34.unknown()).optional()
       }),
-      outputSchema: z29.object({ taskId: z29.string(), title: z29.string(), status: z29.string() }),
+      outputSchema: z34.object({ taskId: z34.string(), title: z34.string(), status: z34.string() }),
       execute: async (input, context) => {
         const taskId = crypto4.randomUUID();
         const dueDate = input.dueDate ? new Date(input.dueDate) : null;
@@ -11312,12 +14504,12 @@ var ActionRegistry = class _ActionRegistry {
       riskLevel: "MEDIUM",
       requiresApproval: false,
       requiresAudit: true,
-      inputSchema: z29.object({
-        clientId: z29.string().min(1),
-        status: z29.enum(["PROSPECT", "ACTIVE", "INACTIVE", "SUSPENDED", "ARCHIVED"]).optional(),
-        notes: z29.string().optional()
+      inputSchema: z34.object({
+        clientId: z34.string().min(1),
+        status: z34.enum(["PROSPECT", "ACTIVE", "INACTIVE", "SUSPENDED", "ARCHIVED"]).optional(),
+        notes: z34.string().optional()
       }),
-      outputSchema: z29.object({ clientId: z29.string(), updated: z29.boolean() }),
+      outputSchema: z34.object({ clientId: z34.string(), updated: z34.boolean() }),
       execute: async (input, context) => {
         const client3 = await prisma.client.findFirst({ where: { id: input.clientId, organizationId: context.organizationId } });
         if (!client3) {
@@ -11340,16 +14532,16 @@ var ActionRegistry = class _ActionRegistry {
       riskLevel: "LOW",
       requiresApproval: false,
       requiresAudit: false,
-      inputSchema: z29.object({
-        userId: z29.string().optional(),
-        recipientRole: z29.string().optional(),
-        title: z29.string().min(1),
-        message: z29.string().min(1),
-        level: z29.enum(["INFO", "WARNING", "ERROR", "SUCCESS"]).default("INFO"),
-        channel: z29.enum(["IN_APP", "EMAIL", "SMS", "WEBHOOK"]).default("IN_APP"),
-        metadata: z29.record(z29.unknown()).optional()
+      inputSchema: z34.object({
+        userId: z34.string().optional(),
+        recipientRole: z34.string().optional(),
+        title: z34.string().min(1),
+        message: z34.string().min(1),
+        level: z34.enum(["INFO", "WARNING", "ERROR", "SUCCESS"]).default("INFO"),
+        channel: z34.enum(["IN_APP", "EMAIL", "SMS", "WEBHOOK"]).default("IN_APP"),
+        metadata: z34.record(z34.unknown()).optional()
       }),
-      outputSchema: z29.object({ notificationId: z29.string(), delivered: z29.boolean() }),
+      outputSchema: z34.object({ notificationId: z34.string(), delivered: z34.boolean() }),
       execute: async (input, context) => {
         const notifId = crypto4.randomUUID();
         const autoNotif = await prisma.automationNotification.create({
@@ -11396,12 +14588,12 @@ var ActionRegistry = class _ActionRegistry {
       riskLevel: "MEDIUM",
       requiresApproval: false,
       requiresAudit: true,
-      inputSchema: z29.object({
-        entityType: z29.enum(["LEAD", "CLIENT", "TASK"]),
-        entityId: z29.string().min(1),
-        userId: z29.string().min(1)
+      inputSchema: z34.object({
+        entityType: z34.enum(["LEAD", "CLIENT", "TASK"]),
+        entityId: z34.string().min(1),
+        userId: z34.string().min(1)
       }),
-      outputSchema: z29.object({ entityId: z29.string(), assignedUserId: z29.string(), success: z29.boolean() }),
+      outputSchema: z34.object({ entityId: z34.string(), assignedUserId: z34.string(), success: z34.boolean() }),
       execute: async (input, _context) => {
         if (input.entityType === "LEAD") {
           await prisma.lead.update({ where: { id: input.entityId }, data: { assignedTo: input.userId } });
@@ -11421,12 +14613,18 @@ var ActionRegistry = class _ActionRegistry {
       riskLevel: "LOW",
       requiresApproval: false,
       requiresAudit: true,
-      inputSchema: z29.object({ reportType: z29.string(), title: z29.string(), parameters: z29.record(z29.unknown()).optional() }),
-      outputSchema: z29.object({ reportId: z29.string(), generatedAt: z29.string(), summary: z29.string() }),
-      execute: async (input, context) => {
-        const reportId = crypto4.randomUUID();
-        const generatedAt = (/* @__PURE__ */ new Date()).toISOString();
-        return { reportId, generatedAt, summary: `Report "${input.title}" (${input.reportType}) generated successfully for workflow ${context.workflowId || "manual"}.` };
+      inputSchema: z34.object({ reportType: z34.string(), title: z34.string(), parameters: z34.record(z34.unknown()).optional() }),
+      outputSchema: z34.object({ reportId: z34.string(), generatedAt: z34.string(), summary: z34.string() }),
+      // Phase 1 audit finding (docs/control-center-module-gap-analysis.md):
+      // this previously fabricated a reportId/summary with no real report
+      // ever generated. No reporting service exists in this codebase
+      // (confirmed: no server/services/*report* file) — per the Phase 1
+      // brief's Part H, a nonexistent capability must throw an explicit
+      // not-implemented error, never fake a successful result.
+      execute: async () => {
+        throw new NotImplementedError(
+          "generate_report has no real report-generation service to call yet \u2014 this action is registered but not implemented. It will not fabricate a result."
+        );
       }
     });
     this.registerAction({
@@ -11437,17 +14635,63 @@ var ActionRegistry = class _ActionRegistry {
       riskLevel: "HIGH",
       requiresApproval: true,
       requiresAudit: true,
-      inputSchema: z29.object({
-        clientId: z29.string().min(1),
-        amountDue: z29.number().positive(),
-        currency: z29.string().default("USD"),
-        dueDate: z29.string().optional(),
-        memo: z29.string().optional()
+      inputSchema: z34.object({
+        clientId: z34.string().min(1),
+        amountDue: z34.number().positive(),
+        currency: z34.string().default("USD"),
+        dueDate: z34.string().optional(),
+        memo: z34.string().optional()
       }),
-      outputSchema: z29.object({ draftCreated: z29.boolean(), invoiceNumber: z29.string(), amountDue: z29.number() }),
-      execute: async (input, _context) => {
-        const invoiceNumber = `INV-DRAFT-${Date.now().toString(36).toUpperCase()}`;
-        return { draftCreated: true, invoiceNumber, amountDue: input.amountDue };
+      outputSchema: z34.object({ draftCreated: z34.boolean(), invoiceId: z34.string(), invoiceNumber: z34.string(), amountDue: z34.number() }),
+      // Phase 1 audit finding (docs/control-center-module-gap-analysis.md):
+      // this previously fabricated an "INV-DRAFT-..." string with no
+      // Invoice row ever created. Fixed by real service integration —
+      // reusing the exact same real utilities invoiceService.createInvoice
+      // itself uses (nextInvoiceNumber, calculateLineItem/
+      // calculateInvoiceTotals/calculateInvoiceBalance, invoiceRepository)
+      // rather than calling invoiceService directly, since this action's
+      // execution context (organizationId + optional userId) is not a full
+      // SanitizedUser caller — going through the same real, audited
+      // primitives is genuine reuse, not a parallel reimplementation, and
+      // does not require redesigning the automation system (Part H).
+      execute: async (input, context) => {
+        const client3 = await clientRepository.findByIdInOrg(input.clientId, context.organizationId);
+        if (!client3) throw new ValidationError("create_invoice_draft: clientId does not refer to a client in this organization.");
+        const issueDate = /* @__PURE__ */ new Date();
+        const dueDate = input.dueDate ? new Date(input.dueDate) : new Date(issueDate.getTime() + 30 * 24 * 60 * 60 * 1e3);
+        const currency = input.currency ?? DEFAULT_CURRENCY;
+        const line = calculateLineItem({ quantity: 1, unitPrice: toMoney(input.amountDue), discount: toMoney(0) });
+        const { subtotal, total } = calculateInvoiceTotals([line], toMoney(0), toMoney(0));
+        const { amountDue } = calculateInvoiceBalance(total, []);
+        const invoiceNumber = await nextInvoiceNumber();
+        const invoice = await invoiceRepository.create(
+          {
+            invoiceNumber,
+            organizationId: context.organizationId,
+            clientId: input.clientId,
+            issueDate,
+            dueDate,
+            currency,
+            subtotal,
+            tax: toMoney(0),
+            discount: toMoney(0),
+            total,
+            amountDue,
+            notes: input.memo,
+            createdById: context.userId
+          },
+          [{ description: input.memo ?? "Automation-drafted invoice line", quantity: 1, unitPrice: line.unitPrice, discount: line.discount, lineTotal: line.lineTotal }]
+        );
+        await auditLogRepository.record({
+          organizationId: context.organizationId,
+          actorUserId: context.userId,
+          actorType: context.userId ? "USER" : "SYSTEM",
+          action: "INVOICE_CREATED",
+          resourceType: "invoice",
+          resourceId: invoice.id,
+          afterData: { invoiceNumber, clientId: input.clientId, total: total.toString(), currency, source: "automation:create_invoice_draft" }
+        });
+        return { draftCreated: true, invoiceId: invoice.id, invoiceNumber, amountDue: Number(amountDue.toString()) };
       }
     });
     this.registerAction({
@@ -11458,8 +14702,8 @@ var ActionRegistry = class _ActionRegistry {
       riskLevel: "HIGH",
       requiresApproval: false,
       requiresAudit: true,
-      inputSchema: z29.object({ workflowId: z29.string().min(1), status: z29.enum(["ACTIVE", "PAUSED", "ARCHIVED"]) }),
-      outputSchema: z29.object({ workflowId: z29.string(), newStatus: z29.string() }),
+      inputSchema: z34.object({ workflowId: z34.string().min(1), status: z34.enum(["ACTIVE", "PAUSED", "ARCHIVED"]) }),
+      outputSchema: z34.object({ workflowId: z34.string(), newStatus: z34.string() }),
       execute: async (input, _context) => {
         const updated = await prisma.automationWorkflow.update({ where: { id: input.workflowId }, data: { status: input.status } });
         return { workflowId: updated.id, newStatus: updated.status };
@@ -11473,8 +14717,8 @@ var ActionRegistry = class _ActionRegistry {
       riskLevel: "HIGH",
       requiresApproval: true,
       requiresAudit: true,
-      inputSchema: z29.object({ contentType: z29.enum(["PAGE", "POST"]), contentId: z29.string().min(1) }),
-      outputSchema: z29.object({ contentId: z29.string(), published: z29.boolean() }),
+      inputSchema: z34.object({ contentType: z34.enum(["PAGE", "POST"]), contentId: z34.string().min(1) }),
+      outputSchema: z34.object({ contentId: z34.string(), published: z34.boolean() }),
       execute: async (input, _context) => {
         if (input.contentType === "PAGE") {
           await prisma.page.update({ where: { id: input.contentId }, data: { status: "PUBLISHED", publishedAt: /* @__PURE__ */ new Date() } });
@@ -11492,8 +14736,8 @@ var ActionRegistry = class _ActionRegistry {
       riskLevel: "MEDIUM",
       requiresApproval: true,
       requiresAudit: true,
-      inputSchema: z29.object({ recipientUserId: z29.string().min(1), title: z29.string().min(1), message: z29.string().min(1) }),
-      outputSchema: z29.object({ sent: z29.boolean() }),
+      inputSchema: z34.object({ recipientUserId: z34.string().min(1), title: z34.string().min(1), message: z34.string().min(1) }),
+      outputSchema: z34.object({ sent: z34.boolean() }),
       execute: async (input, context) => {
         await prisma.automationNotification.create({
           data: {
@@ -13288,13 +16532,13 @@ var KnowledgeService = class {
 };
 
 // server/services/automation/types.ts
-import { z as z30 } from "zod";
-var StructuredAiDecisionSchema = z30.object({
-  decision: z30.string(),
-  reason: z30.string(),
-  confidence: z30.number().min(0).max(1),
-  recommended_action: z30.string().optional(),
-  metadata: z30.record(z30.unknown()).optional()
+import { z as z35 } from "zod";
+var StructuredAiDecisionSchema = z35.object({
+  decision: z35.string(),
+  reason: z35.string(),
+  confidence: z35.number().min(0).max(1),
+  recommended_action: z35.string().optional(),
+  metadata: z35.record(z35.unknown()).optional()
 });
 var DEFAULT_WORKFLOW_LIMITS = {
   maxSteps: 50,
@@ -14410,9 +17654,76 @@ ${validation.errors.join("\n")}`);
 };
 var automationService = AutomationService.getInstance();
 
+// server/services/contentSchedulingService.ts
+function hasPublishableContent(revision) {
+  return !!revision && !!revision.title.trim() && !!revision.body.trim();
+}
+var contentSchedulingService = {
+  async publishDueScheduled() {
+    const now = /* @__PURE__ */ new Date();
+    const [duePosts, duePages] = await Promise.all([postRepository.findDueScheduled(now), pageRepository.findDueScheduled(now)]);
+    let postsPublished = 0;
+    let pagesPublished = 0;
+    let skipped = 0;
+    for (const post of duePosts) {
+      if (!post.currentRevisionId || !hasPublishableContent(post.currentRevision)) {
+        skipped++;
+        logger.warn({ postId: post.id }, "[contentSchedulingService] Skipped due scheduled post with no publishable content");
+        continue;
+      }
+      try {
+        await prisma.$transaction([
+          prisma.contentRevision.update({ where: { id: post.currentRevisionId }, data: { status: "PUBLISHED", publishedAt: now } }),
+          prisma.post.update({ where: { id: post.id }, data: { status: "PUBLISHED", publishedAt: now, scheduledAt: null } })
+        ]);
+        await auditLogRepository.record({
+          organizationId: post.organizationId,
+          actorType: "SYSTEM",
+          actorName: "content-scheduler",
+          action: "POST_PUBLISHED",
+          resourceType: "post",
+          resourceId: post.id,
+          beforeData: { status: "SCHEDULED", scheduledAt: post.scheduledAt },
+          afterData: { status: "PUBLISHED" }
+        });
+        postsPublished++;
+      } catch (err) {
+        logger.error({ err, postId: post.id }, "[contentSchedulingService] Failed to publish due scheduled post");
+      }
+    }
+    for (const page of duePages) {
+      if (!page.currentRevisionId || !hasPublishableContent(page.currentRevision)) {
+        skipped++;
+        logger.warn({ pageId: page.id }, "[contentSchedulingService] Skipped due scheduled page with no publishable content");
+        continue;
+      }
+      try {
+        await prisma.$transaction([
+          prisma.contentRevision.update({ where: { id: page.currentRevisionId }, data: { status: "PUBLISHED", publishedAt: now } }),
+          prisma.page.update({ where: { id: page.id }, data: { status: "PUBLISHED", publishedAt: now, scheduledAt: null } })
+        ]);
+        await auditLogRepository.record({
+          organizationId: page.organizationId,
+          actorType: "SYSTEM",
+          actorName: "content-scheduler",
+          action: "PAGE_PUBLISHED",
+          resourceType: "page",
+          resourceId: page.id,
+          beforeData: { status: "SCHEDULED", scheduledAt: page.scheduledAt },
+          afterData: { status: "PUBLISHED" }
+        });
+        pagesPublished++;
+      } catch (err) {
+        logger.error({ err, pageId: page.id }, "[contentSchedulingService] Failed to publish due scheduled page");
+      }
+    }
+    return { postsPublished, pagesPublished, skipped };
+  }
+};
+
 // server/routes/v1/automationRoutes.ts
-var router37 = Router37();
-router37.get(
+var router44 = Router44();
+router44.get(
   "/internal/tick",
   asyncHandler(async (req, res) => {
     if (!config.cronSecret) {
@@ -14421,86 +17732,86 @@ router37.get(
     if (req.headers.authorization !== `Bearer ${config.cronSecret}`) {
       throw new AuthenticationError("Invalid cron credentials.");
     }
-    const result = await automationService.runCronTick();
-    sendSuccess(res, result);
+    const [automation, content] = await Promise.all([automationService.runCronTick(), contentSchedulingService.publishDueScheduled()]);
+    sendSuccess(res, { automation, content });
   })
 );
-router37.use(authenticateToken);
-var CreateWorkflowSchema = z31.object({
-  name: z31.string().min(1).max(200),
-  description: z31.string().optional(),
-  category: z31.string().default("GENERAL"),
-  triggerType: z31.enum(["EVENT", "SCHEDULE", "MANUAL", "API", "CONDITIONAL"]).default("EVENT"),
-  triggerConfig: z31.record(z31.unknown()).default({}),
-  conditions: z31.unknown().default([]),
-  steps: z31.array(z31.record(z31.unknown())).default([]),
-  retryPolicy: z31.object({
-    maxRetries: z31.number().int().min(0).max(5).default(2),
-    backoffMs: z31.number().int().min(100).max(6e4).default(1e3),
-    exponential: z31.boolean().default(true)
+router44.use(authenticateToken);
+var CreateWorkflowSchema = z36.object({
+  name: z36.string().min(1).max(200),
+  description: z36.string().optional(),
+  category: z36.string().default("GENERAL"),
+  triggerType: z36.enum(["EVENT", "SCHEDULE", "MANUAL", "API", "CONDITIONAL"]).default("EVENT"),
+  triggerConfig: z36.record(z36.unknown()).default({}),
+  conditions: z36.unknown().default([]),
+  steps: z36.array(z36.record(z36.unknown())).default([]),
+  retryPolicy: z36.object({
+    maxRetries: z36.number().int().min(0).max(5).default(2),
+    backoffMs: z36.number().int().min(100).max(6e4).default(1e3),
+    exponential: z36.boolean().default(true)
   }).optional(),
-  limits: z31.object({
-    maxSteps: z31.number().int().min(1).max(100).default(50),
-    maxDurationMs: z31.number().int().min(5e3).max(6e5).default(3e5),
-    maxAiCalls: z31.number().int().min(0).max(50).default(10),
-    maxToolCalls: z31.number().int().min(0).max(50).default(15),
-    maxLoopIterations: z31.number().int().min(1).max(50).default(10)
+  limits: z36.object({
+    maxSteps: z36.number().int().min(1).max(100).default(50),
+    maxDurationMs: z36.number().int().min(5e3).max(6e5).default(3e5),
+    maxAiCalls: z36.number().int().min(0).max(50).default(10),
+    maxToolCalls: z36.number().int().min(0).max(50).default(15),
+    maxLoopIterations: z36.number().int().min(1).max(50).default(10)
   }).optional()
 });
 var UpdateWorkflowSchema = CreateWorkflowSchema.partial().extend({
-  status: z31.enum(["DRAFT", "ACTIVE", "PAUSED", "ARCHIVED"]).optional()
+  status: z36.enum(["DRAFT", "ACTIVE", "PAUSED", "ARCHIVED"]).optional()
 });
-var TriggerWorkflowSchema = z31.object({
-  input: z31.record(z31.unknown()).default({}),
-  correlationId: z31.string().optional()
+var TriggerWorkflowSchema = z36.object({
+  input: z36.record(z36.unknown()).default({}),
+  correlationId: z36.string().optional()
 });
-var DecideApprovalSchema = z31.object({
-  decision: z31.enum(["APPROVED", "REJECTED"]),
-  reason: z31.string().optional()
+var DecideApprovalSchema = z36.object({
+  decision: z36.enum(["APPROVED", "REJECTED"]),
+  reason: z36.string().optional()
 });
-var CreateTaskSchema = z31.object({
-  title: z31.string().min(1),
-  description: z31.string().optional(),
-  assignedUserId: z31.string().optional(),
-  assignedRole: z31.string().optional(),
-  priority: z31.enum(["LOW", "MEDIUM", "HIGH", "URGENT"]).default("MEDIUM"),
-  dueDate: z31.string().optional(),
-  sourceWorkflowId: z31.string().optional(),
-  sourceExecutionId: z31.string().optional(),
-  sourceEntityType: z31.string().optional(),
-  sourceEntityId: z31.string().optional(),
-  isAiGenerated: z31.boolean().default(false),
-  metadata: z31.record(z31.unknown()).optional()
+var CreateTaskSchema = z36.object({
+  title: z36.string().min(1),
+  description: z36.string().optional(),
+  assignedUserId: z36.string().optional(),
+  assignedRole: z36.string().optional(),
+  priority: z36.enum(["LOW", "MEDIUM", "HIGH", "URGENT"]).default("MEDIUM"),
+  dueDate: z36.string().optional(),
+  sourceWorkflowId: z36.string().optional(),
+  sourceExecutionId: z36.string().optional(),
+  sourceEntityType: z36.string().optional(),
+  sourceEntityId: z36.string().optional(),
+  isAiGenerated: z36.boolean().default(false),
+  metadata: z36.record(z36.unknown()).optional()
 });
-var UpdateTaskSchema = z31.object({
-  status: z31.enum(["PENDING", "IN_PROGRESS", "COMPLETED", "CANCELLED"]).optional(),
-  assignedUserId: z31.string().optional(),
-  priority: z31.enum(["LOW", "MEDIUM", "HIGH", "URGENT"]).optional(),
-  dueDate: z31.string().optional()
+var UpdateTaskSchema = z36.object({
+  status: z36.enum(["PENDING", "IN_PROGRESS", "COMPLETED", "CANCELLED"]).optional(),
+  assignedUserId: z36.string().optional(),
+  priority: z36.enum(["LOW", "MEDIUM", "HIGH", "URGENT"]).optional(),
+  dueDate: z36.string().optional()
 });
-var CreateScheduleSchema = z31.object({
-  workflowId: z31.string().uuid(),
-  name: z31.string().min(1),
-  description: z31.string().optional(),
-  scheduleType: z31.enum(["ONE_TIME", "RECURRING", "CRON"]).default("RECURRING"),
-  cronExpression: z31.string().optional(),
-  timezone: z31.string().default("UTC"),
-  intervalSeconds: z31.number().int().positive().optional(),
-  config: z31.record(z31.unknown()).optional()
+var CreateScheduleSchema = z36.object({
+  workflowId: z36.string().uuid(),
+  name: z36.string().min(1),
+  description: z36.string().optional(),
+  scheduleType: z36.enum(["ONE_TIME", "RECURRING", "CRON"]).default("RECURRING"),
+  cronExpression: z36.string().optional(),
+  timezone: z36.string().default("UTC"),
+  intervalSeconds: z36.number().int().positive().optional(),
+  config: z36.record(z36.unknown()).optional()
 });
-var EmitEventSchema = z31.object({
-  eventType: z31.string().min(1),
-  entityType: z31.string().min(1),
-  entityId: z31.string().min(1),
-  sourceModule: z31.string().optional(),
-  payload: z31.record(z31.unknown()).default({}),
-  correlationId: z31.string().optional()
+var EmitEventSchema = z36.object({
+  eventType: z36.string().min(1),
+  entityType: z36.string().min(1),
+  entityId: z36.string().min(1),
+  sourceModule: z36.string().optional(),
+  payload: z36.record(z36.unknown()).default({}),
+  correlationId: z36.string().optional()
 });
-var ExecuteActionSchema = z31.object({
-  actionId: z31.string().min(1),
-  input: z31.record(z31.unknown()).default({})
+var ExecuteActionSchema = z36.object({
+  actionId: z36.string().min(1),
+  input: z36.record(z36.unknown()).default({})
 });
-router37.get(
+router44.get(
   "/dashboard",
   requirePermission("automation.read"),
   asyncHandler(async (req, res) => {
@@ -14508,7 +17819,7 @@ router37.get(
     sendSuccess(res, data);
   })
 );
-router37.get(
+router44.get(
   "/workflows",
   requirePermission("automation.read"),
   asyncHandler(async (req, res) => {
@@ -14524,7 +17835,7 @@ router37.get(
     sendSuccess(res, result);
   })
 );
-router37.post(
+router44.post(
   "/workflows",
   requirePermission("automation.create"),
   asyncHandler(async (req, res) => {
@@ -14545,7 +17856,7 @@ router37.post(
     sendSuccess(res, { workflow }, 201);
   })
 );
-router37.get(
+router44.get(
   "/workflows/:id",
   requirePermission("automation.read"),
   asyncHandler(async (req, res) => {
@@ -14553,7 +17864,7 @@ router37.get(
     sendSuccess(res, { workflow });
   })
 );
-router37.put(
+router44.put(
   "/workflows/:id",
   requirePermission("automation.edit"),
   asyncHandler(async (req, res) => {
@@ -14576,11 +17887,11 @@ router37.put(
     sendSuccess(res, { workflow: updated });
   })
 );
-router37.post(
+router44.post(
   "/workflows/:id/publish",
   requirePermission("automation.publish"),
   asyncHandler(async (req, res) => {
-    const body = z31.object({ changeSummary: z31.string().optional() }).parse(req.body || {});
+    const body = z36.object({ changeSummary: z36.string().optional() }).parse(req.body || {});
     const published = await automationService.publishWorkflow({
       id: req.params.id,
       organizationId: req.user.organizationId,
@@ -14590,7 +17901,7 @@ router37.post(
     sendSuccess(res, { workflow: published });
   })
 );
-router37.get(
+router44.get(
   "/workflows/:id/versions",
   requirePermission("automation.read"),
   asyncHandler(async (req, res) => {
@@ -14598,7 +17909,7 @@ router37.get(
     sendSuccess(res, { versions });
   })
 );
-router37.post(
+router44.post(
   "/workflows/:id/trigger",
   requirePermission("automation.execute"),
   asyncHandler(async (req, res) => {
@@ -14614,7 +17925,7 @@ router37.post(
     sendSuccess(res, result, 202);
   })
 );
-router37.get(
+router44.get(
   "/executions",
   requirePermission("automation.read"),
   asyncHandler(async (req, res) => {
@@ -14629,7 +17940,7 @@ router37.get(
     sendSuccess(res, result);
   })
 );
-router37.get(
+router44.get(
   "/executions/:id",
   requirePermission("automation.read"),
   asyncHandler(async (req, res) => {
@@ -14637,7 +17948,7 @@ router37.get(
     sendSuccess(res, { execution });
   })
 );
-router37.post(
+router44.post(
   "/executions/:id/retry",
   requirePermission("automation.execute"),
   asyncHandler(async (req, res) => {
@@ -14645,16 +17956,16 @@ router37.post(
     sendSuccess(res, { execution: result });
   })
 );
-router37.post(
+router44.post(
   "/executions/:id/cancel",
   requirePermission("automation.manage"),
   asyncHandler(async (req, res) => {
-    const body = z31.object({ reason: z31.string().optional() }).parse(req.body || {});
+    const body = z36.object({ reason: z36.string().optional() }).parse(req.body || {});
     const result = await automationService.cancelExecution(req.params.id, req.user.organizationId, body.reason);
     sendSuccess(res, { execution: result });
   })
 );
-router37.get(
+router44.get(
   "/approvals",
   requirePermission("automation.read"),
   asyncHandler(async (req, res) => {
@@ -14668,7 +17979,7 @@ router37.get(
     sendSuccess(res, result);
   })
 );
-router37.post(
+router44.post(
   "/approvals/:id/decide",
   requirePermission("automation.approve"),
   asyncHandler(async (req, res) => {
@@ -14684,7 +17995,7 @@ router37.post(
     sendSuccess(res, result);
   })
 );
-router37.get(
+router44.get(
   "/tasks",
   requirePermission("automation.read"),
   asyncHandler(async (req, res) => {
@@ -14700,7 +18011,7 @@ router37.get(
     sendSuccess(res, result);
   })
 );
-router37.post(
+router44.post(
   "/tasks",
   requirePermission("automation.execute"),
   asyncHandler(async (req, res) => {
@@ -14712,7 +18023,7 @@ router37.post(
     sendSuccess(res, { task }, 201);
   })
 );
-router37.patch(
+router44.patch(
   "/tasks/:id",
   requirePermission("automation.execute"),
   asyncHandler(async (req, res) => {
@@ -14726,7 +18037,7 @@ router37.patch(
     sendSuccess(res, { task: updated });
   })
 );
-router37.get(
+router44.get(
   "/schedules",
   requirePermission("automation.read"),
   asyncHandler(async (req, res) => {
@@ -14741,7 +18052,7 @@ router37.get(
     sendSuccess(res, result);
   })
 );
-router37.post(
+router44.post(
   "/schedules",
   requirePermission("automation.manage"),
   asyncHandler(async (req, res) => {
@@ -14753,16 +18064,16 @@ router37.post(
     sendSuccess(res, { schedule }, 201);
   })
 );
-router37.patch(
+router44.patch(
   "/schedules/:id/toggle",
   requirePermission("automation.manage"),
   asyncHandler(async (req, res) => {
-    const body = z31.object({ isActive: z31.boolean().optional() }).parse(req.body || {});
+    const body = z36.object({ isActive: z36.boolean().optional() }).parse(req.body || {});
     const schedule = await automationService.toggleSchedule(req.params.id, req.user.organizationId, body.isActive);
     sendSuccess(res, { schedule });
   })
 );
-router37.delete(
+router44.delete(
   "/schedules/:id",
   requirePermission("automation.manage"),
   asyncHandler(async (req, res) => {
@@ -14770,7 +18081,7 @@ router37.delete(
     sendSuccess(res, result);
   })
 );
-router37.get(
+router44.get(
   "/events/types",
   requirePermission("automation.read"),
   asyncHandler(async (_req, res) => {
@@ -14778,7 +18089,7 @@ router37.get(
     sendSuccess(res, { types });
   })
 );
-router37.get(
+router44.get(
   "/events",
   requirePermission("automation.read"),
   asyncHandler(async (req, res) => {
@@ -14792,7 +18103,7 @@ router37.get(
     sendSuccess(res, result);
   })
 );
-router37.post(
+router44.post(
   "/events",
   requirePermission("automation.execute"),
   asyncHandler(async (req, res) => {
@@ -14806,7 +18117,7 @@ router37.post(
     sendSuccess(res, { event }, 202);
   })
 );
-router37.get(
+router44.get(
   "/actions",
   requirePermission("automation.read"),
   asyncHandler(async (_req, res) => {
@@ -14814,7 +18125,7 @@ router37.get(
     sendSuccess(res, { actions });
   })
 );
-router37.post(
+router44.post(
   "/actions/execute",
   requirePermission("automation.execute"),
   asyncHandler(async (req, res) => {
@@ -14829,16 +18140,16 @@ router37.post(
     sendSuccess(res, { result });
   })
 );
-var automationRoutes_default = router37;
+var automationRoutes_default = router44;
 
 // server/routes/v1/knowledgeRoutes.ts
-import { Router as Router38 } from "express";
+import { Router as Router45 } from "express";
 import express3 from "express";
 
 // server/schemas/knowledgeSchemas.ts
-import { z as z32 } from "zod";
-var knowledgeAccessPolicySchema = z32.enum(["PUBLIC", "RESTRICTED", "ROLE_BASED", "OWNER_ONLY"]);
-var knowledgeSourceTypeSchema = z32.enum([
+import { z as z37 } from "zod";
+var knowledgeAccessPolicySchema = z37.enum(["PUBLIC", "RESTRICTED", "ROLE_BASED", "OWNER_ONLY"]);
+var knowledgeSourceTypeSchema = z37.enum([
   "UPLOADED_DOCUMENT",
   "MEDIA_ASSET",
   "CMS_CONTENT",
@@ -14850,53 +18161,53 @@ var knowledgeSourceTypeSchema = z32.enum([
   "MANUAL_ENTRY",
   "EXTERNAL_CONNECTOR"
 ]);
-var createCollectionSchema = z32.object({
-  name: z32.string().trim().min(1).max(200),
-  description: z32.string().trim().max(2e3).optional(),
+var createCollectionSchema = z37.object({
+  name: z37.string().trim().min(1).max(200),
+  description: z37.string().trim().max(2e3).optional(),
   accessPolicy: knowledgeAccessPolicySchema.optional(),
-  allowedRoles: z32.array(z32.string().trim().min(1)).max(50).optional(),
-  metadata: z32.record(z32.unknown()).optional()
+  allowedRoles: z37.array(z37.string().trim().min(1)).max(50).optional(),
+  metadata: z37.record(z37.unknown()).optional()
 });
-var registerSourceSchema = z32.object({
-  collectionId: z32.string().trim().uuid().optional(),
-  name: z32.string().trim().min(1).max(200),
+var registerSourceSchema = z37.object({
+  collectionId: z37.string().trim().uuid().optional(),
+  name: z37.string().trim().min(1).max(200),
   sourceType: knowledgeSourceTypeSchema,
-  entityType: z32.string().trim().max(100).optional(),
-  entityId: z32.string().trim().max(200).optional(),
-  config: z32.record(z32.unknown()).optional()
+  entityType: z37.string().trim().max(100).optional(),
+  entityId: z37.string().trim().max(200).optional(),
+  config: z37.record(z37.unknown()).optional()
 });
-var listDocumentsQuerySchema = z32.object({
-  collectionId: z32.string().trim().uuid().optional(),
-  sourceId: z32.string().trim().uuid().optional(),
-  status: z32.enum(["UPLOADED", "PROCESSING", "EXTRACTED", "CHUNKED", "INDEXING", "INDEXED", "FAILED", "ARCHIVED"]).optional()
+var listDocumentsQuerySchema = z37.object({
+  collectionId: z37.string().trim().uuid().optional(),
+  sourceId: z37.string().trim().uuid().optional(),
+  status: z37.enum(["UPLOADED", "PROCESSING", "EXTRACTED", "CHUNKED", "INDEXING", "INDEXED", "FAILED", "ARCHIVED"]).optional()
 });
-var uploadDocumentSchema = z32.object({
-  text: z32.string().max(2e6).optional(),
-  contentBase64: z32.string().max(4e7).optional(),
-  mimeType: z32.string().trim().max(100).optional(),
-  filename: z32.string().trim().max(300).optional(),
-  title: z32.string().trim().max(300).optional(),
-  description: z32.string().trim().max(2e3).optional(),
-  collectionId: z32.string().trim().uuid().optional(),
-  sourceId: z32.string().trim().uuid().optional(),
-  securityScope: z32.string().trim().max(100).optional(),
-  requiredRole: z32.string().trim().max(100).optional(),
-  metadata: z32.record(z32.unknown()).optional()
+var uploadDocumentSchema = z37.object({
+  text: z37.string().max(2e6).optional(),
+  contentBase64: z37.string().max(4e7).optional(),
+  mimeType: z37.string().trim().max(100).optional(),
+  filename: z37.string().trim().max(300).optional(),
+  title: z37.string().trim().max(300).optional(),
+  description: z37.string().trim().max(2e3).optional(),
+  collectionId: z37.string().trim().uuid().optional(),
+  sourceId: z37.string().trim().uuid().optional(),
+  securityScope: z37.string().trim().max(100).optional(),
+  requiredRole: z37.string().trim().max(100).optional(),
+  metadata: z37.record(z37.unknown()).optional()
 }).refine((v) => v.contentBase64 !== void 0 || v.text !== void 0, {
   message: "Either text or contentBase64 is required."
 });
-var searchKnowledgeSchema = z32.object({
-  query: z32.string().trim().min(1).max(2e3),
-  mode: z32.enum(["KEYWORD", "SEMANTIC", "HYBRID"]).optional(),
-  limit: z32.coerce.number().int().positive().max(50).optional(),
-  minScore: z32.coerce.number().min(0).max(1).optional(),
-  filter: z32.record(z32.unknown()).optional()
+var searchKnowledgeSchema = z37.object({
+  query: z37.string().trim().min(1).max(2e3),
+  mode: z37.enum(["KEYWORD", "SEMANTIC", "HYBRID"]).optional(),
+  limit: z37.coerce.number().int().positive().max(50).optional(),
+  minScore: z37.coerce.number().min(0).max(1).optional(),
+  filter: z37.record(z37.unknown()).optional()
 });
 
 // server/routes/v1/knowledgeRoutes.ts
-var router38 = Router38();
-router38.use(authenticateToken);
-router38.get(
+var router45 = Router45();
+router45.use(authenticateToken);
+router45.get(
   "/collections",
   requirePermission("knowledge.read"),
   asyncHandler(async (req, res) => {
@@ -14904,7 +18215,7 @@ router38.get(
     sendSuccess(res, { collections });
   })
 );
-router38.post(
+router45.post(
   "/collections",
   requirePermission("knowledge.create"),
   asyncHandler(async (req, res) => {
@@ -14917,7 +18228,7 @@ router38.post(
     sendSuccess(res, { collection }, 201);
   })
 );
-router38.get(
+router45.get(
   "/collections/:id",
   requirePermission("knowledge.read"),
   asyncHandler(async (req, res) => {
@@ -14925,7 +18236,7 @@ router38.get(
     sendSuccess(res, { collection });
   })
 );
-router38.post(
+router45.post(
   "/sources",
   requirePermission("knowledge.create"),
   asyncHandler(async (req, res) => {
@@ -14937,7 +18248,7 @@ router38.post(
     sendSuccess(res, { source }, 201);
   })
 );
-router38.get(
+router45.get(
   "/sources",
   requirePermission("knowledge.read"),
   asyncHandler(async (req, res) => {
@@ -14951,7 +18262,7 @@ router38.get(
     sendSuccess(res, { sources });
   })
 );
-router38.get(
+router45.get(
   "/documents",
   requirePermission("knowledge.read"),
   asyncHandler(async (req, res) => {
@@ -14973,7 +18284,7 @@ router38.get(
     sendSuccess(res, { documents });
   })
 );
-router38.get(
+router45.get(
   "/documents/:id",
   requirePermission("knowledge.read"),
   asyncHandler(async (req, res) => {
@@ -14992,7 +18303,7 @@ router38.get(
     sendSuccess(res, { document });
   })
 );
-router38.post(
+router45.post(
   "/documents/upload",
   requirePermission("knowledge.upload"),
   express3.json({ limit: "25mb" }),
@@ -15024,7 +18335,7 @@ router38.post(
     sendSuccess(res, result, 201);
   })
 );
-router38.post(
+router45.post(
   "/documents/:id/reindex",
   requirePermission("knowledge.reindex"),
   asyncHandler(async (req, res) => {
@@ -15032,7 +18343,7 @@ router38.post(
     sendSuccess(res, result);
   })
 );
-router38.post(
+router45.post(
   "/search",
   requirePermission("knowledge.search"),
   asyncHandler(async (req, res) => {
@@ -15055,10 +18366,10 @@ router38.post(
     sendSuccess(res, { results, count: results.length });
   })
 );
-var knowledgeRoutes_default = router38;
+var knowledgeRoutes_default = router45;
 
 // server/routes/v1/copilotRoutes.ts
-import { Router as Router39 } from "express";
+import { Router as Router46 } from "express";
 
 // server/services/copilot/CopilotService.ts
 import crypto12 from "crypto";
@@ -15863,54 +19174,54 @@ ${JSON.stringify(executionResult, null, 2)}
 };
 
 // server/schemas/copilotSchemas.ts
-import { z as z33 } from "zod";
-var conversationModeSchema = z33.enum(["ANSWER", "EXPLAIN", "SUMMARIZE", "ANALYZE", "RECOMMEND", "DRAFT", "EXECUTE"]);
-var createWorkspaceSchema = z33.object({
-  name: z33.string().trim().min(1).max(200),
-  slug: z33.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)").optional(),
-  description: z33.string().trim().max(2e3).optional(),
-  icon: z33.string().trim().max(100).optional(),
-  allowedTools: z33.array(z33.string().trim().min(1)).max(100).optional(),
-  allowedModules: z33.array(z33.string().trim().min(1)).max(100).optional(),
-  requiredPermissions: z33.array(z33.string().trim().min(1)).max(100).optional(),
-  systemInstruction: z33.string().trim().max(1e4).optional(),
+import { z as z38 } from "zod";
+var conversationModeSchema = z38.enum(["ANSWER", "EXPLAIN", "SUMMARIZE", "ANALYZE", "RECOMMEND", "DRAFT", "EXECUTE"]);
+var createWorkspaceSchema = z38.object({
+  name: z38.string().trim().min(1).max(200),
+  slug: z38.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)").optional(),
+  description: z38.string().trim().max(2e3).optional(),
+  icon: z38.string().trim().max(100).optional(),
+  allowedTools: z38.array(z38.string().trim().min(1)).max(100).optional(),
+  allowedModules: z38.array(z38.string().trim().min(1)).max(100).optional(),
+  requiredPermissions: z38.array(z38.string().trim().min(1)).max(100).optional(),
+  systemInstruction: z38.string().trim().max(1e4).optional(),
   defaultMode: conversationModeSchema.optional(),
-  temperature: z33.coerce.number().min(0).max(2).optional(),
-  maxTokens: z33.coerce.number().int().positive().max(32e3).optional(),
-  requireCitations: z33.coerce.boolean().optional()
+  temperature: z38.coerce.number().min(0).max(2).optional(),
+  maxTokens: z38.coerce.number().int().positive().max(32e3).optional(),
+  requireCitations: z38.coerce.boolean().optional()
 });
-var createConversationSchema = z33.object({
-  workspaceId: z33.string().trim().uuid().optional(),
-  title: z33.string().trim().max(300).optional(),
-  contextMetadata: z33.record(z33.unknown()).optional()
+var createConversationSchema = z38.object({
+  workspaceId: z38.string().trim().uuid().optional(),
+  title: z38.string().trim().max(300).optional(),
+  contextMetadata: z38.record(z38.unknown()).optional()
 });
-var listConversationsQuerySchema = z33.object({
-  workspaceId: z33.string().trim().uuid().optional(),
-  status: z33.string().trim().max(50).optional(),
-  search: z33.string().trim().max(300).optional(),
-  limit: z33.coerce.number().int().positive().max(100).optional(),
-  offset: z33.coerce.number().int().nonnegative().optional()
+var listConversationsQuerySchema = z38.object({
+  workspaceId: z38.string().trim().uuid().optional(),
+  status: z38.string().trim().max(50).optional(),
+  search: z38.string().trim().max(300).optional(),
+  limit: z38.coerce.number().int().positive().max(100).optional(),
+  offset: z38.coerce.number().int().nonnegative().optional()
 });
-var contextMetadataSchema = z33.object({
-  currentModule: z33.string().trim().max(200).optional(),
-  currentPage: z33.string().trim().max(200).optional(),
-  selectedClientId: z33.string().trim().uuid().optional(),
-  selectedInvoiceId: z33.string().trim().uuid().optional(),
-  selectedDocumentId: z33.string().trim().uuid().optional(),
-  selectedWorkflowId: z33.string().trim().uuid().optional()
-}).catchall(z33.unknown()).optional();
-var sendMessageSchema = z33.object({
-  conversationId: z33.string().trim().uuid().optional(),
-  workspaceId: z33.string().trim().uuid().optional(),
-  content: z33.string().trim().min(1).max(2e4),
+var contextMetadataSchema = z38.object({
+  currentModule: z38.string().trim().max(200).optional(),
+  currentPage: z38.string().trim().max(200).optional(),
+  selectedClientId: z38.string().trim().uuid().optional(),
+  selectedInvoiceId: z38.string().trim().uuid().optional(),
+  selectedDocumentId: z38.string().trim().uuid().optional(),
+  selectedWorkflowId: z38.string().trim().uuid().optional()
+}).catchall(z38.unknown()).optional();
+var sendMessageSchema = z38.object({
+  conversationId: z38.string().trim().uuid().optional(),
+  workspaceId: z38.string().trim().uuid().optional(),
+  content: z38.string().trim().min(1).max(2e4),
   mode: conversationModeSchema.optional(),
   contextMetadata: contextMetadataSchema
 });
 
 // server/routes/v1/copilotRoutes.ts
-var router39 = Router39();
-router39.use(authenticateToken);
-router39.get(
+var router46 = Router46();
+router46.use(authenticateToken);
+router46.get(
   "/workspaces",
   asyncHandler(async (req, res) => {
     const permissions = req.user.role.permissions || [];
@@ -15918,7 +19229,7 @@ router39.get(
     sendSuccess(res, { workspaces });
   })
 );
-router39.post(
+router46.post(
   "/workspaces",
   requirePermission("copilot.manage"),
   asyncHandler(async (req, res) => {
@@ -15927,7 +19238,7 @@ router39.post(
     sendSuccess(res, { workspace }, 201);
   })
 );
-router39.get(
+router46.get(
   "/workspaces/:id",
   asyncHandler(async (req, res) => {
     const permissions = req.user.role.permissions || [];
@@ -15935,7 +19246,7 @@ router39.get(
     sendSuccess(res, { workspace });
   })
 );
-router39.get(
+router46.get(
   "/conversations",
   requirePermission("copilot.read"),
   asyncHandler(async (req, res) => {
@@ -15950,7 +19261,7 @@ router39.get(
     sendSuccess(res, result);
   })
 );
-router39.post(
+router46.post(
   "/conversations",
   requirePermission("copilot.use"),
   asyncHandler(async (req, res) => {
@@ -15959,7 +19270,7 @@ router39.post(
     sendSuccess(res, { conversation }, 201);
   })
 );
-router39.get(
+router46.get(
   "/conversations/:id",
   requirePermission("copilot.read"),
   asyncHandler(async (req, res) => {
@@ -15967,7 +19278,7 @@ router39.get(
     sendSuccess(res, { conversation });
   })
 );
-router39.post(
+router46.post(
   "/conversations/:id/archive",
   requirePermission("copilot.use"),
   asyncHandler(async (req, res) => {
@@ -15975,7 +19286,7 @@ router39.post(
     sendSuccess(res, { conversation: updated });
   })
 );
-router39.delete(
+router46.delete(
   "/conversations/:id",
   requirePermission("copilot.use"),
   asyncHandler(async (req, res) => {
@@ -15983,7 +19294,7 @@ router39.delete(
     sendSuccess(res, result);
   })
 );
-router39.post(
+router46.post(
   "/messages",
   requirePermission("copilot.use"),
   asyncHandler(async (req, res) => {
@@ -16001,7 +19312,7 @@ router39.post(
     sendSuccess(res, result);
   })
 );
-router39.post(
+router46.post(
   "/messages/stream",
   requirePermission("copilot.use"),
   asyncHandler(async (req, res) => {
@@ -16054,7 +19365,7 @@ data: ${JSON.stringify(data)}
     }
   })
 );
-router39.post(
+router46.post(
   "/actions/:id/confirm",
   requirePermission("copilot.use"),
   asyncHandler(async (req, res) => {
@@ -16067,7 +19378,7 @@ router39.post(
     sendSuccess(res, result);
   })
 );
-router39.post(
+router46.post(
   "/actions/:id/reject",
   requirePermission("copilot.use"),
   asyncHandler(async (req, res) => {
@@ -16080,7 +19391,7 @@ router39.post(
     sendSuccess(res, result);
   })
 );
-router39.get(
+router46.get(
   "/dashboard",
   requirePermission("copilot.read"),
   asyncHandler(async (req, res) => {
@@ -16088,10 +19399,10 @@ router39.get(
     sendSuccess(res, stats);
   })
 );
-var copilotRoutes_default = router39;
+var copilotRoutes_default = router46;
 
 // server/routes/v1/index.ts
-var v1Router = Router40();
+var v1Router = Router47();
 v1Router.use("/auth", authRoutes_default);
 v1Router.use("/webhooks", webhookRoutes_default);
 v1Router.use("/system", systemRoutes_default);
@@ -16104,6 +19415,9 @@ v1Router.use("/settings", settingsRoutes_default);
 v1Router.use("/leads", leadRoutes_default);
 v1Router.use("/clients", clientRoutes_default);
 v1Router.use("/contacts", contactRoutes_default);
+v1Router.use("/opportunities", opportunityRoutes_default);
+v1Router.use("/notifications", notificationRoutes_default);
+v1Router.use("/forms", formRoutes_default);
 v1Router.use("/crm", crmRoutes_default);
 v1Router.use("/onboarding", onboardingRoutes_default);
 v1Router.use("/workspaces", workspaceRoutes_default);
@@ -16111,8 +19425,12 @@ v1Router.use("/invitations", invitationRoutes_default);
 v1Router.use("/products", productRoutes_default);
 v1Router.use("/product-modules", productModuleRoutes_default);
 v1Router.use("/pages", pageRoutes_default);
+v1Router.use("/templates", templateRoutes_default);
+v1Router.use("/template-parts", templatePartRoutes_default);
 v1Router.use("/posts", postRoutes_default);
 v1Router.use("/categories", categoryRoutes_default);
+v1Router.use("/redirects", redirectRoutes_default);
+v1Router.use("/seo", seoRoutes_default);
 v1Router.use("/tags", tagRoutes_default);
 v1Router.use("/authors", authorRoutes_default);
 v1Router.use("/media", mediaRoutes_default);
