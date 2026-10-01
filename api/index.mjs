@@ -2321,32 +2321,45 @@ var ROLE_PERMISSION_SETS = {
   ]
 };
 async function seedRolesAndPermissions(prisma2) {
-  for (const key of PERMISSION_KEYS) {
-    await prisma2.permission.upsert({
-      where: { key },
-      update: {},
-      create: { key, name: permissionName(key), module: moduleOf(key) }
-    });
-  }
-  const roleIds = {};
-  for (const key of SYSTEM_ROLE_KEYS) {
-    const def = ROLE_DEFINITIONS[key];
-    const role = await prisma2.role.upsert({
-      where: { key },
-      update: {},
-      create: { key, name: def.name, description: def.description, isSystem: true }
-    });
-    roleIds[key] = role.id;
-    const grantedKeys = ROLE_PERMISSION_SETS[key] === "*" ? PERMISSION_KEYS : ROLE_PERMISSION_SETS[key];
-    const permissions = await prisma2.permission.findMany({ where: { key: { in: [...grantedKeys] } } });
-    for (const permission of permissions) {
-      await prisma2.rolePermission.upsert({
-        where: { roleId_permissionId: { roleId: role.id, permissionId: permission.id } },
+  await Promise.all(
+    PERMISSION_KEYS.map(
+      (key) => prisma2.permission.upsert({
+        where: { key },
         update: {},
-        create: { roleId: role.id, permissionId: permission.id }
+        create: { key, name: permissionName(key), module: moduleOf(key) }
+      })
+    )
+  );
+  const roleIds = {};
+  const roles = await Promise.all(
+    SYSTEM_ROLE_KEYS.map(async (key) => {
+      const def = ROLE_DEFINITIONS[key];
+      const role = await prisma2.role.upsert({
+        where: { key },
+        update: {},
+        create: { key, name: def.name, description: def.description, isSystem: true }
       });
-    }
+      return { key, role };
+    })
+  );
+  for (const { key, role } of roles) {
+    roleIds[key] = role.id;
   }
+  await Promise.all(
+    roles.map(async ({ key, role }) => {
+      const grantedKeys = ROLE_PERMISSION_SETS[key] === "*" ? PERMISSION_KEYS : ROLE_PERMISSION_SETS[key];
+      const permissions = await prisma2.permission.findMany({ where: { key: { in: [...grantedKeys] } } });
+      await Promise.all(
+        permissions.map(
+          (permission) => prisma2.rolePermission.upsert({
+            where: { roleId_permissionId: { roleId: role.id, permissionId: permission.id } },
+            update: {},
+            create: { roleId: role.id, permissionId: permission.id }
+          })
+        )
+      );
+    })
+  );
   return roleIds;
 }
 

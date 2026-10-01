@@ -420,37 +420,62 @@ const ROLE_PERMISSION_SETS: Record<RoleKey, readonly string[] | "*"> = {
   ],
 };
 
+/**
+ * Every upsert below is independent (keyed on its own unique constraint),
+ * so they run concurrently rather than one-at-a-time: on a cold
+ * already-provisioned environment this loop is hundreds of individual
+ * round trips to the database, and awaiting them sequentially (the
+ * original implementation) took long enough to hit Vercel's serverless
+ * function timeout (confirmed in production: 504 "Task timed out after
+ * 300 seconds" on an environment with ~190 permissions x 5 roles of
+ * rolePermission rows to reconcile). Prisma queues these over its own
+ * connection pool, so this doesn't open more DB connections than before —
+ * it just stops waiting for each round trip before starting the next.
+ */
 export async function seedRolesAndPermissions(prisma: PrismaClient): Promise<Record<RoleKey, string>> {
-  for (const key of PERMISSION_KEYS) {
-    await prisma.permission.upsert({
-      where: { key },
-      update: {},
-      create: { key, name: permissionName(key), module: moduleOf(key) },
-    });
-  }
+  await Promise.all(
+    PERMISSION_KEYS.map((key) =>
+      prisma.permission.upsert({
+        where: { key },
+        update: {},
+        create: { key, name: permissionName(key), module: moduleOf(key) },
+      })
+    )
+  );
 
   const roleIds = {} as Record<RoleKey, string>;
 
-  for (const key of SYSTEM_ROLE_KEYS) {
-    const def = ROLE_DEFINITIONS[key];
-    const role = await prisma.role.upsert({
-      where: { key },
-      update: {},
-      create: { key, name: def.name, description: def.description, isSystem: true },
-    });
-    roleIds[key] = role.id;
-
-    const grantedKeys = ROLE_PERMISSION_SETS[key] === "*" ? PERMISSION_KEYS : ROLE_PERMISSION_SETS[key];
-    const permissions = await prisma.permission.findMany({ where: { key: { in: [...grantedKeys] } } });
-
-    for (const permission of permissions) {
-      await prisma.rolePermission.upsert({
-        where: { roleId_permissionId: { roleId: role.id, permissionId: permission.id } },
+  const roles = await Promise.all(
+    SYSTEM_ROLE_KEYS.map(async (key) => {
+      const def = ROLE_DEFINITIONS[key];
+      const role = await prisma.role.upsert({
+        where: { key },
         update: {},
-        create: { roleId: role.id, permissionId: permission.id },
+        create: { key, name: def.name, description: def.description, isSystem: true },
       });
-    }
+      return { key, role };
+    })
+  );
+  for (const { key, role } of roles) {
+    roleIds[key] = role.id;
   }
+
+  await Promise.all(
+    roles.map(async ({ key, role }) => {
+      const grantedKeys = ROLE_PERMISSION_SETS[key] === "*" ? PERMISSION_KEYS : ROLE_PERMISSION_SETS[key];
+      const permissions = await prisma.permission.findMany({ where: { key: { in: [...grantedKeys] } } });
+
+      await Promise.all(
+        permissions.map((permission) =>
+          prisma.rolePermission.upsert({
+            where: { roleId_permissionId: { roleId: role.id, permissionId: permission.id } },
+            update: {},
+            create: { roleId: role.id, permissionId: permission.id },
+          })
+        )
+      );
+    })
+  );
 
   return roleIds;
 }
