@@ -9,23 +9,16 @@ type Section = "Platform" | "CRM" | "Onboarding" | "Workspaces" | "Products" | "
 const SECTIONS: Section[] = ["Platform", "CRM", "Onboarding", "Workspaces", "Products", "Website", "CMS", "SEO", "Marketing", "Commercial", "AI", "Client Portal"];
 
 /** Presentation state only, like the theme preference — safe to persist client-side. */
-const COLLAPSED_STORAGE_KEY = "artify_cc_sidebar_collapsed";
+const EXPANDED_STORAGE_KEY = "artify_cc_sidebar_expanded_section";
 
-/** Every section starts collapsed; the active item's section overrides this via `hasActiveItem`. */
-function defaultCollapsed(): Record<string, boolean> {
-  return SECTIONS.reduce((acc, section) => {
-    acc[section] = true;
-    return acc;
-  }, {} as Record<string, boolean>);
-}
-
-function loadCollapsed(): Record<string, boolean> {
-  const defaults = defaultCollapsed();
+/** Accordion: at most one section open at a time. Every section starts
+ * collapsed; the active item's section overrides this via `hasActiveItem`. */
+function loadExpanded(): Section | null {
   try {
-    const raw = localStorage.getItem(COLLAPSED_STORAGE_KEY);
-    return raw ? { ...defaults, ...(JSON.parse(raw) as Record<string, boolean>) } : defaults;
+    const raw = localStorage.getItem(EXPANDED_STORAGE_KEY);
+    return raw && (SECTIONS as string[]).includes(raw) ? (raw as Section) : null;
   } catch {
-    return defaults;
+    return null;
   }
 }
 
@@ -33,13 +26,14 @@ export const Sidebar: React.FC<{ mobileOpen: boolean; onCloseMobile: () => void 
   const { user } = useAuth();
   const { path, navigate } = useRouter();
   const items = visibleNavItems(user?.role.permissions);
-  const [collapsed, setCollapsed] = useState<Record<string, boolean>>(loadCollapsed);
+  const [expanded, setExpanded] = useState<Section | null>(loadExpanded);
 
   const toggleSection = (section: Section) => {
-    setCollapsed((prev) => {
-      const next = { ...prev, [section]: !prev[section] };
+    setExpanded((prev) => {
+      const next = prev === section ? null : section;
       try {
-        localStorage.setItem(COLLAPSED_STORAGE_KEY, JSON.stringify(next));
+        if (next) localStorage.setItem(EXPANDED_STORAGE_KEY, next);
+        else localStorage.removeItem(EXPANDED_STORAGE_KEY);
       } catch {
         // Best-effort persistence — a private-mode browser just won't remember it.
       }
@@ -66,7 +60,7 @@ export const Sidebar: React.FC<{ mobileOpen: boolean; onCloseMobile: () => void 
           if (sectionItems.length === 0) return null;
 
           const hasActiveItem = sectionItems.some((item) => path === item.path);
-          const isCollapsed = Boolean(collapsed[section]) && !hasActiveItem;
+          const isCollapsed = expanded !== section && !hasActiveItem;
 
           return (
             <div key={section} className="space-y-0.5">
