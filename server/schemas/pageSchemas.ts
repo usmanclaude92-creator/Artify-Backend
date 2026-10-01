@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { patchableContentStatusSchema, expectedUpdatedAtSchema, seoMetadataSchema } from "./contentSchemas";
+import { editorDocumentSchema } from "./editorSchemas";
 
 const slugSchema = z
   .string()
@@ -19,6 +20,10 @@ export const createPageSchema = z.object({
   slug: slugSchema.optional(),
   body: z.string().trim().max(500000).default(""),
   metadata: seoMetadataSchema.optional(),
+  // Phase 2 (Site Editor) — additive, optional. A page created without it
+  // behaves exactly as before: body/metadata alone drive rendering
+  // (publicSiteService.ts falls back whenever editorBlocks is absent).
+  editorBlocks: editorDocumentSchema.optional(),
   featuredMediaId: z.string().trim().uuid().optional(),
   templateId: z.string().trim().uuid().optional(),
   pageType: pageTypeSchema.optional(),
@@ -32,6 +37,9 @@ export const updatePageSchema = z
     slug: slugSchema.optional(),
     body: z.string().trim().max(500000).optional(),
     metadata: seoMetadataSchema.optional(),
+    // null clears the editor composition (falls back to body-only
+    // rendering); omitted leaves it unchanged.
+    editorBlocks: editorDocumentSchema.nullable().optional(),
     status: patchableContentStatusSchema.optional(),
     featuredMediaId: z.string().trim().uuid().nullable().optional(),
     // null explicitly unassigns the template (falls back to default

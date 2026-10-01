@@ -71,12 +71,26 @@ function projectPageTemplate(page: PageWithPublicRelations) {
   return { type: template.type, slug: template.slug, structure: revision.structure as Record<string, unknown> };
 }
 
+// Phase 2 (Site Editor) — additive, same backward-compatible pattern as
+// `template` above: a page with no editor composition (the overwhelming
+// majority of existing pages) gets `editorBlocks: null` exactly as
+// before, and the public renderer's safe fallback (render `body` HTML) is
+// unaffected. Only a page whose current revision has a genuinely saved
+// block document gets a non-null value here — never partial/unsaved
+// editor state, since this reads the same persisted revision `body` does.
+function projectPageEditorBlocks(revision: PageWithPublicRelations["currentRevision"]): Record<string, unknown> | null {
+  const blocks = revision?.editorBlocks as Record<string, unknown> | null | undefined;
+  if (!blocks || !Array.isArray(blocks.blocks) || blocks.blocks.length === 0) return null;
+  return blocks;
+}
+
 async function projectPage(page: PageWithPublicRelations) {
   const revision = page.currentRevision;
   return {
     slug: page.slug,
     title: page.title,
     body: revision?.body ?? "",
+    editorBlocks: projectPageEditorBlocks(revision),
     seo: (revision?.metadata as Record<string, unknown> | undefined) ?? {},
     featuredMedia: await projectPublicMedia(page.featuredMedia),
     pageType: page.pageType,

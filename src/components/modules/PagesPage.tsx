@@ -1,8 +1,9 @@
 /** Phase 8 — CMS pages: searchable/filterable/paginated list + master-detail editor with workflow actions and revision history/revert. */
 import React, { useEffect, useState } from "react";
-import { FileText, Plus, Search, Send, Rocket, CalendarClock, Archive, History, RotateCcw, Image as ImageIcon, X } from "lucide-react";
+import { FileText, Plus, Search, Send, Rocket, CalendarClock, Archive, History, RotateCcw, Image as ImageIcon, X, Wand2 } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
+import { useRouter } from "../../lib/router";
 import { pagesApi, mediaApi, type CmsPage, type CmsMedia, type ContentRevision, type ContentStatusValue } from "../../lib/api";
 import { ApiClientError } from "../../lib/apiClient";
 import { Card, Button, Input, Select, Badge, LoadingState, ErrorState, EmptyState, Pagination, Modal, Field, ConfirmDialog } from "../ui/ui";
@@ -216,6 +217,7 @@ const ScheduleModal: React.FC<{ open: boolean; onClose: () => void; onSchedule: 
 const PageDetail: React.FC<{ page: CmsPage; onChanged: (p?: CmsPage) => void }> = ({ page, onChanged }) => {
   const { user } = useAuth();
   const { notify } = useToast();
+  const { navigate } = useRouter();
   const canUpdate = hasPermission(user?.role.permissions, "content.update");
   const canPublish = hasPermission(user?.role.permissions, "content.publish");
   const canDelete = hasPermission(user?.role.permissions, "content.delete");
@@ -290,6 +292,11 @@ const PageDetail: React.FC<{ page: CmsPage; onChanged: (p?: CmsPage) => void }> 
           >
             <History className="w-3.5 h-3.5" /> Revisions
           </Button>
+          {canUpdate && page.status !== "ARCHIVED" && (
+            <Button variant="secondary" onClick={() => navigate(`/website/site-editor?pageId=${page.id}`)} disabled={busy}>
+              <Wand2 className="w-3.5 h-3.5" /> Open Site Editor
+            </Button>
+          )}
           {canUpdate && (page.status === "DRAFT" || page.status === "IN_REVIEW" || page.status === "SCHEDULED") && (
             <Button variant="secondary" onClick={() => setEditOpen(true)} disabled={busy}>
               Edit

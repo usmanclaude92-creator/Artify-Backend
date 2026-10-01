@@ -424,4 +424,103 @@ describe("CMS pages", () => {
     const count = await prisma.page.count({ where: { slug: "race-page" } });
     expect(count).toBe(1);
   });
+
+  // Phase 2 (Site Editor) — editorBlocks persistence mirrors body's own
+  // create/in-place-edit/fork-on-published-edit/revert handling exactly
+  // (pageService.ts), and a raw <script> inside a text block is sanitized
+  // the same way body HTML already is.
+  describe("editorBlocks (Phase 2 — Site Editor)", () => {
+    it("creates a page with editorBlocks, sanitizing embedded script content", async () => {
+      const res = await request(app)
+        .post("/api/v1/pages")
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({
+          title: "Editor Page",
+          body: "",
+          editorBlocks: { version: 1, blocks: [{ id: "t1", type: "text", props: { html: "<p>safe</p><script>alert(1)</script>" } }] },
+        });
+      expect(res.status).toBe(201);
+      const blocks = res.body.data.page.currentRevision.editorBlocks.blocks;
+      expect(blocks[0].props.html).toContain("safe");
+      expect(blocks[0].props.html).not.toContain("<script>");
+    });
+
+    it("edits editorBlocks in place on a DRAFT page (no new revision), then forks a new one on further edits to a PUBLISHED page", async () => {
+      const created = await request(app)
+        .post("/api/v1/pages")
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ title: "Editor Lifecycle", body: "<p>x</p>", editorBlocks: { version: 1, blocks: [] } });
+      const id = created.body.data.page.id;
+
+      const docV1 = { version: 1, blocks: [{ id: "h1", type: "heading", props: { text: "v1", level: 2 } }] };
+      const edited = await request(app).patch(`/api/v1/pages/${id}`).set("Authorization", `Bearer ${adminToken}`).send({ editorBlocks: docV1 });
+      expect(edited.status).toBe(200);
+      expect(edited.body.data.page.currentRevision.version).toBe(1);
+      expect(edited.body.data.page.currentRevision.editorBlocks).toEqual(docV1);
+
+      await request(app).post(`/api/v1/pages/${id}/publish`).set("Authorization", `Bearer ${adminToken}`).send();
+
+      const docV2 = { version: 1, blocks: [{ id: "h2", type: "heading", props: { text: "v2", level: 2 } }] };
+      const liveEdit = await request(app).patch(`/api/v1/pages/${id}`).set("Authorization", `Bearer ${adminToken}`).send({ editorBlocks: docV2 });
+      expect(liveEdit.status).toBe(200);
+      expect(liveEdit.body.data.page.currentRevision.version).toBe(2);
+      expect(liveEdit.body.data.page.currentRevision.editorBlocks).toEqual(docV2);
+      expect(liveEdit.body.data.page.status).toBe("PUBLISHED");
+
+      const v1 = await prisma.contentRevision.findFirst({ where: { pageId: id, version: 1 } });
+      expect(v1?.editorBlocks).toEqual(docV1);
+    });
+
+    it("reverting to a prior PUBLISHED revision restores that revision's editorBlocks (DRAFT edits mutate in place, so this needs the publish->edit fork)", async () => {
+      const created = await request(app)
+        .post("/api/v1/pages")
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ title: "Editor Revert", body: "<p>x</p>", editorBlocks: { version: 1, blocks: [{ id: "a", type: "divider", props: {} }] } });
+      const id = created.body.data.page.id;
+      const v1RevisionId = created.body.data.page.currentRevisionId;
+
+      await request(app).post(`/api/v1/pages/${id}/publish`).set("Authorization", `Bearer ${adminToken}`).send();
+      // Live edit of PUBLISHED content forks a new revision (v2) rather than mutating v1 in place.
+      await request(app)
+        .patch(`/api/v1/pages/${id}`)
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ editorBlocks: { version: 1, blocks: [{ id: "b", type: "spacer", props: { height: 10 } }] } });
+
+      const revert = await request(app).post(`/api/v1/pages/${id}/revert`).set("Authorization", `Bearer ${adminToken}`).send({ revisionId: v1RevisionId });
+      expect(revert.status).toBe(200);
+      expect(revert.body.data.page.currentRevision.version).toBe(3);
+      expect(revert.body.data.page.currentRevision.editorBlocks).toEqual({ version: 1, blocks: [{ id: "a", type: "divider", props: {} }] });
+    });
+
+    it("explicitly clearing editorBlocks (null) falls back to body-only rendering", async () => {
+      const created = await request(app)
+        .post("/api/v1/pages")
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ title: "Editor Clear", body: "<p>x</p>", editorBlocks: { version: 1, blocks: [{ id: "a", type: "divider", props: {} }] } });
+      const id = created.body.data.page.id;
+
+      const cleared = await request(app).patch(`/api/v1/pages/${id}`).set("Authorization", `Bearer ${adminToken}`).send({ editorBlocks: null });
+      expect(cleared.status).toBe(200);
+      expect(cleared.body.data.page.currentRevision.editorBlocks).toBeNull();
+    });
+
+    it("rejects a block tree with an unknown block type (schema-validated, not arbitrary JSON)", async () => {
+      const res = await request(app)
+        .post("/api/v1/pages")
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ title: "Bad Blocks", body: "", editorBlocks: { version: 1, blocks: [{ id: "x", type: "not-a-real-block", props: {} }] } });
+      expect(res.status).toBe(400);
+    });
+
+    it("tenant isolation: editorBlocks on another organization's page is never readable", async () => {
+      const created = await request(app)
+        .post("/api/v1/pages")
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ title: "Private Blocks", body: "", editorBlocks: { version: 1, blocks: [{ id: "a", type: "divider", props: {} }] } });
+      const id = created.body.data.page.id;
+
+      const crossOrgRead = await request(app).get(`/api/v1/pages/${id}`).set("Authorization", `Bearer ${otherOrgAdminToken}`);
+      expect(crossOrgRead.status).toBe(404);
+    });
+  });
 });

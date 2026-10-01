@@ -774,6 +774,37 @@ export const productModulesApi = {
 };
 
 // ---------------------------------------------------------------------------
+// Phase 2 (Site Editor) — block tree shared by a Page's own canvas
+// (ContentRevision.editorBlocks) and a Template Part's content
+// (TemplatePart.content). Mirrors server/schemas/editorSchemas.ts exactly.
+// ---------------------------------------------------------------------------
+
+export type BlockType =
+  | "section"
+  | "container"
+  | "columns"
+  | "text"
+  | "heading"
+  | "image"
+  | "button"
+  | "card"
+  | "spacer"
+  | "divider"
+  | "templatePart";
+
+export interface EditorBlock {
+  id: string;
+  type: BlockType;
+  props: Record<string, unknown>;
+  children?: EditorBlock[];
+}
+
+export interface EditorDocument {
+  version: 1;
+  blocks: EditorBlock[];
+}
+
+// ---------------------------------------------------------------------------
 // Phase 8 — CMS (pages, posts, categories, tags, authors, revisions)
 // ---------------------------------------------------------------------------
 
@@ -813,6 +844,7 @@ export interface ContentRevision {
   title: string;
   body: string;
   metadata: PostSeoMetadata;
+  editorBlocks: EditorDocument | null;
   createdById: string | null;
   createdAt: string;
   publishedAt: string | null;
@@ -897,6 +929,7 @@ const contentUpdateBody = (payload: {
   slug?: string;
   body?: string;
   metadata?: PostSeoMetadata;
+  editorBlocks?: EditorDocument | null;
   status?: PatchableContentStatus;
   featuredMediaId?: string | null;
   expectedUpdatedAt?: string;
@@ -908,8 +941,17 @@ export const pagesApi = {
   ) => paginatedGet<CmsPage>("/pages", "pages", params),
   get: (id: string) => apiClient.get<{ page: CmsPage }>(`/pages/${id}`),
   revisions: (id: string) => apiClient.get<{ revisions: ContentRevision[] }>(`/pages/${id}/revisions`),
-  create: (payload: { title: string; slug?: string; body?: string; metadata?: PostSeoMetadata; featuredMediaId?: string }) =>
-    apiClient.post<{ page: CmsPage }>("/pages", payload),
+  create: (payload: {
+    title: string;
+    slug?: string;
+    body?: string;
+    metadata?: PostSeoMetadata;
+    editorBlocks?: EditorDocument;
+    featuredMediaId?: string;
+    templateId?: string;
+    pageType?: PageTypeValue;
+    isHomepage?: boolean;
+  }) => apiClient.post<{ page: CmsPage }>("/pages", payload),
   update: (id: string, payload: Parameters<typeof contentUpdateBody>[0]) => apiClient.patch<{ page: CmsPage }>(`/pages/${id}`, contentUpdateBody(payload)),
   submitForReview: (id: string) => apiClient.post<{ page: CmsPage }>(`/pages/${id}/submit-review`),
   publish: (id: string) => apiClient.post<{ page: CmsPage }>(`/pages/${id}/publish`),
@@ -955,13 +997,22 @@ export type TemplatePartTypeValue =
   | "CONTACT_SECTION"
   | "SOCIAL_SECTION";
 
+// `structure` stays unconstrained JSON (server/schemas/templateSchemas.ts).
+// Phase 2 (Site Editor) reads an optional `regions` convention off of it —
+// a map of region key ("header", "footer", ...) to the id of the
+// TemplatePart rendered there — but never requires it.
+export interface TemplateStructure {
+  regions?: Record<string, string>;
+  [key: string]: unknown;
+}
+
 export interface TemplateRevision {
   id: string;
   templateId: string;
   version: number;
   status: TemplateWorkflowStatus;
   name: string;
-  structure: Record<string, unknown>;
+  structure: TemplateStructure;
   createdById: string | null;
   createdAt: string;
   publishedAt: string | null;
@@ -991,7 +1042,7 @@ export interface TemplatePartRevision {
   version: number;
   status: TemplateWorkflowStatus;
   name: string;
-  content: Record<string, unknown>;
+  content: EditorDocument;
   createdById: string | null;
   createdAt: string;
   publishedAt: string | null;
@@ -1027,11 +1078,11 @@ export const templatesApi = {
   ) => paginatedGet<Template>("/templates", "templates", params),
   get: (id: string) => apiClient.get<{ template: Template }>(`/templates/${id}`),
   revisions: (id: string) => apiClient.get<{ revisions: TemplateRevision[] }>(`/templates/${id}/revisions`),
-  create: (payload: { type: TemplateTypeValue; name: string; slug?: string; description?: string; structure?: Record<string, unknown> }) =>
+  create: (payload: { type: TemplateTypeValue; name: string; slug?: string; description?: string; structure?: TemplateStructure }) =>
     apiClient.post<{ template: Template }>("/templates", payload),
   update: (
     id: string,
-    payload: Partial<{ name: string; slug: string; description: string | null; structure: Record<string, unknown>; expectedUpdatedAt: string }>
+    payload: Partial<{ name: string; slug: string; description: string | null; structure: TemplateStructure; expectedUpdatedAt: string }>
   ) => apiClient.patch<{ template: Template }>(`/templates/${id}`, payload),
   publish: (id: string) => apiClient.post<{ template: Template }>(`/templates/${id}/publish`),
   archive: (id: string) => apiClient.post<{ template: Template }>(`/templates/${id}/archive`),
@@ -1054,9 +1105,9 @@ export const templatePartsApi = {
   ) => paginatedGet<TemplatePart>("/template-parts", "templateParts", params),
   get: (id: string) => apiClient.get<{ templatePart: TemplatePart }>(`/template-parts/${id}`),
   revisions: (id: string) => apiClient.get<{ revisions: TemplatePartRevision[] }>(`/template-parts/${id}/revisions`),
-  create: (payload: { type: TemplatePartTypeValue; name: string; slug?: string; content?: Record<string, unknown> }) =>
+  create: (payload: { type: TemplatePartTypeValue; name: string; slug?: string; content?: EditorDocument }) =>
     apiClient.post<{ templatePart: TemplatePart }>("/template-parts", payload),
-  update: (id: string, payload: Partial<{ name: string; slug: string; content: Record<string, unknown>; expectedUpdatedAt: string }>) =>
+  update: (id: string, payload: Partial<{ name: string; slug: string; content: EditorDocument; expectedUpdatedAt: string }>) =>
     apiClient.patch<{ templatePart: TemplatePart }>(`/template-parts/${id}`, payload),
   publish: (id: string) => apiClient.post<{ templatePart: TemplatePart }>(`/template-parts/${id}/publish`),
   archive: (id: string) => apiClient.post<{ templatePart: TemplatePart }>(`/template-parts/${id}/archive`),

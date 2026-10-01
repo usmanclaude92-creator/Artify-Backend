@@ -24,10 +24,19 @@ export const RouterProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   }, []);
 
   const navigate = useCallback((next: string) => {
-    if (next !== window.location.pathname) {
+    // `next` may carry a query string (the `?q=`/`?new=1` deep-link
+    // convention — see src/lib/deepLink.ts) — only the pathname is ever
+    // stored as `path`, matching the popstate handler above and
+    // NAV_ITEMS' exact-path lookup (AppShell.tsx/Sidebar.tsx both do
+    // `path === item.path`, which a path carrying its own query string
+    // would never match). The full string (query included) still goes to
+    // the real browser URL via pushState, so reload/bookmark/back-button
+    // keep working.
+    const nextPathname = next.split("?")[0]!.split("#")[0]!;
+    if (next !== `${window.location.pathname}${window.location.search}${window.location.hash}`) {
       window.history.pushState({}, "", next);
     }
-    setPath(next);
+    setPath(nextPathname);
   }, []);
 
   const value = useMemo(() => ({ path, navigate }), [path, navigate]);

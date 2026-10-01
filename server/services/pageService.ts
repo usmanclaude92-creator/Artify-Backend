@@ -38,6 +38,7 @@ import { templateRepository } from "../repositories/templateRepository";
 import { auditLogRepository } from "../repositories/auditLogRepository";
 import { assertFeaturedMediaUsable } from "./mediaService";
 import { sanitizeContentHtml } from "../utils/sanitizeHtml";
+import { sanitizeEditorDocument } from "../schemas/editorSchemas";
 import { notificationService } from "./notificationService";
 import { redirectService } from "./redirectService";
 import { prisma } from "../db/prisma";
@@ -46,7 +47,7 @@ import type { SanitizedUser } from "../types/domain";
 import type { CreatePageInput, UpdatePageInput } from "../schemas/pageSchemas";
 import type { ScheduleContentInput, RevertContentInput } from "../schemas/contentSchemas";
 import type { RequestMeta } from "./authService";
-import type { Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 
 /**
  * ARCHIVED content is fully read-only until restored (PATCH status:"DRAFT")
@@ -60,6 +61,15 @@ import type { Prisma } from "@prisma/client";
  * offline until republished.
  */
 const CONTENT_EDIT_BLOCKED_STATUSES = new Set(["ARCHIVED"]);
+
+// Json? columns need Prisma's DbNull sentinel to write SQL NULL — a plain
+// `null` is ambiguous with storing the JSON literal `null` (see
+// server/ai/governance.ts's identical use of Prisma.JsonNull for the same
+// reason). Clearing editorBlocks always means "no editor composition"
+// (SQL NULL), never a stored JSON null.
+function resolveEditorBlocksInput(value: unknown): Prisma.InputJsonValue | typeof Prisma.DbNull {
+  return value === null || value === undefined ? Prisma.DbNull : (value as Prisma.InputJsonValue);
+}
 
 function isUniqueConstraintError(err: unknown): boolean {
   return !!err && typeof err === "object" && "code" in err && (err as { code?: string }).code === "P2002";
@@ -122,6 +132,7 @@ export const pageService = {
   async createPage(caller: SanitizedUser, input: CreatePageInput, meta: RequestMeta = {}): Promise<PageWithRevision> {
     const organizationId = caller.organizationId;
     const body = sanitizeContentHtml(input.body);
+    const editorBlocks = input.editorBlocks ? sanitizeEditorDocument(input.editorBlocks) : undefined;
 
     if (input.slug) {
       const dup = await pageRepository.findBySlugInOrg(organizationId, input.slug);
@@ -155,6 +166,10 @@ export const pageService = {
             title: input.title,
             body,
             metadata: (input.metadata ?? {}) as Prisma.InputJsonValue,
+            // undefined (not DbNull) here: omitting the field lets Prisma
+            // skip it entirely on insert, same as leaving a page's editor
+            // composition unset at creation time.
+            editorBlocks: editorBlocks ? (editorBlocks as unknown as Prisma.InputJsonValue) : undefined,
             createdById: caller.id,
           },
         });
@@ -185,12 +200,18 @@ export const pageService = {
     const organizationId = caller.organizationId;
     const existing = await loadPageOrThrow(id, organizationId);
     const sanitizedBody = input.body !== undefined ? sanitizeContentHtml(input.body) : undefined;
+    // null explicitly clears the editor composition (falls back to
+    // body-only rendering); undefined leaves it unchanged; a document
+    // gets the same sanitize pass as a fresh create.
+    const sanitizedEditorBlocks =
+      input.editorBlocks === undefined ? undefined : input.editorBlocks === null ? null : sanitizeEditorDocument(input.editorBlocks);
 
     // Schema restricts input.status to "DRAFT" — every other status is
     // dedicated-endpoint-only (submitForReview/schedulePage/publishPage/
     // archivePage). Moving to DRAFT is always a legal "reopen" from any
     // other status.
-    const hasContentEdit = input.title !== undefined || input.body !== undefined || input.metadata !== undefined || input.slug !== undefined;
+    const hasContentEdit =
+      input.title !== undefined || input.body !== undefined || input.metadata !== undefined || input.slug !== undefined || input.editorBlocks !== undefined;
     // Blocked only when the page STAYS archived — target status is always
     // existing.status unless input.status ("DRAFT" only, restoring it) is
     // supplied, so this never blocks a combined restore+edit.
@@ -248,6 +269,7 @@ export const pageService = {
               title: input.title ?? currentRevision.title,
               body: sanitizedBody ?? currentRevision.body,
               metadata: (input.metadata ?? currentRevision.metadata) as Prisma.InputJsonValue,
+              editorBlocks: resolveEditorBlocksInput(sanitizedEditorBlocks !== undefined ? sanitizedEditorBlocks : currentRevision.editorBlocks),
               createdById: caller.id,
               publishedAt: liveEditOfPublished ? new Date() : null,
             },
@@ -258,6 +280,7 @@ export const pageService = {
           if (input.title !== undefined) revisionPatch.title = input.title;
           if (sanitizedBody !== undefined) revisionPatch.body = sanitizedBody;
           if (input.metadata !== undefined) revisionPatch.metadata = input.metadata as Prisma.InputJsonValue;
+          if (sanitizedEditorBlocks !== undefined) revisionPatch.editorBlocks = resolveEditorBlocksInput(sanitizedEditorBlocks);
           if (Object.keys(revisionPatch).length > 0) {
             await tx.contentRevision.update({ where: { id: currentRevision.id }, data: revisionPatch });
           }
@@ -486,6 +509,7 @@ export const pageService = {
           title: target.title,
           body: target.body,
           metadata: target.metadata as Prisma.InputJsonValue,
+          editorBlocks: resolveEditorBlocksInput(target.editorBlocks),
           createdById: caller.id,
           publishedAt: wasPublished ? new Date() : null,
         },

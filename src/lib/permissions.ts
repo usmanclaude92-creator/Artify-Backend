@@ -51,6 +51,7 @@ import {
   ClipboardList,
   LayoutTemplate,
   PanelsTopLeft,
+  Wand2,
 } from "lucide-react";
 import { DashboardPage } from "../components/modules/DashboardPage";
 
@@ -83,6 +84,7 @@ const ProductsPage = lazyPage(() => import("../components/modules/ProductsPage")
 const TemplatesPage = lazyPage(() => import("../components/modules/TemplatesPage"), "TemplatesPage");
 const TemplatePartsPage = lazyPage(() => import("../components/modules/TemplatePartsPage"), "TemplatePartsPage");
 const PagesPage = lazyPage(() => import("../components/modules/PagesPage"), "PagesPage");
+const SiteEditorPage = lazyPage(() => import("../components/modules/SiteEditorPage"), "SiteEditorPage");
 const PostsPage = lazyPage(() => import("../components/modules/PostsPage"), "PostsPage");
 const CmsTaxonomyPage = lazyPage(() => import("../components/modules/CmsTaxonomyPage"), "CmsTaxonomyPage");
 const AuthorsPage = lazyPage(() => import("../components/modules/AuthorsPage"), "AuthorsPage");
@@ -300,6 +302,15 @@ export const NAV_ITEMS: NavItem[] = [
     icon: PanelsTopLeft,
     requiresAnyPermission: ["template_parts.read"],
     component: TemplatePartsPage,
+    section: "Website",
+  },
+  {
+    id: "website-site-editor",
+    label: "Site Editor",
+    path: "/website/site-editor",
+    icon: Wand2,
+    requiresAnyPermission: ["content.update"],
+    component: SiteEditorPage,
     section: "Website",
   },
   {
