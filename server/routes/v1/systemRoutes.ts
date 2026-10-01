@@ -15,6 +15,7 @@ import { asyncHandler } from "../../utils/asyncHandler";
 import { authenticateToken, requireRole } from "../../middleware/auth";
 import { config } from "../../config/env";
 import { seedRolesAndPermissions } from "../../../prisma/rolePermissionSeed";
+import { applyPendingMigrations } from "../../db/pendingMigrations";
 
 const router = Router();
 
@@ -123,6 +124,25 @@ router.post(
       totalPermissions: afterPermissions,
       totalRolePermissionLinks: afterRolePermissions,
     });
+  })
+);
+
+/**
+ * SUPER_ADMIN-only, one-time catch-up. Applies migrations present in
+ * prisma/migrations that `prisma migrate deploy` has never been able to
+ * run against this environment (see server/db/pendingMigrations.ts for
+ * why: this environment's DATABASE_URL is a PgBouncer transaction-mode
+ * pooler, which doesn't support the session-level lock `migrate deploy`
+ * requires). Idempotent — records each applied migration in
+ * _prisma_migrations and skips any already marked finished there.
+ */
+router.post(
+  "/apply-pending-migrations",
+  authenticateToken,
+  requireRole(["SUPER_ADMIN"]),
+  asyncHandler(async (_req, res) => {
+    const result = await applyPendingMigrations(prisma);
+    sendSuccess(res, result);
   })
 );
 
