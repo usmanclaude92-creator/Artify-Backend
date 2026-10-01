@@ -2320,46 +2320,55 @@ var ROLE_PERMISSION_SETS = {
     "forms.read"
   ]
 };
+async function mapWithConcurrency(items, limit, fn) {
+  const results = new Array(items.length);
+  let next = 0;
+  async function worker() {
+    for (; ; ) {
+      const i = next++;
+      if (i >= items.length) return;
+      results[i] = await fn(items[i]);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+var DB_CONCURRENCY = 4;
 async function seedRolesAndPermissions(prisma2) {
-  await Promise.all(
-    PERMISSION_KEYS.map(
-      (key) => prisma2.permission.upsert({
-        where: { key },
-        update: {},
-        create: { key, name: permissionName(key), module: moduleOf(key) }
-      })
-    )
+  await mapWithConcurrency(
+    PERMISSION_KEYS,
+    DB_CONCURRENCY,
+    (key) => prisma2.permission.upsert({
+      where: { key },
+      update: {},
+      create: { key, name: permissionName(key), module: moduleOf(key) }
+    })
   );
   const roleIds = {};
-  const roles = await Promise.all(
-    SYSTEM_ROLE_KEYS.map(async (key) => {
-      const def = ROLE_DEFINITIONS[key];
-      const role = await prisma2.role.upsert({
-        where: { key },
-        update: {},
-        create: { key, name: def.name, description: def.description, isSystem: true }
-      });
-      return { key, role };
-    })
-  );
-  for (const { key, role } of roles) {
+  const roles = [];
+  for (const key of SYSTEM_ROLE_KEYS) {
+    const def = ROLE_DEFINITIONS[key];
+    const role = await prisma2.role.upsert({
+      where: { key },
+      update: {},
+      create: { key, name: def.name, description: def.description, isSystem: true }
+    });
     roleIds[key] = role.id;
+    roles.push({ key, role });
   }
-  await Promise.all(
-    roles.map(async ({ key, role }) => {
-      const grantedKeys = ROLE_PERMISSION_SETS[key] === "*" ? PERMISSION_KEYS : ROLE_PERMISSION_SETS[key];
-      const permissions = await prisma2.permission.findMany({ where: { key: { in: [...grantedKeys] } } });
-      await Promise.all(
-        permissions.map(
-          (permission) => prisma2.rolePermission.upsert({
-            where: { roleId_permissionId: { roleId: role.id, permissionId: permission.id } },
-            update: {},
-            create: { roleId: role.id, permissionId: permission.id }
-          })
-        )
-      );
-    })
-  );
+  for (const { key, role } of roles) {
+    const grantedKeys = ROLE_PERMISSION_SETS[key] === "*" ? PERMISSION_KEYS : ROLE_PERMISSION_SETS[key];
+    const permissions = await prisma2.permission.findMany({ where: { key: { in: [...grantedKeys] } } });
+    await mapWithConcurrency(
+      permissions,
+      DB_CONCURRENCY,
+      (permission) => prisma2.rolePermission.upsert({
+        where: { roleId_permissionId: { roleId: role.id, permissionId: permission.id } },
+        update: {},
+        create: { roleId: role.id, permissionId: permission.id }
+      })
+    );
+  }
   return roleIds;
 }
 

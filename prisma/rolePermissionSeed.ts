@@ -421,61 +421,69 @@ const ROLE_PERMISSION_SETS: Record<RoleKey, readonly string[] | "*"> = {
 };
 
 /**
- * Every upsert below is independent (keyed on its own unique constraint),
- * so they run concurrently rather than one-at-a-time: on a cold
- * already-provisioned environment this loop is hundreds of individual
- * round trips to the database, and awaiting them sequentially (the
- * original implementation) took long enough to hit Vercel's serverless
- * function timeout (confirmed in production: 504 "Task timed out after
- * 300 seconds" on an environment with ~190 permissions x 5 roles of
- * rolePermission rows to reconcile). Prisma queues these over its own
- * connection pool, so this doesn't open more DB connections than before —
- * it just stops waiting for each round trip before starting the next.
+ * Runs `fn` over `items` with at most `limit` in flight at once. Every
+ * upsert below is independent (keyed on its own unique constraint), so
+ * awaiting them one at a time (the original implementation) turned this
+ * into hundreds of serial round trips and hit Vercel's 300s serverless
+ * function timeout. Firing them all at once via a single Promise.all
+ * isn't safe either — this environment's Postgres connection pool is
+ * capped at 5, and confirmed in production: a few hundred concurrent
+ * upserts blow past that limit and fail with Prisma's P2024 ("Timed out
+ * fetching a new connection from the connection pool"). Capping
+ * concurrency below the pool size keeps every connection busy without
+ * any request queuing for one.
  */
+async function mapWithConcurrency<T, R>(items: readonly T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  async function worker(): Promise<void> {
+    for (;;) {
+      const i = next++;
+      if (i >= items.length) return;
+      results[i] = await fn(items[i]!);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+
+const DB_CONCURRENCY = 4;
+
 export async function seedRolesAndPermissions(prisma: PrismaClient): Promise<Record<RoleKey, string>> {
-  await Promise.all(
-    PERMISSION_KEYS.map((key) =>
-      prisma.permission.upsert({
-        where: { key },
-        update: {},
-        create: { key, name: permissionName(key), module: moduleOf(key) },
-      })
-    )
+  await mapWithConcurrency(PERMISSION_KEYS, DB_CONCURRENCY, (key) =>
+    prisma.permission.upsert({
+      where: { key },
+      update: {},
+      create: { key, name: permissionName(key), module: moduleOf(key) },
+    })
   );
 
   const roleIds = {} as Record<RoleKey, string>;
 
-  const roles = await Promise.all(
-    SYSTEM_ROLE_KEYS.map(async (key) => {
-      const def = ROLE_DEFINITIONS[key];
-      const role = await prisma.role.upsert({
-        where: { key },
-        update: {},
-        create: { key, name: def.name, description: def.description, isSystem: true },
-      });
-      return { key, role };
-    })
-  );
-  for (const { key, role } of roles) {
+  const roles = [];
+  for (const key of SYSTEM_ROLE_KEYS) {
+    const def = ROLE_DEFINITIONS[key];
+    const role = await prisma.role.upsert({
+      where: { key },
+      update: {},
+      create: { key, name: def.name, description: def.description, isSystem: true },
+    });
     roleIds[key] = role.id;
+    roles.push({ key, role });
   }
 
-  await Promise.all(
-    roles.map(async ({ key, role }) => {
-      const grantedKeys = ROLE_PERMISSION_SETS[key] === "*" ? PERMISSION_KEYS : ROLE_PERMISSION_SETS[key];
-      const permissions = await prisma.permission.findMany({ where: { key: { in: [...grantedKeys] } } });
+  for (const { key, role } of roles) {
+    const grantedKeys = ROLE_PERMISSION_SETS[key] === "*" ? PERMISSION_KEYS : ROLE_PERMISSION_SETS[key];
+    const permissions = await prisma.permission.findMany({ where: { key: { in: [...grantedKeys] } } });
 
-      await Promise.all(
-        permissions.map((permission) =>
-          prisma.rolePermission.upsert({
-            where: { roleId_permissionId: { roleId: role.id, permissionId: permission.id } },
-            update: {},
-            create: { roleId: role.id, permissionId: permission.id },
-          })
-        )
-      );
-    })
-  );
+    await mapWithConcurrency(permissions, DB_CONCURRENCY, (permission) =>
+      prisma.rolePermission.upsert({
+        where: { roleId_permissionId: { roleId: role.id, permissionId: permission.id } },
+        update: {},
+        create: { roleId: role.id, permissionId: permission.id },
+      })
+    );
+  }
 
   return roleIds;
 }
