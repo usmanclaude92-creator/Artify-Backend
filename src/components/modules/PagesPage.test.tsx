@@ -14,6 +14,11 @@ const revertMock = vi.fn();
 const revisionsMock = vi.fn();
 const childrenMock = vi.fn();
 const templatesListMock = vi.fn();
+const trashMock = vi.fn();
+const restoreMock = vi.fn();
+const bulkArchiveMock = vi.fn();
+const bulkTrashMock = vi.fn();
+const bulkRestoreMock = vi.fn();
 const notifyMock = vi.fn();
 
 vi.mock("../../lib/api", () => ({
@@ -29,6 +34,11 @@ vi.mock("../../lib/api", () => ({
     schedule: (...args: unknown[]) => scheduleMock(...args),
     archive: (...args: unknown[]) => archiveMock(...args),
     revert: (...args: unknown[]) => revertMock(...args),
+    trash: (...args: unknown[]) => trashMock(...args),
+    restore: (...args: unknown[]) => restoreMock(...args),
+    bulkArchive: (...args: unknown[]) => bulkArchiveMock(...args),
+    bulkTrash: (...args: unknown[]) => bulkTrashMock(...args),
+    bulkRestore: (...args: unknown[]) => bulkRestoreMock(...args),
   },
   templatesApi: {
     list: (...args: unknown[]) => templatesListMock(...args),
@@ -77,6 +87,7 @@ const page = {
 beforeEach(() => {
   childrenMock.mockResolvedValue({ children: [] });
   templatesListMock.mockResolvedValue({ items: [], page: 1, limit: 100, total: 0, totalPages: 1 });
+  trashMock.mockResolvedValue({ items: [], page: 1, limit: 20, total: 0, totalPages: 1 });
 });
 
 afterEach(() => {
@@ -92,6 +103,11 @@ afterEach(() => {
   revisionsMock.mockReset();
   childrenMock.mockReset();
   templatesListMock.mockReset();
+  trashMock.mockReset();
+  restoreMock.mockReset();
+  bulkArchiveMock.mockReset();
+  bulkTrashMock.mockReset();
+  bulkRestoreMock.mockReset();
   notifyMock.mockReset();
   navigateMock.mockReset();
   mockPermissions = ["content.read", "content.create", "content.update", "content.publish", "content.delete"];
@@ -245,5 +261,34 @@ describe("PagesPage", () => {
     await screen.findByText("Hello world");
 
     expect(await screen.findByText("Child Page")).toBeInTheDocument();
+  });
+
+  // Phase 7 (Content Management upgrade) — Trash view, bulk actions.
+  describe("Phase 7 — Trash view, bulk actions", () => {
+    it("switches to the Trash tab, calling the real trash API", async () => {
+      listMock.mockResolvedValue({ items: [page], page: 1, limit: 20, total: 1, totalPages: 1 });
+      trashMock.mockResolvedValue({ items: [{ ...page, title: "Trashed Page" }], page: 1, limit: 20, total: 1, totalPages: 1 });
+      render(<PagesPage />);
+      await screen.findByText("Hello world");
+
+      fireEvent.click(screen.getByRole("button", { name: /^trash$/i }));
+      expect(await screen.findByText("Trashed Page")).toBeInTheDocument();
+      expect(trashMock).toHaveBeenCalled();
+    });
+
+    it("bulk-archives selected pages only after confirming, through the real API", async () => {
+      listMock.mockResolvedValue({ items: [page], page: 1, limit: 20, total: 1, totalPages: 1 });
+      bulkArchiveMock.mockResolvedValue({ succeeded: ["page-1"], failed: [] });
+      render(<PagesPage />);
+      await screen.findByText("Hello world");
+
+      fireEvent.click(screen.getByLabelText(/select about us/i));
+      fireEvent.click(screen.getByRole("button", { name: /archive selected/i }));
+      expect(bulkArchiveMock).not.toHaveBeenCalled();
+
+      const dialog = await screen.findByRole("dialog");
+      fireEvent.click(within(dialog).getByRole("button", { name: /^archive$/i }));
+      await vi.waitFor(() => expect(bulkArchiveMock).toHaveBeenCalledWith(["page-1"]));
+    });
   });
 });

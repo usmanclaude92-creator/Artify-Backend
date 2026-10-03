@@ -7942,6 +7942,9 @@ var withPublicRelations = { include: { currentRevision: true, featuredMedia: tru
 function buildWhere9(organizationId, filters) {
   const where = { organizationId, deletedAt: null };
   if (filters.status) where.status = filters.status;
+  if (filters.fromDate || filters.toDate) {
+    where.createdAt = { ...filters.fromDate ? { gte: filters.fromDate } : {}, ...filters.toDate ? { lte: filters.toDate } : {} };
+  }
   if (filters.search) {
     where.OR = [{ title: { contains: filters.search, mode: "insensitive" } }, { slug: { contains: filters.search, mode: "insensitive" } }];
   }
@@ -8029,6 +8032,22 @@ var pageRepository = {
   },
   async softDelete(id) {
     await prisma.page.update({ where: { id }, data: { deletedAt: /* @__PURE__ */ new Date() } });
+  },
+  /** Phase 7 — Trash view: pages soft-deleted but not yet permanently gone, newest-deleted first. */
+  async listTrash(organizationId, page, limit) {
+    const where = { organizationId, deletedAt: { not: null } };
+    const [rows, total] = await Promise.all([
+      prisma.page.findMany({ where, orderBy: { deletedAt: "desc" }, skip: (page - 1) * limit, take: limit }),
+      prisma.page.count({ where })
+    ]);
+    return { rows, total };
+  },
+  /** Phase 7 — Trash view: a single soft-deleted page, org-scoped (never a live one). */
+  async findTrashedByIdInOrg(id, organizationId) {
+    return prisma.page.findFirst({ where: { id, organizationId, deletedAt: { not: null } } });
+  },
+  async restore(id) {
+    await prisma.page.update({ where: { id }, data: { deletedAt: null } });
   }
 };
 
@@ -8538,6 +8557,7 @@ var pageService = {
             version: 1,
             status: "DRAFT",
             title: input.title,
+            excerpt: input.excerpt,
             body,
             metadata: input.metadata ?? {},
             // undefined (not DbNull) here: omitting the field lets Prisma
@@ -8572,7 +8592,7 @@ var pageService = {
     const existing = await loadPageOrThrow(id, organizationId);
     const sanitizedBody = input.body !== void 0 ? sanitizeContentHtml(input.body) : void 0;
     const sanitizedEditorBlocks = input.editorBlocks === void 0 ? void 0 : input.editorBlocks === null ? null : sanitizeEditorDocument(input.editorBlocks);
-    const hasContentEdit = input.title !== void 0 || input.body !== void 0 || input.metadata !== void 0 || input.slug !== void 0 || input.editorBlocks !== void 0;
+    const hasContentEdit = input.title !== void 0 || input.body !== void 0 || input.excerpt !== void 0 || input.metadata !== void 0 || input.slug !== void 0 || input.editorBlocks !== void 0;
     if (hasContentEdit && input.status === void 0 && CONTENT_EDIT_BLOCKED_STATUSES.has(existing.status)) {
       throw new ConflictError(`Page content cannot be edited while status is ${existing.status}. Restore it to draft first.`);
     }
@@ -8609,6 +8629,7 @@ var pageService = {
               version: currentRevision.version + 1,
               status: liveEditOfPublished ? "PUBLISHED" : "DRAFT",
               title: input.title ?? currentRevision.title,
+              excerpt: input.excerpt !== void 0 ? input.excerpt : currentRevision.excerpt,
               body: sanitizedBody ?? currentRevision.body,
               metadata: input.metadata ?? currentRevision.metadata,
               editorBlocks: resolveEditorBlocksInput(sanitizedEditorBlocks !== void 0 ? sanitizedEditorBlocks : currentRevision.editorBlocks),
@@ -8620,6 +8641,7 @@ var pageService = {
         } else if (hasContentEdit && currentRevision) {
           const revisionPatch = {};
           if (input.title !== void 0) revisionPatch.title = input.title;
+          if (input.excerpt !== void 0) revisionPatch.excerpt = input.excerpt;
           if (sanitizedBody !== void 0) revisionPatch.body = sanitizedBody;
           if (input.metadata !== void 0) revisionPatch.metadata = input.metadata;
           if (sanitizedEditorBlocks !== void 0) revisionPatch.editorBlocks = resolveEditorBlocksInput(sanitizedEditorBlocks);
@@ -8795,6 +8817,7 @@ var pageService = {
           version: nextVersion,
           status: wasPublished ? "PUBLISHED" : "DRAFT",
           title: target.title,
+          excerpt: target.excerpt,
           body: target.body,
           metadata: target.metadata,
           editorBlocks: resolveEditorBlocksInput(target.editorBlocks),
@@ -8836,6 +8859,43 @@ var pageService = {
       ipAddress: meta.ip,
       userAgent: meta.userAgent
     });
+  },
+  /** Phase 7 — Trash view (Content Dashboard): soft-deleted pages, paginated. */
+  async listTrash(organizationId, page, limit) {
+    return pageRepository.listTrash(organizationId, page, limit);
+  },
+  async restorePage(caller, id, meta = {}) {
+    const organizationId = caller.organizationId;
+    const existing = await pageRepository.findTrashedByIdInOrg(id, organizationId);
+    if (!existing) throw new NotFoundError("Page not found in trash.");
+    await pageRepository.restore(id);
+    await auditLogRepository.record({
+      organizationId,
+      actorUserId: caller.id,
+      actorType: "USER",
+      action: "PAGE_RESTORED",
+      resourceType: "page",
+      resourceId: id,
+      beforeData: { status: existing.status, title: existing.title },
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent
+    });
+  },
+  /** Phase 7 — bulk workflow actions, same per-item isolation as postService.bulkAction. */
+  async bulkAction(caller, action, ids, meta = {}) {
+    const succeeded = [];
+    const failed = [];
+    for (const id of ids) {
+      try {
+        if (action === "archive") await this.archivePage(caller, id, meta);
+        else if (action === "trash") await this.deletePage(caller, id, meta);
+        else await this.restorePage(caller, id, meta);
+        succeeded.push(id);
+      } catch (err) {
+        failed.push({ id, error: err instanceof Error ? err.message : "Action failed." });
+      }
+    }
+    return { succeeded, failed };
   }
 };
 
@@ -8870,6 +8930,9 @@ var listContentQuerySchema = z20.object({
   limit: z20.coerce.number().int().positive().max(100).default(20),
   search: z20.string().trim().max(200).optional(),
   status: contentStatusSchema.optional(),
+  // Phase 7 — Content Dashboard date filtering, inclusive range over createdAt.
+  fromDate: z20.coerce.date().optional(),
+  toDate: z20.coerce.date().optional(),
   sort: z20.enum(SORT_FIELDS2).default("updatedAt"),
   order: z20.enum(["asc", "desc"]).default("desc")
 });
@@ -8880,21 +8943,30 @@ var slugSchema3 = z20.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slu
 var createCategorySchema = z20.object({
   name: z20.string().trim().min(1).max(150),
   slug: slugSchema3.optional(),
-  description: z20.string().trim().max(2e3).optional()
+  description: z20.string().trim().max(2e3).optional(),
+  // Phase 7 — optional parent for a simple hierarchy (Category.parentId).
+  parentId: z20.string().trim().uuid().optional()
 });
 var updateCategorySchema = z20.object({
   name: z20.string().trim().min(1).max(150).optional(),
   slug: slugSchema3.optional(),
-  description: z20.string().trim().max(2e3).nullable().optional()
+  description: z20.string().trim().max(2e3).nullable().optional(),
+  parentId: z20.string().trim().uuid().nullable().optional()
 }).refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
 var createTagSchema = z20.object({
   name: z20.string().trim().min(1).max(100),
-  slug: slugSchema3.optional()
+  slug: slugSchema3.optional(),
+  // Phase 7 — optional description, matching Category's own field.
+  description: z20.string().trim().max(2e3).optional()
 });
 var updateTagSchema = z20.object({
   name: z20.string().trim().min(1).max(100).optional(),
-  slug: slugSchema3.optional()
+  slug: slugSchema3.optional(),
+  description: z20.string().trim().max(2e3).nullable().optional()
 }).refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
+var bulkContentIdsSchema = z20.object({
+  ids: z20.array(z20.string().trim().uuid()).min(1).max(100)
+});
 
 // server/schemas/pageSchemas.ts
 var slugSchema4 = z21.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)");
@@ -8903,6 +8975,8 @@ var createPageSchema = z21.object({
   title: z21.string().trim().min(1).max(200),
   slug: slugSchema4.optional(),
   body: z21.string().trim().max(5e5).default(""),
+  // Phase 7 — short author-written summary, distinct from SEO metaDescription.
+  excerpt: z21.string().trim().max(500).optional(),
   metadata: seoMetadataSchema.optional(),
   // Phase 2 (Site Editor) — additive, optional. A page created without it
   // behaves exactly as before: body/metadata alone drive rendering
@@ -8920,6 +8994,7 @@ var updatePageSchema = z21.object({
   title: z21.string().trim().min(1).max(200).optional(),
   slug: slugSchema4.optional(),
   body: z21.string().trim().max(5e5).optional(),
+  excerpt: z21.string().trim().max(500).nullable().optional(),
   metadata: seoMetadataSchema.optional(),
   // null clears the editor composition (falls back to body-only
   // rendering); omitted leaves it unchanged.
@@ -8938,6 +9013,11 @@ var updatePageSchema = z21.object({
 }).refine((v) => Object.keys(v).filter((k) => k !== "expectedUpdatedAt").length > 0, { message: "At least one field must be provided." });
 
 // server/routes/v1/pageRoutes.ts
+import { z as z22 } from "zod";
+var trashQuerySchema = z22.object({
+  page: z22.coerce.number().int().positive().default(1),
+  limit: z22.coerce.number().int().positive().max(100).default(20)
+});
 var router22 = Router22();
 router22.use(authenticateToken);
 function requestMeta13(req) {
@@ -8950,13 +9030,57 @@ router22.get(
     const query = listContentQuerySchema.parse(req.query);
     const { rows, total } = await pageService.listPages(
       req.user.organizationId,
-      { search: query.search, status: query.status },
+      { search: query.search, status: query.status, fromDate: query.fromDate, toDate: query.toDate },
       query.page,
       query.limit,
       query.sort,
       query.order
     );
     sendSuccess(res, { pages: rows }, 200, { page: query.page, limit: query.limit, total });
+  })
+);
+router22.get(
+  "/trash",
+  requirePermission("content.read"),
+  asyncHandler(async (req, res) => {
+    const query = trashQuerySchema.parse(req.query);
+    const { rows, total } = await pageService.listTrash(req.user.organizationId, query.page, query.limit);
+    sendSuccess(res, { pages: rows }, 200, { page: query.page, limit: query.limit, total });
+  })
+);
+router22.post(
+  "/bulk/archive",
+  requirePermission("content.delete"),
+  asyncHandler(async (req, res) => {
+    const input = bulkContentIdsSchema.parse(req.body);
+    const result = await pageService.bulkAction(req.user, "archive", input.ids, requestMeta13(req));
+    sendSuccess(res, result);
+  })
+);
+router22.post(
+  "/bulk/trash",
+  requirePermission("content.delete"),
+  asyncHandler(async (req, res) => {
+    const input = bulkContentIdsSchema.parse(req.body);
+    const result = await pageService.bulkAction(req.user, "trash", input.ids, requestMeta13(req));
+    sendSuccess(res, result);
+  })
+);
+router22.post(
+  "/bulk/restore",
+  requirePermission("content.delete"),
+  asyncHandler(async (req, res) => {
+    const input = bulkContentIdsSchema.parse(req.body);
+    const result = await pageService.bulkAction(req.user, "restore", input.ids, requestMeta13(req));
+    sendSuccess(res, result);
+  })
+);
+router22.post(
+  "/:id/restore",
+  requirePermission("content.delete"),
+  asyncHandler(async (req, res) => {
+    await pageService.restorePage(req.user, req.params.id, requestMeta13(req));
+    sendSuccess(res, { message: "Page restored from trash." });
   })
 );
 router22.get(
@@ -9504,8 +9628,8 @@ var templateService = {
 };
 
 // server/schemas/templateSchemas.ts
-import { z as z22 } from "zod";
-var templateTypeSchema = z22.enum([
+import { z as z23 } from "zod";
+var templateTypeSchema = z23.enum([
   "HOMEPAGE",
   "STANDARD_PAGE",
   "BLOG_INDEX",
@@ -9522,7 +9646,7 @@ var templateTypeSchema = z22.enum([
   "CASE_STUDY",
   "LANDING_PAGE"
 ]);
-var templatePartTypeSchema = z22.enum([
+var templatePartTypeSchema = z23.enum([
   "HEADER",
   "FOOTER",
   "PRIMARY_NAVIGATION",
@@ -9534,65 +9658,65 @@ var templatePartTypeSchema = z22.enum([
   "CONTACT_SECTION",
   "SOCIAL_SECTION"
 ]);
-var templateWorkflowStatusSchema = z22.enum(["DRAFT", "PUBLISHED", "ARCHIVED"]);
-var slugSchema5 = z22.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)");
+var templateWorkflowStatusSchema = z23.enum(["DRAFT", "PUBLISHED", "ARCHIVED"]);
+var slugSchema5 = z23.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)");
 var SORT_FIELDS3 = ["name", "slug", "type", "status", "createdAt", "updatedAt"];
-var listTemplatesQuerySchema = z22.object({
-  page: z22.coerce.number().int().positive().default(1),
-  limit: z22.coerce.number().int().positive().max(100).default(20),
-  search: z22.string().trim().max(200).optional(),
+var listTemplatesQuerySchema = z23.object({
+  page: z23.coerce.number().int().positive().default(1),
+  limit: z23.coerce.number().int().positive().max(100).default(20),
+  search: z23.string().trim().max(200).optional(),
   status: templateWorkflowStatusSchema.optional(),
   type: templateTypeSchema.optional(),
-  sort: z22.enum(SORT_FIELDS3).default("updatedAt"),
-  order: z22.enum(["asc", "desc"]).default("desc")
+  sort: z23.enum(SORT_FIELDS3).default("updatedAt"),
+  order: z23.enum(["asc", "desc"]).default("desc")
 });
-var templateStructureSchema = z22.record(z22.unknown());
-var createTemplateSchema = z22.object({
+var templateStructureSchema = z23.record(z23.unknown());
+var createTemplateSchema = z23.object({
   type: templateTypeSchema,
-  name: z22.string().trim().min(1).max(150),
+  name: z23.string().trim().min(1).max(150),
   slug: slugSchema5.optional(),
-  description: z22.string().trim().max(2e3).optional(),
+  description: z23.string().trim().max(2e3).optional(),
   structure: templateStructureSchema.default({})
 });
-var updateTemplateSchema = z22.object({
-  name: z22.string().trim().min(1).max(150).optional(),
+var updateTemplateSchema = z23.object({
+  name: z23.string().trim().min(1).max(150).optional(),
   slug: slugSchema5.optional(),
-  description: z22.string().trim().max(2e3).nullable().optional(),
+  description: z23.string().trim().max(2e3).nullable().optional(),
   structure: templateStructureSchema.optional(),
   expectedUpdatedAt: expectedUpdatedAtSchema
 }).refine((v) => Object.keys(v).filter((k) => k !== "expectedUpdatedAt").length > 0, { message: "At least one field must be provided." });
-var duplicateTemplateSchema = z22.object({
-  name: z22.string().trim().min(1).max(150).optional()
+var duplicateTemplateSchema = z23.object({
+  name: z23.string().trim().min(1).max(150).optional()
 });
-var revertTemplateSchema = z22.object({
-  revisionId: z22.string().trim().uuid()
+var revertTemplateSchema = z23.object({
+  revisionId: z23.string().trim().uuid()
 });
-var listTemplatePartsQuerySchema = z22.object({
-  page: z22.coerce.number().int().positive().default(1),
-  limit: z22.coerce.number().int().positive().max(100).default(20),
-  search: z22.string().trim().max(200).optional(),
+var listTemplatePartsQuerySchema = z23.object({
+  page: z23.coerce.number().int().positive().default(1),
+  limit: z23.coerce.number().int().positive().max(100).default(20),
+  search: z23.string().trim().max(200).optional(),
   status: templateWorkflowStatusSchema.optional(),
   type: templatePartTypeSchema.optional(),
-  sort: z22.enum(SORT_FIELDS3).default("updatedAt"),
-  order: z22.enum(["asc", "desc"]).default("desc")
+  sort: z23.enum(SORT_FIELDS3).default("updatedAt"),
+  order: z23.enum(["asc", "desc"]).default("desc")
 });
-var createTemplatePartSchema = z22.object({
+var createTemplatePartSchema = z23.object({
   type: templatePartTypeSchema,
-  name: z22.string().trim().min(1).max(150),
+  name: z23.string().trim().min(1).max(150),
   slug: slugSchema5.optional(),
-  content: z22.record(z22.unknown()).default({})
+  content: z23.record(z23.unknown()).default({})
 });
-var updateTemplatePartSchema = z22.object({
-  name: z22.string().trim().min(1).max(150).optional(),
+var updateTemplatePartSchema = z23.object({
+  name: z23.string().trim().min(1).max(150).optional(),
   slug: slugSchema5.optional(),
-  content: z22.record(z22.unknown()).optional(),
+  content: z23.record(z23.unknown()).optional(),
   expectedUpdatedAt: expectedUpdatedAtSchema
 }).refine((v) => Object.keys(v).filter((k) => k !== "expectedUpdatedAt").length > 0, { message: "At least one field must be provided." });
-var duplicateTemplatePartSchema = z22.object({
-  name: z22.string().trim().min(1).max(150).optional()
+var duplicateTemplatePartSchema = z23.object({
+  name: z23.string().trim().min(1).max(150).optional()
 });
-var revertTemplatePartSchema = z22.object({
-  revisionId: z22.string().trim().uuid()
+var revertTemplatePartSchema = z23.object({
+  revisionId: z23.string().trim().uuid()
 });
 
 // server/routes/v1/templateRoutes.ts
@@ -10214,6 +10338,9 @@ function buildWhere14(organizationId, filters) {
   if (filters.status) where.status = filters.status;
   if (filters.categoryId) where.categoryId = filters.categoryId;
   if (filters.tagId) where.tags = { some: { tagId: filters.tagId } };
+  if (filters.fromDate || filters.toDate) {
+    where.createdAt = { ...filters.fromDate ? { gte: filters.fromDate } : {}, ...filters.toDate ? { lte: filters.toDate } : {} };
+  }
   if (filters.search) {
     where.OR = [{ title: { contains: filters.search, mode: "insensitive" } }, { slug: { contains: filters.search, mode: "insensitive" } }];
   }
@@ -10302,6 +10429,22 @@ var postRepository = {
   },
   async softDelete(id) {
     await prisma.post.update({ where: { id }, data: { deletedAt: /* @__PURE__ */ new Date() } });
+  },
+  /** Phase 7 — Trash view: posts soft-deleted but not yet permanently gone, newest-deleted first. */
+  async listTrash(organizationId, page, limit) {
+    const where = { organizationId, deletedAt: { not: null } };
+    const [rows, total] = await Promise.all([
+      prisma.post.findMany({ where, orderBy: { deletedAt: "desc" }, skip: (page - 1) * limit, take: limit }),
+      prisma.post.count({ where })
+    ]);
+    return { rows, total };
+  },
+  /** Phase 7 — Trash view: a single soft-deleted post, org-scoped (never a live one). */
+  async findTrashedByIdInOrg(id, organizationId) {
+    return prisma.post.findFirst({ where: { id, organizationId, deletedAt: { not: null } } });
+  },
+  async restore(id) {
+    await prisma.post.update({ where: { id }, data: { deletedAt: null } });
   }
 };
 
@@ -10311,7 +10454,12 @@ function slugify11(input) {
 }
 var categoryRepository = {
   async list(organizationId) {
-    return prisma.category.findMany({ where: { organizationId }, orderBy: { name: "asc" } });
+    const rows = await prisma.category.findMany({
+      where: { organizationId },
+      orderBy: { name: "asc" },
+      include: { _count: { select: { posts: true } }, parent: { select: { id: true, name: true, slug: true } } }
+    });
+    return rows.map(({ _count, ...c }) => ({ ...c, postCount: _count.posts }));
   },
   async findByIdInOrg(id, organizationId) {
     return prisma.category.findFirst({ where: { id, organizationId } });
@@ -10330,6 +10478,15 @@ var categoryRepository = {
     }
     return slug;
   },
+  /** Phase 7 — this category's own parentId, org-scoped (for cycle-checking a reparent), mirrors pageRepository.findParentId. */
+  async findParentId(id, organizationId) {
+    const row = await prisma.category.findFirst({ where: { id, organizationId }, select: { parentId: true } });
+    return row?.parentId ?? null;
+  },
+  /** Phase 7 — how many posts currently reference this category, for the delete-in-use guard. */
+  async countPostsUsing(id) {
+    return prisma.post.count({ where: { categoryId: id, deletedAt: null } });
+  },
   async create(data) {
     return prisma.category.create({ data });
   },
@@ -10347,7 +10504,12 @@ function slugify12(input) {
 }
 var tagRepository = {
   async list(organizationId) {
-    return prisma.tag.findMany({ where: { organizationId }, orderBy: { name: "asc" } });
+    const rows = await prisma.tag.findMany({
+      where: { organizationId },
+      orderBy: { name: "asc" },
+      include: { _count: { select: { posts: true } } }
+    });
+    return rows.map(({ _count, ...t }) => ({ ...t, postCount: _count.posts }));
   },
   async findByIdInOrg(id, organizationId) {
     return prisma.tag.findFirst({ where: { id, organizationId } });
@@ -10369,6 +10531,10 @@ var tagRepository = {
   async findByIdsInOrg(ids, organizationId) {
     if (ids.length === 0) return [];
     return prisma.tag.findMany({ where: { id: { in: ids }, organizationId } });
+  },
+  /** Phase 7 — how many posts currently carry this tag, for the delete-in-use guard. */
+  async countPostsUsing(id) {
+    return prisma.postTag.count({ where: { tagId: id, post: { deletedAt: null } } });
   },
   async create(data) {
     return prisma.tag.create({ data });
@@ -10703,54 +10869,54 @@ var navigationMenuService = {
 };
 
 // server/schemas/navigationMenuSchemas.ts
-import { z as z23 } from "zod";
-var navigationMenuTypeSchema = z23.enum(["PRIMARY", "HEADER", "FOOTER", "MOBILE", "CUSTOM"]);
-var navigationMenuWorkflowStatusSchema = z23.enum(["DRAFT", "PUBLISHED", "ARCHIVED"]);
-var slugSchema6 = z23.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)");
+import { z as z24 } from "zod";
+var navigationMenuTypeSchema = z24.enum(["PRIMARY", "HEADER", "FOOTER", "MOBILE", "CUSTOM"]);
+var navigationMenuWorkflowStatusSchema = z24.enum(["DRAFT", "PUBLISHED", "ARCHIVED"]);
+var slugSchema6 = z24.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)");
 var SORT_FIELDS4 = ["name", "slug", "type", "status", "createdAt", "updatedAt"];
-var menuLinkTypeSchema = z23.enum(["page", "post", "category", "tag", "product", "custom"]);
+var menuLinkTypeSchema = z24.enum(["page", "post", "category", "tag", "product", "custom"]);
 var MAX_MENU_DEPTH = 4;
 function menuItemSchemaAtDepth(depth) {
-  return z23.object({
-    id: z23.string().trim().min(1).max(100),
-    label: z23.string().trim().min(1).max(150),
+  return z24.object({
+    id: z24.string().trim().min(1).max(100),
+    label: z24.string().trim().min(1).max(150),
     linkType: menuLinkTypeSchema,
-    targetId: z23.string().trim().uuid().optional(),
-    url: z23.string().trim().max(2e3).optional(),
-    openInNewTab: z23.boolean().default(false),
-    children: depth >= MAX_MENU_DEPTH ? z23.array(z23.never()).default([]) : z23.lazy(() => menuItemSchemaAtDepth(depth + 1).array()).default([])
+    targetId: z24.string().trim().uuid().optional(),
+    url: z24.string().trim().max(2e3).optional(),
+    openInNewTab: z24.boolean().default(false),
+    children: depth >= MAX_MENU_DEPTH ? z24.array(z24.never()).default([]) : z24.lazy(() => menuItemSchemaAtDepth(depth + 1).array()).default([])
   }).refine((item) => item.linkType === "custom" ? !!item.url : !!item.targetId, {
     message: "A custom link needs a url; any other link type needs a targetId."
   });
 }
 var menuItemSchema = menuItemSchemaAtDepth(0);
-var menuItemsSchema = z23.array(menuItemSchema).default([]);
-var listNavigationMenusQuerySchema = z23.object({
-  page: z23.coerce.number().int().positive().default(1),
-  limit: z23.coerce.number().int().positive().max(100).default(20),
-  search: z23.string().trim().max(200).optional(),
+var menuItemsSchema = z24.array(menuItemSchema).default([]);
+var listNavigationMenusQuerySchema = z24.object({
+  page: z24.coerce.number().int().positive().default(1),
+  limit: z24.coerce.number().int().positive().max(100).default(20),
+  search: z24.string().trim().max(200).optional(),
   status: navigationMenuWorkflowStatusSchema.optional(),
   type: navigationMenuTypeSchema.optional(),
-  sort: z23.enum(SORT_FIELDS4).default("updatedAt"),
-  order: z23.enum(["asc", "desc"]).default("desc")
+  sort: z24.enum(SORT_FIELDS4).default("updatedAt"),
+  order: z24.enum(["asc", "desc"]).default("desc")
 });
-var createNavigationMenuSchema = z23.object({
+var createNavigationMenuSchema = z24.object({
   type: navigationMenuTypeSchema,
-  name: z23.string().trim().min(1).max(150),
+  name: z24.string().trim().min(1).max(150),
   slug: slugSchema6.optional(),
   items: menuItemsSchema
 });
-var updateNavigationMenuSchema = z23.object({
-  name: z23.string().trim().min(1).max(150).optional(),
+var updateNavigationMenuSchema = z24.object({
+  name: z24.string().trim().min(1).max(150).optional(),
   slug: slugSchema6.optional(),
   items: menuItemsSchema.optional(),
   expectedUpdatedAt: expectedUpdatedAtSchema
 }).refine((v) => Object.keys(v).filter((k) => k !== "expectedUpdatedAt").length > 0, { message: "At least one field must be provided." });
-var duplicateNavigationMenuSchema = z23.object({
-  name: z23.string().trim().min(1).max(150).optional()
+var duplicateNavigationMenuSchema = z24.object({
+  name: z24.string().trim().min(1).max(150).optional()
 });
-var revertNavigationMenuSchema = z23.object({
-  revisionId: z23.string().trim().uuid()
+var revertNavigationMenuSchema = z24.object({
+  revisionId: z24.string().trim().uuid()
 });
 
 // server/routes/v1/navigationMenuRoutes.ts
@@ -10934,6 +11100,7 @@ var postService = {
             version: 1,
             status: "DRAFT",
             title: input.title,
+            excerpt: input.excerpt,
             body,
             metadata: input.metadata ?? {},
             createdById: caller.id
@@ -10965,7 +11132,7 @@ var postService = {
     const organizationId = caller.organizationId;
     const existing = await loadPostOrThrow(id, organizationId);
     const sanitizedBody = input.body !== void 0 ? sanitizeContentHtml(input.body) : void 0;
-    const hasContentEdit = input.title !== void 0 || input.body !== void 0 || input.metadata !== void 0 || input.slug !== void 0;
+    const hasContentEdit = input.title !== void 0 || input.body !== void 0 || input.excerpt !== void 0 || input.metadata !== void 0 || input.slug !== void 0;
     if (hasContentEdit && input.status === void 0 && CONTENT_EDIT_BLOCKED_STATUSES2.has(existing.status)) {
       throw new ConflictError(`Post content cannot be edited while status is ${existing.status}. Restore it to draft first.`);
     }
@@ -11000,6 +11167,7 @@ var postService = {
               version: currentRevision.version + 1,
               status: liveEditOfPublished ? "PUBLISHED" : "DRAFT",
               title: input.title ?? currentRevision.title,
+              excerpt: input.excerpt !== void 0 ? input.excerpt : currentRevision.excerpt,
               body: sanitizedBody ?? currentRevision.body,
               metadata: input.metadata ?? currentRevision.metadata,
               createdById: caller.id,
@@ -11010,6 +11178,7 @@ var postService = {
         } else if (hasContentEdit && currentRevision) {
           const revisionPatch = {};
           if (input.title !== void 0) revisionPatch.title = input.title;
+          if (input.excerpt !== void 0) revisionPatch.excerpt = input.excerpt;
           if (sanitizedBody !== void 0) revisionPatch.body = sanitizedBody;
           if (input.metadata !== void 0) revisionPatch.metadata = input.metadata;
           if (Object.keys(revisionPatch).length > 0) {
@@ -11190,6 +11359,7 @@ var postService = {
           version: nextVersion,
           status: wasPublished ? "PUBLISHED" : "DRAFT",
           title: target.title,
+          excerpt: target.excerpt,
           body: target.body,
           metadata: target.metadata,
           createdById: caller.id,
@@ -11230,46 +11400,102 @@ var postService = {
       ipAddress: meta.ip,
       userAgent: meta.userAgent
     });
+  },
+  /** Phase 7 — Trash view (Content Dashboard): soft-deleted posts, paginated. */
+  async listTrash(organizationId, page, limit) {
+    return postRepository.listTrash(organizationId, page, limit);
+  },
+  async restorePost(caller, id, meta = {}) {
+    const organizationId = caller.organizationId;
+    const existing = await postRepository.findTrashedByIdInOrg(id, organizationId);
+    if (!existing) throw new NotFoundError("Post not found in trash.");
+    await postRepository.restore(id);
+    await auditLogRepository.record({
+      organizationId,
+      actorUserId: caller.id,
+      actorType: "USER",
+      action: "POST_RESTORED",
+      resourceType: "post",
+      resourceId: id,
+      beforeData: { status: existing.status, title: existing.title },
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent
+    });
+  },
+  /**
+   * Phase 7 — bulk workflow actions for the Content Dashboard's list view.
+   * Each id is processed through the exact same single-item method used
+   * by its dedicated endpoint (no duplicated business logic), isolated in
+   * its own try/catch so one bad id (wrong status for the transition,
+   * already in the target state, a race with another editor) never aborts
+   * the rest of the batch — mirrors contentSchedulingService's per-item
+   * isolation for the same reason.
+   */
+  async bulkAction(caller, action, ids, meta = {}) {
+    const succeeded = [];
+    const failed = [];
+    for (const id of ids) {
+      try {
+        if (action === "archive") await this.archivePost(caller, id, meta);
+        else if (action === "trash") await this.deletePost(caller, id, meta);
+        else await this.restorePost(caller, id, meta);
+        succeeded.push(id);
+      } catch (err) {
+        failed.push({ id, error: err instanceof Error ? err.message : "Action failed." });
+      }
+    }
+    return { succeeded, failed };
   }
 };
 
 // server/schemas/postSchemas.ts
-import { z as z24 } from "zod";
-var slugSchema7 = z24.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)");
-var createPostSchema = z24.object({
-  title: z24.string().trim().min(1).max(200),
+import { z as z25 } from "zod";
+var slugSchema7 = z25.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)");
+var createPostSchema = z25.object({
+  title: z25.string().trim().min(1).max(200),
   slug: slugSchema7.optional(),
-  body: z24.string().trim().max(5e5).default(""),
+  body: z25.string().trim().max(5e5).default(""),
+  // Phase 7 — short author-written summary, distinct from SEO metaDescription.
+  excerpt: z25.string().trim().max(500).optional(),
   metadata: seoMetadataSchema.optional(),
-  categoryId: z24.string().trim().uuid().optional(),
-  authorId: z24.string().trim().uuid().optional(),
-  tagIds: z24.array(z24.string().trim().uuid()).max(50).optional(),
-  featuredMediaId: z24.string().trim().uuid().optional()
+  categoryId: z25.string().trim().uuid().optional(),
+  authorId: z25.string().trim().uuid().optional(),
+  tagIds: z25.array(z25.string().trim().uuid()).max(50).optional(),
+  featuredMediaId: z25.string().trim().uuid().optional()
 });
-var updatePostSchema = z24.object({
-  title: z24.string().trim().min(1).max(200).optional(),
+var updatePostSchema = z25.object({
+  title: z25.string().trim().min(1).max(200).optional(),
   slug: slugSchema7.optional(),
-  body: z24.string().trim().max(5e5).optional(),
+  body: z25.string().trim().max(5e5).optional(),
+  excerpt: z25.string().trim().max(500).nullable().optional(),
   metadata: seoMetadataSchema.optional(),
   status: patchableContentStatusSchema.optional(),
-  categoryId: z24.string().trim().uuid().nullable().optional(),
-  authorId: z24.string().trim().uuid().nullable().optional(),
-  tagIds: z24.array(z24.string().trim().uuid()).max(50).optional(),
-  featuredMediaId: z24.string().trim().uuid().nullable().optional(),
+  categoryId: z25.string().trim().uuid().nullable().optional(),
+  authorId: z25.string().trim().uuid().nullable().optional(),
+  tagIds: z25.array(z25.string().trim().uuid()).max(50).optional(),
+  featuredMediaId: z25.string().trim().uuid().nullable().optional(),
   expectedUpdatedAt: expectedUpdatedAtSchema
 }).refine((v) => Object.keys(v).filter((k) => k !== "expectedUpdatedAt").length > 0, { message: "At least one field must be provided." });
-var listPostsQuerySchema = z24.object({
-  page: z24.coerce.number().int().positive().default(1),
-  limit: z24.coerce.number().int().positive().max(100).default(20),
-  search: z24.string().trim().max(200).optional(),
-  status: z24.enum(["DRAFT", "IN_REVIEW", "SCHEDULED", "PUBLISHED", "ARCHIVED"]).optional(),
-  categoryId: z24.string().trim().uuid().optional(),
-  tagId: z24.string().trim().uuid().optional(),
-  sort: z24.enum(["title", "slug", "status", "createdAt", "updatedAt", "publishedAt"]).default("updatedAt"),
-  order: z24.enum(["asc", "desc"]).default("desc")
+var listPostsQuerySchema = z25.object({
+  page: z25.coerce.number().int().positive().default(1),
+  limit: z25.coerce.number().int().positive().max(100).default(20),
+  search: z25.string().trim().max(200).optional(),
+  status: z25.enum(["DRAFT", "IN_REVIEW", "SCHEDULED", "PUBLISHED", "ARCHIVED"]).optional(),
+  categoryId: z25.string().trim().uuid().optional(),
+  tagId: z25.string().trim().uuid().optional(),
+  // Phase 7 — Content Dashboard date filtering, inclusive range over createdAt.
+  fromDate: z25.coerce.date().optional(),
+  toDate: z25.coerce.date().optional(),
+  sort: z25.enum(["title", "slug", "status", "createdAt", "updatedAt", "publishedAt"]).default("updatedAt"),
+  order: z25.enum(["asc", "desc"]).default("desc")
 });
 
 // server/routes/v1/postRoutes.ts
+import { z as z26 } from "zod";
+var trashQuerySchema2 = z26.object({
+  page: z26.coerce.number().int().positive().default(1),
+  limit: z26.coerce.number().int().positive().max(100).default(20)
+});
 var router26 = Router26();
 router26.use(authenticateToken);
 function requestMeta17(req) {
@@ -11282,13 +11508,57 @@ router26.get(
     const query = listPostsQuerySchema.parse(req.query);
     const { rows, total } = await postService.listPosts(
       req.user.organizationId,
-      { search: query.search, status: query.status, categoryId: query.categoryId, tagId: query.tagId },
+      { search: query.search, status: query.status, categoryId: query.categoryId, tagId: query.tagId, fromDate: query.fromDate, toDate: query.toDate },
       query.page,
       query.limit,
       query.sort,
       query.order
     );
     sendSuccess(res, { posts: rows }, 200, { page: query.page, limit: query.limit, total });
+  })
+);
+router26.get(
+  "/trash",
+  requirePermission("content.read"),
+  asyncHandler(async (req, res) => {
+    const query = trashQuerySchema2.parse(req.query);
+    const { rows, total } = await postService.listTrash(req.user.organizationId, query.page, query.limit);
+    sendSuccess(res, { posts: rows }, 200, { page: query.page, limit: query.limit, total });
+  })
+);
+router26.post(
+  "/bulk/archive",
+  requirePermission("content.delete"),
+  asyncHandler(async (req, res) => {
+    const input = bulkContentIdsSchema.parse(req.body);
+    const result = await postService.bulkAction(req.user, "archive", input.ids, requestMeta17(req));
+    sendSuccess(res, result);
+  })
+);
+router26.post(
+  "/bulk/trash",
+  requirePermission("content.delete"),
+  asyncHandler(async (req, res) => {
+    const input = bulkContentIdsSchema.parse(req.body);
+    const result = await postService.bulkAction(req.user, "trash", input.ids, requestMeta17(req));
+    sendSuccess(res, result);
+  })
+);
+router26.post(
+  "/bulk/restore",
+  requirePermission("content.delete"),
+  asyncHandler(async (req, res) => {
+    const input = bulkContentIdsSchema.parse(req.body);
+    const result = await postService.bulkAction(req.user, "restore", input.ids, requestMeta17(req));
+    sendSuccess(res, result);
+  })
+);
+router26.post(
+  "/:id/restore",
+  requirePermission("content.delete"),
+  asyncHandler(async (req, res) => {
+    await postService.restorePost(req.user, req.params.id, requestMeta17(req));
+    sendSuccess(res, { message: "Post restored from trash." });
   })
 );
 router26.get(
@@ -11389,6 +11659,21 @@ async function loadCategoryOrThrow(id, organizationId) {
   if (!category) throw new NotFoundError("Category not found.");
   return category;
 }
+async function assertParentUsable2(parentId, organizationId, selfId) {
+  if (!parentId) return;
+  if (parentId === selfId) throw new ValidationError("A category cannot be its own parent.");
+  const parent = await categoryRepository.findByIdInOrg(parentId, organizationId);
+  if (!parent) throw new ValidationError("parentId must refer to another category in this organization.");
+  if (selfId) {
+    let cursor = parent.parentId;
+    let guard = 0;
+    while (cursor && guard < 100) {
+      if (cursor === selfId) throw new ValidationError("Assigning this parent would create a circular category hierarchy.");
+      cursor = await categoryRepository.findParentId(cursor, organizationId);
+      guard += 1;
+    }
+  }
+}
 var categoryService = {
   async listCategories(organizationId) {
     return categoryRepository.list(organizationId);
@@ -11402,10 +11687,11 @@ var categoryService = {
       const dup = await categoryRepository.findBySlugInOrg(organizationId, input.slug);
       if (dup) throw new ConflictError(`A category with slug "${input.slug}" already exists.`, { existingCategoryId: dup.id });
     }
+    await assertParentUsable2(input.parentId, organizationId);
     const slug = input.slug ?? await categoryRepository.findUniqueSlugInOrg(organizationId, input.name);
     let category;
     try {
-      category = await categoryRepository.create({ organizationId, name: input.name, slug, description: input.description });
+      category = await categoryRepository.create({ organizationId, name: input.name, slug, description: input.description, parentId: input.parentId });
     } catch (err) {
       throw isUniqueConstraintError9(err) ? new ConflictError("A category with this slug already exists.") : err;
     }
@@ -11429,10 +11715,12 @@ var categoryService = {
       const dup = await categoryRepository.findBySlugInOrg(organizationId, input.slug);
       if (dup && dup.id !== id) throw new ConflictError(`A category with slug "${input.slug}" already exists.`, { existingCategoryId: dup.id });
     }
+    if (input.parentId !== void 0) await assertParentUsable2(input.parentId, organizationId, id);
     const patch = {};
     if (input.name !== void 0) patch.name = input.name;
     if (input.slug !== void 0) patch.slug = input.slug;
     if (input.description !== void 0) patch.description = input.description;
+    if (input.parentId !== void 0) patch.parentId = input.parentId;
     let updated;
     try {
       updated = await categoryRepository.update(id, patch);
@@ -11456,6 +11744,10 @@ var categoryService = {
   async deleteCategory(caller, id, meta = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadCategoryOrThrow(id, organizationId);
+    const postCount = await categoryRepository.countPostsUsing(id);
+    if (postCount > 0) {
+      throw new ValidationError(`This category is still assigned to ${postCount} post(s). Reassign or remove them before deleting it.`);
+    }
     await categoryRepository.delete(id);
     await auditLogRepository.record({
       organizationId,
@@ -11525,23 +11817,23 @@ var categoryRoutes_default = router27;
 import { Router as Router28 } from "express";
 
 // server/schemas/redirectSchemas.ts
-import { z as z25 } from "zod";
-var sitePathSchema = z25.string().trim().min(1).max(2048).refine((v) => v.startsWith("/") && !v.startsWith("//"), { message: "Must be a site-relative path starting with a single /." }).refine((v) => !/[a-z][a-z0-9+.-]*:/i.test(v), { message: "Must not contain a URL scheme." });
-var listRedirectsQuerySchema = z25.object({
-  page: z25.coerce.number().int().positive().default(1),
-  limit: z25.coerce.number().int().positive().max(100).default(20),
-  search: z25.string().trim().max(200).optional(),
-  sort: z25.enum(["createdAt", "updatedAt", "fromPath", "toPath"]).default("createdAt"),
-  order: z25.enum(["asc", "desc"]).default("desc")
+import { z as z27 } from "zod";
+var sitePathSchema = z27.string().trim().min(1).max(2048).refine((v) => v.startsWith("/") && !v.startsWith("//"), { message: "Must be a site-relative path starting with a single /." }).refine((v) => !/[a-z][a-z0-9+.-]*:/i.test(v), { message: "Must not contain a URL scheme." });
+var listRedirectsQuerySchema = z27.object({
+  page: z27.coerce.number().int().positive().default(1),
+  limit: z27.coerce.number().int().positive().max(100).default(20),
+  search: z27.string().trim().max(200).optional(),
+  sort: z27.enum(["createdAt", "updatedAt", "fromPath", "toPath"]).default("createdAt"),
+  order: z27.enum(["asc", "desc"]).default("desc")
 });
-var createRedirectSchema = z25.object({
+var createRedirectSchema = z27.object({
   fromPath: sitePathSchema,
   toPath: sitePathSchema,
-  statusCode: z25.union([z25.literal(301), z25.literal(302), z25.literal(307), z25.literal(308)]).default(301)
+  statusCode: z27.union([z27.literal(301), z27.literal(302), z27.literal(307), z27.literal(308)]).default(301)
 }).strict().refine((v) => v.fromPath !== v.toPath, { message: "fromPath and toPath must differ.", path: ["toPath"] });
-var updateRedirectSchema = z25.object({
+var updateRedirectSchema = z27.object({
   toPath: sitePathSchema.optional(),
-  statusCode: z25.union([z25.literal(301), z25.literal(302), z25.literal(307), z25.literal(308)]).optional()
+  statusCode: z27.union([z27.literal(301), z27.literal(302), z27.literal(307), z27.literal(308)]).optional()
 }).strict().refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
 
 // server/routes/v1/redirectRoutes.ts
@@ -11722,7 +12014,7 @@ var tagService = {
     const slug = input.slug ?? await tagRepository.findUniqueSlugInOrg(organizationId, input.name);
     let tag;
     try {
-      tag = await tagRepository.create({ organizationId, name: input.name, slug });
+      tag = await tagRepository.create({ organizationId, name: input.name, slug, description: input.description });
     } catch (err) {
       throw isUniqueConstraintError10(err) ? new ConflictError("A tag with this slug already exists.") : err;
     }
@@ -11749,6 +12041,7 @@ var tagService = {
     const patch = {};
     if (input.name !== void 0) patch.name = input.name;
     if (input.slug !== void 0) patch.slug = input.slug;
+    if (input.description !== void 0) patch.description = input.description;
     let updated;
     try {
       updated = await tagRepository.update(id, patch);
@@ -11772,6 +12065,10 @@ var tagService = {
   async deleteTag(caller, id, meta = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadTagOrThrow(id, organizationId);
+    const postCount = await tagRepository.countPostsUsing(id);
+    if (postCount > 0) {
+      throw new ValidationError(`This tag is still assigned to ${postCount} post(s). Remove it from them before deleting it.`);
+    }
     await tagRepository.delete(id);
     await auditLogRepository.record({
       organizationId,
@@ -11844,7 +12141,12 @@ import { Router as Router31 } from "express";
 var withUser = { include: { user: { select: { id: true, email: true, firstName: true, lastName: true, displayName: true, status: true } } } };
 var authorRepository = {
   async list() {
-    return prisma.author.findMany({ ...withUser, orderBy: { createdAt: "desc" } });
+    const rows = await prisma.author.findMany({
+      ...withUser,
+      include: { ...withUser.include, _count: { select: { posts: true } } },
+      orderBy: { createdAt: "desc" }
+    });
+    return rows.map(({ _count, ...a }) => ({ ...a, postCount: _count.posts }));
   },
   async findById(id) {
     return prisma.author.findUnique({ where: { id }, ...withUser });
@@ -11913,15 +12215,15 @@ var authorService = {
 };
 
 // server/schemas/authorSchemas.ts
-import { z as z26 } from "zod";
-var createAuthorSchema = z26.object({
-  userId: z26.string().trim().uuid(),
-  bio: z26.string().trim().max(2e3).optional(),
-  avatarUrl: z26.string().trim().url().max(500).optional()
+import { z as z28 } from "zod";
+var createAuthorSchema = z28.object({
+  userId: z28.string().trim().uuid(),
+  bio: z28.string().trim().max(2e3).optional(),
+  avatarUrl: z28.string().trim().url().max(500).optional()
 });
-var updateAuthorSchema = z26.object({
-  bio: z26.string().trim().max(2e3).nullable().optional(),
-  avatarUrl: z26.string().trim().url().max(500).nullable().optional()
+var updateAuthorSchema = z28.object({
+  bio: z28.string().trim().max(2e3).nullable().optional(),
+  avatarUrl: z28.string().trim().url().max(500).nullable().optional()
 }).refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
 
 // server/routes/v1/authorRoutes.ts
@@ -11971,36 +12273,36 @@ import { Router as Router32 } from "express";
 import express2 from "express";
 
 // server/schemas/mediaSchemas.ts
-import { z as z27 } from "zod";
+import { z as z29 } from "zod";
 var SORT_FIELDS5 = ["originalFilename", "displayName", "mimeType", "sizeBytes", "status", "createdAt", "updatedAt"];
-var listMediaQuerySchema = z27.object({
-  page: z27.coerce.number().int().positive().default(1),
-  limit: z27.coerce.number().int().positive().max(100).default(20),
-  search: z27.string().trim().max(200).optional(),
-  status: z27.enum(["PENDING", "ACTIVE", "FAILED", "ARCHIVED"]).optional(),
-  mimeType: z27.enum(ALLOWED_MIME_TYPES).optional(),
-  uploadedById: z27.string().trim().uuid().optional(),
-  dateFrom: z27.coerce.date().optional(),
-  dateTo: z27.coerce.date().optional(),
-  sort: z27.enum(SORT_FIELDS5).default("createdAt"),
-  order: z27.enum(["asc", "desc"]).default("desc")
+var listMediaQuerySchema = z29.object({
+  page: z29.coerce.number().int().positive().default(1),
+  limit: z29.coerce.number().int().positive().max(100).default(20),
+  search: z29.string().trim().max(200).optional(),
+  status: z29.enum(["PENDING", "ACTIVE", "FAILED", "ARCHIVED"]).optional(),
+  mimeType: z29.enum(ALLOWED_MIME_TYPES).optional(),
+  uploadedById: z29.string().trim().uuid().optional(),
+  dateFrom: z29.coerce.date().optional(),
+  dateTo: z29.coerce.date().optional(),
+  sort: z29.enum(SORT_FIELDS5).default("createdAt"),
+  order: z29.enum(["asc", "desc"]).default("desc")
 });
-var createUploadSessionSchema = z27.object({
-  filename: z27.string().trim().min(1).max(255),
-  mimeType: z27.enum(ALLOWED_MIME_TYPES),
-  sizeBytes: z27.number().int().positive(),
-  displayName: z27.string().trim().max(255).optional(),
-  altText: z27.string().trim().max(500).optional(),
-  caption: z27.string().trim().max(1e3).optional()
+var createUploadSessionSchema = z29.object({
+  filename: z29.string().trim().min(1).max(255),
+  mimeType: z29.enum(ALLOWED_MIME_TYPES),
+  sizeBytes: z29.number().int().positive(),
+  displayName: z29.string().trim().max(255).optional(),
+  altText: z29.string().trim().max(500).optional(),
+  caption: z29.string().trim().max(1e3).optional()
 });
-var completeUploadSchema = z27.object({
-  token: z27.string().trim().min(1)
+var completeUploadSchema = z29.object({
+  token: z29.string().trim().min(1)
 });
-var updateMediaSchema = z27.object({
-  displayName: z27.string().trim().max(255).nullable().optional(),
-  altText: z27.string().trim().max(500).nullable().optional(),
-  caption: z27.string().trim().max(1e3).nullable().optional(),
-  visibility: z27.enum(["PRIVATE", "PUBLIC"]).optional()
+var updateMediaSchema = z29.object({
+  displayName: z29.string().trim().max(255).nullable().optional(),
+  altText: z29.string().trim().max(500).nullable().optional(),
+  caption: z29.string().trim().max(1e3).nullable().optional(),
+  visibility: z29.enum(["PRIVATE", "PUBLIC"]).optional()
 }).refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
 
 // server/routes/v1/mediaRoutes.ts
@@ -12437,57 +12739,57 @@ var contractService = {
 };
 
 // server/schemas/contractSchemas.ts
-import { z as z29 } from "zod";
+import { z as z31 } from "zod";
 
 // server/schemas/commercialSchemas.ts
-import { z as z28 } from "zod";
-var expectedUpdatedAtSchema2 = z28.coerce.date().optional();
-var currencyCodeSchema = z28.string().trim().toUpperCase().regex(/^[A-Z]{3}$/, "currency must be a 3-letter ISO 4217 code").default(DEFAULT_CURRENCY);
-var moneyAmountSchema = z28.union([z28.string(), z28.number()]).transform((v) => String(v).trim()).refine((v) => /^\d+(\.\d{1,3})?$/.test(v), { message: "amount must be a non-negative number with at most 3 decimal places" });
-var signedMoneyAmountSchema = z28.union([z28.string(), z28.number()]).transform((v) => String(v).trim()).refine((v) => /^-?\d+(\.\d{1,3})?$/.test(v), { message: "amount must be a number with at most 3 decimal places" });
+import { z as z30 } from "zod";
+var expectedUpdatedAtSchema2 = z30.coerce.date().optional();
+var currencyCodeSchema = z30.string().trim().toUpperCase().regex(/^[A-Z]{3}$/, "currency must be a 3-letter ISO 4217 code").default(DEFAULT_CURRENCY);
+var moneyAmountSchema = z30.union([z30.string(), z30.number()]).transform((v) => String(v).trim()).refine((v) => /^\d+(\.\d{1,3})?$/.test(v), { message: "amount must be a non-negative number with at most 3 decimal places" });
+var signedMoneyAmountSchema = z30.union([z30.string(), z30.number()]).transform((v) => String(v).trim()).refine((v) => /^-?\d+(\.\d{1,3})?$/.test(v), { message: "amount must be a number with at most 3 decimal places" });
 var SORT_ORDER = ["asc", "desc"];
 function paginationQuerySchema(sortFields, defaultSort, defaultOrder = "desc") {
   return {
-    page: z28.coerce.number().int().positive().default(1),
-    limit: z28.coerce.number().int().positive().max(100).default(20),
-    search: z28.string().trim().max(200).optional(),
-    sort: z28.enum(sortFields).default(defaultSort),
-    order: z28.enum(SORT_ORDER).default(defaultOrder)
+    page: z30.coerce.number().int().positive().default(1),
+    limit: z30.coerce.number().int().positive().max(100).default(20),
+    search: z30.string().trim().max(200).optional(),
+    sort: z30.enum(sortFields).default(defaultSort),
+    order: z30.enum(SORT_ORDER).default(defaultOrder)
   };
 }
 
 // server/schemas/contractSchemas.ts
-var contractStatusSchema = z29.enum(["DRAFT", "ACTIVE", "SUSPENDED", "EXPIRED", "TERMINATED"]);
+var contractStatusSchema = z31.enum(["DRAFT", "ACTIVE", "SUSPENDED", "EXPIRED", "TERMINATED"]);
 var SORT_FIELDS6 = ["contractNumber", "title", "status", "startDate", "endDate", "createdAt", "updatedAt"];
-var listContractsQuerySchema = z29.object({
+var listContractsQuerySchema = z31.object({
   ...paginationQuerySchema(SORT_FIELDS6, "createdAt"),
   status: contractStatusSchema.optional(),
-  clientId: z29.string().trim().uuid().optional()
+  clientId: z31.string().trim().uuid().optional()
 });
-var createContractSchema = z29.object({
-  clientId: z29.string().trim().uuid(),
-  title: z29.string().trim().min(1).max(200),
-  description: z29.string().trim().max(5e3).optional(),
-  startDate: z29.coerce.date(),
-  endDate: z29.coerce.date().optional(),
+var createContractSchema = z31.object({
+  clientId: z31.string().trim().uuid(),
+  title: z31.string().trim().min(1).max(200),
+  description: z31.string().trim().max(5e3).optional(),
+  startDate: z31.coerce.date(),
+  endDate: z31.coerce.date().optional(),
   contractValue: moneyAmountSchema,
   currency: currencyCodeSchema.optional(),
-  notes: z29.string().trim().max(5e3).optional()
+  notes: z31.string().trim().max(5e3).optional()
 });
-var updateContractSchema = z29.object({
-  title: z29.string().trim().min(1).max(200).optional(),
-  description: z29.string().trim().max(5e3).nullable().optional(),
-  endDate: z29.coerce.date().nullable().optional(),
-  notes: z29.string().trim().max(5e3).nullable().optional(),
+var updateContractSchema = z31.object({
+  title: z31.string().trim().min(1).max(200).optional(),
+  description: z31.string().trim().max(5e3).nullable().optional(),
+  endDate: z31.coerce.date().nullable().optional(),
+  notes: z31.string().trim().max(5e3).nullable().optional(),
   expectedUpdatedAt: expectedUpdatedAtSchema2
 }).refine((v) => Object.keys(v).some((k) => k !== "expectedUpdatedAt"), { message: "At least one field must be provided." });
-var terminateContractSchema = z29.object({
-  reason: z29.string().trim().min(1).max(1e3)
+var terminateContractSchema = z31.object({
+  reason: z31.string().trim().min(1).max(1e3)
 });
-var createContractVariationSchema = z29.object({
+var createContractVariationSchema = z31.object({
   amount: signedMoneyAmountSchema,
-  effectiveDate: z29.coerce.date(),
-  reason: z29.string().trim().min(1).max(1e3)
+  effectiveDate: z31.coerce.date(),
+  reason: z31.string().trim().min(1).max(1e3)
 });
 
 // server/routes/v1/contractRoutes.ts
@@ -12793,41 +13095,41 @@ var subscriptionService = {
 };
 
 // server/schemas/subscriptionSchemas.ts
-import { z as z30 } from "zod";
-var subscriptionStatusSchema = z30.enum(["DRAFT", "TRIALING", "ACTIVE", "PAST_DUE", "PAUSED", "CANCELLED", "EXPIRED"]);
-var billingCycleSchema = z30.enum(["ONE_TIME", "MONTHLY", "QUARTERLY", "ANNUAL"]);
+import { z as z32 } from "zod";
+var subscriptionStatusSchema = z32.enum(["DRAFT", "TRIALING", "ACTIVE", "PAST_DUE", "PAUSED", "CANCELLED", "EXPIRED"]);
+var billingCycleSchema = z32.enum(["ONE_TIME", "MONTHLY", "QUARTERLY", "ANNUAL"]);
 var SORT_FIELDS7 = ["subscriptionNumber", "status", "startDate", "renewalDate", "createdAt", "updatedAt"];
-var listSubscriptionsQuerySchema = z30.object({
+var listSubscriptionsQuerySchema = z32.object({
   ...paginationQuerySchema(SORT_FIELDS7, "createdAt"),
   status: subscriptionStatusSchema.optional(),
-  clientId: z30.string().trim().uuid().optional(),
-  productId: z30.string().trim().uuid().optional()
+  clientId: z32.string().trim().uuid().optional(),
+  productId: z32.string().trim().uuid().optional()
 });
-var subscriptionItemInputSchema = z30.object({
-  productModuleId: z30.string().trim().uuid().optional(),
-  description: z30.string().trim().min(1).max(500),
-  quantity: z30.number().int().positive().default(1),
+var subscriptionItemInputSchema = z32.object({
+  productModuleId: z32.string().trim().uuid().optional(),
+  description: z32.string().trim().min(1).max(500),
+  quantity: z32.number().int().positive().default(1),
   unitPrice: moneyAmountSchema
 });
-var createSubscriptionSchema = z30.object({
-  clientId: z30.string().trim().uuid(),
-  productId: z30.string().trim().uuid(),
-  startDate: z30.coerce.date(),
+var createSubscriptionSchema = z32.object({
+  clientId: z32.string().trim().uuid(),
+  productId: z32.string().trim().uuid(),
+  startDate: z32.coerce.date(),
   billingCycle: billingCycleSchema,
-  quantity: z30.number().int().positive().default(1),
+  quantity: z32.number().int().positive().default(1),
   price: moneyAmountSchema,
   currency: currencyCodeSchema.optional(),
-  items: z30.array(subscriptionItemInputSchema).default([])
+  items: z32.array(subscriptionItemInputSchema).default([])
 });
-var updateSubscriptionSchema = z30.object({
-  renewalDate: z30.coerce.date().nullable().optional(),
-  endDate: z30.coerce.date().nullable().optional(),
-  quantity: z30.number().int().positive().optional(),
+var updateSubscriptionSchema = z32.object({
+  renewalDate: z32.coerce.date().nullable().optional(),
+  endDate: z32.coerce.date().nullable().optional(),
+  quantity: z32.number().int().positive().optional(),
   price: moneyAmountSchema.optional(),
   expectedUpdatedAt: expectedUpdatedAtSchema2
 }).refine((v) => Object.keys(v).some((k) => k !== "expectedUpdatedAt"), { message: "At least one field must be provided." });
-var cancelSubscriptionSchema = z30.object({
-  reason: z30.string().trim().min(1).max(1e3)
+var cancelSubscriptionSchema = z32.object({
+  reason: z32.string().trim().min(1).max(1e3)
 });
 
 // server/routes/v1/subscriptionRoutes.ts
@@ -13337,59 +13639,59 @@ var paymentService = {
 };
 
 // server/schemas/invoiceSchemas.ts
-import { z as z31 } from "zod";
-var invoiceStatusSchema = z31.enum(["DRAFT", "ISSUED", "PARTIALLY_PAID", "PAID", "OVERDUE", "VOID", "CANCELLED"]);
-var paymentMethodSchema = z31.enum(["BANK_TRANSFER", "CARD", "CASH", "CHEQUE", "ONLINE", "OTHER"]);
-var paymentStatusSchema = z31.enum(["PENDING", "COMPLETED", "FAILED", "REVERSED"]);
+import { z as z33 } from "zod";
+var invoiceStatusSchema = z33.enum(["DRAFT", "ISSUED", "PARTIALLY_PAID", "PAID", "OVERDUE", "VOID", "CANCELLED"]);
+var paymentMethodSchema = z33.enum(["BANK_TRANSFER", "CARD", "CASH", "CHEQUE", "ONLINE", "OTHER"]);
+var paymentStatusSchema = z33.enum(["PENDING", "COMPLETED", "FAILED", "REVERSED"]);
 var SORT_FIELDS8 = ["invoiceNumber", "status", "issueDate", "dueDate", "total", "amountDue", "createdAt", "updatedAt"];
-var listInvoicesQuerySchema = z31.object({
+var listInvoicesQuerySchema = z33.object({
   ...paginationQuerySchema(SORT_FIELDS8, "issueDate"),
   status: invoiceStatusSchema.optional(),
-  clientId: z31.string().trim().uuid().optional(),
-  contractId: z31.string().trim().uuid().optional(),
-  subscriptionId: z31.string().trim().uuid().optional(),
-  dateFrom: z31.coerce.date().optional(),
-  dateTo: z31.coerce.date().optional()
+  clientId: z33.string().trim().uuid().optional(),
+  contractId: z33.string().trim().uuid().optional(),
+  subscriptionId: z33.string().trim().uuid().optional(),
+  dateFrom: z33.coerce.date().optional(),
+  dateTo: z33.coerce.date().optional()
 });
-var invoiceItemInputSchema = z31.object({
-  productModuleId: z31.string().trim().uuid().optional(),
-  description: z31.string().trim().min(1).max(500),
-  quantity: z31.number().int().positive().default(1),
+var invoiceItemInputSchema = z33.object({
+  productModuleId: z33.string().trim().uuid().optional(),
+  description: z33.string().trim().min(1).max(500),
+  quantity: z33.number().int().positive().default(1),
   unitPrice: moneyAmountSchema,
   discount: moneyAmountSchema.default("0")
 });
-var createInvoiceSchema = z31.object({
-  clientId: z31.string().trim().uuid(),
-  contractId: z31.string().trim().uuid().optional(),
-  subscriptionId: z31.string().trim().uuid().optional(),
-  issueDate: z31.coerce.date(),
-  dueDate: z31.coerce.date(),
+var createInvoiceSchema = z33.object({
+  clientId: z33.string().trim().uuid(),
+  contractId: z33.string().trim().uuid().optional(),
+  subscriptionId: z33.string().trim().uuid().optional(),
+  issueDate: z33.coerce.date(),
+  dueDate: z33.coerce.date(),
   currency: currencyCodeSchema.optional(),
   discount: moneyAmountSchema.default("0"),
   tax: moneyAmountSchema.default("0"),
-  notes: z31.string().trim().max(5e3).optional(),
-  items: z31.array(invoiceItemInputSchema).min(1, "An invoice needs at least one line item.")
+  notes: z33.string().trim().max(5e3).optional(),
+  items: z33.array(invoiceItemInputSchema).min(1, "An invoice needs at least one line item.")
 });
-var updateInvoiceSchema = z31.object({
-  issueDate: z31.coerce.date().optional(),
-  dueDate: z31.coerce.date().optional(),
+var updateInvoiceSchema = z33.object({
+  issueDate: z33.coerce.date().optional(),
+  dueDate: z33.coerce.date().optional(),
   discount: moneyAmountSchema.optional(),
   tax: moneyAmountSchema.optional(),
-  notes: z31.string().trim().max(5e3).nullable().optional(),
-  items: z31.array(invoiceItemInputSchema).min(1).optional(),
+  notes: z33.string().trim().max(5e3).nullable().optional(),
+  items: z33.array(invoiceItemInputSchema).min(1).optional(),
   expectedUpdatedAt: expectedUpdatedAtSchema2
 }).refine((v) => Object.keys(v).some((k) => k !== "expectedUpdatedAt"), { message: "At least one field must be provided." });
-var issueInvoiceSchema = z31.object({ expectedUpdatedAt: expectedUpdatedAtSchema2 });
-var voidInvoiceSchema = z31.object({
-  reason: z31.string().trim().min(1).max(1e3)
+var issueInvoiceSchema = z33.object({ expectedUpdatedAt: expectedUpdatedAtSchema2 });
+var voidInvoiceSchema = z33.object({
+  reason: z33.string().trim().min(1).max(1e3)
 });
-var recordPaymentSchema = z31.object({
+var recordPaymentSchema = z33.object({
   amount: moneyAmountSchema,
   currency: currencyCodeSchema.optional(),
-  paymentDate: z31.coerce.date(),
+  paymentDate: z33.coerce.date(),
   method: paymentMethodSchema,
-  reference: z31.string().trim().max(200).optional(),
-  notes: z31.string().trim().max(2e3).optional()
+  reference: z33.string().trim().max(200).optional(),
+  notes: z33.string().trim().max(2e3).optional()
 });
 
 // server/routes/v1/invoiceRoutes.ts
@@ -13489,19 +13791,19 @@ var invoiceRoutes_default = router35;
 import { Router as Router36 } from "express";
 
 // server/schemas/paymentSchemas.ts
-import { z as z32 } from "zod";
+import { z as z34 } from "zod";
 var SORT_FIELDS9 = ["paymentDate", "amount", "status", "createdAt"];
-var listPaymentsQuerySchema = z32.object({
+var listPaymentsQuerySchema = z34.object({
   ...paginationQuerySchema(SORT_FIELDS9, "paymentDate"),
   status: paymentStatusSchema.optional(),
   method: paymentMethodSchema.optional(),
-  invoiceId: z32.string().trim().uuid().optional(),
-  clientId: z32.string().trim().uuid().optional(),
-  dateFrom: z32.coerce.date().optional(),
-  dateTo: z32.coerce.date().optional()
+  invoiceId: z34.string().trim().uuid().optional(),
+  clientId: z34.string().trim().uuid().optional(),
+  dateFrom: z34.coerce.date().optional(),
+  dateTo: z34.coerce.date().optional()
 });
-var reversePaymentSchema = z32.object({
-  reason: z32.string().trim().min(1).max(1e3)
+var reversePaymentSchema = z34.object({
+  reason: z34.string().trim().min(1).max(1e3)
 });
 
 // server/routes/v1/paymentRoutes.ts
@@ -13547,7 +13849,7 @@ var paymentRoutes_default = router36;
 
 // server/routes/v1/portalRoutes.ts
 import { Router as Router37 } from "express";
-import { z as z33 } from "zod";
+import { z as z35 } from "zod";
 
 // server/services/clientPortalService.ts
 async function resolveClientForCaller(caller) {
@@ -13617,9 +13919,9 @@ var clientPortalService = {
 // server/routes/v1/portalRoutes.ts
 var router37 = Router37();
 router37.use(authenticateToken);
-var pageQuerySchema = z33.object({
-  page: z33.coerce.number().int().positive().default(1),
-  limit: z33.coerce.number().int().positive().max(100).default(20)
+var pageQuerySchema = z35.object({
+  page: z35.coerce.number().int().positive().default(1),
+  limit: z35.coerce.number().int().positive().max(100).default(20)
 });
 router37.get(
   "/dashboard",
@@ -13734,6 +14036,7 @@ async function projectPage(page) {
     slug: page.slug,
     title: page.title,
     body: revision?.body ?? "",
+    excerpt: revision?.excerpt ?? null,
     editorBlocks: projectPageEditorBlocks(revision),
     seo: revision?.metadata ?? {},
     featuredMedia: await projectPublicMedia(page.featuredMedia),
@@ -13790,6 +14093,7 @@ async function projectPost(post) {
     slug: post.slug,
     title: post.title,
     body: revision?.body ?? "",
+    excerpt: revision?.excerpt ?? null,
     seo: revision?.metadata ?? {},
     category: post.category ? { slug: post.category.slug, name: post.category.name } : null,
     tags: post.tags.map((t) => ({ slug: t.tag.slug, name: t.tag.name })),
@@ -14113,39 +14417,39 @@ var publicFormService = {
 };
 
 // server/schemas/publicSchemas.ts
-import { z as z34 } from "zod";
+import { z as z36 } from "zod";
 var SORT_FIELDS10 = ["publishedAt", "createdAt", "title"];
-var listPublicPostsQuerySchema = z34.object({
-  page: z34.coerce.number().int().positive().default(1),
-  limit: z34.coerce.number().int().positive().max(50).default(12),
-  search: z34.string().trim().max(200).optional(),
-  category: z34.string().trim().max(150).optional(),
-  tag: z34.string().trim().max(150).optional(),
-  sort: z34.enum(SORT_FIELDS10).default("publishedAt"),
-  order: z34.enum(["asc", "desc"]).default("desc")
+var listPublicPostsQuerySchema = z36.object({
+  page: z36.coerce.number().int().positive().default(1),
+  limit: z36.coerce.number().int().positive().max(50).default(12),
+  search: z36.string().trim().max(200).optional(),
+  category: z36.string().trim().max(150).optional(),
+  tag: z36.string().trim().max(150).optional(),
+  sort: z36.enum(SORT_FIELDS10).default("publishedAt"),
+  order: z36.enum(["asc", "desc"]).default("desc")
 });
-var listPublicProductsQuerySchema = z34.object({
-  page: z34.coerce.number().int().positive().default(1),
-  limit: z34.coerce.number().int().positive().max(50).default(20),
-  search: z34.string().trim().max(200).optional(),
-  type: z34.enum(["PRODUCT", "SERVICE"]).optional()
+var listPublicProductsQuerySchema = z36.object({
+  page: z36.coerce.number().int().positive().default(1),
+  limit: z36.coerce.number().int().positive().max(50).default(20),
+  search: z36.string().trim().max(200).optional(),
+  type: z36.enum(["PRODUCT", "SERVICE"]).optional()
 });
-var publicNavigationMenuTypeSchema = z34.enum(["PRIMARY", "HEADER", "FOOTER", "MOBILE", "CUSTOM"]);
-var publicRedirectLookupQuerySchema = z34.object({
-  path: z34.string().trim().min(1).max(2048).refine((v) => v.startsWith("/") && !v.startsWith("//"), { message: "Must be a site-relative path starting with a single /." })
+var publicNavigationMenuTypeSchema = z36.enum(["PRIMARY", "HEADER", "FOOTER", "MOBILE", "CUSTOM"]);
+var publicRedirectLookupQuerySchema = z36.object({
+  path: z36.string().trim().min(1).max(2048).refine((v) => v.startsWith("/") && !v.startsWith("//"), { message: "Must be a site-relative path starting with a single /." })
 });
-var nonEmptyTrimmed = (max) => z34.string().trim().min(1).max(max);
-var createPublicLeadSchema = z34.object({
+var nonEmptyTrimmed = (max) => z36.string().trim().min(1).max(max);
+var createPublicLeadSchema = z36.object({
   name: nonEmptyTrimmed(200),
-  company: z34.string().trim().max(200).optional(),
-  email: z34.string().trim().email().max(320),
-  phone: z34.string().trim().max(50).optional(),
-  subject: z34.string().trim().max(200).optional(),
+  company: z36.string().trim().max(200).optional(),
+  email: z36.string().trim().email().max(320),
+  phone: z36.string().trim().max(50).optional(),
+  subject: z36.string().trim().max(200).optional(),
   message: nonEmptyTrimmed(5e3),
-  productInterest: z34.string().trim().max(200).optional(),
-  source: z34.enum(["contact_form", "product_inquiry", "project_brief", "other"]).default("contact_form"),
-  consent: z34.literal(true, { errorMap: () => ({ message: "Consent is required to submit this form." }) }),
-  website: z34.string().trim().max(200).optional()
+  productInterest: z36.string().trim().max(200).optional(),
+  source: z36.enum(["contact_form", "product_inquiry", "project_brief", "other"]).default("contact_form"),
+  consent: z36.literal(true, { errorMap: () => ({ message: "Consent is required to submit this form." }) }),
+  website: z36.string().trim().max(200).optional()
 });
 
 // server/routes/v1/publicRoutes.ts
@@ -14414,107 +14718,107 @@ var aiProviderService = {
 };
 
 // server/schemas/aiSchemas.ts
-import { z as z35 } from "zod";
-var createAiProviderSchema = z35.object({
-  code: z35.string().trim().min(1).max(50),
-  name: z35.string().trim().min(1).max(200),
-  status: z35.enum(["ACTIVE", "INACTIVE"]).optional(),
-  isDefault: z35.boolean().optional()
+import { z as z37 } from "zod";
+var createAiProviderSchema = z37.object({
+  code: z37.string().trim().min(1).max(50),
+  name: z37.string().trim().min(1).max(200),
+  status: z37.enum(["ACTIVE", "INACTIVE"]).optional(),
+  isDefault: z37.boolean().optional()
 });
-var updateAiProviderSchema = z35.object({
-  name: z35.string().trim().min(1).max(200).optional(),
-  status: z35.enum(["ACTIVE", "INACTIVE"]).optional(),
-  isDefault: z35.boolean().optional()
+var updateAiProviderSchema = z37.object({
+  name: z37.string().trim().min(1).max(200).optional(),
+  status: z37.enum(["ACTIVE", "INACTIVE"]).optional(),
+  isDefault: z37.boolean().optional()
 });
-var createAiModelSchema = z35.object({
-  providerId: z35.string().uuid(),
-  modelId: z35.string().trim().min(1).max(100),
-  displayName: z35.string().trim().min(1).max(200),
-  contextWindow: z35.number().int().positive().optional(),
-  supportsStructuredOutput: z35.boolean().optional(),
-  supportsToolCalling: z35.boolean().optional(),
-  inputPricePerMillionTokens: z35.number().nonnegative().optional(),
-  outputPricePerMillionTokens: z35.number().nonnegative().optional(),
-  isActive: z35.boolean().optional(),
-  isDefault: z35.boolean().optional()
+var createAiModelSchema = z37.object({
+  providerId: z37.string().uuid(),
+  modelId: z37.string().trim().min(1).max(100),
+  displayName: z37.string().trim().min(1).max(200),
+  contextWindow: z37.number().int().positive().optional(),
+  supportsStructuredOutput: z37.boolean().optional(),
+  supportsToolCalling: z37.boolean().optional(),
+  inputPricePerMillionTokens: z37.number().nonnegative().optional(),
+  outputPricePerMillionTokens: z37.number().nonnegative().optional(),
+  isActive: z37.boolean().optional(),
+  isDefault: z37.boolean().optional()
 });
 var updateAiModelSchema = createAiModelSchema.partial().omit({ providerId: true, modelId: true });
-var updateAiOrgToolSettingSchema = z35.object({
-  enabled: z35.boolean().optional(),
-  requireApprovalOverride: z35.boolean().nullable().optional()
+var updateAiOrgToolSettingSchema = z37.object({
+  enabled: z37.boolean().optional(),
+  requireApprovalOverride: z37.boolean().nullable().optional()
 });
 var PROMPT_SORT_FIELDS = ["key", "name", "status", "createdAt", "updatedAt"];
-var listAiPromptsQuerySchema = z35.object(paginationQuerySchema(PROMPT_SORT_FIELDS, "createdAt", "desc"));
-var createAiPromptTemplateSchema = z35.object({
-  key: z35.string().trim().min(1).max(100).regex(/^[a-z0-9._-]+$/, "key must be lowercase, URL-safe (letters, numbers, dots, hyphens, underscores)"),
-  name: z35.string().trim().min(1).max(200),
-  purpose: z35.string().trim().max(1e3).optional(),
-  systemInstructions: z35.string().trim().min(1).max(2e4),
-  userTemplate: z35.string().trim().min(1).max(2e4),
-  variablesSchema: z35.record(z35.unknown()).optional()
+var listAiPromptsQuerySchema = z37.object(paginationQuerySchema(PROMPT_SORT_FIELDS, "createdAt", "desc"));
+var createAiPromptTemplateSchema = z37.object({
+  key: z37.string().trim().min(1).max(100).regex(/^[a-z0-9._-]+$/, "key must be lowercase, URL-safe (letters, numbers, dots, hyphens, underscores)"),
+  name: z37.string().trim().min(1).max(200),
+  purpose: z37.string().trim().max(1e3).optional(),
+  systemInstructions: z37.string().trim().min(1).max(2e4),
+  userTemplate: z37.string().trim().min(1).max(2e4),
+  variablesSchema: z37.record(z37.unknown()).optional()
 });
-var createAiPromptVersionSchema = z35.object({
-  systemInstructions: z35.string().trim().min(1).max(2e4),
-  userTemplate: z35.string().trim().min(1).max(2e4),
-  variablesSchema: z35.record(z35.unknown()).optional()
+var createAiPromptVersionSchema = z37.object({
+  systemInstructions: z37.string().trim().min(1).max(2e4),
+  userTemplate: z37.string().trim().min(1).max(2e4),
+  variablesSchema: z37.record(z37.unknown()).optional()
 });
-var updateAiPromptTemplateSchema = z35.object({
-  name: z35.string().trim().min(1).max(200).optional(),
-  purpose: z35.string().trim().max(1e3).nullable().optional(),
-  status: z35.enum(["DRAFT", "ACTIVE", "ARCHIVED"]).optional()
+var updateAiPromptTemplateSchema = z37.object({
+  name: z37.string().trim().min(1).max(200).optional(),
+  purpose: z37.string().trim().max(1e3).nullable().optional(),
+  status: z37.enum(["DRAFT", "ACTIVE", "ARCHIVED"]).optional()
 });
-var publishAiPromptVersionSchema = z35.object({
-  versionId: z35.string().uuid()
+var publishAiPromptVersionSchema = z37.object({
+  versionId: z37.string().uuid()
 });
 var WORKFLOW_SORT_FIELDS = ["key", "name", "status", "createdAt", "updatedAt"];
-var listAiWorkflowsQuerySchema = z35.object(paginationQuerySchema(WORKFLOW_SORT_FIELDS, "createdAt", "desc"));
-var workflowStepSchema = z35.object({
-  order: z35.number().int().nonnegative(),
-  toolCode: z35.string().trim().min(1).max(100),
-  description: z35.string().trim().max(500).optional()
+var listAiWorkflowsQuerySchema = z37.object(paginationQuerySchema(WORKFLOW_SORT_FIELDS, "createdAt", "desc"));
+var workflowStepSchema = z37.object({
+  order: z37.number().int().nonnegative(),
+  toolCode: z37.string().trim().min(1).max(100),
+  description: z37.string().trim().max(500).optional()
 });
-var createAiWorkflowSchema = z35.object({
-  key: z35.string().trim().min(1).max(100).regex(/^[a-z0-9._-]+$/, "key must be lowercase, URL-safe (letters, numbers, dots, hyphens, underscores)"),
-  name: z35.string().trim().min(1).max(200),
-  description: z35.string().trim().max(2e3).optional(),
-  steps: z35.array(workflowStepSchema).min(1).max(10),
-  maxSteps: z35.number().int().positive().max(10).optional(),
-  timeoutMs: z35.number().int().positive().max(12e4).optional()
+var createAiWorkflowSchema = z37.object({
+  key: z37.string().trim().min(1).max(100).regex(/^[a-z0-9._-]+$/, "key must be lowercase, URL-safe (letters, numbers, dots, hyphens, underscores)"),
+  name: z37.string().trim().min(1).max(200),
+  description: z37.string().trim().max(2e3).optional(),
+  steps: z37.array(workflowStepSchema).min(1).max(10),
+  maxSteps: z37.number().int().positive().max(10).optional(),
+  timeoutMs: z37.number().int().positive().max(12e4).optional()
 });
-var updateAiWorkflowSchema = z35.object({
-  name: z35.string().trim().min(1).max(200).optional(),
-  description: z35.string().trim().max(2e3).nullable().optional(),
-  steps: z35.array(workflowStepSchema).min(1).max(10).optional(),
-  maxSteps: z35.number().int().positive().max(10).optional(),
-  timeoutMs: z35.number().int().positive().max(12e4).optional(),
+var updateAiWorkflowSchema = z37.object({
+  name: z37.string().trim().min(1).max(200).optional(),
+  description: z37.string().trim().max(2e3).nullable().optional(),
+  steps: z37.array(workflowStepSchema).min(1).max(10).optional(),
+  maxSteps: z37.number().int().positive().max(10).optional(),
+  timeoutMs: z37.number().int().positive().max(12e4).optional(),
   expectedUpdatedAt: expectedUpdatedAtSchema2
 });
-var executeAiWorkflowSchema = z35.object({
+var executeAiWorkflowSchema = z37.object({
   /** Keyed by step order — each step's tool input, supplied by the caller (Phase 12 has no autonomous planning, see AIWorkflow's schema.prisma doc comment). */
-  stepInputs: z35.record(z35.string(), z35.record(z35.unknown())).default({})
+  stepInputs: z37.record(z37.string(), z37.record(z37.unknown())).default({})
 });
-var executeAiToolSchema = z35.object({
-  toolCode: z35.string().trim().min(1).max(100),
-  input: z35.record(z35.unknown()).default({})
+var executeAiToolSchema = z37.object({
+  toolCode: z37.string().trim().min(1).max(100),
+  input: z37.record(z37.unknown()).default({})
 });
 var EXECUTION_SORT_FIELDS = ["createdAt", "startedAt", "status"];
-var listAiExecutionsQuerySchema = z35.object({
+var listAiExecutionsQuerySchema = z37.object({
   ...paginationQuerySchema(EXECUTION_SORT_FIELDS, "createdAt", "desc"),
-  kind: z35.enum(["TOOL_CALL", "WORKFLOW"]).optional(),
-  status: z35.enum(["PENDING", "RUNNING", "AWAITING_APPROVAL", "COMPLETED", "FAILED", "CANCELLED"]).optional()
+  kind: z37.enum(["TOOL_CALL", "WORKFLOW"]).optional(),
+  status: z37.enum(["PENDING", "RUNNING", "AWAITING_APPROVAL", "COMPLETED", "FAILED", "CANCELLED"]).optional()
 });
-var usageSummaryQuerySchema = z35.object({
-  dateFrom: z35.coerce.date().optional(),
-  dateTo: z35.coerce.date().optional()
+var usageSummaryQuerySchema = z37.object({
+  dateFrom: z37.coerce.date().optional(),
+  dateTo: z37.coerce.date().optional()
 });
 var APPROVAL_SORT_FIELDS = ["createdAt", "expiresAt", "status"];
-var listAiApprovalsQuerySchema = z35.object({
+var listAiApprovalsQuerySchema = z37.object({
   ...paginationQuerySchema(APPROVAL_SORT_FIELDS, "createdAt", "desc"),
-  status: z35.enum(["PENDING", "APPROVED", "REJECTED", "EXPIRED"]).optional()
+  status: z37.enum(["PENDING", "APPROVED", "REJECTED", "EXPIRED"]).optional()
 });
-var decideAiApprovalSchema = z35.object({
-  decision: z35.enum(["APPROVE", "REJECT"]),
-  rejectionReason: z35.string().trim().max(2e3).optional()
+var decideAiApprovalSchema = z37.object({
+  decision: z37.enum(["APPROVE", "REJECT"]),
+  rejectionReason: z37.string().trim().max(2e3).optional()
 });
 
 // server/routes/v1/aiProviderRoutes.ts
@@ -15042,66 +15346,66 @@ import crypto from "crypto";
 import { Prisma as Prisma6 } from "@prisma/client";
 
 // server/ai/toolRegistry.ts
-import { z as z36 } from "zod";
+import { z as z38 } from "zod";
 function tool(def) {
   return def;
 }
-var listLeadsInput = z36.object({
-  search: z36.string().trim().max(200).optional(),
-  status: z36.enum(["NEW", "CONTACTED", "QUALIFIED", "CONVERTED", "LOST"]).optional(),
-  page: z36.number().int().positive().default(1),
-  limit: z36.number().int().positive().max(50).default(20)
+var listLeadsInput = z38.object({
+  search: z38.string().trim().max(200).optional(),
+  status: z38.enum(["NEW", "CONTACTED", "QUALIFIED", "CONVERTED", "LOST"]).optional(),
+  page: z38.number().int().positive().default(1),
+  limit: z38.number().int().positive().max(50).default(20)
 });
-var createLeadInput = z36.object({
-  companyName: z36.string().trim().min(1).max(200),
-  contactName: z36.string().trim().max(200).optional(),
-  email: z36.string().trim().email().max(255).optional(),
-  phone: z36.string().trim().max(50).optional(),
-  source: z36.string().trim().max(100).optional(),
-  notes: z36.string().trim().max(5e3).optional()
+var createLeadInput = z38.object({
+  companyName: z38.string().trim().min(1).max(200),
+  contactName: z38.string().trim().max(200).optional(),
+  email: z38.string().trim().email().max(255).optional(),
+  phone: z38.string().trim().max(50).optional(),
+  source: z38.string().trim().max(100).optional(),
+  notes: z38.string().trim().max(5e3).optional()
 });
-var convertLeadInput = z36.object({
-  leadId: z36.string().uuid(),
-  clientCode: z36.string().trim().min(1).max(50).regex(/^[A-Za-z0-9._-]+$/),
-  name: z36.string().trim().max(200).optional(),
-  createContact: z36.boolean().default(true)
+var convertLeadInput = z38.object({
+  leadId: z38.string().uuid(),
+  clientCode: z38.string().trim().min(1).max(50).regex(/^[A-Za-z0-9._-]+$/),
+  name: z38.string().trim().max(200).optional(),
+  createContact: z38.boolean().default(true)
 });
-var listClientsInput = z36.object({
-  search: z36.string().trim().max(200).optional(),
-  status: z36.enum(["ACTIVE", "INACTIVE", "ARCHIVED"]).optional(),
-  page: z36.number().int().positive().default(1),
-  limit: z36.number().int().positive().max(50).default(20)
+var listClientsInput = z38.object({
+  search: z38.string().trim().max(200).optional(),
+  status: z38.enum(["ACTIVE", "INACTIVE", "ARCHIVED"]).optional(),
+  page: z38.number().int().positive().default(1),
+  limit: z38.number().int().positive().max(50).default(20)
 });
-var createClientInput = z36.object({
-  clientCode: z36.string().trim().min(1).max(50).regex(/^[A-Za-z0-9._-]+$/),
-  name: z36.string().trim().min(1).max(200),
-  email: z36.string().trim().email().max(255).optional(),
-  phone: z36.string().trim().max(50).optional(),
-  notes: z36.string().trim().max(5e3).optional()
+var createClientInput = z38.object({
+  clientCode: z38.string().trim().min(1).max(50).regex(/^[A-Za-z0-9._-]+$/),
+  name: z38.string().trim().min(1).max(200),
+  email: z38.string().trim().email().max(255).optional(),
+  phone: z38.string().trim().max(50).optional(),
+  notes: z38.string().trim().max(5e3).optional()
 });
-var listPostsInput = z36.object({
-  search: z36.string().trim().max(200).optional(),
-  status: z36.enum(["DRAFT", "IN_REVIEW", "SCHEDULED", "PUBLISHED", "ARCHIVED"]).optional(),
-  page: z36.number().int().positive().default(1),
-  limit: z36.number().int().positive().max(50).default(20)
+var listPostsInput = z38.object({
+  search: z38.string().trim().max(200).optional(),
+  status: z38.enum(["DRAFT", "IN_REVIEW", "SCHEDULED", "PUBLISHED", "ARCHIVED"]).optional(),
+  page: z38.number().int().positive().default(1),
+  limit: z38.number().int().positive().max(50).default(20)
 });
-var createDraftPostInput = z36.object({
-  title: z36.string().trim().min(1).max(200),
-  body: z36.string().trim().max(5e5).default(""),
-  categoryId: z36.string().trim().uuid().optional()
+var createDraftPostInput = z38.object({
+  title: z38.string().trim().min(1).max(200),
+  body: z38.string().trim().max(5e5).default(""),
+  categoryId: z38.string().trim().uuid().optional()
 });
-var listProductsInput = z36.object({
-  search: z36.string().trim().max(200).optional(),
-  type: z36.enum(["PRODUCT", "SERVICE"]).optional(),
-  status: z36.enum(["DRAFT", "ACTIVE", "INACTIVE", "ARCHIVED"]).optional(),
-  page: z36.number().int().positive().default(1),
-  limit: z36.number().int().positive().max(50).default(20)
+var listProductsInput = z38.object({
+  search: z38.string().trim().max(200).optional(),
+  type: z38.enum(["PRODUCT", "SERVICE"]).optional(),
+  status: z38.enum(["DRAFT", "ACTIVE", "INACTIVE", "ARCHIVED"]).optional(),
+  page: z38.number().int().positive().default(1),
+  limit: z38.number().int().positive().max(50).default(20)
 });
-var issueInvoiceInput = z36.object({
-  invoiceId: z36.string().uuid()
+var issueInvoiceInput = z38.object({
+  invoiceId: z38.string().uuid()
 });
-var activateContractInput = z36.object({
-  contractId: z36.string().uuid()
+var activateContractInput = z38.object({
+  contractId: z38.string().uuid()
 });
 var AI_TOOL_REGISTRY = Object.freeze({
   "leads.list": tool({
@@ -15958,7 +16262,7 @@ var aiApprovalRoutes_default = router45;
 
 // server/routes/v1/automationRoutes.ts
 import { Router as Router46 } from "express";
-import { z as z39 } from "zod";
+import { z as z41 } from "zod";
 
 // server/services/automation/AutomationService.ts
 import crypto11 from "node:crypto";
@@ -16291,7 +16595,7 @@ var EventEngine = class _EventEngine {
 var eventEngine = EventEngine.getInstance();
 
 // server/services/automation/ActionRegistry.ts
-import { z as z37 } from "zod";
+import { z as z39 } from "zod";
 import crypto4 from "node:crypto";
 var ActionRegistry = class _ActionRegistry {
   constructor() {
@@ -16330,19 +16634,19 @@ var ActionRegistry = class _ActionRegistry {
       riskLevel: "LOW",
       requiresApproval: false,
       requiresAudit: true,
-      inputSchema: z37.object({
-        title: z37.string().min(1),
-        description: z37.string().optional(),
-        assignedUserId: z37.string().optional(),
-        assignedRole: z37.string().optional(),
-        priority: z37.enum(["LOW", "MEDIUM", "HIGH", "URGENT"]).default("MEDIUM"),
-        dueDate: z37.string().optional(),
-        sourceEntityType: z37.string().optional(),
-        sourceEntityId: z37.string().optional(),
-        isAiGenerated: z37.boolean().default(true),
-        metadata: z37.record(z37.unknown()).optional()
+      inputSchema: z39.object({
+        title: z39.string().min(1),
+        description: z39.string().optional(),
+        assignedUserId: z39.string().optional(),
+        assignedRole: z39.string().optional(),
+        priority: z39.enum(["LOW", "MEDIUM", "HIGH", "URGENT"]).default("MEDIUM"),
+        dueDate: z39.string().optional(),
+        sourceEntityType: z39.string().optional(),
+        sourceEntityId: z39.string().optional(),
+        isAiGenerated: z39.boolean().default(true),
+        metadata: z39.record(z39.unknown()).optional()
       }),
-      outputSchema: z37.object({ taskId: z37.string(), title: z37.string(), status: z37.string() }),
+      outputSchema: z39.object({ taskId: z39.string(), title: z39.string(), status: z39.string() }),
       execute: async (input, context) => {
         const taskId = crypto4.randomUUID();
         const dueDate = input.dueDate ? new Date(input.dueDate) : null;
@@ -16376,12 +16680,12 @@ var ActionRegistry = class _ActionRegistry {
       riskLevel: "MEDIUM",
       requiresApproval: false,
       requiresAudit: true,
-      inputSchema: z37.object({
-        clientId: z37.string().min(1),
-        status: z37.enum(["PROSPECT", "ACTIVE", "INACTIVE", "SUSPENDED", "ARCHIVED"]).optional(),
-        notes: z37.string().optional()
+      inputSchema: z39.object({
+        clientId: z39.string().min(1),
+        status: z39.enum(["PROSPECT", "ACTIVE", "INACTIVE", "SUSPENDED", "ARCHIVED"]).optional(),
+        notes: z39.string().optional()
       }),
-      outputSchema: z37.object({ clientId: z37.string(), updated: z37.boolean() }),
+      outputSchema: z39.object({ clientId: z39.string(), updated: z39.boolean() }),
       execute: async (input, context) => {
         const client3 = await prisma.client.findFirst({ where: { id: input.clientId, organizationId: context.organizationId } });
         if (!client3) {
@@ -16404,16 +16708,16 @@ var ActionRegistry = class _ActionRegistry {
       riskLevel: "LOW",
       requiresApproval: false,
       requiresAudit: false,
-      inputSchema: z37.object({
-        userId: z37.string().optional(),
-        recipientRole: z37.string().optional(),
-        title: z37.string().min(1),
-        message: z37.string().min(1),
-        level: z37.enum(["INFO", "WARNING", "ERROR", "SUCCESS"]).default("INFO"),
-        channel: z37.enum(["IN_APP", "EMAIL", "SMS", "WEBHOOK"]).default("IN_APP"),
-        metadata: z37.record(z37.unknown()).optional()
+      inputSchema: z39.object({
+        userId: z39.string().optional(),
+        recipientRole: z39.string().optional(),
+        title: z39.string().min(1),
+        message: z39.string().min(1),
+        level: z39.enum(["INFO", "WARNING", "ERROR", "SUCCESS"]).default("INFO"),
+        channel: z39.enum(["IN_APP", "EMAIL", "SMS", "WEBHOOK"]).default("IN_APP"),
+        metadata: z39.record(z39.unknown()).optional()
       }),
-      outputSchema: z37.object({ notificationId: z37.string(), delivered: z37.boolean() }),
+      outputSchema: z39.object({ notificationId: z39.string(), delivered: z39.boolean() }),
       execute: async (input, context) => {
         const notifId = crypto4.randomUUID();
         const autoNotif = await prisma.automationNotification.create({
@@ -16460,12 +16764,12 @@ var ActionRegistry = class _ActionRegistry {
       riskLevel: "MEDIUM",
       requiresApproval: false,
       requiresAudit: true,
-      inputSchema: z37.object({
-        entityType: z37.enum(["LEAD", "CLIENT", "TASK"]),
-        entityId: z37.string().min(1),
-        userId: z37.string().min(1)
+      inputSchema: z39.object({
+        entityType: z39.enum(["LEAD", "CLIENT", "TASK"]),
+        entityId: z39.string().min(1),
+        userId: z39.string().min(1)
       }),
-      outputSchema: z37.object({ entityId: z37.string(), assignedUserId: z37.string(), success: z37.boolean() }),
+      outputSchema: z39.object({ entityId: z39.string(), assignedUserId: z39.string(), success: z39.boolean() }),
       execute: async (input, _context) => {
         if (input.entityType === "LEAD") {
           await prisma.lead.update({ where: { id: input.entityId }, data: { assignedTo: input.userId } });
@@ -16485,8 +16789,8 @@ var ActionRegistry = class _ActionRegistry {
       riskLevel: "LOW",
       requiresApproval: false,
       requiresAudit: true,
-      inputSchema: z37.object({ reportType: z37.string(), title: z37.string(), parameters: z37.record(z37.unknown()).optional() }),
-      outputSchema: z37.object({ reportId: z37.string(), generatedAt: z37.string(), summary: z37.string() }),
+      inputSchema: z39.object({ reportType: z39.string(), title: z39.string(), parameters: z39.record(z39.unknown()).optional() }),
+      outputSchema: z39.object({ reportId: z39.string(), generatedAt: z39.string(), summary: z39.string() }),
       // Phase 1 audit finding (docs/control-center-module-gap-analysis.md):
       // this previously fabricated a reportId/summary with no real report
       // ever generated. No reporting service exists in this codebase
@@ -16507,14 +16811,14 @@ var ActionRegistry = class _ActionRegistry {
       riskLevel: "HIGH",
       requiresApproval: true,
       requiresAudit: true,
-      inputSchema: z37.object({
-        clientId: z37.string().min(1),
-        amountDue: z37.number().positive(),
-        currency: z37.string().default("USD"),
-        dueDate: z37.string().optional(),
-        memo: z37.string().optional()
+      inputSchema: z39.object({
+        clientId: z39.string().min(1),
+        amountDue: z39.number().positive(),
+        currency: z39.string().default("USD"),
+        dueDate: z39.string().optional(),
+        memo: z39.string().optional()
       }),
-      outputSchema: z37.object({ draftCreated: z37.boolean(), invoiceId: z37.string(), invoiceNumber: z37.string(), amountDue: z37.number() }),
+      outputSchema: z39.object({ draftCreated: z39.boolean(), invoiceId: z39.string(), invoiceNumber: z39.string(), amountDue: z39.number() }),
       // Phase 1 audit finding (docs/control-center-module-gap-analysis.md):
       // this previously fabricated an "INV-DRAFT-..." string with no
       // Invoice row ever created. Fixed by real service integration —
@@ -16574,8 +16878,8 @@ var ActionRegistry = class _ActionRegistry {
       riskLevel: "HIGH",
       requiresApproval: false,
       requiresAudit: true,
-      inputSchema: z37.object({ workflowId: z37.string().min(1), status: z37.enum(["ACTIVE", "PAUSED", "ARCHIVED"]) }),
-      outputSchema: z37.object({ workflowId: z37.string(), newStatus: z37.string() }),
+      inputSchema: z39.object({ workflowId: z39.string().min(1), status: z39.enum(["ACTIVE", "PAUSED", "ARCHIVED"]) }),
+      outputSchema: z39.object({ workflowId: z39.string(), newStatus: z39.string() }),
       execute: async (input, _context) => {
         const updated = await prisma.automationWorkflow.update({ where: { id: input.workflowId }, data: { status: input.status } });
         return { workflowId: updated.id, newStatus: updated.status };
@@ -16589,8 +16893,8 @@ var ActionRegistry = class _ActionRegistry {
       riskLevel: "HIGH",
       requiresApproval: true,
       requiresAudit: true,
-      inputSchema: z37.object({ contentType: z37.enum(["PAGE", "POST"]), contentId: z37.string().min(1) }),
-      outputSchema: z37.object({ contentId: z37.string(), published: z37.boolean() }),
+      inputSchema: z39.object({ contentType: z39.enum(["PAGE", "POST"]), contentId: z39.string().min(1) }),
+      outputSchema: z39.object({ contentId: z39.string(), published: z39.boolean() }),
       execute: async (input, _context) => {
         if (input.contentType === "PAGE") {
           await prisma.page.update({ where: { id: input.contentId }, data: { status: "PUBLISHED", publishedAt: /* @__PURE__ */ new Date() } });
@@ -16608,8 +16912,8 @@ var ActionRegistry = class _ActionRegistry {
       riskLevel: "MEDIUM",
       requiresApproval: true,
       requiresAudit: true,
-      inputSchema: z37.object({ recipientUserId: z37.string().min(1), title: z37.string().min(1), message: z37.string().min(1) }),
-      outputSchema: z37.object({ sent: z37.boolean() }),
+      inputSchema: z39.object({ recipientUserId: z39.string().min(1), title: z39.string().min(1), message: z39.string().min(1) }),
+      outputSchema: z39.object({ sent: z39.boolean() }),
       execute: async (input, context) => {
         await prisma.automationNotification.create({
           data: {
@@ -18404,13 +18708,13 @@ var KnowledgeService = class {
 };
 
 // server/services/automation/types.ts
-import { z as z38 } from "zod";
-var StructuredAiDecisionSchema = z38.object({
-  decision: z38.string(),
-  reason: z38.string(),
-  confidence: z38.number().min(0).max(1),
-  recommended_action: z38.string().optional(),
-  metadata: z38.record(z38.unknown()).optional()
+import { z as z40 } from "zod";
+var StructuredAiDecisionSchema = z40.object({
+  decision: z40.string(),
+  reason: z40.string(),
+  confidence: z40.number().min(0).max(1),
+  recommended_action: z40.string().optional(),
+  metadata: z40.record(z40.unknown()).optional()
 });
 var DEFAULT_WORKFLOW_LIMITS = {
   maxSteps: 50,
@@ -19609,79 +19913,79 @@ router46.get(
   })
 );
 router46.use(authenticateToken);
-var CreateWorkflowSchema = z39.object({
-  name: z39.string().min(1).max(200),
-  description: z39.string().optional(),
-  category: z39.string().default("GENERAL"),
-  triggerType: z39.enum(["EVENT", "SCHEDULE", "MANUAL", "API", "CONDITIONAL"]).default("EVENT"),
-  triggerConfig: z39.record(z39.unknown()).default({}),
-  conditions: z39.unknown().default([]),
-  steps: z39.array(z39.record(z39.unknown())).default([]),
-  retryPolicy: z39.object({
-    maxRetries: z39.number().int().min(0).max(5).default(2),
-    backoffMs: z39.number().int().min(100).max(6e4).default(1e3),
-    exponential: z39.boolean().default(true)
+var CreateWorkflowSchema = z41.object({
+  name: z41.string().min(1).max(200),
+  description: z41.string().optional(),
+  category: z41.string().default("GENERAL"),
+  triggerType: z41.enum(["EVENT", "SCHEDULE", "MANUAL", "API", "CONDITIONAL"]).default("EVENT"),
+  triggerConfig: z41.record(z41.unknown()).default({}),
+  conditions: z41.unknown().default([]),
+  steps: z41.array(z41.record(z41.unknown())).default([]),
+  retryPolicy: z41.object({
+    maxRetries: z41.number().int().min(0).max(5).default(2),
+    backoffMs: z41.number().int().min(100).max(6e4).default(1e3),
+    exponential: z41.boolean().default(true)
   }).optional(),
-  limits: z39.object({
-    maxSteps: z39.number().int().min(1).max(100).default(50),
-    maxDurationMs: z39.number().int().min(5e3).max(6e5).default(3e5),
-    maxAiCalls: z39.number().int().min(0).max(50).default(10),
-    maxToolCalls: z39.number().int().min(0).max(50).default(15),
-    maxLoopIterations: z39.number().int().min(1).max(50).default(10)
+  limits: z41.object({
+    maxSteps: z41.number().int().min(1).max(100).default(50),
+    maxDurationMs: z41.number().int().min(5e3).max(6e5).default(3e5),
+    maxAiCalls: z41.number().int().min(0).max(50).default(10),
+    maxToolCalls: z41.number().int().min(0).max(50).default(15),
+    maxLoopIterations: z41.number().int().min(1).max(50).default(10)
   }).optional()
 });
 var UpdateWorkflowSchema = CreateWorkflowSchema.partial().extend({
-  status: z39.enum(["DRAFT", "ACTIVE", "PAUSED", "ARCHIVED"]).optional()
+  status: z41.enum(["DRAFT", "ACTIVE", "PAUSED", "ARCHIVED"]).optional()
 });
-var TriggerWorkflowSchema = z39.object({
-  input: z39.record(z39.unknown()).default({}),
-  correlationId: z39.string().optional()
+var TriggerWorkflowSchema = z41.object({
+  input: z41.record(z41.unknown()).default({}),
+  correlationId: z41.string().optional()
 });
-var DecideApprovalSchema = z39.object({
-  decision: z39.enum(["APPROVED", "REJECTED"]),
-  reason: z39.string().optional()
+var DecideApprovalSchema = z41.object({
+  decision: z41.enum(["APPROVED", "REJECTED"]),
+  reason: z41.string().optional()
 });
-var CreateTaskSchema = z39.object({
-  title: z39.string().min(1),
-  description: z39.string().optional(),
-  assignedUserId: z39.string().optional(),
-  assignedRole: z39.string().optional(),
-  priority: z39.enum(["LOW", "MEDIUM", "HIGH", "URGENT"]).default("MEDIUM"),
-  dueDate: z39.string().optional(),
-  sourceWorkflowId: z39.string().optional(),
-  sourceExecutionId: z39.string().optional(),
-  sourceEntityType: z39.string().optional(),
-  sourceEntityId: z39.string().optional(),
-  isAiGenerated: z39.boolean().default(false),
-  metadata: z39.record(z39.unknown()).optional()
+var CreateTaskSchema = z41.object({
+  title: z41.string().min(1),
+  description: z41.string().optional(),
+  assignedUserId: z41.string().optional(),
+  assignedRole: z41.string().optional(),
+  priority: z41.enum(["LOW", "MEDIUM", "HIGH", "URGENT"]).default("MEDIUM"),
+  dueDate: z41.string().optional(),
+  sourceWorkflowId: z41.string().optional(),
+  sourceExecutionId: z41.string().optional(),
+  sourceEntityType: z41.string().optional(),
+  sourceEntityId: z41.string().optional(),
+  isAiGenerated: z41.boolean().default(false),
+  metadata: z41.record(z41.unknown()).optional()
 });
-var UpdateTaskSchema = z39.object({
-  status: z39.enum(["PENDING", "IN_PROGRESS", "COMPLETED", "CANCELLED"]).optional(),
-  assignedUserId: z39.string().optional(),
-  priority: z39.enum(["LOW", "MEDIUM", "HIGH", "URGENT"]).optional(),
-  dueDate: z39.string().optional()
+var UpdateTaskSchema = z41.object({
+  status: z41.enum(["PENDING", "IN_PROGRESS", "COMPLETED", "CANCELLED"]).optional(),
+  assignedUserId: z41.string().optional(),
+  priority: z41.enum(["LOW", "MEDIUM", "HIGH", "URGENT"]).optional(),
+  dueDate: z41.string().optional()
 });
-var CreateScheduleSchema = z39.object({
-  workflowId: z39.string().uuid(),
-  name: z39.string().min(1),
-  description: z39.string().optional(),
-  scheduleType: z39.enum(["ONE_TIME", "RECURRING", "CRON"]).default("RECURRING"),
-  cronExpression: z39.string().optional(),
-  timezone: z39.string().default("UTC"),
-  intervalSeconds: z39.number().int().positive().optional(),
-  config: z39.record(z39.unknown()).optional()
+var CreateScheduleSchema = z41.object({
+  workflowId: z41.string().uuid(),
+  name: z41.string().min(1),
+  description: z41.string().optional(),
+  scheduleType: z41.enum(["ONE_TIME", "RECURRING", "CRON"]).default("RECURRING"),
+  cronExpression: z41.string().optional(),
+  timezone: z41.string().default("UTC"),
+  intervalSeconds: z41.number().int().positive().optional(),
+  config: z41.record(z41.unknown()).optional()
 });
-var EmitEventSchema = z39.object({
-  eventType: z39.string().min(1),
-  entityType: z39.string().min(1),
-  entityId: z39.string().min(1),
-  sourceModule: z39.string().optional(),
-  payload: z39.record(z39.unknown()).default({}),
-  correlationId: z39.string().optional()
+var EmitEventSchema = z41.object({
+  eventType: z41.string().min(1),
+  entityType: z41.string().min(1),
+  entityId: z41.string().min(1),
+  sourceModule: z41.string().optional(),
+  payload: z41.record(z41.unknown()).default({}),
+  correlationId: z41.string().optional()
 });
-var ExecuteActionSchema = z39.object({
-  actionId: z39.string().min(1),
-  input: z39.record(z39.unknown()).default({})
+var ExecuteActionSchema = z41.object({
+  actionId: z41.string().min(1),
+  input: z41.record(z41.unknown()).default({})
 });
 router46.get(
   "/dashboard",
@@ -19763,7 +20067,7 @@ router46.post(
   "/workflows/:id/publish",
   requirePermission("automation.publish"),
   asyncHandler(async (req, res) => {
-    const body = z39.object({ changeSummary: z39.string().optional() }).parse(req.body || {});
+    const body = z41.object({ changeSummary: z41.string().optional() }).parse(req.body || {});
     const published = await automationService.publishWorkflow({
       id: req.params.id,
       organizationId: req.user.organizationId,
@@ -19832,7 +20136,7 @@ router46.post(
   "/executions/:id/cancel",
   requirePermission("automation.manage"),
   asyncHandler(async (req, res) => {
-    const body = z39.object({ reason: z39.string().optional() }).parse(req.body || {});
+    const body = z41.object({ reason: z41.string().optional() }).parse(req.body || {});
     const result = await automationService.cancelExecution(req.params.id, req.user.organizationId, body.reason);
     sendSuccess(res, { execution: result });
   })
@@ -19940,7 +20244,7 @@ router46.patch(
   "/schedules/:id/toggle",
   requirePermission("automation.manage"),
   asyncHandler(async (req, res) => {
-    const body = z39.object({ isActive: z39.boolean().optional() }).parse(req.body || {});
+    const body = z41.object({ isActive: z41.boolean().optional() }).parse(req.body || {});
     const schedule = await automationService.toggleSchedule(req.params.id, req.user.organizationId, body.isActive);
     sendSuccess(res, { schedule });
   })
@@ -20019,9 +20323,9 @@ import { Router as Router47 } from "express";
 import express3 from "express";
 
 // server/schemas/knowledgeSchemas.ts
-import { z as z40 } from "zod";
-var knowledgeAccessPolicySchema = z40.enum(["PUBLIC", "RESTRICTED", "ROLE_BASED", "OWNER_ONLY"]);
-var knowledgeSourceTypeSchema = z40.enum([
+import { z as z42 } from "zod";
+var knowledgeAccessPolicySchema = z42.enum(["PUBLIC", "RESTRICTED", "ROLE_BASED", "OWNER_ONLY"]);
+var knowledgeSourceTypeSchema = z42.enum([
   "UPLOADED_DOCUMENT",
   "MEDIA_ASSET",
   "CMS_CONTENT",
@@ -20033,47 +20337,47 @@ var knowledgeSourceTypeSchema = z40.enum([
   "MANUAL_ENTRY",
   "EXTERNAL_CONNECTOR"
 ]);
-var createCollectionSchema = z40.object({
-  name: z40.string().trim().min(1).max(200),
-  description: z40.string().trim().max(2e3).optional(),
+var createCollectionSchema = z42.object({
+  name: z42.string().trim().min(1).max(200),
+  description: z42.string().trim().max(2e3).optional(),
   accessPolicy: knowledgeAccessPolicySchema.optional(),
-  allowedRoles: z40.array(z40.string().trim().min(1)).max(50).optional(),
-  metadata: z40.record(z40.unknown()).optional()
+  allowedRoles: z42.array(z42.string().trim().min(1)).max(50).optional(),
+  metadata: z42.record(z42.unknown()).optional()
 });
-var registerSourceSchema = z40.object({
-  collectionId: z40.string().trim().uuid().optional(),
-  name: z40.string().trim().min(1).max(200),
+var registerSourceSchema = z42.object({
+  collectionId: z42.string().trim().uuid().optional(),
+  name: z42.string().trim().min(1).max(200),
   sourceType: knowledgeSourceTypeSchema,
-  entityType: z40.string().trim().max(100).optional(),
-  entityId: z40.string().trim().max(200).optional(),
-  config: z40.record(z40.unknown()).optional()
+  entityType: z42.string().trim().max(100).optional(),
+  entityId: z42.string().trim().max(200).optional(),
+  config: z42.record(z42.unknown()).optional()
 });
-var listDocumentsQuerySchema = z40.object({
-  collectionId: z40.string().trim().uuid().optional(),
-  sourceId: z40.string().trim().uuid().optional(),
-  status: z40.enum(["UPLOADED", "PROCESSING", "EXTRACTED", "CHUNKED", "INDEXING", "INDEXED", "FAILED", "ARCHIVED"]).optional()
+var listDocumentsQuerySchema = z42.object({
+  collectionId: z42.string().trim().uuid().optional(),
+  sourceId: z42.string().trim().uuid().optional(),
+  status: z42.enum(["UPLOADED", "PROCESSING", "EXTRACTED", "CHUNKED", "INDEXING", "INDEXED", "FAILED", "ARCHIVED"]).optional()
 });
-var uploadDocumentSchema = z40.object({
-  text: z40.string().max(2e6).optional(),
-  contentBase64: z40.string().max(4e7).optional(),
-  mimeType: z40.string().trim().max(100).optional(),
-  filename: z40.string().trim().max(300).optional(),
-  title: z40.string().trim().max(300).optional(),
-  description: z40.string().trim().max(2e3).optional(),
-  collectionId: z40.string().trim().uuid().optional(),
-  sourceId: z40.string().trim().uuid().optional(),
-  securityScope: z40.string().trim().max(100).optional(),
-  requiredRole: z40.string().trim().max(100).optional(),
-  metadata: z40.record(z40.unknown()).optional()
+var uploadDocumentSchema = z42.object({
+  text: z42.string().max(2e6).optional(),
+  contentBase64: z42.string().max(4e7).optional(),
+  mimeType: z42.string().trim().max(100).optional(),
+  filename: z42.string().trim().max(300).optional(),
+  title: z42.string().trim().max(300).optional(),
+  description: z42.string().trim().max(2e3).optional(),
+  collectionId: z42.string().trim().uuid().optional(),
+  sourceId: z42.string().trim().uuid().optional(),
+  securityScope: z42.string().trim().max(100).optional(),
+  requiredRole: z42.string().trim().max(100).optional(),
+  metadata: z42.record(z42.unknown()).optional()
 }).refine((v) => v.contentBase64 !== void 0 || v.text !== void 0, {
   message: "Either text or contentBase64 is required."
 });
-var searchKnowledgeSchema = z40.object({
-  query: z40.string().trim().min(1).max(2e3),
-  mode: z40.enum(["KEYWORD", "SEMANTIC", "HYBRID"]).optional(),
-  limit: z40.coerce.number().int().positive().max(50).optional(),
-  minScore: z40.coerce.number().min(0).max(1).optional(),
-  filter: z40.record(z40.unknown()).optional()
+var searchKnowledgeSchema = z42.object({
+  query: z42.string().trim().min(1).max(2e3),
+  mode: z42.enum(["KEYWORD", "SEMANTIC", "HYBRID"]).optional(),
+  limit: z42.coerce.number().int().positive().max(50).optional(),
+  minScore: z42.coerce.number().min(0).max(1).optional(),
+  filter: z42.record(z42.unknown()).optional()
 });
 
 // server/routes/v1/knowledgeRoutes.ts
@@ -21046,46 +21350,46 @@ ${JSON.stringify(executionResult, null, 2)}
 };
 
 // server/schemas/copilotSchemas.ts
-import { z as z41 } from "zod";
-var conversationModeSchema = z41.enum(["ANSWER", "EXPLAIN", "SUMMARIZE", "ANALYZE", "RECOMMEND", "DRAFT", "EXECUTE"]);
-var createWorkspaceSchema = z41.object({
-  name: z41.string().trim().min(1).max(200),
-  slug: z41.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)").optional(),
-  description: z41.string().trim().max(2e3).optional(),
-  icon: z41.string().trim().max(100).optional(),
-  allowedTools: z41.array(z41.string().trim().min(1)).max(100).optional(),
-  allowedModules: z41.array(z41.string().trim().min(1)).max(100).optional(),
-  requiredPermissions: z41.array(z41.string().trim().min(1)).max(100).optional(),
-  systemInstruction: z41.string().trim().max(1e4).optional(),
+import { z as z43 } from "zod";
+var conversationModeSchema = z43.enum(["ANSWER", "EXPLAIN", "SUMMARIZE", "ANALYZE", "RECOMMEND", "DRAFT", "EXECUTE"]);
+var createWorkspaceSchema = z43.object({
+  name: z43.string().trim().min(1).max(200),
+  slug: z43.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)").optional(),
+  description: z43.string().trim().max(2e3).optional(),
+  icon: z43.string().trim().max(100).optional(),
+  allowedTools: z43.array(z43.string().trim().min(1)).max(100).optional(),
+  allowedModules: z43.array(z43.string().trim().min(1)).max(100).optional(),
+  requiredPermissions: z43.array(z43.string().trim().min(1)).max(100).optional(),
+  systemInstruction: z43.string().trim().max(1e4).optional(),
   defaultMode: conversationModeSchema.optional(),
-  temperature: z41.coerce.number().min(0).max(2).optional(),
-  maxTokens: z41.coerce.number().int().positive().max(32e3).optional(),
-  requireCitations: z41.coerce.boolean().optional()
+  temperature: z43.coerce.number().min(0).max(2).optional(),
+  maxTokens: z43.coerce.number().int().positive().max(32e3).optional(),
+  requireCitations: z43.coerce.boolean().optional()
 });
-var createConversationSchema = z41.object({
-  workspaceId: z41.string().trim().uuid().optional(),
-  title: z41.string().trim().max(300).optional(),
-  contextMetadata: z41.record(z41.unknown()).optional()
+var createConversationSchema = z43.object({
+  workspaceId: z43.string().trim().uuid().optional(),
+  title: z43.string().trim().max(300).optional(),
+  contextMetadata: z43.record(z43.unknown()).optional()
 });
-var listConversationsQuerySchema = z41.object({
-  workspaceId: z41.string().trim().uuid().optional(),
-  status: z41.string().trim().max(50).optional(),
-  search: z41.string().trim().max(300).optional(),
-  limit: z41.coerce.number().int().positive().max(100).optional(),
-  offset: z41.coerce.number().int().nonnegative().optional()
+var listConversationsQuerySchema = z43.object({
+  workspaceId: z43.string().trim().uuid().optional(),
+  status: z43.string().trim().max(50).optional(),
+  search: z43.string().trim().max(300).optional(),
+  limit: z43.coerce.number().int().positive().max(100).optional(),
+  offset: z43.coerce.number().int().nonnegative().optional()
 });
-var contextMetadataSchema = z41.object({
-  currentModule: z41.string().trim().max(200).optional(),
-  currentPage: z41.string().trim().max(200).optional(),
-  selectedClientId: z41.string().trim().uuid().optional(),
-  selectedInvoiceId: z41.string().trim().uuid().optional(),
-  selectedDocumentId: z41.string().trim().uuid().optional(),
-  selectedWorkflowId: z41.string().trim().uuid().optional()
-}).catchall(z41.unknown()).optional();
-var sendMessageSchema = z41.object({
-  conversationId: z41.string().trim().uuid().optional(),
-  workspaceId: z41.string().trim().uuid().optional(),
-  content: z41.string().trim().min(1).max(2e4),
+var contextMetadataSchema = z43.object({
+  currentModule: z43.string().trim().max(200).optional(),
+  currentPage: z43.string().trim().max(200).optional(),
+  selectedClientId: z43.string().trim().uuid().optional(),
+  selectedInvoiceId: z43.string().trim().uuid().optional(),
+  selectedDocumentId: z43.string().trim().uuid().optional(),
+  selectedWorkflowId: z43.string().trim().uuid().optional()
+}).catchall(z43.unknown()).optional();
+var sendMessageSchema = z43.object({
+  conversationId: z43.string().trim().uuid().optional(),
+  workspaceId: z43.string().trim().uuid().optional(),
+  content: z43.string().trim().min(1).max(2e4),
   mode: conversationModeSchema.optional(),
   contextMetadata: contextMetadataSchema
 });

@@ -1284,10 +1284,19 @@ model Category {
   createdAt      DateTime @default(now()) @map("created_at")
   updatedAt      DateTime @updatedAt @map("updated_at")
 
+  // Phase 7 — optional parent for a simple category hierarchy, same
+  // additive, nullable self-relation pattern as Page.parentId. SetNull on
+  // delete: removing a parent category never cascades into deleting or
+  // orphaning its children, which simply become top-level.
+  parentId String? @map("parent_id")
+
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  parent       Category?    @relation("CategoryHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
+  children     Category[]   @relation("CategoryHierarchy")
   posts        Post[]
 
   @@unique([organizationId, slug])
+  @@index([parentId])
   @@map("categories")
 }
 
@@ -1296,6 +1305,9 @@ model Tag {
   organizationId String   @map("organization_id")
   slug           String
   name           String
+  // Phase 7 — optional description, matching Category's own field; every
+  // existing tag gets null, same "no behavior change until used" shape.
+  description    String?
   createdAt      DateTime @default(now()) @map("created_at")
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
@@ -1444,6 +1456,12 @@ model ContentRevision {
   version      Int
   status       ContentStatus
   title        String
+  // Phase 7 — a short, author-written summary distinct from the SEO
+  // `metaDescription` in `metadata` (that one's for search/social
+  // previews; this one's for list views, archive cards, and RSS). Null
+  // on every existing revision — list views fall back to an auto-derived
+  // excerpt from `body`, exactly as they did before this column existed.
+  excerpt      String?
   body         String
   metadata     Json          @default("{}")
   editorBlocks Json?         @map("editor_blocks")

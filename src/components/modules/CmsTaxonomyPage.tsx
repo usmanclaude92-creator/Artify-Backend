@@ -5,17 +5,19 @@ import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
 import { categoriesApi, tagsApi, type CmsCategory, type CmsTag } from "../../lib/api";
 import { ApiClientError } from "../../lib/apiClient";
-import { Card, Button, Input, LoadingState, EmptyState, Modal, Field, ConfirmDialog } from "../ui/ui";
+import { Card, Button, Input, Select, LoadingState, EmptyState, Modal, Field, ConfirmDialog, Badge } from "../ui/ui";
 import { hasPermission } from "../../lib/permissions";
 
-const CategoryFormModal: React.FC<{ open: boolean; onClose: () => void; onSaved: () => void; category?: CmsCategory }> = ({
+const CategoryFormModal: React.FC<{ open: boolean; onClose: () => void; onSaved: () => void; category?: CmsCategory; categories: CmsCategory[] }> = ({
   open,
   onClose,
   onSaved,
   category,
+  categories,
 }) => {
   const [name, setName] = useState(category?.name ?? "");
   const [description, setDescription] = useState(category?.description ?? "");
+  const [parentId, setParentId] = useState(category?.parentId ?? "");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -23,17 +25,22 @@ const CategoryFormModal: React.FC<{ open: boolean; onClose: () => void; onSaved:
     if (open) {
       setName(category?.name ?? "");
       setDescription(category?.description ?? "");
+      setParentId(category?.parentId ?? "");
       setError(null);
     }
   }, [open, category]);
+
+  // Phase 7 — a category cannot be its own parent; the server also rejects
+  // a cycle through an ancestor, but there's no point offering one here.
+  const parentOptions = categories.filter((c) => c.id !== category?.id);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
     setSubmitting(true);
     try {
-      if (category) await categoriesApi.update(category.id, { name, description });
-      else await categoriesApi.create({ name, description: description || undefined });
+      if (category) await categoriesApi.update(category.id, { name, description, parentId: parentId || null });
+      else await categoriesApi.create({ name, description: description || undefined, parentId: parentId || undefined });
       onSaved();
       onClose();
     } catch (err) {
@@ -49,6 +56,16 @@ const CategoryFormModal: React.FC<{ open: boolean; onClose: () => void; onSaved:
         {error && <div className="text-xs rounded-lg px-3 py-2 bg-rose-500/10 text-rose-500 border border-rose-500/30">{error}</div>}
         <Field label="Name">
           <Input required value={name} onChange={(e) => setName(e.target.value)} />
+        </Field>
+        <Field label="Parent category" hint="Builds a simple category hierarchy.">
+          <Select value={parentId} onChange={(e) => setParentId(e.target.value)}>
+            <option value="">— No parent (top-level) —</option>
+            {parentOptions.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+          </Select>
         </Field>
         <Field label="Description">
           <Input value={description ?? ""} onChange={(e) => setDescription(e.target.value)} />
@@ -68,12 +85,14 @@ const CategoryFormModal: React.FC<{ open: boolean; onClose: () => void; onSaved:
 
 const TagFormModal: React.FC<{ open: boolean; onClose: () => void; onSaved: () => void; tag?: CmsTag }> = ({ open, onClose, onSaved, tag }) => {
   const [name, setName] = useState(tag?.name ?? "");
+  const [description, setDescription] = useState(tag?.description ?? "");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
     if (open) {
       setName(tag?.name ?? "");
+      setDescription(tag?.description ?? "");
       setError(null);
     }
   }, [open, tag]);
@@ -83,8 +102,8 @@ const TagFormModal: React.FC<{ open: boolean; onClose: () => void; onSaved: () =
     setError(null);
     setSubmitting(true);
     try {
-      if (tag) await tagsApi.update(tag.id, { name });
-      else await tagsApi.create({ name });
+      if (tag) await tagsApi.update(tag.id, { name, description });
+      else await tagsApi.create({ name, description: description || undefined });
       onSaved();
       onClose();
     } catch (err) {
@@ -100,6 +119,9 @@ const TagFormModal: React.FC<{ open: boolean; onClose: () => void; onSaved: () =
         {error && <div className="text-xs rounded-lg px-3 py-2 bg-rose-500/10 text-rose-500 border border-rose-500/30">{error}</div>}
         <Field label="Name">
           <Input required value={name} onChange={(e) => setName(e.target.value)} />
+        </Field>
+        <Field label="Description">
+          <Input value={description ?? ""} onChange={(e) => setDescription(e.target.value)} />
         </Field>
         <div className="pt-2 border-t flex justify-end gap-2" style={{ borderColor: "var(--border)" }}>
           <Button type="button" variant="secondary" onClick={onClose}>
@@ -189,10 +211,14 @@ export const CmsTaxonomyPage: React.FC = () => {
               {categories.map((c) => (
                 <li key={c.id} className="px-4 py-2.5 flex items-center justify-between gap-3 text-xs">
                   <div>
-                    <p className="font-semibold" style={{ color: "var(--text-primary)" }}>
+                    <p className="font-semibold flex items-center gap-1.5" style={{ color: "var(--text-primary)" }}>
                       {c.name}
+                      <Badge tone="neutral">{c.postCount} post(s)</Badge>
                     </p>
-                    <p style={{ color: "var(--text-muted)" }}>/{c.slug}</p>
+                    <p style={{ color: "var(--text-muted)" }}>
+                      /{c.slug}
+                      {c.parent && <> · child of {c.parent.name}</>}
+                    </p>
                   </div>
                   <div className="flex gap-1.5 shrink-0">
                     {canUpdate && (
@@ -230,10 +256,14 @@ export const CmsTaxonomyPage: React.FC = () => {
               {tags.map((t) => (
                 <li key={t.id} className="px-4 py-2.5 flex items-center justify-between gap-3 text-xs">
                   <div>
-                    <p className="font-semibold" style={{ color: "var(--text-primary)" }}>
+                    <p className="font-semibold flex items-center gap-1.5" style={{ color: "var(--text-primary)" }}>
                       {t.name}
+                      <Badge tone="neutral">{t.postCount} post(s)</Badge>
                     </p>
-                    <p style={{ color: "var(--text-muted)" }}>/{t.slug}</p>
+                    <p style={{ color: "var(--text-muted)" }}>
+                      /{t.slug}
+                      {t.description && <> · {t.description}</>}
+                    </p>
                   </div>
                   <div className="flex gap-1.5 shrink-0">
                     {canUpdate && (
@@ -259,6 +289,7 @@ export const CmsTaxonomyPage: React.FC = () => {
         onClose={() => setCategoryModal({ open: false })}
         onSaved={load}
         category={categoryModal.category}
+        categories={categories}
       />
       <TagFormModal open={tagModal.open} onClose={() => setTagModal({ open: false })} onSaved={load} tag={tagModal.tag} />
       <ConfirmDialog

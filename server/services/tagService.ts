@@ -1,7 +1,7 @@
-/** Tag management (Phase 8 — docs/CMS_ARCHITECTURE.md). Organization-scoped, mirrors categoryService.ts. */
-import { tagRepository } from "../repositories/tagRepository";
+/** Tag management (Phase 8 — docs/CMS_ARCHITECTURE.md). Organization-scoped, mirrors categoryService.ts's shape. */
+import { tagRepository, type TagWithCounts } from "../repositories/tagRepository";
 import { auditLogRepository } from "../repositories/auditLogRepository";
-import { ConflictError, NotFoundError } from "../core/errors";
+import { ConflictError, NotFoundError, ValidationError } from "../core/errors";
 import type { SanitizedUser } from "../types/domain";
 import type { CreateTagInput, UpdateTagInput } from "../schemas/contentSchemas";
 import type { RequestMeta } from "./authService";
@@ -18,7 +18,7 @@ async function loadTagOrThrow(id: string, organizationId: string): Promise<Tag> 
 }
 
 export const tagService = {
-  async listTags(organizationId: string): Promise<Tag[]> {
+  async listTags(organizationId: string): Promise<TagWithCounts[]> {
     return tagRepository.list(organizationId);
   },
 
@@ -36,7 +36,7 @@ export const tagService = {
 
     let tag: Tag;
     try {
-      tag = await tagRepository.create({ organizationId, name: input.name, slug });
+      tag = await tagRepository.create({ organizationId, name: input.name, slug, description: input.description });
     } catch (err) {
       throw isUniqueConstraintError(err) ? new ConflictError("A tag with this slug already exists.") : err;
     }
@@ -68,6 +68,7 @@ export const tagService = {
     const patch: Record<string, unknown> = {};
     if (input.name !== undefined) patch.name = input.name;
     if (input.slug !== undefined) patch.slug = input.slug;
+    if (input.description !== undefined) patch.description = input.description;
 
     let updated: Tag;
     try {
@@ -95,6 +96,13 @@ export const tagService = {
   async deleteTag(caller: SanitizedUser, id: string, meta: RequestMeta = {}): Promise<void> {
     const organizationId = caller.organizationId;
     const existing = await loadTagOrThrow(id, organizationId);
+
+    // Phase 7 — "Prevent accidental deletion of terms/content in use",
+    // same hard block as categoryService.deleteCategory.
+    const postCount = await tagRepository.countPostsUsing(id);
+    if (postCount > 0) {
+      throw new ValidationError(`This tag is still assigned to ${postCount} post(s). Remove it from them before deleting it.`);
+    }
 
     await tagRepository.delete(id);
 

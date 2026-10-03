@@ -12,6 +12,12 @@ const archiveMock = vi.fn();
 const revisionsMock = vi.fn();
 const categoriesListMock = vi.fn();
 const tagsListMock = vi.fn();
+const authorsListMock = vi.fn();
+const trashMock = vi.fn();
+const restoreMock = vi.fn();
+const bulkArchiveMock = vi.fn();
+const bulkTrashMock = vi.fn();
+const bulkRestoreMock = vi.fn();
 const notifyMock = vi.fn();
 
 vi.mock("../../lib/api", () => ({
@@ -26,9 +32,15 @@ vi.mock("../../lib/api", () => ({
     schedule: vi.fn(),
     archive: (...args: unknown[]) => archiveMock(...args),
     revert: vi.fn(),
+    trash: (...args: unknown[]) => trashMock(...args),
+    restore: (...args: unknown[]) => restoreMock(...args),
+    bulkArchive: (...args: unknown[]) => bulkArchiveMock(...args),
+    bulkTrash: (...args: unknown[]) => bulkTrashMock(...args),
+    bulkRestore: (...args: unknown[]) => bulkRestoreMock(...args),
   },
   categoriesApi: { list: (...args: unknown[]) => categoriesListMock(...args) },
   tagsApi: { list: (...args: unknown[]) => tagsListMock(...args) },
+  authorsApi: { list: (...args: unknown[]) => authorsListMock(...args) },
 }));
 
 let mockPermissions: string[] = ["content.read", "content.create", "content.update", "content.publish", "content.delete"];
@@ -86,6 +98,12 @@ afterEach(() => {
   revisionsMock.mockReset();
   categoriesListMock.mockReset();
   tagsListMock.mockReset();
+  authorsListMock.mockReset();
+  trashMock.mockReset();
+  restoreMock.mockReset();
+  bulkArchiveMock.mockReset();
+  bulkTrashMock.mockReset();
+  bulkRestoreMock.mockReset();
   notifyMock.mockReset();
   mockPermissions = ["content.read", "content.create", "content.update", "content.publish", "content.delete"];
 });
@@ -93,6 +111,8 @@ afterEach(() => {
 beforeEach(() => {
   categoriesListMock.mockResolvedValue({ categories: [category] });
   tagsListMock.mockResolvedValue({ tags: [tag] });
+  authorsListMock.mockResolvedValue({ authors: [] });
+  trashMock.mockResolvedValue({ items: [], page: 1, limit: 20, total: 0, totalPages: 1 });
 });
 
 describe("PostsPage", () => {
@@ -172,5 +192,81 @@ describe("PostsPage", () => {
     const selects = screen.getAllByRole("combobox");
     fireEvent.change(selects[1]!, { target: { value: "cat-1" } });
     await vi.waitFor(() => expect(listMock).toHaveBeenCalledWith(expect.objectContaining({ categoryId: "cat-1" })));
+  });
+
+  // Phase 7 (Content Management upgrade) — Trash view, bulk actions, date filters.
+  describe("Phase 7 — Trash view, bulk actions", () => {
+    it("switches to the Trash tab, calling the real trash API instead of the active list", async () => {
+      listMock.mockResolvedValue({ items: [post], page: 1, limit: 20, total: 1, totalPages: 1 });
+      trashMock.mockResolvedValue({ items: [{ ...post, title: "Trashed Post" }], page: 1, limit: 20, total: 1, totalPages: 1 });
+      render(<PostsPage />);
+      await screen.findByText("We shipped it.");
+
+      fireEvent.click(screen.getByRole("button", { name: /^trash$/i }));
+      expect(await screen.findByText("Trashed Post")).toBeInTheDocument();
+      expect(trashMock).toHaveBeenCalled();
+    });
+
+    it("restores a single trashed post through the real API", async () => {
+      trashMock.mockResolvedValue({ items: [{ ...post, title: "Trashed Post" }], page: 1, limit: 20, total: 1, totalPages: 1 });
+      restoreMock.mockResolvedValue({ message: "Post restored from trash." });
+      listMock.mockResolvedValue({ items: [], page: 1, limit: 20, total: 0, totalPages: 1 });
+      render(<PostsPage />);
+
+      fireEvent.click(await screen.findByRole("button", { name: /^trash$/i }));
+      await screen.findByText("Trashed Post");
+      fireEvent.click(screen.getByRole("button", { name: /restore trashed post/i }));
+
+      await vi.waitFor(() => expect(restoreMock).toHaveBeenCalledWith("post-1"));
+    });
+
+    it("bulk-archives selected posts only after confirming, through the real API", async () => {
+      listMock.mockResolvedValue({ items: [post], page: 1, limit: 20, total: 1, totalPages: 1 });
+      bulkArchiveMock.mockResolvedValue({ succeeded: ["post-1"], failed: [] });
+      render(<PostsPage />);
+      await screen.findByText("We shipped it.");
+
+      fireEvent.click(screen.getByLabelText(/select launch day/i));
+      fireEvent.click(screen.getByRole("button", { name: /archive selected/i }));
+      expect(bulkArchiveMock).not.toHaveBeenCalled();
+
+      const dialog = await screen.findByRole("dialog");
+      fireEvent.click(within(dialog).getByRole("button", { name: /^archive$/i }));
+
+      await vi.waitFor(() => expect(bulkArchiveMock).toHaveBeenCalledWith(["post-1"]));
+      expect(notifyMock).toHaveBeenCalledWith("1 post(s) archived.", "success");
+    });
+
+    it("bulk-trashes selected posts only after confirming", async () => {
+      listMock.mockResolvedValue({ items: [post], page: 1, limit: 20, total: 1, totalPages: 1 });
+      bulkTrashMock.mockResolvedValue({ succeeded: ["post-1"], failed: [] });
+      render(<PostsPage />);
+      await screen.findByText("We shipped it.");
+
+      fireEvent.click(screen.getByLabelText(/select launch day/i));
+      fireEvent.click(screen.getByRole("button", { name: /trash selected/i }));
+      const dialog = await screen.findByRole("dialog");
+      fireEvent.click(within(dialog).getByRole("button", { name: /^trash$/i }));
+
+      await vi.waitFor(() => expect(bulkTrashMock).toHaveBeenCalledWith(["post-1"]));
+    });
+
+    it("hides checkboxes and bulk actions when the caller lacks content.delete", async () => {
+      mockPermissions = ["content.read"];
+      listMock.mockResolvedValue({ items: [post], page: 1, limit: 20, total: 1, totalPages: 1 });
+      render(<PostsPage />);
+      await screen.findByText("We shipped it.");
+
+      expect(screen.queryByLabelText(/select launch day/i)).not.toBeInTheDocument();
+    });
+
+    it("filters by date range, sending fromDate/toDate to the real API", async () => {
+      listMock.mockResolvedValue({ items: [post], page: 1, limit: 20, total: 1, totalPages: 1 });
+      render(<PostsPage />);
+      await screen.findByText("We shipped it.");
+
+      fireEvent.change(screen.getByLabelText(/from date/i), { target: { value: "2026-01-01" } });
+      await vi.waitFor(() => expect(listMock).toHaveBeenCalledWith(expect.objectContaining({ fromDate: expect.any(String) })));
+    });
   });
 });

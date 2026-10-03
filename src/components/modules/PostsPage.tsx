@@ -1,6 +1,20 @@
 /** Phase 8 — CMS blog posts: searchable/filterable/paginated list + master-detail editor with category/tag assignment, workflow actions, and revision history/revert. */
 import React, { useEffect, useState } from "react";
-import { Newspaper, Plus, Search, Send, Rocket, CalendarClock, Archive, History, RotateCcw, Image as ImageIcon, X } from "lucide-react";
+import {
+  Newspaper,
+  Plus,
+  Search,
+  Send,
+  Rocket,
+  CalendarClock,
+  Archive,
+  History,
+  RotateCcw,
+  Image as ImageIcon,
+  X,
+  Trash2,
+  Undo2,
+} from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
 import {
@@ -8,10 +22,12 @@ import {
   categoriesApi,
   tagsApi,
   mediaApi,
+  authorsApi,
   type CmsPost,
   type CmsCategory,
   type CmsTag,
   type CmsMedia,
+  type CmsAuthor,
   type ContentRevision,
   type ContentStatusValue,
 } from "../../lib/api";
@@ -98,11 +114,14 @@ const PostFormModal: React.FC<{
   post?: CmsPost;
   categories: CmsCategory[];
   tags: CmsTag[];
-}> = ({ open, onClose, onSaved, mode, post, categories, tags }) => {
+  authors: CmsAuthor[];
+}> = ({ open, onClose, onSaved, mode, post, categories, tags, authors }) => {
   const [title, setTitle] = useState(post?.title ?? "");
   const [slug, setSlug] = useState(post?.slug ?? "");
+  const [excerpt, setExcerpt] = useState(post?.currentRevision?.excerpt ?? "");
   const [body, setBody] = useState(post?.currentRevision?.body ?? "");
   const [categoryId, setCategoryId] = useState(post?.categoryId ?? "");
+  const [authorId, setAuthorId] = useState(post?.authorId ?? "");
   const [tagIds, setTagIds] = useState<string[]>(post?.tags.map((t) => t.tagId) ?? []);
   const [featuredMediaId, setFeaturedMediaId] = useState<string | undefined>(post?.featuredMediaId ?? undefined);
   const [metaTitle, setMetaTitle] = useState((post?.currentRevision?.metadata?.metaTitle as string) ?? "");
@@ -115,8 +134,10 @@ const PostFormModal: React.FC<{
     if (open) {
       setTitle(post?.title ?? "");
       setSlug(post?.slug ?? "");
+      setExcerpt(post?.currentRevision?.excerpt ?? "");
       setBody(post?.currentRevision?.body ?? "");
       setCategoryId(post?.categoryId ?? "");
+      setAuthorId(post?.authorId ?? "");
       setTagIds(post?.tags.map((t) => t.tagId) ?? []);
       setFeaturedMediaId(post?.featuredMediaId ?? undefined);
       setMetaTitle((post?.currentRevision?.metadata?.metaTitle as string) ?? "");
@@ -139,15 +160,27 @@ const PostFormModal: React.FC<{
     };
     try {
       if (mode === "create") {
-        const res = await postsApi.create({ title, slug: slug || undefined, body, metadata, categoryId: categoryId || undefined, tagIds, featuredMediaId });
+        const res = await postsApi.create({
+          title,
+          slug: slug || undefined,
+          excerpt: excerpt.trim() || undefined,
+          body,
+          metadata,
+          categoryId: categoryId || undefined,
+          authorId: authorId || undefined,
+          tagIds,
+          featuredMediaId,
+        });
         onSaved(res.post);
       } else if (post) {
         const res = await postsApi.update(post.id, {
           title,
           slug,
+          excerpt: excerpt.trim() || null,
           body,
           metadata,
           categoryId: categoryId || null,
+          authorId: authorId || null,
           tagIds,
           featuredMediaId: featuredMediaId ?? null,
           expectedUpdatedAt: post.updatedAt,
@@ -184,6 +217,26 @@ const PostFormModal: React.FC<{
             </Select>
           </Field>
         </div>
+        <Field label="Author">
+          <Select value={authorId} onChange={(e) => setAuthorId(e.target.value)}>
+            <option value="">Unassigned</option>
+            {authors.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.user.displayName || `${a.user.firstName} ${a.user.lastName}`}
+              </option>
+            ))}
+          </Select>
+        </Field>
+        <Field label="Excerpt" hint="A short summary for list views and archive cards. Falls back to an auto-generated one if left blank.">
+          <textarea
+            className="w-full px-3 py-2 rounded-lg text-sm focus:outline-none"
+            style={{ background: "var(--bg-app)", border: "1px solid var(--border)", color: "var(--text-primary)" }}
+            rows={2}
+            maxLength={500}
+            value={excerpt}
+            onChange={(e) => setExcerpt(e.target.value)}
+          />
+        </Field>
         <Field label="Tags">
           <div className="flex flex-wrap gap-1.5">
             {tags.length === 0 && <span style={{ color: "var(--text-muted)" }}>No tags yet.</span>}
@@ -266,10 +319,11 @@ const ScheduleModal: React.FC<{ open: boolean; onClose: () => void; onSchedule: 
   );
 };
 
-const PostDetail: React.FC<{ post: CmsPost; categories: CmsCategory[]; tags: CmsTag[]; onChanged: (p?: CmsPost) => void }> = ({
+const PostDetail: React.FC<{ post: CmsPost; categories: CmsCategory[]; tags: CmsTag[]; authors: CmsAuthor[]; onChanged: (p?: CmsPost) => void }> = ({
   post,
   categories,
   tags,
+  authors,
   onChanged,
 }) => {
   const { user } = useAuth();
@@ -412,6 +466,7 @@ const PostDetail: React.FC<{ post: CmsPost; categories: CmsCategory[]; tags: Cms
         post={post}
         categories={categories}
         tags={tags}
+        authors={authors}
       />
       <ScheduleModal open={scheduleOpen} onClose={() => setScheduleOpen(false)} onSchedule={handleSchedule} />
       <ConfirmDialog
@@ -469,6 +524,17 @@ export const PostsPage: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
+  const [authors, setAuthors] = useState<CmsAuthor[]>([]);
+
+  // Phase 7 — Content Dashboard: date range filter, Trash view, bulk actions.
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
+  const [view, setView] = useState<"active" | "trash">("active");
+  const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkConfirm, setBulkConfirm] = useState<"archive" | "trash" | null>(null);
+  const { notify } = useToast();
+  const canDeleteBulk = hasPermission(user?.role.permissions, "content.delete");
 
   // Command Center "New Post" deep link (?new=1)
   useEffect(() => {
@@ -482,24 +548,31 @@ export const PostsPage: React.FC = () => {
 
   useEffect(() => {
     setPageNum(1);
-  }, [debouncedSearch, status, categoryFilter]);
+    setCheckedIds(new Set());
+  }, [debouncedSearch, status, categoryFilter, fromDate, toDate, view]);
 
   useEffect(() => {
     void categoriesApi.list().then((res) => setCategories(res.categories));
     void tagsApi.list().then((res) => setTags(res.tags));
+    void authorsApi.list().then((res) => setAuthors(res.authors));
   }, []);
 
   const load = React.useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const res = await postsApi.list({
-        page: pageNum,
-        limit: 20,
-        search: debouncedSearch || undefined,
-        status: status || undefined,
-        categoryId: categoryFilter || undefined,
-      });
+      const res =
+        view === "trash"
+          ? await postsApi.trash({ page: pageNum, limit: 20 })
+          : await postsApi.list({
+              page: pageNum,
+              limit: 20,
+              search: debouncedSearch || undefined,
+              status: status || undefined,
+              categoryId: categoryFilter || undefined,
+              fromDate: fromDate ? new Date(fromDate).toISOString() : undefined,
+              toDate: toDate ? new Date(toDate).toISOString() : undefined,
+            });
       setPosts(res.items);
       setTotalPages(res.totalPages);
       setSelected((prev) => (prev && res.items.some((p) => p.id === prev.id) ? res.items.find((p) => p.id === prev.id)! : res.items[0] ?? null));
@@ -508,11 +581,41 @@ export const PostsPage: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [pageNum, debouncedSearch, status, categoryFilter]);
+  }, [pageNum, debouncedSearch, status, categoryFilter, fromDate, toDate, view]);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  const toggleChecked = (id: string) =>
+    setCheckedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  const runBulk = async (action: "archive" | "trash" | "restore") => {
+    const ids = Array.from(checkedIds);
+    if (ids.length === 0) return;
+    setBulkBusy(true);
+    setBulkConfirm(null);
+    try {
+      const res = action === "archive" ? await postsApi.bulkArchive(ids) : action === "trash" ? await postsApi.bulkTrash(ids) : await postsApi.bulkRestore(ids);
+      const verb = action === "archive" ? "archived" : action === "trash" ? "moved to trash" : "restored";
+      if (res.failed.length === 0) {
+        notify(`${res.succeeded.length} post(s) ${verb}.`, "success");
+      } else {
+        notify(`${res.succeeded.length} ${verb}, ${res.failed.length} failed: ${res.failed[0]!.error}`, "error");
+      }
+      setCheckedIds(new Set());
+      void load();
+    } catch (err) {
+      notify(err instanceof ApiClientError ? err.message : "Bulk action failed.", "error");
+    } finally {
+      setBulkBusy(false);
+    }
+  };
 
   return (
     <div className="space-y-4">
@@ -525,35 +628,81 @@ export const PostsPage: React.FC = () => {
             Blog content for this organization.
           </p>
         </div>
-        {canCreate && (
-          <Button variant="primary" onClick={() => setCreateOpen(true)}>
-            <Plus className="w-4 h-4" /> New post
-          </Button>
-        )}
+        <div className="flex items-center gap-2">
+          <div className="flex rounded-lg border p-0.5" style={{ borderColor: "var(--border)" }}>
+            <button
+              onClick={() => setView("active")}
+              className="px-3 py-1 rounded-md text-xs font-semibold"
+              style={view === "active" ? { background: "var(--accent-soft)", color: "var(--accent)" } : { color: "var(--text-secondary)" }}
+            >
+              Active
+            </button>
+            <button
+              onClick={() => setView("trash")}
+              className="px-3 py-1 rounded-md text-xs font-semibold flex items-center gap-1"
+              style={view === "trash" ? { background: "var(--accent-soft)", color: "var(--accent)" } : { color: "var(--text-secondary)" }}
+            >
+              <Trash2 className="w-3 h-3" /> Trash
+            </button>
+          </div>
+          {canCreate && view === "active" && (
+            <Button variant="primary" onClick={() => setCreateOpen(true)}>
+              <Plus className="w-4 h-4" /> New post
+            </Button>
+          )}
+        </div>
       </div>
 
-      <Card className="p-3 flex flex-col sm:flex-row gap-2 flex-wrap">
-        <div className="relative flex-1 max-w-xs">
-          <Search className="w-3.5 h-3.5 absolute left-2.5 top-2.5" style={{ color: "var(--text-muted)" }} />
-          <Input placeholder="Search posts…" value={search} onChange={(e) => setSearch(e.target.value)} className="pl-8" />
-        </div>
-        <Select value={status} onChange={(e) => setStatus(e.target.value as ContentStatusValue | "")}>
-          <option value="">All statuses</option>
-          {STATUS_OPTIONS.map((s) => (
-            <option key={s} value={s}>
-              {s}
-            </option>
-          ))}
-        </Select>
-        <Select value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)}>
-          <option value="">All categories</option>
-          {categories.map((c) => (
-            <option key={c.id} value={c.id}>
-              {c.name}
-            </option>
-          ))}
-        </Select>
-      </Card>
+      {view === "active" && (
+        <Card className="p-3 flex flex-col sm:flex-row gap-2 flex-wrap">
+          <div className="relative flex-1 max-w-xs">
+            <Search className="w-3.5 h-3.5 absolute left-2.5 top-2.5" style={{ color: "var(--text-muted)" }} />
+            <Input placeholder="Search posts…" value={search} onChange={(e) => setSearch(e.target.value)} className="pl-8" />
+          </div>
+          <Select value={status} onChange={(e) => setStatus(e.target.value as ContentStatusValue | "")}>
+            <option value="">All statuses</option>
+            {STATUS_OPTIONS.map((s) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
+            ))}
+          </Select>
+          <Select value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)}>
+            <option value="">All categories</option>
+            {categories.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+          </Select>
+          <Input type="date" aria-label="From date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} className="w-auto" />
+          <Input type="date" aria-label="To date" value={toDate} onChange={(e) => setToDate(e.target.value)} className="w-auto" />
+        </Card>
+      )}
+
+      {canDeleteBulk && checkedIds.size > 0 && (
+        <Card className="p-2.5 flex items-center justify-between gap-3">
+          <span className="text-xs font-semibold" style={{ color: "var(--text-secondary)" }}>
+            {checkedIds.size} selected
+          </span>
+          <div className="flex gap-2">
+            {view === "active" ? (
+              <>
+                <Button variant="secondary" disabled={bulkBusy} onClick={() => setBulkConfirm("archive")}>
+                  <Archive className="w-3.5 h-3.5" /> Archive selected
+                </Button>
+                <Button variant="danger" disabled={bulkBusy} onClick={() => setBulkConfirm("trash")}>
+                  <Trash2 className="w-3.5 h-3.5" /> Trash selected
+                </Button>
+              </>
+            ) : (
+              <Button variant="secondary" disabled={bulkBusy} onClick={() => void runBulk("restore")}>
+                <Undo2 className="w-3.5 h-3.5" /> Restore selected
+              </Button>
+            )}
+          </div>
+        </Card>
+      )}
 
       {loading ? (
         <LoadingState />
@@ -561,30 +710,70 @@ export const PostsPage: React.FC = () => {
         <ErrorState message={error} />
       ) : posts.length === 0 ? (
         <Card>
-          <EmptyState title="No posts found" description="Create a post or adjust your filters." />
+          <EmptyState
+            title={view === "trash" ? "Trash is empty" : "No posts found"}
+            description={view === "trash" ? "" : "Create a post or adjust your filters."}
+          />
         </Card>
       ) : (
         <div className="grid lg:grid-cols-[300px_1fr] gap-4">
           <Card className="p-2 h-fit">
             {posts.map((p) => (
-              <button
-                key={p.id}
-                onClick={() => setSelected(p)}
-                className="w-full text-left px-3 py-2 rounded-lg text-xs font-semibold mb-0.5 flex items-center justify-between gap-2"
-                style={selected?.id === p.id ? { background: "var(--accent-soft)", color: "var(--accent)" } : { color: "var(--text-secondary)" }}
-              >
-                <span className="truncate">{p.title}</span>
-                <Badge tone={STATUS_TONE[p.status]}>{p.status}</Badge>
-              </button>
+              <div key={p.id} className="flex items-center gap-1.5 mb-0.5">
+                {canDeleteBulk && (
+                  <input
+                    type="checkbox"
+                    aria-label={`Select ${p.title}`}
+                    checked={checkedIds.has(p.id)}
+                    onChange={() => toggleChecked(p.id)}
+                    className="shrink-0"
+                  />
+                )}
+                <button
+                  onClick={() => setSelected(p)}
+                  className="flex-1 text-left px-2 py-2 rounded-lg text-xs font-semibold flex items-center justify-between gap-2"
+                  style={selected?.id === p.id ? { background: "var(--accent-soft)", color: "var(--accent)" } : { color: "var(--text-secondary)" }}
+                >
+                  <span className="truncate">{p.title}</span>
+                  {view === "active" && <Badge tone={STATUS_TONE[p.status]}>{p.status}</Badge>}
+                </button>
+                {view === "trash" && (
+                  <Button variant="ghost" onClick={() => void postsApi.restore(p.id).then(() => load())} aria-label={`Restore ${p.title}`}>
+                    <Undo2 className="w-3.5 h-3.5" />
+                  </Button>
+                )}
+              </div>
             ))}
             <Pagination page={pageNum} totalPages={totalPages} onChange={setPageNum} />
           </Card>
 
-          {selected && <PostDetail post={selected} categories={categories} tags={tags} onChanged={(updated) => (updated ? setSelected(updated) : void load())} />}
+          {view === "active" && selected && (
+            <PostDetail
+              post={selected}
+              categories={categories}
+              tags={tags}
+              authors={authors}
+              onChanged={(updated) => (updated ? setSelected(updated) : void load())}
+            />
+          )}
         </div>
       )}
 
-      <PostFormModal open={createOpen} onClose={() => setCreateOpen(false)} onSaved={() => load()} mode="create" categories={categories} tags={tags} />
+      <PostFormModal open={createOpen} onClose={() => setCreateOpen(false)} onSaved={() => load()} mode="create" categories={categories} tags={tags} authors={authors} />
+
+      <ConfirmDialog
+        open={bulkConfirm !== null}
+        title={bulkConfirm === "archive" ? "Archive selected posts" : "Move selected posts to trash"}
+        message={
+          bulkConfirm === "archive"
+            ? `Archive ${checkedIds.size} post(s)? They'll be hidden from active use but preserved for history.`
+            : `Move ${checkedIds.size} post(s) to trash? You can restore them later from the Trash tab.`
+        }
+        confirmLabel={bulkConfirm === "archive" ? "Archive" : "Trash"}
+        destructive
+        onConfirm={() => void runBulk(bulkConfirm === "archive" ? "archive" : "trash")}
+        onCancel={() => setBulkConfirm(null)}
+      />
     </div>
   );
 };

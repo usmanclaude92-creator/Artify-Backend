@@ -117,4 +117,54 @@ describe("CMS categories and tags", () => {
     expect((await request(app).get("/api/v1/categories")).status).toBe(401);
     expect((await request(app).get("/api/v1/tags")).status).toBe(401);
   });
+
+  // Phase 7 (Content Management upgrade) — category hierarchy, descriptions, counts, delete-in-use protection.
+  describe("Phase 7 — hierarchy, counts, delete protection", () => {
+    it("supports a parent/child category hierarchy and rejects a self/circular parent", async () => {
+      const parent = await request(app).post("/api/v1/categories").set("Authorization", `Bearer ${adminToken}`).send({ name: "Parent Cat" });
+      const parentId = parent.body.data.category.id;
+
+      const child = await request(app)
+        .post("/api/v1/categories")
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ name: "Child Cat", parentId });
+      expect(child.status).toBe(201);
+      const childId = child.body.data.category.id;
+
+      const list = await request(app).get("/api/v1/categories").set("Authorization", `Bearer ${adminToken}`);
+      const found = list.body.data.categories.find((c: { id: string }) => c.id === childId);
+      expect(found.parentId).toBe(parentId);
+      expect(found.parent.id).toBe(parentId);
+
+      const selfParent = await request(app).patch(`/api/v1/categories/${childId}`).set("Authorization", `Bearer ${adminToken}`).send({ parentId: childId });
+      expect(selfParent.status).toBe(400);
+
+      const circular = await request(app).patch(`/api/v1/categories/${parentId}`).set("Authorization", `Bearer ${adminToken}`).send({ parentId: childId });
+      expect(circular.status).toBe(400);
+    });
+
+    it("reports real postCount on categories and tags, and blocks deleting one still in use", async () => {
+      const category = await request(app).post("/api/v1/categories").set("Authorization", `Bearer ${adminToken}`).send({ name: "In Use Cat" });
+      const categoryId = category.body.data.category.id;
+      const tag = await request(app).post("/api/v1/tags").set("Authorization", `Bearer ${adminToken}`).send({ name: "In Use Tag", description: "d" });
+      const tagId = tag.body.data.tag.id;
+
+      await request(app)
+        .post("/api/v1/posts")
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ title: "Tagged Post", categoryId, tagIds: [tagId] });
+
+      const categories = await request(app).get("/api/v1/categories").set("Authorization", `Bearer ${adminToken}`);
+      expect(categories.body.data.categories.find((c: { id: string }) => c.id === categoryId).postCount).toBe(1);
+      const tags = await request(app).get("/api/v1/tags").set("Authorization", `Bearer ${adminToken}`);
+      const foundTag = tags.body.data.tags.find((t: { id: string }) => t.id === tagId);
+      expect(foundTag.postCount).toBe(1);
+      expect(foundTag.description).toBe("d");
+
+      const blockedCategory = await request(app).delete(`/api/v1/categories/${categoryId}`).set("Authorization", `Bearer ${adminToken}`).send();
+      expect(blockedCategory.status).toBe(400);
+      const blockedTag = await request(app).delete(`/api/v1/tags/${tagId}`).set("Authorization", `Bearer ${adminToken}`).send();
+      expect(blockedTag.status).toBe(400);
+    });
+  });
 });

@@ -5,6 +5,8 @@ import { prisma } from "../db/prisma";
 export interface PageFilters {
   search?: string;
   status?: string;
+  fromDate?: Date;
+  toDate?: Date;
 }
 
 function slugify(input: string): string {
@@ -28,6 +30,9 @@ export type PageWithPublicRelations = Prisma.PageGetPayload<typeof withPublicRel
 function buildWhere(organizationId: string, filters: PageFilters): Prisma.PageWhereInput {
   const where: Prisma.PageWhereInput = { organizationId, deletedAt: null };
   if (filters.status) where.status = filters.status as Prisma.EnumContentStatusFilter["equals"];
+  if (filters.fromDate || filters.toDate) {
+    where.createdAt = { ...(filters.fromDate ? { gte: filters.fromDate } : {}), ...(filters.toDate ? { lte: filters.toDate } : {}) };
+  }
   if (filters.search) {
     where.OR = [{ title: { contains: filters.search, mode: "insensitive" } }, { slug: { contains: filters.search, mode: "insensitive" } }];
   }
@@ -128,5 +133,24 @@ export const pageRepository = {
 
   async softDelete(id: string): Promise<void> {
     await prisma.page.update({ where: { id }, data: { deletedAt: new Date() } });
+  },
+
+  /** Phase 7 — Trash view: pages soft-deleted but not yet permanently gone, newest-deleted first. */
+  async listTrash(organizationId: string, page: number, limit: number): Promise<{ rows: Page[]; total: number }> {
+    const where: Prisma.PageWhereInput = { organizationId, deletedAt: { not: null } };
+    const [rows, total] = await Promise.all([
+      prisma.page.findMany({ where, orderBy: { deletedAt: "desc" }, skip: (page - 1) * limit, take: limit }),
+      prisma.page.count({ where }),
+    ]);
+    return { rows, total };
+  },
+
+  /** Phase 7 — Trash view: a single soft-deleted page, org-scoped (never a live one). */
+  async findTrashedByIdInOrg(id: string, organizationId: string): Promise<Page | null> {
+    return prisma.page.findFirst({ where: { id, organizationId, deletedAt: { not: null } } });
+  },
+
+  async restore(id: string): Promise<void> {
+    await prisma.page.update({ where: { id }, data: { deletedAt: null } });
   },
 };

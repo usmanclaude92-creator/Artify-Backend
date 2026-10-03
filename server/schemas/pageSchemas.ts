@@ -19,6 +19,8 @@ export const createPageSchema = z.object({
   title: z.string().trim().min(1).max(200),
   slug: slugSchema.optional(),
   body: z.string().trim().max(500000).default(""),
+  // Phase 7 — short author-written summary, distinct from SEO metaDescription.
+  excerpt: z.string().trim().max(500).optional(),
   metadata: seoMetadataSchema.optional(),
   // Phase 2 (Site Editor) — additive, optional. A page created without it
   // behaves exactly as before: body/metadata alone drive rendering
@@ -39,6 +41,7 @@ export const updatePageSchema = z
     title: z.string().trim().min(1).max(200).optional(),
     slug: slugSchema.optional(),
     body: z.string().trim().max(500000).optional(),
+    excerpt: z.string().trim().max(500).nullable().optional(),
     metadata: seoMetadataSchema.optional(),
     // null clears the editor composition (falls back to body-only
     // rendering); omitted leaves it unchanged.

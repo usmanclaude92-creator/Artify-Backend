@@ -5,9 +5,18 @@ import { prisma } from "../db/prisma";
 const withUser = { include: { user: { select: { id: true, email: true, firstName: true, lastName: true, displayName: true, status: true } } } } as const;
 export type AuthorWithUser = Prisma.AuthorGetPayload<typeof withUser>;
 
+// Phase 7 — post counts for the Content Organization UI, same shape as
+// CategoryWithCounts/TagWithCounts.
+export type AuthorWithCounts = AuthorWithUser & { postCount: number };
+
 export const authorRepository = {
-  async list(): Promise<AuthorWithUser[]> {
-    return prisma.author.findMany({ ...withUser, orderBy: { createdAt: "desc" } });
+  async list(): Promise<AuthorWithCounts[]> {
+    const rows = await prisma.author.findMany({
+      ...withUser,
+      include: { ...withUser.include, _count: { select: { posts: true } } },
+      orderBy: { createdAt: "desc" },
+    });
+    return rows.map(({ _count, ...a }) => ({ ...a, postCount: _count.posts }));
   },
 
   async findById(id: string): Promise<AuthorWithUser | null> {

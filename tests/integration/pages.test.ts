@@ -640,4 +640,54 @@ describe("CMS pages", () => {
       expect(crossOrgRead.status).toBe(404);
     });
   });
+
+  // Phase 7 (Content Management upgrade) — excerpt, trash/restore, bulk actions.
+  describe("Phase 7 — excerpt, trash, bulk actions", () => {
+    it("persists excerpt through create and update", async () => {
+      const created = await request(app)
+        .post("/api/v1/pages")
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ title: "Excerpt Page", body: "v1", excerpt: "page summary" });
+      expect(created.body.data.page.currentRevision.excerpt).toBe("page summary");
+
+      const updated = await request(app)
+        .patch(`/api/v1/pages/${created.body.data.page.id}`)
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ excerpt: "page summary edited" });
+      expect(updated.body.data.page.currentRevision.excerpt).toBe("page summary edited");
+    });
+
+    it("soft-deletes into Trash, lists it there, and restores it", async () => {
+      const created = await request(app).post("/api/v1/pages").set("Authorization", `Bearer ${adminToken}`).send({ title: "Trash Page Me" });
+      const id = created.body.data.page.id;
+
+      await request(app).delete(`/api/v1/pages/${id}`).set("Authorization", `Bearer ${adminToken}`).send();
+
+      const trash = await request(app).get("/api/v1/pages/trash").set("Authorization", `Bearer ${adminToken}`);
+      expect(trash.status).toBe(200);
+      expect(trash.body.data.pages.some((p: { id: string }) => p.id === id)).toBe(true);
+
+      const restore = await request(app).post(`/api/v1/pages/${id}/restore`).set("Authorization", `Bearer ${adminToken}`).send();
+      expect(restore.status).toBe(200);
+
+      const get = await request(app).get(`/api/v1/pages/${id}`).set("Authorization", `Bearer ${adminToken}`);
+      expect(get.status).toBe(200);
+    });
+
+    it("bulk-trashes and bulk-restores pages through dedicated endpoints distinct from /:id/restore", async () => {
+      const a = await request(app).post("/api/v1/pages").set("Authorization", `Bearer ${adminToken}`).send({ title: "Bulk Page A" });
+      const idA = a.body.data.page.id;
+
+      const trash = await request(app).post("/api/v1/pages/bulk/trash").set("Authorization", `Bearer ${adminToken}`).send({ ids: [idA] });
+      expect(trash.status).toBe(200);
+      expect(trash.body.data.succeeded).toEqual([idA]);
+
+      const restore = await request(app).post("/api/v1/pages/bulk/restore").set("Authorization", `Bearer ${adminToken}`).send({ ids: [idA] });
+      expect(restore.status).toBe(200);
+      expect(restore.body.data.succeeded).toEqual([idA]);
+
+      const get = await request(app).get(`/api/v1/pages/${idA}`).set("Authorization", `Bearer ${adminToken}`);
+      expect(get.status).toBe(200);
+    });
+  });
 });

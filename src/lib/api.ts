@@ -950,6 +950,8 @@ export interface ContentRevision {
   version: number;
   status: ContentStatusValue;
   title: string;
+  // Phase 7 — short author-written summary, distinct from metadata.metaDescription.
+  excerpt: string | null;
   body: string;
   metadata: PostSeoMetadata;
   editorBlocks: EditorDocument | null;
@@ -992,6 +994,10 @@ export interface CmsCategory {
   description: string | null;
   createdAt: string;
   updatedAt: string;
+  // Phase 7 — hierarchy + usage count; null/0 on every category created before this phase.
+  parentId: string | null;
+  parent: { id: string; name: string; slug: string } | null;
+  postCount: number;
 }
 
 export interface CmsTag {
@@ -1000,6 +1006,9 @@ export interface CmsTag {
   slug: string;
   name: string;
   createdAt: string;
+  // Phase 7 — description + usage count; null/0 on every tag created before this phase.
+  description: string | null;
+  postCount: number;
 }
 
 export interface CmsPost {
@@ -1032,12 +1041,15 @@ export interface CmsAuthor {
   createdAt: string;
   updatedAt: string;
   user: { id: string; email: string; firstName: string; lastName: string; displayName: string | null; status: string };
+  // Phase 7 — usage count; 0 is a genuine "no posts yet", not a loading placeholder.
+  postCount: number;
 }
 
 const contentUpdateBody = (payload: {
   title?: string;
   slug?: string;
   body?: string;
+  excerpt?: string | null;
   metadata?: PostSeoMetadata;
   editorBlocks?: EditorDocument | null;
   status?: PatchableContentStatus;
@@ -1049,9 +1061,26 @@ const contentUpdateBody = (payload: {
   expectedUpdatedAt?: string;
 }) => payload;
 
+// Phase 7 — bulk workflow action result: ids that succeeded, and per-id
+// failures with the real error message (not a fabricated generic one),
+// shared shape for both pagesApi and postsApi's bulk methods.
+export interface BulkActionResult {
+  succeeded: string[];
+  failed: { id: string; error: string }[];
+}
+
 export const pagesApi = {
   list: (
-    params: { page?: number; limit?: number; search?: string; status?: ContentStatusValue; sort?: string; order?: "asc" | "desc" } = {}
+    params: {
+      page?: number;
+      limit?: number;
+      search?: string;
+      status?: ContentStatusValue;
+      fromDate?: string;
+      toDate?: string;
+      sort?: string;
+      order?: "asc" | "desc";
+    } = {}
   ) => paginatedGet<CmsPage>("/pages", "pages", params),
   get: (id: string) => apiClient.get<{ page: CmsPage }>(`/pages/${id}`),
   revisions: (id: string) => apiClient.get<{ revisions: ContentRevision[] }>(`/pages/${id}/revisions`),
@@ -1059,6 +1088,7 @@ export const pagesApi = {
     title: string;
     slug?: string;
     body?: string;
+    excerpt?: string;
     metadata?: PostSeoMetadata;
     editorBlocks?: EditorDocument;
     featuredMediaId?: string;
@@ -1075,6 +1105,12 @@ export const pagesApi = {
   archive: (id: string) => apiClient.post<{ page: CmsPage }>(`/pages/${id}/archive`),
   revert: (id: string, revisionId: string) => apiClient.post<{ page: CmsPage }>(`/pages/${id}/revert`, { revisionId }),
   remove: (id: string) => apiClient.delete<{ message: string }>(`/pages/${id}`),
+  // Phase 7 — Trash view + bulk actions.
+  trash: (params: { page?: number; limit?: number } = {}) => paginatedGet<CmsPage>("/pages/trash", "pages", params),
+  restore: (id: string) => apiClient.post<{ message: string }>(`/pages/${id}/restore`),
+  bulkArchive: (ids: string[]) => apiClient.post<BulkActionResult>("/pages/bulk/archive", { ids }),
+  bulkTrash: (ids: string[]) => apiClient.post<BulkActionResult>("/pages/bulk/trash", { ids }),
+  bulkRestore: (ids: string[]) => apiClient.post<BulkActionResult>("/pages/bulk/restore", { ids }),
 };
 
 // ---------------------------------------------------------------------------
@@ -1340,6 +1376,8 @@ export const postsApi = {
       status?: ContentStatusValue;
       categoryId?: string;
       tagId?: string;
+      fromDate?: string;
+      toDate?: string;
       sort?: string;
       order?: "asc" | "desc";
     } = {}
@@ -1350,6 +1388,7 @@ export const postsApi = {
     title: string;
     slug?: string;
     body?: string;
+    excerpt?: string;
     metadata?: PostSeoMetadata;
     categoryId?: string;
     authorId?: string;
@@ -1362,6 +1401,7 @@ export const postsApi = {
       title?: string;
       slug?: string;
       body?: string;
+      excerpt?: string | null;
       metadata?: PostSeoMetadata;
       status?: PatchableContentStatus;
       categoryId?: string | null;
@@ -1377,13 +1417,20 @@ export const postsApi = {
   archive: (id: string) => apiClient.post<{ post: CmsPost }>(`/posts/${id}/archive`),
   revert: (id: string, revisionId: string) => apiClient.post<{ post: CmsPost }>(`/posts/${id}/revert`, { revisionId }),
   remove: (id: string) => apiClient.delete<{ message: string }>(`/posts/${id}`),
+  // Phase 7 — Trash view + bulk actions.
+  trash: (params: { page?: number; limit?: number } = {}) => paginatedGet<CmsPost>("/posts/trash", "posts", params),
+  restore: (id: string) => apiClient.post<{ message: string }>(`/posts/${id}/restore`),
+  bulkArchive: (ids: string[]) => apiClient.post<BulkActionResult>("/posts/bulk/archive", { ids }),
+  bulkTrash: (ids: string[]) => apiClient.post<BulkActionResult>("/posts/bulk/trash", { ids }),
+  bulkRestore: (ids: string[]) => apiClient.post<BulkActionResult>("/posts/bulk/restore", { ids }),
 };
 
 export const categoriesApi = {
   list: () => apiClient.get<{ categories: CmsCategory[] }>("/categories"),
   get: (id: string) => apiClient.get<{ category: CmsCategory }>(`/categories/${id}`),
-  create: (payload: { name: string; slug?: string; description?: string }) => apiClient.post<{ category: CmsCategory }>("/categories", payload),
-  update: (id: string, payload: Partial<{ name: string; slug: string; description: string | null }>) =>
+  create: (payload: { name: string; slug?: string; description?: string; parentId?: string }) =>
+    apiClient.post<{ category: CmsCategory }>("/categories", payload),
+  update: (id: string, payload: Partial<{ name: string; slug: string; description: string | null; parentId: string | null }>) =>
     apiClient.patch<{ category: CmsCategory }>(`/categories/${id}`, payload),
   remove: (id: string) => apiClient.delete<{ message: string }>(`/categories/${id}`),
 };
@@ -1391,8 +1438,9 @@ export const categoriesApi = {
 export const tagsApi = {
   list: () => apiClient.get<{ tags: CmsTag[] }>("/tags"),
   get: (id: string) => apiClient.get<{ tag: CmsTag }>(`/tags/${id}`),
-  create: (payload: { name: string; slug?: string }) => apiClient.post<{ tag: CmsTag }>("/tags", payload),
-  update: (id: string, payload: Partial<{ name: string; slug: string }>) => apiClient.patch<{ tag: CmsTag }>(`/tags/${id}`, payload),
+  create: (payload: { name: string; slug?: string; description?: string }) => apiClient.post<{ tag: CmsTag }>("/tags", payload),
+  update: (id: string, payload: Partial<{ name: string; slug: string; description: string | null }>) =>
+    apiClient.patch<{ tag: CmsTag }>(`/tags/${id}`, payload),
   remove: (id: string) => apiClient.delete<{ message: string }>(`/tags/${id}`),
 };
 
