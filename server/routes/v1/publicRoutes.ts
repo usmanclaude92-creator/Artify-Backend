@@ -38,6 +38,14 @@ router.get(
 );
 
 router.get(
+  "/site-settings",
+  asyncHandler(async (_req, res) => {
+    const settings = await publicSiteService.getSiteSettings();
+    sendSuccess(res, { settings });
+  })
+);
+
+router.get(
   "/pages/:slug",
   asyncHandler(async (req, res) => {
     const page = await publicSiteService.getPageBySlug(req.params.slug!);

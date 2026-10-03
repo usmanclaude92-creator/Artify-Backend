@@ -239,6 +239,113 @@ export const settingsApi = {
 };
 
 // ---------------------------------------------------------------------------
+// Phase 3 (Site Identity + Global Styles) — typed convenience endpoints on
+// top of the generic SystemSetting store (server/schemas/siteSettingsSchemas.ts).
+// ---------------------------------------------------------------------------
+
+export interface SiteIdentity {
+  siteName: string;
+  tagline: string;
+  description: string;
+  logoMediaId: string | null;
+  logoDarkMediaId: string | null;
+  logoMobileMediaId: string | null;
+  faviconMediaId: string | null;
+  socialImageMediaId: string | null;
+  defaultMetaTitle: string;
+  defaultMetaDescription: string;
+  contactEmail?: string;
+  contactPhone?: string;
+  address?: string;
+  organizationLegalName?: string;
+}
+
+export type FontWeightValue = number | "normal" | "bold";
+
+export interface GlobalStyles {
+  colors: {
+    primary: string;
+    primaryHover: string;
+    primaryForeground: string;
+    secondary: string;
+    secondaryForeground: string;
+    background: string;
+    surface: string;
+    textPrimary: string;
+    textSecondary: string;
+    link: string;
+    linkHover: string;
+    border: string;
+  };
+  typography: {
+    fontFamilyBase: string;
+    fontFamilyHeading: string;
+    fontSizeBase: string;
+    headingScale: { h1: string; h2: string; h3: string; h4: string; h5: string; h6: string };
+    lineHeightBase: number;
+    lineHeightHeading: number;
+    fontWeightBase: FontWeightValue;
+    fontWeightHeading: FontWeightValue;
+    fontWeightBold: FontWeightValue;
+  };
+  layout: {
+    containerMaxWidth: string;
+    spacingScale: { xs: string; sm: string; md: string; lg: string; xl: string };
+    borderRadius: { sm: string; md: string; lg: string; full: string };
+  };
+  effects: {
+    borderColor: string;
+    borderWidth: string;
+    shadowSm: string;
+    shadowMd: string;
+    shadowLg: string;
+  };
+  buttons: {
+    radius: string;
+    paddingX: string;
+    paddingY: string;
+    fontWeight: FontWeightValue;
+    primaryBg: string;
+    primaryText: string;
+    primaryHoverBg: string;
+    secondaryBg: string;
+    secondaryText: string;
+    secondaryBorder: string;
+  };
+  forms: {
+    radius: string;
+    borderColor: string;
+    focusColor: string;
+    background: string;
+    text: string;
+  };
+  responsive: {
+    tablet: { containerMaxWidth?: string; fontSizeBase?: string };
+    mobile: { containerMaxWidth?: string; fontSizeBase?: string };
+  };
+}
+
+export interface SettingsGroupState<T> {
+  draft: T;
+  published: T;
+  isDirty: boolean;
+  updatedAt: string | null;
+  publishedAt: string | null;
+}
+
+export const siteSettingsApi = {
+  getIdentity: () => apiClient.get<SettingsGroupState<SiteIdentity>>("/site-settings/identity"),
+  saveIdentityDraft: (input: SiteIdentity) => apiClient.put<{ draft: SiteIdentity }>("/site-settings/identity/draft", input),
+  publishIdentity: () => apiClient.post<{ published: SiteIdentity }>("/site-settings/identity/publish"),
+  revertIdentity: () => apiClient.post<{ draft: SiteIdentity }>("/site-settings/identity/revert"),
+
+  getGlobalStyles: () => apiClient.get<SettingsGroupState<GlobalStyles>>("/site-settings/global-styles"),
+  saveGlobalStylesDraft: (input: GlobalStyles) => apiClient.put<{ draft: GlobalStyles }>("/site-settings/global-styles/draft", input),
+  publishGlobalStyles: () => apiClient.post<{ published: GlobalStyles }>("/site-settings/global-styles/publish"),
+  revertGlobalStyles: () => apiClient.post<{ draft: GlobalStyles }>("/site-settings/global-styles/revert"),
+};
+
+// ---------------------------------------------------------------------------
 // Phase 5 — CRM (leads, clients, contacts)
 // ---------------------------------------------------------------------------
 

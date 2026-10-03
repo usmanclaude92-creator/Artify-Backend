@@ -32,6 +32,9 @@ vi.mock("../../lib/api", () => ({
   mediaApi: {
     getReadUrl: vi.fn().mockResolvedValue({ url: "https://cdn.example.com/x.jpg", expiresAt: "2026-01-01" }),
   },
+  siteSettingsApi: {
+    getGlobalStyles: vi.fn().mockRejectedValue(new Error("not configured in this test")),
+  },
 }));
 
 let mockPermissions: string[] = ["content.read", "content.create", "content.update", "content.publish"];

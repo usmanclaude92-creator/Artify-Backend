@@ -42,6 +42,7 @@ import {
   pagesApi,
   templatesApi,
   templatePartsApi,
+  siteSettingsApi,
   mediaApi,
   type CmsPage,
   type EditorDocument,
@@ -50,6 +51,7 @@ import {
   type Template,
   type TemplatePart,
   type ContentRevision,
+  type GlobalStyles,
 } from "../../lib/api";
 import { ApiClientError } from "../../lib/apiClient";
 import { Card, Button, Input, Select, Badge, LoadingState, ErrorState, EmptyState, Modal, Field, ConfirmDialog, Pagination } from "../ui/ui";
@@ -249,7 +251,8 @@ const CanvasBlock: React.FC<{
   mediaCache: Record<string, string>;
   onMediaResolved: (id: string, url: string) => void;
   templatePartNames: Record<string, string>;
-}> = ({ block, depth, selectedId, onSelect, onDelete, onDuplicate, onMove, onAddChild, mediaCache, onMediaResolved, templatePartNames }) => {
+  globalStyles: GlobalStyles | null;
+}> = ({ block, depth, selectedId, onSelect, onDelete, onDuplicate, onMove, onAddChild, mediaCache, onMediaResolved, templatePartNames, globalStyles }) => {
   const selected = block.id === selectedId;
   const [addChildOpen, setAddChildOpen] = useState(false);
 
@@ -317,6 +320,7 @@ const CanvasBlock: React.FC<{
               mediaCache={mediaCache}
               onMediaResolved={onMediaResolved}
               templatePartNames={templatePartNames}
+              globalStyles={globalStyles}
             />
           ))}
           {addChildOpen ? (
@@ -355,10 +359,25 @@ const CanvasBlock: React.FC<{
     case "text":
       return frame(<div className="text-sm cms-rendered-body" dangerouslySetInnerHTML={{ __html: String(block.props.html ?? "") }} />);
     case "heading": {
-      const level = Number(block.props.level) || 2;
-      const Tag = (`h${Math.min(6, Math.max(1, level))}` as unknown) as "h1";
+      const level = Math.min(6, Math.max(1, Number(block.props.level) || 2));
+      const Tag = (`h${level}` as unknown) as "h1";
+      const headingKey = `h${level}` as keyof GlobalStyles["typography"]["headingScale"];
       return frame(
-        <Tag className="font-bold" style={{ color: "var(--text-primary)" }}>
+        <Tag
+          className={globalStyles ? undefined : "font-bold"}
+          style={
+            globalStyles
+              ? {
+                  fontFamily: globalStyles.typography.fontFamilyHeading,
+                  fontWeight: globalStyles.typography.fontWeightHeading,
+                  fontSize: globalStyles.typography.headingScale[headingKey],
+                  lineHeight: globalStyles.typography.lineHeightHeading,
+                  color: globalStyles.colors.textPrimary,
+                  margin: 0,
+                }
+              : { color: "var(--text-primary)" }
+          }
+        >
           {String(block.props.text ?? "")}
         </Tag>
       );
@@ -367,15 +386,38 @@ const CanvasBlock: React.FC<{
       return frame(<CanvasImage mediaId={String(block.props.mediaId ?? "")} alt={String(block.props.alt ?? "")} cache={mediaCache} onResolved={onMediaResolved} />);
     case "button":
       return frame(
-        <span className="inline-block px-3 py-1.5 rounded-lg text-xs font-semibold text-white" style={{ background: "var(--accent)" }}>
+        <span
+          className="inline-block text-xs font-semibold"
+          style={
+            globalStyles
+              ? {
+                  background: globalStyles.buttons.primaryBg,
+                  color: globalStyles.buttons.primaryText,
+                  borderRadius: globalStyles.buttons.radius,
+                  padding: `${globalStyles.buttons.paddingY} ${globalStyles.buttons.paddingX}`,
+                  fontWeight: globalStyles.buttons.fontWeight,
+                }
+              : { background: "var(--accent)", color: "#fff", padding: "0.375rem 0.75rem", borderRadius: "0.5rem" }
+          }
+        >
           {String(block.props.label ?? "Button")}
         </span>
       );
     case "card":
       return frame(
-        <div className="p-3 rounded-lg" style={{ background: "var(--bg-app)" }}>
+        <div
+          className="p-3"
+          style={
+            globalStyles
+              ? { background: globalStyles.colors.surface, border: `1px solid ${globalStyles.colors.border}`, borderRadius: globalStyles.layout.borderRadius.md }
+              : { background: "var(--bg-app)", borderRadius: "0.5rem" }
+          }
+        >
           {!!block.props.title && (
-            <p className="font-bold text-sm mb-1" style={{ color: "var(--text-primary)" }}>
+            <p
+              className="font-bold text-sm mb-1"
+              style={{ color: globalStyles ? globalStyles.colors.textPrimary : "var(--text-primary)", fontFamily: globalStyles?.typography.fontFamilyHeading }}
+            >
               {String(block.props.title)}
             </p>
           )}
@@ -646,6 +688,7 @@ export const SiteEditorPage: React.FC = () => {
   const [template, setTemplate] = useState<Template | null>(null);
   const [templateRegionParts, setTemplateRegionParts] = useState<Record<string, TemplatePart>>({});
   const [templateParts, setTemplateParts] = useState<TemplatePart[]>([]);
+  const [globalStyles, setGlobalStyles] = useState<GlobalStyles | null>(null);
 
   const [mediaCache, setMediaCache] = useState<Record<string, string>>({});
   const [addBlockOpen, setAddBlockOpen] = useState(false);
@@ -725,6 +768,17 @@ export const SiteEditorPage: React.FC = () => {
 
   useEffect(() => {
     void templatePartsApi.list({ limit: 100, sort: "name", order: "asc" }).then((res) => setTemplateParts(res.items));
+  }, []);
+
+  // Phase 3 — make Global Styles available to the canvas preview, scoped
+  // to rendered block content only (never the Control Center's own chrome
+  // theme). Reads the PUBLISHED values, same as what the live site shows,
+  // so what an editor sees here matches what visitors will see.
+  useEffect(() => {
+    void siteSettingsApi
+      .getGlobalStyles()
+      .then((res) => setGlobalStyles(res.published))
+      .catch(() => undefined);
   }, []);
 
   // Pre-resolve every image block's URL on load (both for the Canvas and
@@ -1000,6 +1054,7 @@ export const SiteEditorPage: React.FC = () => {
                   mediaCache={mediaCache}
                   onMediaResolved={(id, url) => setMediaCache((prev) => ({ ...prev, [id]: url }))}
                   templatePartNames={templatePartNames}
+                  globalStyles={globalStyles}
                 />
               ))}
 
@@ -1053,6 +1108,7 @@ export const SiteEditorPage: React.FC = () => {
                 mediaCache={mediaCache}
                 onMediaResolved={(id, url) => setMediaCache((prev) => ({ ...prev, [id]: url }))}
                 templatePartNames={templatePartNames}
+                globalStyles={globalStyles}
               />
             ))
           )}
