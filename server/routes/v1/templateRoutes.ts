@@ -49,6 +49,24 @@ router.get(
   })
 );
 
+router.get(
+  "/:id/usage",
+  requirePermission("templates.read"),
+  asyncHandler(async (req, res) => {
+    const usage = await templateService.getUsage(req.user!.organizationId, req.params.id!);
+    sendSuccess(res, usage);
+  })
+);
+
+router.get(
+  "/:id/preview",
+  requirePermission("templates.read"),
+  asyncHandler(async (req, res) => {
+    const preview = await templateService.previewTemplate(req.user!.organizationId, req.params.id!);
+    sendSuccess(res, preview);
+  })
+);
+
 router.post(
   "/",
   requirePermission("templates.create"),

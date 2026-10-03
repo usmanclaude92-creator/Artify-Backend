@@ -1,12 +1,15 @@
 /** Phase 1 (Website module) — Template Parts list/detail, create form, publish, no fabricated data. Mirrors TemplatesPage.test.tsx's shape. */
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { TemplatePartsPage } from "./TemplatePartsPage";
 
 const listMock = vi.fn();
 const createMock = vi.fn();
 const publishMock = vi.fn();
+const usageMock = vi.fn();
+const removeMock = vi.fn();
 const notifyMock = vi.fn();
+const navigateMock = vi.fn();
 
 vi.mock("../../lib/api", () => ({
   templatePartsApi: {
@@ -19,6 +22,8 @@ vi.mock("../../lib/api", () => ({
     archive: vi.fn(),
     revert: vi.fn(),
     duplicate: vi.fn(),
+    usage: (...args: unknown[]) => usageMock(...args),
+    remove: (...args: unknown[]) => removeMock(...args),
   },
 }));
 
@@ -27,6 +32,7 @@ vi.mock("../../context/AuthContext", () => ({
   useAuth: () => ({ user: { role: { permissions: mockPermissions } } }),
 }));
 vi.mock("../../context/ToastContext", () => ({ useToast: () => ({ notify: notifyMock }) }));
+vi.mock("../../lib/router", () => ({ useRouter: () => ({ path: "/website/template-parts", navigate: navigateMock }) }));
 
 const revision = {
   id: "prev-1",
@@ -56,12 +62,19 @@ const part = {
   deletedAt: null,
 };
 
+beforeEach(() => {
+  usageMock.mockResolvedValue({ templates: [], pages: [] });
+});
+
 afterEach(() => {
   cleanup();
   listMock.mockReset();
   createMock.mockReset();
   publishMock.mockReset();
+  usageMock.mockReset();
+  removeMock.mockReset();
   notifyMock.mockReset();
+  navigateMock.mockReset();
   mockPermissions = ["template_parts.read", "template_parts.create", "template_parts.update", "template_parts.publish", "template_parts.delete"];
 });
 
@@ -107,7 +120,35 @@ describe("TemplatePartsPage", () => {
 
     await screen.findAllByText("Main Header");
     expect(screen.queryByRole("button", { name: /new part/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /^edit$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /edit details/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /edit content/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^publish$/i })).not.toBeInTheDocument();
+  });
+
+  it("shows real templates/pages referencing this part and navigates to the content editor", async () => {
+    usageMock.mockResolvedValue({ templates: [{ id: "t-1", name: "Standard Page", status: "PUBLISHED" }], pages: [] });
+    listMock.mockResolvedValue({ items: [part], page: 1, limit: 20, total: 1, totalPages: 1 });
+    render(<TemplatePartsPage />);
+    await screen.findAllByText("Main Header");
+
+    expect(await screen.findByText("Template: Standard Page")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /edit content/i }));
+    expect(navigateMock).toHaveBeenCalledWith("/website/site-editor?templatePartId=part-1");
+  });
+
+  it("deletes a template part through the real API only after confirming", async () => {
+    listMock.mockResolvedValue({ items: [part], page: 1, limit: 20, total: 1, totalPages: 1 });
+    removeMock.mockResolvedValue({ message: "Template part deleted." });
+    render(<TemplatePartsPage />);
+    await screen.findAllByText("Main Header");
+
+    fireEvent.click(screen.getByRole("button", { name: /^delete$/i }));
+    expect(removeMock).not.toHaveBeenCalled();
+
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: /^delete$/i }));
+    await vi.waitFor(() => expect(removeMock).toHaveBeenCalledWith("part-1"));
+    expect(notifyMock).toHaveBeenCalledWith("Template part deleted.", "success");
   });
 });

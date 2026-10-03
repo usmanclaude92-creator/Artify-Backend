@@ -243,4 +243,73 @@ describe("Templates", () => {
     const res = await request(app).post("/api/v1/templates").set("Authorization", `Bearer ${adminToken}`).send({ type: "STANDARD_PAGE", name: "Org Scoped" });
     expect(res.body.data.template.organizationId).toBe(organizationId);
   });
+
+  it("GET /:id/usage lists real pages assigned to the template, tenant-scoped", async () => {
+    const template = await request(app).post("/api/v1/templates").set("Authorization", `Bearer ${adminToken}`).send({ type: "STANDARD_PAGE", name: "Usage Template" });
+    const templateId = template.body.data.template.id;
+    await request(app).post(`/api/v1/templates/${templateId}/publish`).set("Authorization", `Bearer ${adminToken}`).send();
+    const page = await request(app).post("/api/v1/pages").set("Authorization", `Bearer ${adminToken}`).send({ title: "Uses Usage Template", templateId });
+
+    const usage = await request(app).get(`/api/v1/templates/${templateId}/usage`).set("Authorization", `Bearer ${adminToken}`);
+    expect(usage.status).toBe(200);
+    expect(usage.body.data.pages).toHaveLength(1);
+    expect(usage.body.data.pages[0].id).toBe(page.body.data.page.id);
+
+    expect((await request(app).get(`/api/v1/templates/${templateId}/usage`).set("Authorization", `Bearer ${otherOrgAdminToken}`)).status).toBe(404);
+  });
+
+  it("GET /:id/preview resolves each region's assigned Template Part", async () => {
+    const part = await request(app)
+      .post("/api/v1/template-parts")
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({ type: "HEADER", name: "Preview Header", content: { version: 1, blocks: [] } });
+    const partId = part.body.data.templatePart.id;
+
+    const template = await request(app)
+      .post("/api/v1/templates")
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({ type: "STANDARD_PAGE", name: "Preview Template", structure: { regions: [{ key: "header", templatePartId: partId }] } });
+    const templateId = template.body.data.template.id;
+
+    const preview = await request(app).get(`/api/v1/templates/${templateId}/preview`).set("Authorization", `Bearer ${adminToken}`);
+    expect(preview.status).toBe(200);
+    expect(preview.body.data.regions).toHaveLength(1);
+    expect(preview.body.data.regions[0].key).toBe("header");
+    expect(preview.body.data.regions[0].part.id).toBe(partId);
+  });
+
+  it("refuses to publish a template whose region references a deleted/non-existent Template Part", async () => {
+    const part = await request(app)
+      .post("/api/v1/template-parts")
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({ type: "HEADER", name: "Doomed Header" });
+    const partId = part.body.data.templatePart.id;
+    await request(app).delete(`/api/v1/template-parts/${partId}`).set("Authorization", `Bearer ${adminToken}`).send();
+
+    const template = await request(app)
+      .post("/api/v1/templates")
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({ type: "STANDARD_PAGE", name: "Broken Reference", structure: { regions: [{ key: "header", templatePartId: partId }] } });
+    const templateId = template.body.data.template.id;
+
+    const publish = await request(app).post(`/api/v1/templates/${templateId}/publish`).set("Authorization", `Bearer ${adminToken}`).send();
+    expect(publish.status).toBe(400);
+  });
+
+  it("publishes successfully when every region's Template Part resolves", async () => {
+    const part = await request(app)
+      .post("/api/v1/template-parts")
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({ type: "FOOTER", name: "Valid Footer" });
+    const partId = part.body.data.templatePart.id;
+
+    const template = await request(app)
+      .post("/api/v1/templates")
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({ type: "STANDARD_PAGE", name: "Valid Reference", structure: { regions: [{ key: "footer", templatePartId: partId }] } });
+    const templateId = template.body.data.template.id;
+
+    const publish = await request(app).post(`/api/v1/templates/${templateId}/publish`).set("Authorization", `Bearer ${adminToken}`).send();
+    expect(publish.status).toBe(200);
+  });
 });

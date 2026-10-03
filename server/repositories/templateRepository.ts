@@ -73,6 +73,15 @@ export const templateRepository = {
     return prisma.templateRevision.findMany({ where: { templateId }, orderBy: { version: "desc" } });
   },
 
+  /** Phase 4 — the actual pages assigned to this template (not just `_count.pages`), for "where is this used" display. */
+  async findPagesUsing(templateId: string, organizationId: string) {
+    return prisma.page.findMany({
+      where: { templateId, organizationId, deletedAt: null },
+      select: { id: true, title: true, slug: true, status: true },
+      orderBy: { title: "asc" },
+    });
+  },
+
   async softDelete(id: string): Promise<void> {
     await prisma.template.update({ where: { id }, data: { deletedAt: new Date() } });
   },

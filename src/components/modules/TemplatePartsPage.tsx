@@ -4,9 +4,10 @@
  * Mirrors TemplatesPage.tsx exactly — see that file's header comment.
  */
 import React, { useEffect, useState } from "react";
-import { PanelsTopLeft, Plus, Search, Rocket, Archive, History, RotateCcw, Copy, Pencil } from "lucide-react";
+import { PanelsTopLeft, Plus, Search, Rocket, Archive, History, RotateCcw, Copy, Pencil, Wand2, Eye, Trash2 } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
+import { useRouter } from "../../lib/router";
 import {
   templatePartsApi,
   type TemplatePart,
@@ -19,6 +20,7 @@ import { ApiClientError } from "../../lib/apiClient";
 import { Card, Button, Input, Select, Badge, LoadingState, ErrorState, EmptyState, Pagination, Modal, Field, ConfirmDialog } from "../ui/ui";
 import { hasPermission } from "../../lib/permissions";
 import { initialSearchFromQuery, consumeNewFlag } from "../../lib/deepLink";
+import { BlockTreeRenderer } from "../common/BlockRenderer";
 
 const TYPE_OPTIONS: TemplatePartTypeValue[] = [
   "HEADER",
@@ -143,9 +145,10 @@ const PartFormModal: React.FC<{ open: boolean; onClose: () => void; onSaved: (p?
   );
 };
 
-const PartDetail: React.FC<{ part: TemplatePart; onChanged: (p?: TemplatePart) => void }> = ({ part, onChanged }) => {
+const PartDetail: React.FC<{ part: TemplatePart; onChanged: (p?: TemplatePart) => void; onDeleted: () => void }> = ({ part, onChanged, onDeleted }) => {
   const { user } = useAuth();
   const { notify } = useToast();
+  const { navigate } = useRouter();
   const canUpdate = hasPermission(user?.role.permissions, "template_parts.update");
   const canPublish = hasPermission(user?.role.permissions, "template_parts.publish");
   const canDelete = hasPermission(user?.role.permissions, "template_parts.delete");
@@ -153,10 +156,20 @@ const PartDetail: React.FC<{ part: TemplatePart; onChanged: (p?: TemplatePart) =
 
   const [editOpen, setEditOpen] = useState(false);
   const [archiveOpen, setArchiveOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const [revisionsOpen, setRevisionsOpen] = useState(false);
   const [revisions, setRevisions] = useState<TemplatePartRevision[]>([]);
   const [revisionsLoading, setRevisionsLoading] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [usage, setUsage] = useState<{
+    templates: { id: string; name: string; status: string }[];
+    pages: { id: string; title: string; status: string }[];
+  } | null>(null);
+
+  useEffect(() => {
+    void templatePartsApi.usage(part.id).then(setUsage).catch(() => undefined);
+  }, [part.id]);
 
   const loadRevisions = async () => {
     setRevisionsLoading(true);
@@ -165,6 +178,20 @@ const PartDetail: React.FC<{ part: TemplatePart; onChanged: (p?: TemplatePart) =
       setRevisions(res.revisions);
     } finally {
       setRevisionsLoading(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    setDeleteOpen(false);
+    setBusy(true);
+    try {
+      await templatePartsApi.remove(part.id);
+      notify("Template part deleted.", "success");
+      onDeleted();
+    } catch (err) {
+      notify(err instanceof ApiClientError ? err.message : "Could not delete template part.", "error");
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -206,6 +233,9 @@ const PartDetail: React.FC<{ part: TemplatePart; onChanged: (p?: TemplatePart) =
           </p>
         </div>
         <div className="flex gap-1.5 flex-wrap justify-end shrink-0">
+          <Button variant="ghost" onClick={() => setPreviewOpen(true)}>
+            <Eye className="w-3.5 h-3.5" /> Preview
+          </Button>
           <Button
             variant="ghost"
             onClick={() => {
@@ -221,8 +251,13 @@ const PartDetail: React.FC<{ part: TemplatePart; onChanged: (p?: TemplatePart) =
             </Button>
           )}
           {canUpdate && !part.isSystem && (
+            <Button variant="secondary" onClick={() => navigate(`/website/site-editor?templatePartId=${part.id}`)}>
+              <Wand2 className="w-3.5 h-3.5" /> Edit content
+            </Button>
+          )}
+          {canUpdate && !part.isSystem && (
             <Button variant="secondary" onClick={() => setEditOpen(true)} disabled={busy}>
-              <Pencil className="w-3.5 h-3.5" /> Edit
+              <Pencil className="w-3.5 h-3.5" /> Edit details
             </Button>
           )}
           {canPublish && !part.isSystem && part.status !== "PUBLISHED" && part.status !== "ARCHIVED" && (
@@ -235,7 +270,38 @@ const PartDetail: React.FC<{ part: TemplatePart; onChanged: (p?: TemplatePart) =
               <Archive className="w-3.5 h-3.5" /> Archive
             </Button>
           )}
+          {canDelete && !part.isSystem && (
+            <Button variant="danger" onClick={() => setDeleteOpen(true)} disabled={busy}>
+              <Trash2 className="w-3.5 h-3.5" /> Delete
+            </Button>
+          )}
         </div>
+      </div>
+
+      <div className="px-4 py-3 border-t" style={{ borderColor: "var(--border)" }}>
+        <p className="text-xs font-bold uppercase tracking-wide mb-1.5" style={{ color: "var(--text-muted)" }}>
+          Used by
+        </p>
+        {!usage || (usage.templates.length === 0 && usage.pages.length === 0) ? (
+          <p className="text-[11px]" style={{ color: "var(--text-muted)" }}>
+            Not referenced by any template or page yet.
+          </p>
+        ) : (
+          <ul className="space-y-1">
+            {usage.templates.map((t) => (
+              <li key={t.id} className="text-[11px] flex items-center justify-between gap-2" style={{ color: "var(--text-secondary)" }}>
+                <span>Template: {t.name}</span>
+                <Badge tone={t.status === "PUBLISHED" ? "success" : "neutral"}>{t.status}</Badge>
+              </li>
+            ))}
+            {usage.pages.map((p) => (
+              <li key={p.id} className="text-[11px] flex items-center justify-between gap-2" style={{ color: "var(--text-secondary)" }}>
+                <span>Page: {p.title}</span>
+                <Badge tone={p.status === "PUBLISHED" ? "success" : "neutral"}>{p.status}</Badge>
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
 
       <div className="p-4">
@@ -257,6 +323,24 @@ const PartDetail: React.FC<{ part: TemplatePart; onChanged: (p?: TemplatePart) =
         onConfirm={handleArchive}
         onCancel={() => setArchiveOpen(false)}
       />
+      <ConfirmDialog
+        open={deleteOpen}
+        title="Delete template part"
+        message={`Permanently delete "${part.name}"? This cannot be undone. Blocked while any template or page still references it.`}
+        confirmLabel="Delete"
+        destructive
+        onConfirm={() => void handleDelete()}
+        onCancel={() => setDeleteOpen(false)}
+      />
+      <Modal open={previewOpen} onClose={() => setPreviewOpen(false)} title={`Preview: ${part.name}`}>
+        <div className="max-h-[70vh] overflow-y-auto">
+          {Array.isArray(part.currentRevision?.content?.blocks) && part.currentRevision!.content.blocks.length > 0 ? (
+            <BlockTreeRenderer blocks={part.currentRevision!.content.blocks} />
+          ) : (
+            <EmptyState title="No visual preview available" description="This part's content isn't in the visual block format yet." />
+          )}
+        </div>
+      </Modal>
       <Modal open={revisionsOpen} onClose={() => setRevisionsOpen(false)} title="Revision history">
         {revisionsLoading ? (
           <LoadingState />
@@ -400,7 +484,16 @@ export const TemplatePartsPage: React.FC = () => {
             <Pagination page={pageNum} totalPages={totalPages} onChange={setPageNum} />
           </Card>
 
-          {selected && <PartDetail part={selected} onChanged={(updated) => (updated ? setSelected(updated) : void load())} />}
+          {selected && (
+            <PartDetail
+              part={selected}
+              onChanged={(updated) => (updated ? setSelected(updated) : void load())}
+              onDeleted={() => {
+                setSelected(null);
+                void load();
+              }}
+            />
+          )}
         </div>
       )}
 

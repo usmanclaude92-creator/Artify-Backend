@@ -55,6 +55,15 @@ router.get(
   })
 );
 
+router.get(
+  "/:id/usage",
+  requirePermission("template_parts.read"),
+  asyncHandler(async (req, res) => {
+    const usage = await templatePartService.getUsage(req.user!.organizationId, req.params.id!);
+    sendSuccess(res, usage);
+  })
+);
+
 router.post(
   "/",
   requirePermission("template_parts.create"),

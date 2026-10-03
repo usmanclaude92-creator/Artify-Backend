@@ -166,7 +166,51 @@ describe("public website API", () => {
     // Publish the template row too — now it's genuinely usable.
     await prisma.template.update({ where: { id: template.id }, data: { status: "PUBLISHED" } });
     const fullyPublishedRes = await request(app).get("/api/v1/public/pages/templated-page");
-    expect(fullyPublishedRes.body.data.page.template).toEqual({ type: "STANDARD_PAGE", slug: "public-template", structure: { regions: ["a"] } });
+    expect(fullyPublishedRes.body.data.page.template).toEqual({ type: "STANDARD_PAGE", slug: "public-template", structure: { regions: ["a"] }, regions: {} });
+  });
+
+  // Phase 4 — the public API resolves each region's assigned Template Part
+  // to its own content, applying the same PUBLISHED-status safety check
+  // recursively so a region pointing at a draft/archived/foreign-org part
+  // never leaks unpublished content or a broken reference.
+  it("resolves a region's Template Part content only when that part is itself genuinely PUBLISHED", async () => {
+    const part = await prisma.templatePart.create({ data: { organizationId: PUBLIC_ORG_ID, type: "HEADER", slug: "public-header", name: "Public Header", status: "DRAFT" } });
+    const partRevision = await prisma.templatePartRevision.create({
+      data: { templatePartId: part.id, version: 1, status: "DRAFT", name: "Public Header", content: { version: 1, blocks: [{ id: "b1", type: "heading", props: { text: "Hi" } }] } },
+    });
+    await prisma.templatePart.update({ where: { id: part.id }, data: { currentRevisionId: partRevision.id } });
+
+    const template = await prisma.template.create({ data: { organizationId: PUBLIC_ORG_ID, type: "STANDARD_PAGE", slug: "region-template", name: "Region Template", status: "PUBLISHED" } });
+    const revision = await prisma.templateRevision.create({
+      data: { templateId: template.id, version: 1, status: "PUBLISHED", name: "Region Template", structure: { regions: [{ key: "header", templatePartId: part.id }] }, publishedAt: new Date() },
+    });
+    await prisma.template.update({ where: { id: template.id }, data: { currentRevisionId: revision.id } });
+
+    const page = await prisma.page.create({ data: { organizationId: PUBLIC_ORG_ID, slug: "region-page", title: "Region Page", status: "DRAFT", templateId: template.id } });
+    const pageRevision = await prisma.contentRevision.create({ data: { pageId: page.id, version: 1, status: "PUBLISHED", title: "Region Page", body: "<p>x</p>", metadata: {} } });
+    await prisma.page.update({ where: { id: page.id }, data: { status: "PUBLISHED", currentRevisionId: pageRevision.id, publishedAt: new Date() } });
+
+    // Part still DRAFT — region must resolve to null, never leak draft content.
+    const draftPartRes = await request(app).get("/api/v1/public/pages/region-page");
+    expect(draftPartRes.body.data.page.template.regions.header).toBeNull();
+
+    // Publish the part's revision but not the part row itself.
+    await prisma.templatePartRevision.update({ where: { id: partRevision.id }, data: { status: "PUBLISHED", publishedAt: new Date() } });
+    const halfPublishedRes = await request(app).get("/api/v1/public/pages/region-page");
+    expect(halfPublishedRes.body.data.page.template.regions.header).toBeNull();
+
+    // Publish the part row too — now it resolves to real content.
+    await prisma.templatePart.update({ where: { id: part.id }, data: { status: "PUBLISHED" } });
+    const fullyPublishedRes = await request(app).get("/api/v1/public/pages/region-page");
+    expect(fullyPublishedRes.body.data.page.template.regions.header).toEqual({
+      type: "HEADER",
+      slug: "public-header",
+      content: { version: 1, blocks: [{ id: "b1", type: "heading", props: { text: "Hi" } }] },
+    });
+
+    // SEO fields are completely unaffected by any of this.
+    expect(fullyPublishedRes.body.data.page.title).toBe("Region Page");
+    expect(fullyPublishedRes.body.data.page.seo).toEqual({});
   });
 
   it("rejects a DRAFT page with a clean 404 — never leaks unpublished content", async () => {
