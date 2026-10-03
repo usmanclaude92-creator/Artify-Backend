@@ -14,6 +14,8 @@ import { categoryRepository } from "../repositories/categoryRepository";
 import { tagRepository } from "../repositories/tagRepository";
 import { redirectRepository } from "../repositories/redirectRepository";
 import { mediaRepository } from "../repositories/mediaRepository";
+import { templatePartRepository } from "../repositories/templatePartRepository";
+import { normalizeRegions } from "../utils/templateStructure";
 import { siteSettingsService } from "./siteSettingsService";
 import { SITE_IDENTITY_MEDIA_FIELDS } from "../schemas/siteSettingsSchemas";
 import { getStorageProvider } from "../storage";
@@ -65,13 +67,39 @@ function hasPublicWebsiteOrganization(): boolean {
  * yet consume this field — this only makes it available for the future
  * Site Editor / template-driven renderer to read, without changing how
  * any page renders today.
+ *
+ * Phase 4 — adds a fully resolved `regions` map alongside the existing raw
+ * `structure` field (kept verbatim for backward compatibility): each
+ * region's assigned Template Part is resolved to its own PUBLISHED
+ * content, with the exact same two-level "PUBLISHED template part +
+ * PUBLISHED revision" safety check applied recursively (a region pointing
+ * at a draft/archived/deleted part is silently omitted — never a broken
+ * reference, never draft content leaking to an anonymous caller). This is
+ * "Page -> assigned template -> template parts -> editor content" from
+ * the public side; Global Styles are deliberately NOT duplicated in here —
+ * a consumer fetches /public/site-settings once and applies the same
+ * tokens everywhere, rather than this payload re-embedding them per page.
  */
-function projectPageTemplate(page: PageWithPublicRelations) {
+async function projectPageTemplate(page: PageWithPublicRelations) {
   const template = page.template;
   if (!template || template.status !== "PUBLISHED") return null;
   const revision = template.currentRevision;
   if (!revision || revision.status !== "PUBLISHED") return null;
-  return { type: template.type, slug: template.slug, structure: revision.structure as Record<string, unknown> };
+
+  const regionEntries = normalizeRegions(revision.structure);
+  const organizationId = page.organizationId;
+  const regions = await Promise.all(
+    regionEntries.map(async (r) => {
+      if (!r.templatePartId) return [r.key, null] as const;
+      const part = await templatePartRepository.findByIdInOrg(r.templatePartId, organizationId);
+      if (!part || part.status !== "PUBLISHED" || !part.currentRevision || part.currentRevision.status !== "PUBLISHED") {
+        return [r.key, null] as const;
+      }
+      return [r.key, { type: part.type, slug: part.slug, content: part.currentRevision.content as Record<string, unknown> }] as const;
+    })
+  );
+
+  return { type: template.type, slug: template.slug, structure: revision.structure, regions: Object.fromEntries(regions) };
 }
 
 // Phase 2 (Site Editor) — additive, same backward-compatible pattern as
@@ -98,7 +126,7 @@ async function projectPage(page: PageWithPublicRelations) {
     featuredMedia: await projectPublicMedia(page.featuredMedia),
     pageType: page.pageType,
     isHomepage: page.isHomepage,
-    template: projectPageTemplate(page),
+    template: await projectPageTemplate(page),
     publishedAt: page.publishedAt,
     updatedAt: page.updatedAt,
   };

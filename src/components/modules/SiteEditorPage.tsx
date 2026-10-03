@@ -44,12 +44,15 @@ import {
   templatePartsApi,
   siteSettingsApi,
   mediaApi,
+  normalizeTemplateRegions,
   type CmsPage,
   type EditorDocument,
   type EditorBlock,
   type BlockType,
   type Template,
   type TemplatePart,
+  type TemplateRegionEntry,
+  type TemplatePartRevision,
   type ContentRevision,
   type GlobalStyles,
 } from "../../lib/api";
@@ -57,6 +60,7 @@ import { ApiClientError } from "../../lib/apiClient";
 import { Card, Button, Input, Select, Badge, LoadingState, ErrorState, EmptyState, Modal, Field, ConfirmDialog, Pagination } from "../ui/ui";
 import { MediaPickerModal } from "../common/MediaPickerModal";
 import { RichTextEditor } from "../common/RichTextEditor";
+import { BlockTreeRenderer } from "../common/BlockRenderer";
 import {
   createBlock,
   findBlock,
@@ -662,19 +666,409 @@ const Inspector: React.FC<{
 };
 
 // ---------------------------------------------------------------------------
-// Main page
+// Template structure editor — region -> Template Part assignment
+// (Phase 4). A Template has no canvas content of its own in this
+// architecture; its only editable surface is this ordered list of
+// regions, each optionally assigned to a Template Part (whose own
+// content is edited separately via ?templatePartId=, see below).
 // ---------------------------------------------------------------------------
 
-export const SiteEditorPage: React.FC = () => {
+const TemplateStructureEditor: React.FC<{ templateId: string }> = ({ templateId }) => {
   const { user } = useAuth();
   const { notify } = useToast();
   const { navigate } = useRouter();
-  const canUpdate = hasPermission(user?.role.permissions, "content.update");
-  const canPublish = hasPermission(user?.role.permissions, "content.publish");
+  const canUpdate = hasPermission(user?.role.permissions, "templates.update");
+  const canPublish = hasPermission(user?.role.permissions, "templates.publish");
+
+  const [template, setTemplate] = useState<Template | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [regions, setRegions] = useState<TemplateRegionEntry[]>([]);
+  const [savedRegions, setSavedRegions] = useState<TemplateRegionEntry[]>([]);
+  const [availableParts, setAvailableParts] = useState<TemplatePart[]>([]);
+  const [saving, setSaving] = useState(false);
+  const [publishing, setPublishing] = useState(false);
+  const [usage, setUsage] = useState<{ pages: { id: string; title: string; status: string }[] } | null>(null);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewData, setPreviewData] = useState<{ key: string; templatePartId: string | null; part: TemplatePart | null }[] | null>(null);
+  const [revisionsOpen, setRevisionsOpen] = useState(false);
+  const [revisions, setRevisions] = useState<{ id: string; version: number; status: string; createdAt: string }[]>([]);
+  const [revisionsLoading, setRevisionsLoading] = useState(false);
+  const [leaveConfirmOpen, setLeaveConfirmOpen] = useState(false);
+
+  const dirty = JSON.stringify(regions) !== JSON.stringify(savedRegions);
+
+  useEffect(() => {
+    const handler = (e: BeforeUnloadEvent) => {
+      if (!dirty) return;
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [dirty]);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await templatesApi.get(templateId);
+      setTemplate(res.template);
+      const loaded = normalizeTemplateRegions(res.template.currentRevision?.structure);
+      setRegions(loaded);
+      setSavedRegions(loaded);
+      void templatesApi.usage(templateId).then(setUsage).catch(() => undefined);
+    } catch (err) {
+      setError(err instanceof ApiClientError ? err.message : "Failed to load template.");
+    } finally {
+      setLoading(false);
+    }
+  }, [templateId]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  useEffect(() => {
+    void templatePartsApi.list({ limit: 100, sort: "name", order: "asc" }).then((res) => setAvailableParts(res.items));
+  }, []);
+
+  const addRegion = () => setRegions((r) => [...r, { key: "", templatePartId: null }]);
+  const removeRegion = (index: number) => setRegions((r) => r.filter((_, i) => i !== index));
+  const updateRegionKey = (index: number, key: string) => setRegions((r) => r.map((entry, i) => (i === index ? { ...entry, key } : entry)));
+  const updateRegionPart = (index: number, templatePartId: string | null) =>
+    setRegions((r) => r.map((entry, i) => (i === index ? { ...entry, templatePartId } : entry)));
+  const moveRegion = (index: number, dir: "up" | "down") =>
+    setRegions((r) => {
+      const to = dir === "up" ? index - 1 : index + 1;
+      if (to < 0 || to >= r.length) return r;
+      const next = [...r];
+      [next[index], next[to]] = [next[to]!, next[index]!];
+      return next;
+    });
+
+  const save = async (): Promise<boolean> => {
+    if (!template) return false;
+    setSaving(true);
+    try {
+      const res = await templatesApi.update(template.id, { structure: { ...template.currentRevision?.structure, regions }, expectedUpdatedAt: template.updatedAt });
+      setTemplate(res.template);
+      const next = normalizeTemplateRegions(res.template.currentRevision?.structure);
+      setRegions(next);
+      setSavedRegions(next);
+      return true;
+    } catch (err) {
+      notify(err instanceof ApiClientError ? err.message : "Could not save the template.", "error");
+      return false;
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleSaveDraft = async () => {
+    if (await save()) notify("Draft saved.", "success");
+  };
+
+  const handlePublish = async () => {
+    if (dirty && !(await save())) return;
+    setPublishing(true);
+    try {
+      const res = await templatesApi.publish(template!.id);
+      setTemplate(res.template);
+      notify("Template published.", "success");
+    } catch (err) {
+      notify(err instanceof ApiClientError ? err.message : "Could not publish the template.", "error");
+    } finally {
+      setPublishing(false);
+    }
+  };
+
+  const loadRevisions = async () => {
+    if (!template) return;
+    setRevisionsLoading(true);
+    try {
+      const res = await templatesApi.revisions(template.id);
+      setRevisions(res.revisions);
+    } finally {
+      setRevisionsLoading(false);
+    }
+  };
+
+  const handleRevert = async (revisionId: string) => {
+    if (!template) return;
+    try {
+      const res = await templatesApi.revert(template.id, revisionId);
+      setTemplate(res.template);
+      const next = normalizeTemplateRegions(res.template.currentRevision?.structure);
+      setRegions(next);
+      setSavedRegions(next);
+      notify("Reverted to prior revision.", "success");
+      void loadRevisions();
+    } catch (err) {
+      notify(err instanceof ApiClientError ? err.message : "Could not revert.", "error");
+    }
+  };
+
+  const handleOpenPreview = async () => {
+    try {
+      const res = await templatesApi.preview(templateId);
+      setPreviewData(res.regions);
+      setPreviewOpen(true);
+    } catch (err) {
+      notify(err instanceof ApiClientError ? err.message : "Could not load preview.", "error");
+    }
+  };
+
+  const handleBack = () => {
+    if (dirty) {
+      setLeaveConfirmOpen(true);
+      return;
+    }
+    navigate("/website/templates");
+  };
+
+  if (loading) return <LoadingState label="Loading template…" />;
+  if (error || !template) return <ErrorState message={error ?? "Template not found."} />;
+
+  return (
+    <div className="space-y-3 -m-4 sm:-m-6 p-4 sm:p-6 min-h-[calc(100vh-4rem)]" style={{ background: "var(--bg-app)" }}>
+      <Card className="p-2.5 flex items-center justify-between gap-2 flex-wrap sticky top-0 z-10">
+        <div className="flex items-center gap-2 min-w-0">
+          <Button variant="ghost" onClick={handleBack}>
+            <ArrowLeft className="w-4 h-4" /> Templates
+          </Button>
+          <div className="min-w-0">
+            <p className="text-sm font-bold truncate" style={{ color: "var(--text-primary)" }}>
+              {template.name}
+            </p>
+            <p className="text-[11px] flex items-center gap-1.5" style={{ color: "var(--text-muted)" }}>
+              <Badge tone={template.status === "PUBLISHED" ? "success" : "neutral"}>{template.status}</Badge>
+              {usage && usage.pages.length > 0 && <span style={{ color: "var(--text-muted)" }}>Used by {usage.pages.length} page(s)</span>}
+              {dirty && <span className="text-amber-500">Unsaved changes</span>}
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <Button variant="secondary" onClick={() => void handleOpenPreview()}>
+            <Eye className="w-3.5 h-3.5" /> Preview
+          </Button>
+          <Button
+            variant="ghost"
+            onClick={() => {
+              setRevisionsOpen(true);
+              void loadRevisions();
+            }}
+          >
+            <History className="w-3.5 h-3.5" /> Revisions
+          </Button>
+          {canUpdate && template.status !== "ARCHIVED" && !template.isSystem && (
+            <Button variant="secondary" onClick={() => void handleSaveDraft()} disabled={saving || !dirty}>
+              <Save className="w-3.5 h-3.5" /> {saving ? "Saving…" : "Save draft"}
+            </Button>
+          )}
+          {canPublish && template.status !== "PUBLISHED" && template.status !== "ARCHIVED" && !template.isSystem && (
+            <Button variant="primary" onClick={() => void handlePublish()} disabled={publishing || saving}>
+              <Rocket className="w-3.5 h-3.5" /> {publishing ? "Publishing…" : "Publish"}
+            </Button>
+          )}
+        </div>
+      </Card>
+
+      {template.isSystem && (
+        <div className="flex items-center gap-2 text-xs rounded-lg px-3 py-2 bg-amber-500/10 text-amber-600 border border-amber-500/30">
+          <AlertTriangle className="w-3.5 h-3.5" /> This is a protected system template and is read-only. Duplicate it from Templates to customize.
+        </div>
+      )}
+
+      <Card className="p-4 space-y-3 max-w-2xl">
+        <div className="flex items-center justify-between">
+          <p className="text-xs font-bold uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>
+            Regions
+          </p>
+          {canUpdate && !template.isSystem && (
+            <Button variant="secondary" onClick={addRegion}>
+              <Plus className="w-3.5 h-3.5" /> Add region
+            </Button>
+          )}
+        </div>
+
+        {regions.length === 0 ? (
+          <EmptyState title="No regions yet" description="Add a region (e.g. header, footer) and assign a Template Part to it." />
+        ) : (
+          <ul className="space-y-2">
+            {regions.map((region, index) => (
+              <li key={index} className="flex items-center gap-2 p-2.5 rounded-lg border" style={{ borderColor: "var(--border)" }}>
+                <div className="flex flex-col">
+                  <button type="button" disabled={!canUpdate || template.isSystem || index === 0} onClick={() => moveRegion(index, "up")} className="p-0.5" title="Move up">
+                    <ChevronUp className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!canUpdate || template.isSystem || index === regions.length - 1}
+                    onClick={() => moveRegion(index, "down")}
+                    className="p-0.5"
+                    title="Move down"
+                  >
+                    <ChevronDown className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+                <Input
+                  placeholder="region key, e.g. header"
+                  value={region.key}
+                  disabled={!canUpdate || template.isSystem}
+                  onChange={(e) => updateRegionKey(index, e.target.value)}
+                  className="w-40"
+                />
+                <Select
+                  value={region.templatePartId ?? ""}
+                  disabled={!canUpdate || template.isSystem}
+                  onChange={(e) => updateRegionPart(index, e.target.value || null)}
+                  className="flex-1"
+                >
+                  <option value="">— None —</option>
+                  {availableParts.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name} ({p.status})
+                    </option>
+                  ))}
+                </Select>
+                {region.templatePartId && (
+                  <Button variant="ghost" onClick={() => navigate(`/website/site-editor?templatePartId=${region.templatePartId}`)}>
+                    Edit part →
+                  </Button>
+                )}
+                {canUpdate && !template.isSystem && (
+                  <Button variant="ghost" onClick={() => removeRegion(index)} aria-label={`Remove region ${region.key || index}`}>
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </Button>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </Card>
+
+      {usage && usage.pages.length > 0 && (
+        <Card className="p-4 max-w-2xl">
+          <p className="text-xs font-bold uppercase tracking-wide mb-2" style={{ color: "var(--text-muted)" }}>
+            Used by
+          </p>
+          <ul className="space-y-1">
+            {usage.pages.map((p) => (
+              <li key={p.id} className="text-[11px] flex items-center justify-between gap-2" style={{ color: "var(--text-secondary)" }}>
+                <span>{p.title}</span>
+                <Badge tone={p.status === "PUBLISHED" ? "success" : "neutral"}>{p.status}</Badge>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      )}
+
+      <Modal open={previewOpen} onClose={() => setPreviewOpen(false)} title="Preview">
+        <div className="max-h-[70vh] overflow-y-auto space-y-4">
+          {!previewData || previewData.length === 0 ? (
+            <EmptyState title="Nothing to preview yet" description="Add a region and assign a Template Part to see a preview." />
+          ) : (
+            previewData.map((r) => (
+              <div key={r.key}>
+                <p className="text-[10px] font-bold uppercase tracking-wide mb-1" style={{ color: "var(--text-muted)" }}>
+                  {r.key}
+                </p>
+                {!r.part ? (
+                  <p className="text-xs italic" style={{ color: "var(--text-muted)" }}>
+                    No template part assigned.
+                  </p>
+                ) : Array.isArray((r.part.currentRevision?.content as EditorDocument)?.blocks) ? (
+                  <BlockTreeRenderer blocks={(r.part.currentRevision!.content as EditorDocument).blocks} />
+                ) : (
+                  <p className="text-xs italic" style={{ color: "var(--text-muted)" }}>
+                    {r.part.name} ({r.part.status}) — legacy content, no visual preview available.
+                  </p>
+                )}
+              </div>
+            ))
+          )}
+        </div>
+      </Modal>
+
+      <Modal open={revisionsOpen} onClose={() => setRevisionsOpen(false)} title="Revision history">
+        {revisionsLoading ? (
+          <LoadingState />
+        ) : revisions.length === 0 ? (
+          <EmptyState title="No revisions yet" description="" />
+        ) : (
+          <ul className="space-y-2 max-h-96 overflow-y-auto">
+            {revisions.map((r) => (
+              <li key={r.id} className="p-2.5 rounded-lg border text-xs flex items-center justify-between gap-3" style={{ borderColor: "var(--border)" }}>
+                <div>
+                  <p className="font-semibold flex items-center gap-1.5" style={{ color: "var(--text-primary)" }}>
+                    v{r.version} <Badge tone={r.status === "PUBLISHED" ? "success" : "neutral"}>{r.status}</Badge>
+                  </p>
+                  <p style={{ color: "var(--text-muted)" }}>{new Date(r.createdAt).toLocaleString()}</p>
+                </div>
+                {canUpdate && !template.isSystem && r.id !== template.currentRevisionId && (
+                  <Button variant="secondary" onClick={() => void handleRevert(r.id)} disabled={template.status === "ARCHIVED"}>
+                    <RotateCcw className="w-3.5 h-3.5" /> Revert to this
+                  </Button>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </Modal>
+
+      <ConfirmDialog
+        open={leaveConfirmOpen}
+        title="Leave without saving?"
+        message="You have unsaved region changes. Leave this page and discard them?"
+        confirmLabel="Discard & leave"
+        destructive
+        onConfirm={() => {
+          setLeaveConfirmOpen(false);
+          navigate("/website/templates");
+        }}
+        onCancel={() => setLeaveConfirmOpen(false)}
+      />
+    </div>
+  );
+};
+
+// ---------------------------------------------------------------------------
+// Main page
+// ---------------------------------------------------------------------------
+
+/**
+ * Phase 4 — the Site Editor now opens three kinds of subject, picked by
+ * which query param is present: `?pageId=` (Page, unchanged since Phase 2),
+ * `?templatePartId=` (a Template Part's own content — the exact same
+ * canvas/doc editing machinery as a Page, just persisted through
+ * templatePartsApi instead of pagesApi), or `?templateId=` (a Template's
+ * region assignments — a different, much simpler editor; see
+ * TemplateStructureEditor below, since a Template has no canvas content of
+ * its own in this architecture, only a list of region -> Template Part
+ * assignments).
+ */
+export const SiteEditorPage: React.FC = () => {
+  const templateId = new URLSearchParams(window.location.search).get("templateId");
+  if (templateId) return <TemplateStructureEditor templateId={templateId} />;
+  return <PageOrPartEditor />;
+};
+
+const PageOrPartEditor: React.FC = () => {
+  const { user } = useAuth();
+  const { notify } = useToast();
+  const { navigate } = useRouter();
 
   const [pageId, setPageId] = useState<string | null>(() => new URLSearchParams(window.location.search).get("pageId"));
+  const [templatePartId] = useState<string | null>(() => new URLSearchParams(window.location.search).get("templatePartId"));
+  const subjectKind: "page" | "templatePart" = templatePartId ? "templatePart" : "page";
+
+  const canUpdate = hasPermission(user?.role.permissions, subjectKind === "templatePart" ? "template_parts.update" : "content.update");
+  const canPublish = hasPermission(user?.role.permissions, subjectKind === "templatePart" ? "template_parts.publish" : "content.publish");
 
   const [page, setPage] = useState<CmsPage | null>(null);
+  const [part, setPart] = useState<TemplatePart | null>(null);
+  const [partUsage, setPartUsage] = useState<{ templates: { id: string; name: string; status: string }[]; pages: { id: string; title: string; status: string }[] } | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -693,7 +1087,7 @@ export const SiteEditorPage: React.FC = () => {
   const [mediaCache, setMediaCache] = useState<Record<string, string>>({});
   const [addBlockOpen, setAddBlockOpen] = useState(false);
   const [revisionsOpen, setRevisionsOpen] = useState(false);
-  const [revisions, setRevisions] = useState<ContentRevision[]>([]);
+  const [revisions, setRevisions] = useState<(ContentRevision | TemplatePartRevision)[]>([]);
   const [revisionsLoading, setRevisionsLoading] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [leaveConfirmOpen, setLeaveConfirmOpen] = useState(false);
@@ -730,16 +1124,37 @@ export const SiteEditorPage: React.FC = () => {
     }
   }, []);
 
+  const loadPart = useCallback(async (id: string) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await templatePartsApi.get(id);
+      setPart(res.templatePart);
+      const content = res.templatePart.currentRevision?.content;
+      const loadedDoc = content && Array.isArray((content as EditorDocument).blocks) ? (content as EditorDocument) : EMPTY_DOC;
+      setSavedDoc(loadedDoc);
+      setDoc(loadedDoc);
+      setSelectedId(null);
+      void templatePartsApi.usage(id).then(setPartUsage).catch(() => undefined);
+    } catch (err) {
+      setError(err instanceof ApiClientError ? err.message : "Failed to load template part.");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
-    if (pageId) void loadPage(pageId);
-  }, [pageId, loadPage]);
+    if (subjectKind === "templatePart" && templatePartId) void loadPart(templatePartId);
+    else if (pageId) void loadPage(pageId);
+  }, [pageId, templatePartId, subjectKind, loadPage, loadPart]);
 
   // Resolve the page's assigned Template (if any) so its Header/Footer
   // regions can be shown read-only for context (requirement: "show
-  // resolved template structure in editor") — never editable here, a
-  // Template Part is edited on its own page.
+  // resolved template structure in editor") — editable from its own
+  // Site Editor entry point (?templateId=), reached here via an "Edit
+  // template" link (Phase 4).
   useEffect(() => {
-    if (!page?.templateId) {
+    if (subjectKind !== "page" || !page?.templateId) {
       setTemplate(null);
       setTemplateRegionParts({});
       return;
@@ -748,12 +1163,13 @@ export const SiteEditorPage: React.FC = () => {
     void templatesApi.get(page.templateId).then(async (res) => {
       if (cancelled) return;
       setTemplate(res.template);
-      const regions = res.template.currentRevision?.structure?.regions ?? {};
+      const regions = normalizeTemplateRegions(res.template.currentRevision?.structure);
       const entries = await Promise.all(
-        Object.entries(regions).map(async ([region, partId]) => {
+        regions.map(async ({ key, templatePartId: partId }) => {
+          if (!partId) return null;
           try {
             const partRes = await templatePartsApi.get(partId);
-            return [region, partRes.templatePart] as const;
+            return [key, partRes.templatePart] as const;
           } catch {
             return null;
           }
@@ -764,7 +1180,7 @@ export const SiteEditorPage: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [page?.templateId]);
+  }, [subjectKind, page?.templateId]);
 
   useEffect(() => {
     void templatePartsApi.list({ limit: 100, sort: "name", order: "asc" }).then((res) => setTemplateParts(res.items));
@@ -835,40 +1251,55 @@ export const SiteEditorPage: React.FC = () => {
   const handleMoveInto = (id: string, parentId: string | null) => mutate((d) => moveIntoParent(d, id, parentId));
   const handleChangeProps = (id: string, patch: Record<string, unknown>) => mutate((d) => updateBlockProps(d, id, patch));
 
-  const save = async (): Promise<CmsPage | null> => {
-    if (!page) return null;
+  const save = async (): Promise<boolean> => {
+    const subjectId = subjectKind === "page" ? page?.id : part?.id;
+    const expectedUpdatedAt = subjectKind === "page" ? page?.updatedAt : part?.updatedAt;
+    if (!subjectId) return false;
     setSaving(true);
     try {
-      const body = blocksToPlainHtml(doc, mediaCache);
-      const res = await pagesApi.update(page.id, { editorBlocks: doc, body, expectedUpdatedAt: page.updatedAt });
-      setPage(res.page);
-      const nextDoc = res.page.currentRevision?.editorBlocks ?? doc;
-      setSavedDoc(nextDoc);
-      setDoc(nextDoc);
-      return res.page;
+      if (subjectKind === "page") {
+        const body = blocksToPlainHtml(doc, mediaCache);
+        const res = await pagesApi.update(subjectId, { editorBlocks: doc, body, expectedUpdatedAt });
+        setPage(res.page);
+        const nextDoc = res.page.currentRevision?.editorBlocks ?? doc;
+        setSavedDoc(nextDoc);
+        setDoc(nextDoc);
+      } else {
+        const res = await templatePartsApi.update(subjectId, { content: doc, expectedUpdatedAt });
+        setPart(res.templatePart);
+        const nextDoc = res.templatePart.currentRevision?.content ?? doc;
+        setSavedDoc(nextDoc);
+        setDoc(nextDoc);
+      }
+      return true;
     } catch (err) {
-      notify(err instanceof ApiClientError ? err.message : "Could not save the page.", "error");
-      return null;
+      notify(err instanceof ApiClientError ? err.message : `Could not save the ${subjectKind === "page" ? "page" : "template part"}.`, "error");
+      return false;
     } finally {
       setSaving(false);
     }
   };
 
   const handleSaveDraft = async () => {
-    const saved = await save();
-    if (saved) notify("Draft saved.", "success");
+    if (await save()) notify("Draft saved.", "success");
   };
 
   const handlePublish = async () => {
-    const saved = dirty ? await save() : page;
-    if (!saved) return;
+    const subjectId = subjectKind === "page" ? page?.id : part?.id;
+    if (!subjectId) return;
+    if (dirty && !(await save())) return;
     setPublishing(true);
     try {
-      const res = await pagesApi.publish(saved.id);
-      setPage(res.page);
-      notify("Page published.", "success");
+      if (subjectKind === "page") {
+        const res = await pagesApi.publish(subjectId);
+        setPage(res.page);
+      } else {
+        const res = await templatePartsApi.publish(subjectId);
+        setPart(res.templatePart);
+      }
+      notify(`${subjectKind === "page" ? "Page" : "Template part"} published.`, "success");
     } catch (err) {
-      notify(err instanceof ApiClientError ? err.message : "Could not publish the page.", "error");
+      notify(err instanceof ApiClientError ? err.message : "Could not publish.", "error");
     } finally {
       setPublishing(false);
     }
@@ -886,10 +1317,11 @@ export const SiteEditorPage: React.FC = () => {
   };
 
   const loadRevisions = async () => {
-    if (!page) return;
+    const subjectId = subjectKind === "page" ? page?.id : part?.id;
+    if (!subjectId) return;
     setRevisionsLoading(true);
     try {
-      const res = await pagesApi.revisions(page.id);
+      const res = subjectKind === "page" ? await pagesApi.revisions(subjectId) : await templatePartsApi.revisions(subjectId);
       setRevisions(res.revisions);
     } finally {
       setRevisionsLoading(false);
@@ -897,13 +1329,22 @@ export const SiteEditorPage: React.FC = () => {
   };
 
   const handleRevert = async (revisionId: string) => {
-    if (!page) return;
+    const subjectId = subjectKind === "page" ? page?.id : part?.id;
+    if (!subjectId) return;
     try {
-      const res = await pagesApi.revert(page.id, revisionId);
-      setPage(res.page);
-      const nextDoc = res.page.currentRevision?.editorBlocks ?? EMPTY_DOC;
-      setSavedDoc(nextDoc);
-      setDoc(nextDoc);
+      if (subjectKind === "page") {
+        const res = await pagesApi.revert(subjectId, revisionId);
+        setPage(res.page);
+        const nextDoc = res.page.currentRevision?.editorBlocks ?? EMPTY_DOC;
+        setSavedDoc(nextDoc);
+        setDoc(nextDoc);
+      } else {
+        const res = await templatePartsApi.revert(subjectId, revisionId);
+        setPart(res.templatePart);
+        const nextDoc = res.templatePart.currentRevision?.content ?? EMPTY_DOC;
+        setSavedDoc(nextDoc);
+        setDoc(nextDoc);
+      }
       notify("Reverted to prior revision.", "success");
       void loadRevisions();
     } catch (err) {
@@ -911,15 +1352,16 @@ export const SiteEditorPage: React.FC = () => {
     }
   };
 
+  const backPath = subjectKind === "templatePart" ? "/website/template-parts" : "/cms/pages";
   const handleBack = () => {
     if (dirty) {
       setLeaveConfirmOpen(true);
       return;
     }
-    navigate("/cms/pages");
+    navigate(backPath);
   };
 
-  if (!pageId) {
+  if (!pageId && !templatePartId) {
     return (
       <PagePicker
         onOpen={(id) => {
@@ -930,8 +1372,12 @@ export const SiteEditorPage: React.FC = () => {
     );
   }
 
-  if (loading) return <LoadingState label="Loading page…" />;
-  if (error || !page) return <ErrorState message={error ?? "Page not found."} />;
+  const subject = subjectKind === "page" ? page : part;
+  if (loading) return <LoadingState label={subjectKind === "page" ? "Loading page…" : "Loading template part…"} />;
+  if (error || !subject) return <ErrorState message={error ?? (subjectKind === "page" ? "Page not found." : "Template part not found.")} />;
+
+  const subjectTitle = subjectKind === "page" ? page!.title : part!.name;
+  const subjectStatus = subject.status;
 
   return (
     <div className="space-y-3 -m-4 sm:-m-6 p-4 sm:p-6 min-h-[calc(100vh-4rem)]" style={{ background: "var(--bg-app)" }}>
@@ -939,14 +1385,14 @@ export const SiteEditorPage: React.FC = () => {
       <Card className="p-2.5 flex items-center justify-between gap-2 flex-wrap sticky top-0 z-10">
         <div className="flex items-center gap-2 min-w-0">
           <Button variant="ghost" onClick={handleBack}>
-            <ArrowLeft className="w-4 h-4" /> Pages
+            <ArrowLeft className="w-4 h-4" /> {subjectKind === "page" ? "Pages" : "Template Parts"}
           </Button>
           <div className="min-w-0">
             <p className="text-sm font-bold truncate" style={{ color: "var(--text-primary)" }}>
-              {page.title}
+              {subjectTitle}
             </p>
             <p className="text-[11px] flex items-center gap-1.5" style={{ color: "var(--text-muted)" }}>
-              <Badge tone={page.status === "PUBLISHED" ? "success" : "neutral"}>{page.status}</Badge>
+              <Badge tone={subjectStatus === "PUBLISHED" ? "success" : "neutral"}>{subjectStatus}</Badge>
               {dirty && <span className="text-amber-500">Unsaved changes</span>}
             </p>
           </div>
@@ -975,17 +1421,17 @@ export const SiteEditorPage: React.FC = () => {
           >
             <History className="w-3.5 h-3.5" /> Revisions
           </Button>
-          {canUpdate && page.status !== "ARCHIVED" && (
+          {canUpdate && subjectStatus !== "ARCHIVED" && (
             <Button variant="secondary" onClick={() => void handleSaveDraft()} disabled={saving || !dirty}>
               <Save className="w-3.5 h-3.5" /> {saving ? "Saving…" : "Save draft"}
             </Button>
           )}
-          {canPublish && page.status !== "PUBLISHED" && page.status !== "ARCHIVED" && (
+          {canPublish && subjectStatus !== "PUBLISHED" && subjectStatus !== "ARCHIVED" && (
             <Button variant="primary" onClick={() => void handlePublish()} disabled={publishing || saving}>
               <Rocket className="w-3.5 h-3.5" /> {publishing ? "Publishing…" : "Publish"}
             </Button>
           )}
-          {canUpdate && page.status === "PUBLISHED" && (
+          {subjectKind === "page" && canUpdate && subjectStatus === "PUBLISHED" && (
             <Button variant="secondary" onClick={() => void handleUnpublish()}>
               Move to draft
             </Button>
@@ -993,25 +1439,32 @@ export const SiteEditorPage: React.FC = () => {
         </div>
       </Card>
 
-      {page.status === "ARCHIVED" && (
+      {subjectStatus === "ARCHIVED" && (
         <div className="flex items-center gap-2 text-xs rounded-lg px-3 py-2 bg-amber-500/10 text-amber-600 border border-amber-500/30">
-          <AlertTriangle className="w-3.5 h-3.5" /> This page is archived and read-only. Restore it from Pages to edit again.
+          <AlertTriangle className="w-3.5 h-3.5" /> This {subjectKind === "page" ? "page" : "template part"} is archived and read-only. Restore it to edit again.
         </div>
       )}
 
       <div className="grid lg:grid-cols-[260px_1fr_300px] gap-3 items-start">
         {/* Left: layers / structure */}
         <Card className="p-3 space-y-3 lg:sticky lg:top-16">
-          {template && (
+          {subjectKind === "page" && template && (
             <div>
-              <p className="text-[10px] font-bold uppercase tracking-wide mb-1.5" style={{ color: "var(--text-muted)" }}>
-                Template: {template.name}
+              <p className="text-[10px] font-bold uppercase tracking-wide mb-1.5 flex items-center justify-between gap-2" style={{ color: "var(--text-muted)" }}>
+                <span>Template: {template.name}</span>
+                {hasPermission(user?.role.permissions, "templates.read") && (
+                  <button type="button" className="font-semibold normal-case" style={{ color: "var(--accent)" }} onClick={() => navigate(`/website/site-editor?templateId=${template.id}`)}>
+                    Edit →
+                  </button>
+                )}
               </p>
               <ul className="space-y-1">
-                {Object.entries(templateRegionParts).map(([region, part]) => (
+                {Object.entries(templateRegionParts).map(([region, regionPart]) => (
                   <li key={region} className="text-[11px] flex items-center justify-between gap-2" style={{ color: "var(--text-secondary)" }}>
                     <span className="capitalize">{region}</span>
-                    <Badge tone={part.status === "PUBLISHED" ? "success" : "neutral"}>{part.name}</Badge>
+                    <button type="button" onClick={() => navigate(`/website/site-editor?templatePartId=${regionPart.id}`)}>
+                      <Badge tone={regionPart.status === "PUBLISHED" ? "success" : "neutral"}>{regionPart.name}</Badge>
+                    </button>
                   </li>
                 ))}
                 {Object.keys(templateRegionParts).length === 0 && (
@@ -1020,6 +1473,33 @@ export const SiteEditorPage: React.FC = () => {
                   </li>
                 )}
               </ul>
+            </div>
+          )}
+          {subjectKind === "templatePart" && (
+            <div>
+              <p className="text-[10px] font-bold uppercase tracking-wide mb-1.5" style={{ color: "var(--text-muted)" }}>
+                Used by
+              </p>
+              {!partUsage || (partUsage.templates.length === 0 && partUsage.pages.length === 0) ? (
+                <p className="text-[11px]" style={{ color: "var(--text-muted)" }}>
+                  Not referenced by any template or page yet.
+                </p>
+              ) : (
+                <ul className="space-y-1">
+                  {partUsage.templates.map((t) => (
+                    <li key={t.id} className="text-[11px] flex items-center justify-between gap-2" style={{ color: "var(--text-secondary)" }}>
+                      <span className="truncate">Template: {t.name}</span>
+                      <Badge tone={t.status === "PUBLISHED" ? "success" : "neutral"}>{t.status}</Badge>
+                    </li>
+                  ))}
+                  {partUsage.pages.map((p) => (
+                    <li key={p.id} className="text-[11px] flex items-center justify-between gap-2" style={{ color: "var(--text-secondary)" }}>
+                      <span className="truncate">Page: {p.title}</span>
+                      <Badge tone={p.status === "PUBLISHED" ? "success" : "neutral"}>{p.status}</Badge>
+                    </li>
+                  ))}
+                </ul>
+              )}
             </div>
           )}
           <div>
@@ -1094,23 +1574,7 @@ export const SiteEditorPage: React.FC = () => {
           {doc.blocks.length === 0 ? (
             <EmptyState title="Nothing to preview yet" description="Add blocks to see a preview." />
           ) : (
-            doc.blocks.map((b) => (
-              <CanvasBlock
-                key={b.id}
-                block={b}
-                depth={0}
-                selectedId={null}
-                onSelect={() => undefined}
-                onDelete={() => undefined}
-                onDuplicate={() => undefined}
-                onMove={() => undefined}
-                onAddChild={() => undefined}
-                mediaCache={mediaCache}
-                onMediaResolved={(id, url) => setMediaCache((prev) => ({ ...prev, [id]: url }))}
-                templatePartNames={templatePartNames}
-                globalStyles={globalStyles}
-              />
-            ))
+            <BlockTreeRenderer blocks={doc.blocks} templatePartNames={templatePartNames} globalStyles={globalStyles} />
           )}
         </div>
       </Modal>
@@ -1130,8 +1594,8 @@ export const SiteEditorPage: React.FC = () => {
                   </p>
                   <p style={{ color: "var(--text-muted)" }}>{new Date(r.createdAt).toLocaleString()}</p>
                 </div>
-                {canUpdate && r.id !== page.currentRevisionId && (
-                  <Button variant="secondary" onClick={() => void handleRevert(r.id)} disabled={page.status === "ARCHIVED"}>
+                {canUpdate && r.id !== subject.currentRevisionId && (
+                  <Button variant="secondary" onClick={() => void handleRevert(r.id)} disabled={subjectStatus === "ARCHIVED"}>
                     <RotateCcw className="w-3.5 h-3.5" /> Revert to this
                   </Button>
                 )}
@@ -1149,7 +1613,7 @@ export const SiteEditorPage: React.FC = () => {
         destructive
         onConfirm={() => {
           setLeaveConfirmOpen(false);
-          navigate("/cms/pages");
+          navigate(backPath);
         }}
         onCancel={() => setLeaveConfirmOpen(false)}
       />

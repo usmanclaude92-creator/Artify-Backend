@@ -58,18 +58,19 @@ export const listTemplatesQuerySchema = z.object({
 });
 export type ListTemplatesQuery = z.infer<typeof listTemplatesQuerySchema>;
 
-// `structure`'s shape stays deliberately unconstrained JSON (unchanged
-// since Phase 1 — see the Template model's own doc comment in
-// schema.prisma: the slot/region shape should be proven against a real
-// page before being generalized, not locked down prematurely). Phase 2
-// (Site Editor) reads an optional `regions` convention off of it — a map
-// of region key ("header", "footer", ...) to the id of the TemplatePart
-// rendered there, used only to show the resolved template structure in
-// the editor — but never requires or defaults it: existing callers that
-// store a different shape (tests included) are unaffected.
+// `structure`'s shape stays deliberately unconstrained JSON at the schema
+// layer (unchanged since Phase 1 — see the Template model's own doc
+// comment in schema.prisma). Phase 2 (Site Editor) introduced an optional
+// `regions` convention; Phase 4 (server/utils/templateStructure.ts)
+// formalizes it as an ORDERED array (`{key, templatePartId}[]`) rather
+// than a plain object, since Postgres JSONB doesn't guarantee object key
+// order survives a write — needed for "reorder regions." Both the new
+// array shape and the original Phase 2 `Record<string,string>` shape are
+// read by `normalizeRegions`; this type only documents the newer shape a
+// caller should write going forward.
 export const templateStructureSchema = z.record(z.unknown());
 export interface TemplateStructure {
-  regions?: Record<string, string>;
+  regions?: { key: string; templatePartId: string | null }[] | Record<string, string>;
   [key: string]: unknown;
 }
 

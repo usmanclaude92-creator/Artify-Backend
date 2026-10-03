@@ -20,9 +20,11 @@
  * duplicate becomes an ordinary, fully-editable, non-system template.
  */
 import { templateRepository, type TemplateWithUsage } from "../repositories/templateRepository";
+import { templatePartRepository } from "../repositories/templatePartRepository";
 import { auditLogRepository } from "../repositories/auditLogRepository";
 import { prisma } from "../db/prisma";
 import { AuthorizationError, ConflictError, NotFoundError, ValidationError } from "../core/errors";
+import { normalizeRegions } from "../utils/templateStructure";
 import type { SanitizedUser } from "../types/domain";
 import type {
   CreateTemplateInput,
@@ -50,6 +52,30 @@ function assertNotSystem(template: { isSystem: boolean }, action: string): void 
   }
 }
 
+/**
+ * Phase 4 — "prevent publishing invalid templates" / "broken references":
+ * every region that assigns a template part must point at a part that
+ * actually still exists in this organization. A region left unassigned
+ * (`templatePartId: null`) is valid — publicSiteService simply renders
+ * nothing for that region, same safe-fallback philosophy as everywhere
+ * else in this codebase. This only runs at publish time, not on every
+ * draft save, matching how Post/Page/Template already let a draft be
+ * transiently incomplete.
+ */
+async function assertRegionsResolvable(organizationId: string, structure: unknown): Promise<void> {
+  const regions = normalizeRegions(structure);
+  const partIds = [...new Set(regions.map((r) => r.templatePartId).filter((id): id is string => !!id))];
+  if (partIds.length === 0) return;
+
+  const valid = await templatePartRepository.findManyByIdsInOrg(partIds, organizationId);
+  const broken = regions.filter((r) => r.templatePartId && !valid.has(r.templatePartId));
+  if (broken.length > 0) {
+    throw new ValidationError(
+      `This template references template parts that no longer exist: ${broken.map((r) => r.key).join(", ")}. Fix or unassign these regions before publishing.`
+    );
+  }
+}
+
 export const templateService = {
   async listTemplates(organizationId: string, filters: Pick<ListTemplatesQuery, "search" | "status" | "type">, page: number, limit: number, sort: string, order: "asc" | "desc") {
     return templateRepository.list(organizationId, filters, page, limit, sort, order);
@@ -62,6 +88,34 @@ export const templateService = {
   async listRevisions(organizationId: string, id: string) {
     await loadTemplateOrThrow(id, organizationId);
     return templateRepository.listRevisions(id);
+  },
+
+  /** Phase 4 — "show where a template is used": the actual pages assigned to it, not just a count. */
+  async getUsage(organizationId: string, id: string) {
+    await loadTemplateOrThrow(id, organizationId);
+    const pages = await templateRepository.findPagesUsing(id, organizationId);
+    return { pages };
+  },
+
+  /**
+   * Phase 4 — authenticated preview: resolves the template's CURRENT
+   * revision's regions to their assigned Template Part's CURRENT revision
+   * content, regardless of draft/published status on either side (unlike
+   * the public resolver, which only ever surfaces PUBLISHED+PUBLISHED —
+   * see publicSiteService.ts). This is what lets an editor preview a
+   * template before publishing it or its parts.
+   */
+  async previewTemplate(organizationId: string, id: string) {
+    const template = await loadTemplateOrThrow(id, organizationId);
+    const regionEntries = normalizeRegions(template.currentRevision?.structure);
+    const regions = await Promise.all(
+      regionEntries.map(async (r) => {
+        if (!r.templatePartId) return { key: r.key, templatePartId: null, part: null };
+        const part = await templatePartRepository.findByIdInOrg(r.templatePartId, organizationId);
+        return { key: r.key, templatePartId: r.templatePartId, part };
+      })
+    );
+    return { template, regions };
   },
 
   async createTemplate(caller: SanitizedUser, input: CreateTemplateInput, meta: RequestMeta = {}): Promise<TemplateWithUsage> {
@@ -204,6 +258,7 @@ export const templateService = {
 
     if (existing.status === "ARCHIVED") throw new ConflictError("An archived template must be restored before it can be published.");
     if (!existing.currentRevisionId) throw new ConflictError("This template has no revision to publish.");
+    await assertRegionsResolvable(organizationId, existing.currentRevision?.structure);
 
     const now = new Date();
     await prisma.$transaction([

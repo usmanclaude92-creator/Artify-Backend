@@ -14,7 +14,7 @@ import { templatePartRepository, type TemplatePartWithRevision } from "../reposi
 import { auditLogRepository } from "../repositories/auditLogRepository";
 import { sanitizeContentIfEditorDocument } from "../schemas/editorSchemas";
 import { prisma } from "../db/prisma";
-import { AuthorizationError, ConflictError, NotFoundError } from "../core/errors";
+import { AuthorizationError, ConflictError, NotFoundError, ValidationError } from "../core/errors";
 import type { SanitizedUser } from "../types/domain";
 import type {
   CreateTemplatePartInput,
@@ -54,6 +54,12 @@ export const templatePartService = {
   async listRevisions(organizationId: string, id: string) {
     await loadTemplatePartOrThrow(id, organizationId);
     return templatePartRepository.listRevisions(id);
+  },
+
+  /** Phase 4 — "show where a template part is used": every Template region and Page that references it. */
+  async getUsage(organizationId: string, id: string) {
+    await loadTemplatePartOrThrow(id, organizationId);
+    return templatePartRepository.findUsage(id, organizationId);
   },
 
   async createPart(caller: SanitizedUser, input: CreateTemplatePartInput, meta: RequestMeta = {}): Promise<TemplatePartWithRevision> {
@@ -336,6 +342,19 @@ export const templatePartService = {
     const organizationId = caller.organizationId;
     const existing = await loadTemplatePartOrThrow(id, organizationId);
     assertNotSystem(existing, "deleted");
+
+    // Phase 4 — "prevent orphaned template parts / broken references":
+    // unlike Phase 1 (which had no DB-level reference to check), usage is
+    // now computed by scanning Template regions and Page editorBlocks
+    // (templatePartRepository.findUsage) — block the delete exactly like
+    // templateService's own Page-count guard.
+    const usage = await templatePartRepository.findUsage(id, organizationId);
+    if (usage.templates.length > 0 || usage.pages.length > 0) {
+      const names = [...usage.templates.map((t) => t.name), ...usage.pages.map((p) => p.title)];
+      throw new ValidationError(
+        `This template part is still used by ${names.length} item(s) (${names.slice(0, 5).join(", ")}${names.length > 5 ? ", …" : ""}). Remove those references before deleting it.`
+      );
+    }
 
     await templatePartRepository.softDelete(id);
 

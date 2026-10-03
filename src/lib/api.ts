@@ -1105,12 +1105,27 @@ export type TemplatePartTypeValue =
   | "SOCIAL_SECTION";
 
 // `structure` stays unconstrained JSON (server/schemas/templateSchemas.ts).
-// Phase 2 (Site Editor) reads an optional `regions` convention off of it —
-// a map of region key ("header", "footer", ...) to the id of the
-// TemplatePart rendered there — but never requires it.
+// Phase 4 (server/utils/templateStructure.ts) formalizes `regions` as an
+// ORDERED array (`{key, templatePartId}[]`) rather than a plain object,
+// since JSON object key order isn't guaranteed to round-trip through
+// Postgres JSONB — needed for "reorder regions." The original Phase 2
+// `Record<string,string>` shape is still accepted when reading (a
+// template saved before this phase), just normalized on first edit.
+export interface TemplateRegionEntry {
+  key: string;
+  templatePartId: string | null;
+}
 export interface TemplateStructure {
-  regions?: Record<string, string>;
+  regions?: TemplateRegionEntry[] | Record<string, string>;
   [key: string]: unknown;
+}
+
+/** Mirrors server/utils/templateStructure.ts's normalizeRegions — tolerates both the Phase 2 map shape and the Phase 4 ordered-array shape. */
+export function normalizeTemplateRegions(structure: TemplateStructure | undefined | null): TemplateRegionEntry[] {
+  const regions = structure?.regions;
+  if (!regions) return [];
+  if (Array.isArray(regions)) return regions;
+  return Object.entries(regions).map(([key, templatePartId]) => ({ key, templatePartId }));
 }
 
 export interface TemplateRevision {
@@ -1196,6 +1211,9 @@ export const templatesApi = {
   revert: (id: string, revisionId: string) => apiClient.post<{ template: Template }>(`/templates/${id}/revert`, { revisionId }),
   duplicate: (id: string, name?: string) => apiClient.post<{ template: Template }>(`/templates/${id}/duplicate`, name ? { name } : {}),
   remove: (id: string) => apiClient.delete<{ message: string }>(`/templates/${id}`),
+  usage: (id: string) => apiClient.get<{ pages: { id: string; title: string; slug: string; status: string }[] }>(`/templates/${id}/usage`),
+  preview: (id: string) =>
+    apiClient.get<{ template: Template; regions: { key: string; templatePartId: string | null; part: TemplatePart | null }[] }>(`/templates/${id}/preview`),
 };
 
 export const templatePartsApi = {
@@ -1221,6 +1239,11 @@ export const templatePartsApi = {
   revert: (id: string, revisionId: string) => apiClient.post<{ templatePart: TemplatePart }>(`/template-parts/${id}/revert`, { revisionId }),
   duplicate: (id: string, name?: string) => apiClient.post<{ templatePart: TemplatePart }>(`/template-parts/${id}/duplicate`, name ? { name } : {}),
   remove: (id: string) => apiClient.delete<{ message: string }>(`/template-parts/${id}`),
+  usage: (id: string) =>
+    apiClient.get<{
+      templates: { id: string; name: string; slug: string; status: string }[];
+      pages: { id: string; title: string; slug: string; status: string }[];
+    }>(`/template-parts/${id}/usage`),
 };
 
 export const postsApi = {

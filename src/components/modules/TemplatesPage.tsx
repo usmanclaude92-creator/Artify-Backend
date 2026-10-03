@@ -11,9 +11,10 @@
  * for it.
  */
 import React, { useEffect, useState } from "react";
-import { LayoutTemplate, Plus, Search, Rocket, Archive, History, RotateCcw, Copy, Pencil } from "lucide-react";
+import { LayoutTemplate, Plus, Search, Rocket, Archive, History, RotateCcw, Copy, Pencil, Wand2, Eye, Trash2 } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
+import { useRouter } from "../../lib/router";
 import {
   templatesApi,
   type Template,
@@ -21,11 +22,14 @@ import {
   type TemplateTypeValue,
   type TemplateWorkflowStatus,
   type TemplateStructure,
+  type TemplatePart,
+  type EditorDocument,
 } from "../../lib/api";
 import { ApiClientError } from "../../lib/apiClient";
 import { Card, Button, Input, Select, Badge, LoadingState, ErrorState, EmptyState, Pagination, Modal, Field, ConfirmDialog } from "../ui/ui";
 import { hasPermission } from "../../lib/permissions";
 import { initialSearchFromQuery, consumeNewFlag } from "../../lib/deepLink";
+import { BlockTreeRenderer } from "../common/BlockRenderer";
 
 const TYPE_OPTIONS: TemplateTypeValue[] = [
   "HOMEPAGE",
@@ -166,9 +170,10 @@ const TemplateFormModal: React.FC<{ open: boolean; onClose: () => void; onSaved:
   );
 };
 
-const TemplateDetail: React.FC<{ template: Template; onChanged: (t?: Template) => void }> = ({ template, onChanged }) => {
+const TemplateDetail: React.FC<{ template: Template; onChanged: (t?: Template) => void; onDeleted: () => void }> = ({ template, onChanged, onDeleted }) => {
   const { user } = useAuth();
   const { notify } = useToast();
+  const { navigate } = useRouter();
   const canUpdate = hasPermission(user?.role.permissions, "templates.update");
   const canPublish = hasPermission(user?.role.permissions, "templates.publish");
   const canDelete = hasPermission(user?.role.permissions, "templates.delete");
@@ -176,10 +181,19 @@ const TemplateDetail: React.FC<{ template: Template; onChanged: (t?: Template) =
 
   const [editOpen, setEditOpen] = useState(false);
   const [archiveOpen, setArchiveOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const [revisionsOpen, setRevisionsOpen] = useState(false);
   const [revisions, setRevisions] = useState<TemplateRevision[]>([]);
   const [revisionsLoading, setRevisionsLoading] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [usage, setUsage] = useState<{ pages: { id: string; title: string; status: string }[] } | null>(null);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewData, setPreviewData] = useState<{ key: string; templatePartId: string | null; part: TemplatePart | null }[] | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+
+  useEffect(() => {
+    void templatesApi.usage(template.id).then(setUsage).catch(() => undefined);
+  }, [template.id]);
 
   const loadRevisions = async () => {
     setRevisionsLoading(true);
@@ -188,6 +202,33 @@ const TemplateDetail: React.FC<{ template: Template; onChanged: (t?: Template) =
       setRevisions(res.revisions);
     } finally {
       setRevisionsLoading(false);
+    }
+  };
+
+  const handleOpenPreview = async () => {
+    setPreviewOpen(true);
+    setPreviewLoading(true);
+    try {
+      const res = await templatesApi.preview(template.id);
+      setPreviewData(res.regions);
+    } catch (err) {
+      notify(err instanceof ApiClientError ? err.message : "Could not load preview.", "error");
+    } finally {
+      setPreviewLoading(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    setDeleteOpen(false);
+    setBusy(true);
+    try {
+      await templatesApi.remove(template.id);
+      notify("Template deleted.", "success");
+      onDeleted();
+    } catch (err) {
+      notify(err instanceof ApiClientError ? err.message : "Could not delete template.", "error");
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -225,11 +266,13 @@ const TemplateDetail: React.FC<{ template: Template; onChanged: (t?: Template) =
             {template.isSystem && <Badge tone="info">System</Badge>}
           </h2>
           <p className="text-[11px]" style={{ color: "var(--text-muted)" }}>
-            {template.type} · /{template.slug} · v{template.currentRevision?.version ?? "—"} · used by {template._count.pages} page
-            {template._count.pages === 1 ? "" : "s"} · updated {new Date(template.updatedAt).toLocaleString()}
+            {template.type} · /{template.slug} · v{template.currentRevision?.version ?? "—"} · updated {new Date(template.updatedAt).toLocaleString()}
           </p>
         </div>
         <div className="flex gap-1.5 flex-wrap justify-end shrink-0">
+          <Button variant="ghost" onClick={() => void handleOpenPreview()}>
+            <Eye className="w-3.5 h-3.5" /> Preview
+          </Button>
           <Button
             variant="ghost"
             onClick={() => {
@@ -245,8 +288,13 @@ const TemplateDetail: React.FC<{ template: Template; onChanged: (t?: Template) =
             </Button>
           )}
           {canUpdate && !template.isSystem && (
+            <Button variant="secondary" onClick={() => navigate(`/website/site-editor?templateId=${template.id}`)}>
+              <Wand2 className="w-3.5 h-3.5" /> Edit regions
+            </Button>
+          )}
+          {canUpdate && !template.isSystem && (
             <Button variant="secondary" onClick={() => setEditOpen(true)} disabled={busy}>
-              <Pencil className="w-3.5 h-3.5" /> Edit
+              <Pencil className="w-3.5 h-3.5" /> Edit details
             </Button>
           )}
           {canPublish && !template.isSystem && template.status !== "PUBLISHED" && template.status !== "ARCHIVED" && (
@@ -259,6 +307,11 @@ const TemplateDetail: React.FC<{ template: Template; onChanged: (t?: Template) =
               <Archive className="w-3.5 h-3.5" /> Archive
             </Button>
           )}
+          {canDelete && !template.isSystem && (
+            <Button variant="danger" onClick={() => setDeleteOpen(true)} disabled={busy}>
+              <Trash2 className="w-3.5 h-3.5" /> Delete
+            </Button>
+          )}
         </div>
       </div>
 
@@ -267,6 +320,27 @@ const TemplateDetail: React.FC<{ template: Template; onChanged: (t?: Template) =
           {template.description}
         </div>
       )}
+
+      <div className="px-4 py-3 border-t" style={{ borderColor: "var(--border)" }}>
+        <p className="text-xs font-bold uppercase tracking-wide mb-1.5" style={{ color: "var(--text-muted)" }}>
+          Used by
+        </p>
+        {!usage || usage.pages.length === 0 ? (
+          <p className="text-[11px]" style={{ color: "var(--text-muted)" }}>
+            No pages are assigned to this template.
+          </p>
+        ) : (
+          <ul className="space-y-1">
+            {usage.pages.map((p) => (
+              <li key={p.id} className="text-[11px] flex items-center justify-between gap-2" style={{ color: "var(--text-secondary)" }}>
+                <span>{p.title}</span>
+                <Badge tone={p.status === "PUBLISHED" ? "success" : "neutral"}>{p.status}</Badge>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
       <div className="p-4">
         <pre
           className="text-[11px] font-mono p-3 rounded-lg overflow-auto max-h-64"
@@ -286,6 +360,43 @@ const TemplateDetail: React.FC<{ template: Template; onChanged: (t?: Template) =
         onConfirm={handleArchive}
         onCancel={() => setArchiveOpen(false)}
       />
+      <ConfirmDialog
+        open={deleteOpen}
+        title="Delete template"
+        message={`Permanently delete "${template.name}"? This cannot be undone. Blocked while any page is still assigned to it.`}
+        confirmLabel="Delete"
+        destructive
+        onConfirm={() => void handleDelete()}
+        onCancel={() => setDeleteOpen(false)}
+      />
+      <Modal open={previewOpen} onClose={() => setPreviewOpen(false)} title={`Preview: ${template.name}`}>
+        <div className="max-h-[70vh] overflow-y-auto space-y-4">
+          {previewLoading ? (
+            <LoadingState />
+          ) : !previewData || previewData.length === 0 ? (
+            <EmptyState title="Nothing to preview yet" description="Assign a Template Part to a region to see a preview." />
+          ) : (
+            previewData.map((r) => (
+              <div key={r.key}>
+                <p className="text-[10px] font-bold uppercase tracking-wide mb-1" style={{ color: "var(--text-muted)" }}>
+                  {r.key}
+                </p>
+                {!r.part ? (
+                  <p className="text-xs italic" style={{ color: "var(--text-muted)" }}>
+                    No template part assigned.
+                  </p>
+                ) : Array.isArray((r.part.currentRevision?.content as EditorDocument)?.blocks) ? (
+                  <BlockTreeRenderer blocks={(r.part.currentRevision!.content as EditorDocument).blocks} />
+                ) : (
+                  <p className="text-xs italic" style={{ color: "var(--text-muted)" }}>
+                    {r.part.name} ({r.part.status}) — legacy content, no visual preview available.
+                  </p>
+                )}
+              </div>
+            ))
+          )}
+        </div>
+      </Modal>
       <Modal open={revisionsOpen} onClose={() => setRevisionsOpen(false)} title="Revision history">
         {revisionsLoading ? (
           <LoadingState />
@@ -429,7 +540,16 @@ export const TemplatesPage: React.FC = () => {
             <Pagination page={pageNum} totalPages={totalPages} onChange={setPageNum} />
           </Card>
 
-          {selected && <TemplateDetail template={selected} onChanged={(updated) => (updated ? setSelected(updated) : void load())} />}
+          {selected && (
+            <TemplateDetail
+              template={selected}
+              onChanged={(updated) => (updated ? setSelected(updated) : void load())}
+              onDeleted={() => {
+                setSelected(null);
+                void load();
+              }}
+            />
+          )}
         </div>
       )}
 

@@ -118,4 +118,67 @@ describe("Template Parts", () => {
       404
     );
   });
+
+  it("GET /:id/usage finds both a Template region reference and a Page editorBlocks reference, tenant-scoped", async () => {
+    const part = await request(app).post("/api/v1/template-parts").set("Authorization", `Bearer ${adminToken}`).send({ type: "HEADER", name: "Referenced Header" });
+    const partId = part.body.data.templatePart.id;
+
+    const template = await request(app)
+      .post("/api/v1/templates")
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({ type: "STANDARD_PAGE", name: "Referencing Template", structure: { regions: [{ key: "header", templatePartId: partId }] } });
+
+    const page = await request(app)
+      .post("/api/v1/pages")
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({
+        title: "Page With Part Block",
+        editorBlocks: { version: 1, blocks: [{ id: "b1", type: "templatePart", props: { templatePartId: partId } }] },
+      });
+
+    const usage = await request(app).get(`/api/v1/template-parts/${partId}/usage`).set("Authorization", `Bearer ${adminToken}`);
+    expect(usage.status).toBe(200);
+    expect(usage.body.data.templates.map((t: { id: string }) => t.id)).toContain(template.body.data.template.id);
+    expect(usage.body.data.pages.map((p: { id: string }) => p.id)).toContain(page.body.data.page.id);
+
+    expect((await request(app).get(`/api/v1/template-parts/${partId}/usage`).set("Authorization", `Bearer ${otherOrgAdminToken}`)).status).toBe(404);
+  });
+
+  it("refuses to delete a template part referenced by a Template region", async () => {
+    const part = await request(app).post("/api/v1/template-parts").set("Authorization", `Bearer ${adminToken}`).send({ type: "FOOTER", name: "Used By Template" });
+    const partId = part.body.data.templatePart.id;
+    await request(app)
+      .post("/api/v1/templates")
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({ type: "STANDARD_PAGE", name: "Holds Part Reference", structure: { regions: [{ key: "footer", templatePartId: partId }] } });
+
+    const del = await request(app).delete(`/api/v1/template-parts/${partId}`).set("Authorization", `Bearer ${adminToken}`).send();
+    expect(del.status).toBe(400);
+  });
+
+  it("refuses to delete a template part referenced by a Page's editorBlocks", async () => {
+    const part = await request(app).post("/api/v1/template-parts").set("Authorization", `Bearer ${adminToken}`).send({ type: "SIDEBAR", name: "Used By Page" });
+    const partId = part.body.data.templatePart.id;
+    await request(app)
+      .post("/api/v1/pages")
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({
+        title: "References The Part",
+        editorBlocks: { version: 1, blocks: [{ id: "b1", type: "templatePart", props: { templatePartId: partId } }] },
+      });
+
+    const del = await request(app).delete(`/api/v1/template-parts/${partId}`).set("Authorization", `Bearer ${adminToken}`).send();
+    expect(del.status).toBe(400);
+  });
+
+  it("allows deleting a template part once it is no longer referenced anywhere", async () => {
+    const part = await request(app).post("/api/v1/template-parts").set("Authorization", `Bearer ${adminToken}`).send({ type: "CTA_SECTION", name: "Unused Part" });
+    const partId = part.body.data.templatePart.id;
+
+    const del = await request(app).delete(`/api/v1/template-parts/${partId}`).set("Authorization", `Bearer ${adminToken}`).send();
+    expect(del.status).toBe(200);
+
+    const stillVisible = await request(app).get(`/api/v1/template-parts/${partId}`).set("Authorization", `Bearer ${adminToken}`);
+    expect(stillVisible.status).toBe(404);
+  });
 });

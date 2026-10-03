@@ -1,6 +1,8 @@
 /** Template Part data access (Phase 1 — docs/control-center-replacement-roadmap.md). Organization-scoped, same findByIdInOrg-only convention as templateRepository.ts. */
 import type { TemplatePart, Prisma } from "@prisma/client";
 import { prisma } from "../db/prisma";
+import { normalizeRegions } from "../utils/templateStructure";
+import { collectTemplatePartIds } from "../utils/editorBlockRefs";
 
 export interface TemplatePartFilters {
   search?: string;
@@ -65,6 +67,37 @@ export const templatePartRepository = {
 
   async listRevisions(templatePartId: string) {
     return prisma.templatePartRevision.findMany({ where: { templatePartId }, orderBy: { version: "desc" } });
+  },
+
+  /** Which of `ids` are real, non-deleted template parts in this organization (Phase 4 — publish-time broken-reference validation). */
+  async findManyByIdsInOrg(ids: string[], organizationId: string): Promise<Set<string>> {
+    if (ids.length === 0) return new Set();
+    const rows = await prisma.templatePart.findMany({ where: { id: { in: ids }, organizationId, deletedAt: null }, select: { id: true } });
+    return new Set(rows.map((r) => r.id));
+  },
+
+  /**
+   * Phase 4 — dependency awareness: every Template whose current revision's
+   * `structure.regions` assigns this part to a region, and every Page whose
+   * current revision's editorBlocks contains a `templatePart` block
+   * referencing it. Organization-scoped sets are small in practice (a
+   * handful of templates/parts per org), so this scans in application code
+   * rather than attempting a JSONB containment query — same tradeoff
+   * templateRepository/pageRepository already make elsewhere in this phase.
+   */
+  async findUsage(partId: string, organizationId: string): Promise<{ templates: { id: string; name: string; slug: string; status: string }[]; pages: { id: string; title: string; slug: string; status: string }[] }> {
+    const [templates, pages] = await Promise.all([
+      prisma.template.findMany({ where: { organizationId, deletedAt: null }, include: { currentRevision: true } }),
+      prisma.page.findMany({ where: { organizationId, deletedAt: null }, include: { currentRevision: true } }),
+    ]);
+
+    const usingTemplates = templates.filter((t) => normalizeRegions(t.currentRevision?.structure).some((r) => r.templatePartId === partId));
+    const usingPages = pages.filter((p) => collectTemplatePartIds(p.currentRevision?.editorBlocks).includes(partId));
+
+    return {
+      templates: usingTemplates.map((t) => ({ id: t.id, name: t.name, slug: t.slug, status: t.status })),
+      pages: usingPages.map((p) => ({ id: p.id, title: p.title, slug: p.slug, status: p.status })),
+    };
   },
 
   async softDelete(id: string): Promise<void> {

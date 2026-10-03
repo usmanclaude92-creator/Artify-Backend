@@ -8038,6 +8038,14 @@ var templateRepository = {
   async listRevisions(templateId) {
     return prisma.templateRevision.findMany({ where: { templateId }, orderBy: { version: "desc" } });
   },
+  /** Phase 4 — the actual pages assigned to this template (not just `_count.pages`), for "where is this used" display. */
+  async findPagesUsing(templateId, organizationId) {
+    return prisma.page.findMany({
+      where: { templateId, organizationId, deletedAt: null },
+      select: { id: true, title: true, slug: true, status: true },
+      orderBy: { title: "asc" }
+    });
+  },
   async softDelete(id) {
     await prisma.template.update({ where: { id }, data: { deletedAt: /* @__PURE__ */ new Date() } });
   }
@@ -8956,6 +8964,115 @@ var pageRoutes_default = router22;
 // server/routes/v1/templateRoutes.ts
 import { Router as Router23 } from "express";
 
+// server/utils/templateStructure.ts
+function normalizeRegions(structure) {
+  const regions = structure?.regions;
+  if (!regions) return [];
+  if (Array.isArray(regions)) {
+    return regions.filter((r) => !!r && typeof r === "object" && typeof r.key === "string").map((r) => ({ key: r.key, templatePartId: r.templatePartId ?? null }));
+  }
+  if (typeof regions === "object") {
+    return Object.entries(regions).map(([key, templatePartId]) => ({ key, templatePartId: templatePartId ?? null }));
+  }
+  return [];
+}
+
+// server/utils/editorBlockRefs.ts
+function walk(blocks, out) {
+  for (const raw of blocks) {
+    if (!raw || typeof raw !== "object") continue;
+    const block = raw;
+    if (block.type === "templatePart" && typeof block.props?.templatePartId === "string") {
+      out.add(block.props.templatePartId);
+    }
+    if (Array.isArray(block.children)) walk(block.children, out);
+  }
+}
+function collectTemplatePartIds(doc) {
+  if (!doc || typeof doc !== "object" || !Array.isArray(doc.blocks)) return [];
+  const out = /* @__PURE__ */ new Set();
+  walk(doc.blocks, out);
+  return [...out];
+}
+
+// server/repositories/templatePartRepository.ts
+function slugify8(input) {
+  return input.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 150);
+}
+var withCurrentRevision2 = { include: { currentRevision: true } };
+function buildWhere12(organizationId, filters) {
+  const where = { organizationId, deletedAt: null };
+  if (filters.status) where.status = filters.status;
+  if (filters.type) where.type = filters.type;
+  if (filters.search) {
+    where.OR = [{ name: { contains: filters.search, mode: "insensitive" } }, { slug: { contains: filters.search, mode: "insensitive" } }];
+  }
+  return where;
+}
+var templatePartRepository = {
+  async list(organizationId, filters, page, limit, sort, order) {
+    const where = buildWhere12(organizationId, filters);
+    const [rows, total] = await Promise.all([
+      prisma.templatePart.findMany({ where, orderBy: { [sort]: order }, skip: (page - 1) * limit, take: limit, ...withCurrentRevision2 }),
+      prisma.templatePart.count({ where })
+    ]);
+    return { rows, total };
+  },
+  async findByIdInOrg(id, organizationId) {
+    return prisma.templatePart.findFirst({ where: { id, organizationId, deletedAt: null }, ...withCurrentRevision2 });
+  },
+  async findBySlugInOrg(organizationId, slug) {
+    return prisma.templatePart.findFirst({ where: { organizationId, slug, deletedAt: null } });
+  },
+  async findPublishedByIdInOrg(id, organizationId) {
+    return prisma.templatePart.findFirst({ where: { id, organizationId, status: "PUBLISHED", deletedAt: null } });
+  },
+  async findUniqueSlugInOrg(organizationId, base) {
+    const baseSlug = slugify8(base) || "part";
+    let slug = baseSlug;
+    let attempt = 1;
+    while (await this.findBySlugInOrg(organizationId, slug)) {
+      attempt += 1;
+      slug = `${baseSlug}-${attempt}`;
+      if (attempt > 50) break;
+    }
+    return slug;
+  },
+  async listRevisions(templatePartId) {
+    return prisma.templatePartRevision.findMany({ where: { templatePartId }, orderBy: { version: "desc" } });
+  },
+  /** Which of `ids` are real, non-deleted template parts in this organization (Phase 4 — publish-time broken-reference validation). */
+  async findManyByIdsInOrg(ids, organizationId) {
+    if (ids.length === 0) return /* @__PURE__ */ new Set();
+    const rows = await prisma.templatePart.findMany({ where: { id: { in: ids }, organizationId, deletedAt: null }, select: { id: true } });
+    return new Set(rows.map((r) => r.id));
+  },
+  /**
+   * Phase 4 — dependency awareness: every Template whose current revision's
+   * `structure.regions` assigns this part to a region, and every Page whose
+   * current revision's editorBlocks contains a `templatePart` block
+   * referencing it. Organization-scoped sets are small in practice (a
+   * handful of templates/parts per org), so this scans in application code
+   * rather than attempting a JSONB containment query — same tradeoff
+   * templateRepository/pageRepository already make elsewhere in this phase.
+   */
+  async findUsage(partId, organizationId) {
+    const [templates, pages] = await Promise.all([
+      prisma.template.findMany({ where: { organizationId, deletedAt: null }, include: { currentRevision: true } }),
+      prisma.page.findMany({ where: { organizationId, deletedAt: null }, include: { currentRevision: true } })
+    ]);
+    const usingTemplates = templates.filter((t) => normalizeRegions(t.currentRevision?.structure).some((r) => r.templatePartId === partId));
+    const usingPages = pages.filter((p) => collectTemplatePartIds(p.currentRevision?.editorBlocks).includes(partId));
+    return {
+      templates: usingTemplates.map((t) => ({ id: t.id, name: t.name, slug: t.slug, status: t.status })),
+      pages: usingPages.map((p) => ({ id: p.id, title: p.title, slug: p.slug, status: p.status }))
+    };
+  },
+  async softDelete(id) {
+    await prisma.templatePart.update({ where: { id }, data: { deletedAt: /* @__PURE__ */ new Date() } });
+  }
+};
+
 // server/services/templateService.ts
 function isUniqueConstraintError5(err) {
   return !!err && typeof err === "object" && "code" in err && err.code === "P2002";
@@ -8970,6 +9087,18 @@ function assertNotSystem(template, action) {
     throw new AuthorizationError(`This is a protected system template and cannot be ${action}.`);
   }
 }
+async function assertRegionsResolvable(organizationId, structure) {
+  const regions = normalizeRegions(structure);
+  const partIds = [...new Set(regions.map((r) => r.templatePartId).filter((id) => !!id))];
+  if (partIds.length === 0) return;
+  const valid = await templatePartRepository.findManyByIdsInOrg(partIds, organizationId);
+  const broken = regions.filter((r) => r.templatePartId && !valid.has(r.templatePartId));
+  if (broken.length > 0) {
+    throw new ValidationError(
+      `This template references template parts that no longer exist: ${broken.map((r) => r.key).join(", ")}. Fix or unassign these regions before publishing.`
+    );
+  }
+}
 var templateService = {
   async listTemplates(organizationId, filters, page, limit, sort, order) {
     return templateRepository.list(organizationId, filters, page, limit, sort, order);
@@ -8980,6 +9109,32 @@ var templateService = {
   async listRevisions(organizationId, id) {
     await loadTemplateOrThrow(id, organizationId);
     return templateRepository.listRevisions(id);
+  },
+  /** Phase 4 — "show where a template is used": the actual pages assigned to it, not just a count. */
+  async getUsage(organizationId, id) {
+    await loadTemplateOrThrow(id, organizationId);
+    const pages = await templateRepository.findPagesUsing(id, organizationId);
+    return { pages };
+  },
+  /**
+   * Phase 4 — authenticated preview: resolves the template's CURRENT
+   * revision's regions to their assigned Template Part's CURRENT revision
+   * content, regardless of draft/published status on either side (unlike
+   * the public resolver, which only ever surfaces PUBLISHED+PUBLISHED —
+   * see publicSiteService.ts). This is what lets an editor preview a
+   * template before publishing it or its parts.
+   */
+  async previewTemplate(organizationId, id) {
+    const template = await loadTemplateOrThrow(id, organizationId);
+    const regionEntries = normalizeRegions(template.currentRevision?.structure);
+    const regions = await Promise.all(
+      regionEntries.map(async (r) => {
+        if (!r.templatePartId) return { key: r.key, templatePartId: null, part: null };
+        const part = await templatePartRepository.findByIdInOrg(r.templatePartId, organizationId);
+        return { key: r.key, templatePartId: r.templatePartId, part };
+      })
+    );
+    return { template, regions };
   },
   async createTemplate(caller, input, meta = {}) {
     const organizationId = caller.organizationId;
@@ -9101,6 +9256,7 @@ var templateService = {
     assertNotSystem(existing, "published");
     if (existing.status === "ARCHIVED") throw new ConflictError("An archived template must be restored before it can be published.");
     if (!existing.currentRevisionId) throw new ConflictError("This template has no revision to publish.");
+    await assertRegionsResolvable(organizationId, existing.currentRevision?.structure);
     const now = /* @__PURE__ */ new Date();
     await prisma.$transaction([
       prisma.templateRevision.update({ where: { id: existing.currentRevisionId }, data: { status: "PUBLISHED", publishedAt: now } }),
@@ -9374,6 +9530,22 @@ router23.get(
     sendSuccess(res, { revisions });
   })
 );
+router23.get(
+  "/:id/usage",
+  requirePermission("templates.read"),
+  asyncHandler(async (req, res) => {
+    const usage = await templateService.getUsage(req.user.organizationId, req.params.id);
+    sendSuccess(res, usage);
+  })
+);
+router23.get(
+  "/:id/preview",
+  requirePermission("templates.read"),
+  asyncHandler(async (req, res) => {
+    const preview = await templateService.previewTemplate(req.user.organizationId, req.params.id);
+    sendSuccess(res, preview);
+  })
+);
 router23.post(
   "/",
   requirePermission("templates.create"),
@@ -9439,57 +9611,6 @@ var templateRoutes_default = router23;
 // server/routes/v1/templatePartRoutes.ts
 import { Router as Router24 } from "express";
 
-// server/repositories/templatePartRepository.ts
-function slugify8(input) {
-  return input.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 150);
-}
-var withCurrentRevision2 = { include: { currentRevision: true } };
-function buildWhere12(organizationId, filters) {
-  const where = { organizationId, deletedAt: null };
-  if (filters.status) where.status = filters.status;
-  if (filters.type) where.type = filters.type;
-  if (filters.search) {
-    where.OR = [{ name: { contains: filters.search, mode: "insensitive" } }, { slug: { contains: filters.search, mode: "insensitive" } }];
-  }
-  return where;
-}
-var templatePartRepository = {
-  async list(organizationId, filters, page, limit, sort, order) {
-    const where = buildWhere12(organizationId, filters);
-    const [rows, total] = await Promise.all([
-      prisma.templatePart.findMany({ where, orderBy: { [sort]: order }, skip: (page - 1) * limit, take: limit, ...withCurrentRevision2 }),
-      prisma.templatePart.count({ where })
-    ]);
-    return { rows, total };
-  },
-  async findByIdInOrg(id, organizationId) {
-    return prisma.templatePart.findFirst({ where: { id, organizationId, deletedAt: null }, ...withCurrentRevision2 });
-  },
-  async findBySlugInOrg(organizationId, slug) {
-    return prisma.templatePart.findFirst({ where: { organizationId, slug, deletedAt: null } });
-  },
-  async findPublishedByIdInOrg(id, organizationId) {
-    return prisma.templatePart.findFirst({ where: { id, organizationId, status: "PUBLISHED", deletedAt: null } });
-  },
-  async findUniqueSlugInOrg(organizationId, base) {
-    const baseSlug = slugify8(base) || "part";
-    let slug = baseSlug;
-    let attempt = 1;
-    while (await this.findBySlugInOrg(organizationId, slug)) {
-      attempt += 1;
-      slug = `${baseSlug}-${attempt}`;
-      if (attempt > 50) break;
-    }
-    return slug;
-  },
-  async listRevisions(templatePartId) {
-    return prisma.templatePartRevision.findMany({ where: { templatePartId }, orderBy: { version: "desc" } });
-  },
-  async softDelete(id) {
-    await prisma.templatePart.update({ where: { id }, data: { deletedAt: /* @__PURE__ */ new Date() } });
-  }
-};
-
 // server/services/templatePartService.ts
 function isUniqueConstraintError6(err) {
   return !!err && typeof err === "object" && "code" in err && err.code === "P2002";
@@ -9514,6 +9635,11 @@ var templatePartService = {
   async listRevisions(organizationId, id) {
     await loadTemplatePartOrThrow(id, organizationId);
     return templatePartRepository.listRevisions(id);
+  },
+  /** Phase 4 — "show where a template part is used": every Template region and Page that references it. */
+  async getUsage(organizationId, id) {
+    await loadTemplatePartOrThrow(id, organizationId);
+    return templatePartRepository.findUsage(id, organizationId);
   },
   async createPart(caller, input, meta = {}) {
     const organizationId = caller.organizationId;
@@ -9759,6 +9885,13 @@ var templatePartService = {
     const organizationId = caller.organizationId;
     const existing = await loadTemplatePartOrThrow(id, organizationId);
     assertNotSystem2(existing, "deleted");
+    const usage = await templatePartRepository.findUsage(id, organizationId);
+    if (usage.templates.length > 0 || usage.pages.length > 0) {
+      const names = [...usage.templates.map((t) => t.name), ...usage.pages.map((p) => p.title)];
+      throw new ValidationError(
+        `This template part is still used by ${names.length} item(s) (${names.slice(0, 5).join(", ")}${names.length > 5 ? ", \u2026" : ""}). Remove those references before deleting it.`
+      );
+    }
     await templatePartRepository.softDelete(id);
     await auditLogRepository.record({
       organizationId,
@@ -9810,6 +9943,14 @@ router24.get(
   asyncHandler(async (req, res) => {
     const revisions = await templatePartService.listRevisions(req.user.organizationId, req.params.id);
     sendSuccess(res, { revisions });
+  })
+);
+router24.get(
+  "/:id/usage",
+  requirePermission("template_parts.read"),
+  asyncHandler(async (req, res) => {
+    const usage = await templatePartService.getUsage(req.user.organizationId, req.params.id);
+    sendSuccess(res, usage);
   })
 );
 router24.post(
@@ -12899,12 +13040,24 @@ async function projectPublicMedia(media) {
 function hasPublicWebsiteOrganization() {
   return config.publicWebsiteOrganizationId.length > 0;
 }
-function projectPageTemplate(page) {
+async function projectPageTemplate(page) {
   const template = page.template;
   if (!template || template.status !== "PUBLISHED") return null;
   const revision = template.currentRevision;
   if (!revision || revision.status !== "PUBLISHED") return null;
-  return { type: template.type, slug: template.slug, structure: revision.structure };
+  const regionEntries = normalizeRegions(revision.structure);
+  const organizationId = page.organizationId;
+  const regions = await Promise.all(
+    regionEntries.map(async (r) => {
+      if (!r.templatePartId) return [r.key, null];
+      const part = await templatePartRepository.findByIdInOrg(r.templatePartId, organizationId);
+      if (!part || part.status !== "PUBLISHED" || !part.currentRevision || part.currentRevision.status !== "PUBLISHED") {
+        return [r.key, null];
+      }
+      return [r.key, { type: part.type, slug: part.slug, content: part.currentRevision.content }];
+    })
+  );
+  return { type: template.type, slug: template.slug, structure: revision.structure, regions: Object.fromEntries(regions) };
 }
 function projectPageEditorBlocks(revision) {
   const blocks = revision?.editorBlocks;
@@ -12922,7 +13075,7 @@ async function projectPage(page) {
     featuredMedia: await projectPublicMedia(page.featuredMedia),
     pageType: page.pageType,
     isHomepage: page.isHomepage,
-    template: projectPageTemplate(page),
+    template: await projectPageTemplate(page),
     publishedAt: page.publishedAt,
     updatedAt: page.updatedAt
   };
