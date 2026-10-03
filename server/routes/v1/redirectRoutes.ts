@@ -21,7 +21,7 @@ router.get(
     const query = listRedirectsQuerySchema.parse(req.query);
     const { rows, total } = await redirectService.listRedirects(
       req.user!.organizationId,
-      { search: query.search },
+      { search: query.search, isActive: query.isActive },
       query.page,
       query.limit,
       query.sort,

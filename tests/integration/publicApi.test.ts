@@ -103,10 +103,31 @@ describe("public website API", () => {
     expect(res.status).toBe(200);
     expect(res.body.data.page.title).toBe("About Us");
     expect(res.body.data.page.body).toContain("We build things");
-    expect(res.body.data.page.seo).toEqual({ metaTitle: "About Artify" });
+    // metaTitle is the page's own; metaDescription was never set on this
+    // page, so it falls back to the organization's Site Identity default
+    // (Phase 8 global -> content SEO precedence) instead of being absent.
+    expect(res.body.data.page.seo.metaTitle).toBe("About Artify");
+    expect(res.body.data.page.seo.metaDescription).toBe(
+      "Your Business. Reimagined by AI. We engineer intelligent software systems that understand your business, automate processes, and connect your data."
+    );
     expect(res.body.data.page).not.toHaveProperty("organizationId");
     expect(res.body.data.page).not.toHaveProperty("id");
     expect(res.body.data.page).not.toHaveProperty("createdById");
+  });
+
+  it("falls back to the organization's Site Identity defaults for metaTitle/metaDescription when content has none, but a content-level value always wins", async () => {
+    const { siteSettingsService } = await import("../../server/services/siteSettingsService");
+    const identity = await siteSettingsService.getPublishedSiteIdentity(PUBLIC_ORG_ID);
+    expect(identity.defaultMetaTitle).toBeTruthy();
+
+    const bareRes = await request(app).get(`/api/v1/public/posts/${publishedPostSlug}`);
+    expect(bareRes.status).toBe(200);
+    expect(bareRes.body.data.post.seo.metaTitle).toBe(identity.defaultMetaTitle);
+    expect(bareRes.body.data.post.seo.metaDescription).toBe(identity.defaultMetaDescription);
+
+    // A page with its own metaTitle keeps it — defaults only fill genuinely unset fields.
+    const ownTitleRes = await request(app).get(`/api/v1/public/pages/${publishedPageSlug}`);
+    expect(ownTitleRes.body.data.page.seo.metaTitle).toBe("About Artify");
   });
 
   it("a page with no editor composition reports editorBlocks: null — pure body-HTML rendering, unchanged from before Phase 2", async () => {
@@ -208,9 +229,12 @@ describe("public website API", () => {
       content: { version: 1, blocks: [{ id: "b1", type: "heading", props: { text: "Hi" } }] },
     });
 
-    // SEO fields are completely unaffected by any of this.
+    // Template region resolution is completely unaffected by SEO default
+    // fallback — this page has no metaTitle/metaDescription of its own, so
+    // it still gets the organization's Site Identity defaults, same as
+    // any other bare content.
     expect(fullyPublishedRes.body.data.page.title).toBe("Region Page");
-    expect(fullyPublishedRes.body.data.page.seo).toEqual({});
+    expect(fullyPublishedRes.body.data.page.seo.metaTitle).toBeTruthy();
   });
 
   it("rejects a DRAFT page with a clean 404 — never leaks unpublished content", async () => {

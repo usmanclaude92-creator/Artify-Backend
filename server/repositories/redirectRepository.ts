@@ -10,6 +10,7 @@ import { prisma } from "../db/prisma";
 
 export interface RedirectFilters {
   search?: string;
+  isActive?: boolean;
 }
 
 function buildWhere(organizationId: string, filters: RedirectFilters): Prisma.RedirectWhereInput {
@@ -18,6 +19,7 @@ function buildWhere(organizationId: string, filters: RedirectFilters): Prisma.Re
     const term = filters.search;
     where.OR = [{ fromPath: { contains: term, mode: "insensitive" } }, { toPath: { contains: term, mode: "insensitive" } }];
   }
+  if (filters.isActive !== undefined) where.isActive = filters.isActive;
   return where;
 }
 
@@ -46,6 +48,15 @@ export const redirectRepository = {
     return prisma.redirect.findUnique({ where: { organizationId_fromPath: { organizationId, fromPath } } });
   },
 
+  /** Just the toPath for a fromPath, for cycle-walking without loading whole rows. */
+  async findToPathByFromPathInOrg(organizationId: string, fromPath: string): Promise<string | null> {
+    const row = await prisma.redirect.findUnique({
+      where: { organizationId_fromPath: { organizationId, fromPath } },
+      select: { toPath: true },
+    });
+    return row?.toPath ?? null;
+  },
+
   async create(data: {
     organizationId: string;
     fromPath: string;
@@ -53,6 +64,8 @@ export const redirectRepository = {
     statusCode?: number;
     resourceType?: string;
     resourceId?: string;
+    isActive?: boolean;
+    notes?: string;
     createdById?: string;
   }): Promise<Redirect> {
     return prisma.redirect.create({ data });

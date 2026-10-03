@@ -1546,18 +1546,20 @@ export interface CmsRedirect {
   statusCode: number;
   resourceType: string | null;
   resourceId: string | null;
+  isActive: boolean;
+  notes: string | null;
   createdById: string | null;
   createdAt: string;
   updatedAt: string;
 }
 
 export const redirectsApi = {
-  list: (params: { page?: number; limit?: number; search?: string; sort?: string; order?: "asc" | "desc" } = {}) =>
+  list: (params: { page?: number; limit?: number; search?: string; isActive?: boolean; sort?: string; order?: "asc" | "desc" } = {}) =>
     paginatedGet<CmsRedirect>("/redirects", "redirects", params),
   get: (id: string) => apiClient.get<{ redirect: CmsRedirect }>(`/redirects/${id}`),
-  create: (payload: { fromPath: string; toPath: string; statusCode?: 301 | 302 | 307 | 308 }) =>
+  create: (payload: { fromPath: string; toPath: string; statusCode?: 301 | 302 | 307 | 308; isActive?: boolean; notes?: string }) =>
     apiClient.post<{ redirect: CmsRedirect }>("/redirects", payload),
-  update: (id: string, payload: Partial<{ toPath: string; statusCode: 301 | 302 | 307 | 308 }>) =>
+  update: (id: string, payload: Partial<{ toPath: string; statusCode: 301 | 302 | 307 | 308; isActive: boolean; notes: string | null }>) =>
     apiClient.patch<{ redirect: CmsRedirect }>(`/redirects/${id}`, payload),
   remove: (id: string) => apiClient.delete<{ message: string }>(`/redirects/${id}`),
 };

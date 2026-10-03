@@ -118,16 +118,42 @@ function projectPageEditorBlocks(revision: PageWithPublicRelations["currentRevis
   return blocks;
 }
 
+/**
+ * Phase 8 (Advanced SEO Control Center) — global -> content SEO
+ * precedence: a post/page's own metaTitle/metaDescription/ogImage always
+ * wins; only a field left genuinely unset falls back to the
+ * organization-wide defaults configured on Site Identity (Phase 3's
+ * defaultMetaTitle/defaultMetaDescription/socialImageMediaId). Without
+ * this, those Site Identity fields were dead config for every post/page —
+ * set in the Control Center but never actually read by anything serving
+ * individual content. The featured image (if any) still outranks the
+ * site-wide social image, exactly like the explicit-ogImage case.
+ */
+async function applySeoDefaults(seo: Record<string, unknown>, organizationId: string, hasFeaturedMedia: boolean): Promise<Record<string, unknown>> {
+  if (seo.metaTitle && seo.metaDescription && (seo.ogImage || hasFeaturedMedia)) return seo;
+  const identity = await siteSettingsService.getPublishedSiteIdentity(organizationId);
+  const result = { ...seo };
+  if (!result.metaTitle && identity.defaultMetaTitle) result.metaTitle = identity.defaultMetaTitle;
+  if (!result.metaDescription && identity.defaultMetaDescription) result.metaDescription = identity.defaultMetaDescription;
+  if (!result.ogImage && !hasFeaturedMedia && identity.socialImageMediaId) {
+    const media = await mediaRepository.findByIdInOrg(identity.socialImageMediaId, organizationId);
+    const projected = await projectPublicMedia(media);
+    if (projected) result.ogImage = projected.url;
+  }
+  return result;
+}
+
 async function projectPage(page: PageWithPublicRelations) {
   const revision = page.currentRevision;
+  const featuredMedia = await projectPublicMedia(page.featuredMedia);
   return {
     slug: page.slug,
     title: page.title,
     body: revision?.body ?? "",
     excerpt: revision?.excerpt ?? null,
     editorBlocks: projectPageEditorBlocks(revision),
-    seo: (revision?.metadata as Record<string, unknown> | undefined) ?? {},
-    featuredMedia: await projectPublicMedia(page.featuredMedia),
+    seo: await applySeoDefaults((revision?.metadata as Record<string, unknown> | undefined) ?? {}, page.organizationId, !!featuredMedia),
+    featuredMedia,
     pageType: page.pageType,
     isHomepage: page.isHomepage,
     template: await projectPageTemplate(page),
@@ -200,16 +226,17 @@ function projectAuthor(author: PostWithPublicRelations["author"]) {
 
 async function projectPost(post: PostWithPublicRelations) {
   const revision = post.currentRevision;
+  const featuredMedia = await projectPublicMedia(post.featuredMedia);
   return {
     slug: post.slug,
     title: post.title,
     body: revision?.body ?? "",
     excerpt: revision?.excerpt ?? null,
-    seo: (revision?.metadata as Record<string, unknown> | undefined) ?? {},
+    seo: await applySeoDefaults((revision?.metadata as Record<string, unknown> | undefined) ?? {}, post.organizationId, !!featuredMedia),
     category: post.category ? { slug: post.category.slug, name: post.category.name } : null,
     tags: post.tags.map((t) => ({ slug: t.tag.slug, name: t.tag.name })),
     author: projectAuthor(post.author),
-    featuredMedia: await projectPublicMedia(post.featuredMedia),
+    featuredMedia,
     publishedAt: post.publishedAt,
     updatedAt: post.updatedAt,
   };
@@ -371,7 +398,7 @@ export const publicSiteService = {
   async getRedirectForPath(path: string): Promise<{ toPath: string; statusCode: number } | null> {
     if (!hasPublicWebsiteOrganization()) return null;
     const redirect = await redirectRepository.findByFromPathInOrg(config.publicWebsiteOrganizationId, path);
-    if (!redirect) return null;
+    if (!redirect || !redirect.isActive) return null;
     return { toPath: redirect.toPath, statusCode: redirect.statusCode };
   },
 };

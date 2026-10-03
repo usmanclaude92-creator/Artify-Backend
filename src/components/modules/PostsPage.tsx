@@ -37,6 +37,7 @@ import { hasPermission } from "../../lib/permissions";
 import { initialSearchFromQuery, consumeNewFlag } from "../../lib/deepLink";
 import { MediaPickerModal } from "../common/MediaPickerModal";
 import { RichTextEditor } from "../common/RichTextEditor";
+import { SeoFieldsPanel, EMPTY_SEO_FIELDS, seoFieldsFromMetadata, seoFieldsToMetadata, type SeoFieldsValue } from "../common/SeoFieldsPanel";
 
 const STATUS_OPTIONS: ContentStatusValue[] = ["DRAFT", "IN_REVIEW", "SCHEDULED", "PUBLISHED", "ARCHIVED"];
 const STATUS_TONE: Record<ContentStatusValue, "success" | "warning" | "danger" | "info" | "neutral"> = {
@@ -124,9 +125,7 @@ const PostFormModal: React.FC<{
   const [authorId, setAuthorId] = useState(post?.authorId ?? "");
   const [tagIds, setTagIds] = useState<string[]>(post?.tags.map((t) => t.tagId) ?? []);
   const [featuredMediaId, setFeaturedMediaId] = useState<string | undefined>(post?.featuredMediaId ?? undefined);
-  const [metaTitle, setMetaTitle] = useState((post?.currentRevision?.metadata?.metaTitle as string) ?? "");
-  const [metaDescription, setMetaDescription] = useState((post?.currentRevision?.metadata?.metaDescription as string) ?? "");
-  const [ogImage, setOgImage] = useState((post?.currentRevision?.metadata?.ogImage as string) ?? "");
+  const [seo, setSeo] = useState<SeoFieldsValue>(post ? seoFieldsFromMetadata(post.currentRevision?.metadata) : EMPTY_SEO_FIELDS);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -140,9 +139,7 @@ const PostFormModal: React.FC<{
       setAuthorId(post?.authorId ?? "");
       setTagIds(post?.tags.map((t) => t.tagId) ?? []);
       setFeaturedMediaId(post?.featuredMediaId ?? undefined);
-      setMetaTitle((post?.currentRevision?.metadata?.metaTitle as string) ?? "");
-      setMetaDescription((post?.currentRevision?.metadata?.metaDescription as string) ?? "");
-      setOgImage((post?.currentRevision?.metadata?.ogImage as string) ?? "");
+      setSeo(post ? seoFieldsFromMetadata(post.currentRevision?.metadata) : EMPTY_SEO_FIELDS);
       setError(null);
     }
   }, [open, post]);
@@ -153,11 +150,7 @@ const PostFormModal: React.FC<{
     e.preventDefault();
     setError(null);
     setSubmitting(true);
-    const metadata = {
-      ...(metaTitle.trim() ? { metaTitle: metaTitle.trim() } : {}),
-      ...(metaDescription.trim() ? { metaDescription: metaDescription.trim() } : {}),
-      ...(ogImage.trim() ? { ogImage: ogImage.trim() } : {}),
-    };
+    const metadata = seoFieldsToMetadata(seo);
     try {
       if (mode === "create") {
         const res = await postsApi.create({
@@ -265,22 +258,13 @@ const PostFormModal: React.FC<{
           <p className="text-xs font-bold uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>
             SEO
           </p>
-          <Field label="Meta title" hint="Shown in search results and social previews. Falls back to the post title if left blank.">
-            <Input value={metaTitle} onChange={(e) => setMetaTitle(e.target.value)} maxLength={70} />
-          </Field>
-          <Field label="Meta description" hint="Falls back to an auto-generated excerpt if left blank.">
-            <textarea
-              className="w-full px-3 py-2 rounded-lg text-sm focus:outline-none"
-              style={{ background: "var(--bg-app)", border: "1px solid var(--border)", color: "var(--text-primary)" }}
-              rows={2}
-              maxLength={200}
-              value={metaDescription}
-              onChange={(e) => setMetaDescription(e.target.value)}
-            />
-          </Field>
-          <Field label="Open Graph image URL" hint="Falls back to the featured image if left blank.">
-            <Input value={ogImage} onChange={(e) => setOgImage(e.target.value)} placeholder="https://..." />
-          </Field>
+          <SeoFieldsPanel
+            value={seo}
+            onChange={setSeo}
+            fallbackTitle={title || "(untitled post)"}
+            fallbackDescription={excerpt}
+            previewPath={`/blog/${slug || "your-post-slug"}`}
+          />
         </div>
         <div className="pt-2 border-t flex justify-end gap-2" style={{ borderColor: "var(--border)" }}>
           <Button type="button" variant="secondary" onClick={onClose}>

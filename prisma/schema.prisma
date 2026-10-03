@@ -1429,6 +1429,8 @@ model Redirect {
   statusCode     Int      @default(301) @map("status_code")
   resourceType   String?  @map("resource_type")
   resourceId     String?  @map("resource_id")
+  isActive       Boolean  @default(true) @map("is_active")
+  notes          String?
   createdById    String?  @map("created_by")
   createdAt      DateTime @default(now()) @map("created_at")
   updatedAt      DateTime @updatedAt @map("updated_at")

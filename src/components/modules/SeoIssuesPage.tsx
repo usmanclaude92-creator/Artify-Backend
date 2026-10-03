@@ -1,14 +1,29 @@
-/** Phase 5 — SEO Control Center: rule-based issue list. Every check is a plain, explainable rule against real content — never a fabricated "SEO score." */
+/**
+ * Phase 5 (extended Phase 8 — Advanced SEO Control Center) — SEO Dashboard:
+ * a rule-based issue list plus the real, already-available counts that
+ * make it a dashboard rather than just a list (content audited, redirects
+ * active/inactive). Every number here comes from a real API response —
+ * never a fabricated "SEO score," traffic estimate, or search ranking,
+ * which this system has no real data source for and will not simulate.
+ */
 import React, { useEffect, useState } from "react";
-import { AlertTriangle, AlertCircle, FileText, Newspaper, ExternalLink } from "lucide-react";
+import { AlertTriangle, AlertCircle, FileText, Newspaper, ExternalLink, ArrowRightLeft } from "lucide-react";
 import { useRouter } from "../../lib/router";
-import { seoApi, type SeoIssue } from "../../lib/api";
+import { seoApi, postsApi, pagesApi, redirectsApi, type SeoIssue } from "../../lib/api";
 import { ApiClientError } from "../../lib/apiClient";
 import { Card, Badge, LoadingState, ErrorState, EmptyState, Select } from "../ui/ui";
+
+interface DashboardCounts {
+  totalPosts: number;
+  totalPages: number;
+  totalRedirects: number;
+  activeRedirects: number;
+}
 
 export const SeoIssuesPage: React.FC = () => {
   const { navigate } = useRouter();
   const [issues, setIssues] = useState<SeoIssue[]>([]);
+  const [counts, setCounts] = useState<DashboardCounts | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [severityFilter, setSeverityFilter] = useState<"" | "critical" | "warning">("");
@@ -18,13 +33,20 @@ export const SeoIssuesPage: React.FC = () => {
     let cancelled = false;
     setLoading(true);
     setError(null);
-    seoApi
-      .issues()
-      .then((res) => {
-        if (!cancelled) setIssues(res.issues);
+    Promise.all([
+      seoApi.issues(),
+      postsApi.list({ limit: 1 }),
+      pagesApi.list({ limit: 1 }),
+      redirectsApi.list({ limit: 1 }),
+      redirectsApi.list({ limit: 1, isActive: true }),
+    ])
+      .then(([issuesRes, posts, pages, redirects, activeRedirects]) => {
+        if (cancelled) return;
+        setIssues(issuesRes.issues);
+        setCounts({ totalPosts: posts.total, totalPages: pages.total, totalRedirects: redirects.total, activeRedirects: activeRedirects.total });
       })
       .catch((err) => {
-        if (!cancelled) setError(err instanceof ApiClientError ? err.message : "Could not load SEO issues.");
+        if (!cancelled) setError(err instanceof ApiClientError ? err.message : "Could not load the SEO dashboard.");
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -37,6 +59,8 @@ export const SeoIssuesPage: React.FC = () => {
   const filtered = issues.filter((i) => (!severityFilter || i.severity === severityFilter) && (!typeFilter || i.resourceType === typeFilter));
   const criticalCount = issues.filter((i) => i.severity === "critical").length;
   const warningCount = issues.filter((i) => i.severity === "warning").length;
+  const auditedResourceIds = new Set(issues.map((i) => `${i.resourceType}:${i.resourceId}`));
+  const cleanCount = counts ? Math.max(counts.totalPosts + counts.totalPages - auditedResourceIds.size, 0) : null;
 
   const openRecord = (issue: SeoIssue) => {
     navigate(issue.resourceType === "post" ? `/cms/posts?q=${encodeURIComponent(issue.resourceTitle)}` : `/cms/pages?q=${encodeURIComponent(issue.resourceTitle)}`);
@@ -46,11 +70,13 @@ export const SeoIssuesPage: React.FC = () => {
     <div className="space-y-4">
       <div>
         <h1 className="text-lg font-bold" style={{ color: "var(--text-primary)" }}>
-          SEO Issues
+          SEO Dashboard
         </h1>
         <p className="text-xs max-w-2xl" style={{ color: "var(--text-muted)" }}>
           Deterministic, rule-based checks against your Posts and Pages — missing/oversized meta fields, missing image alt
-          text, duplicate titles. This is not a Google ranking score; it flags things you can fix directly.
+          text, duplicate titles/descriptions, invalid slugs, missing social images — plus real counts from your content
+          and redirects. This is not a Google ranking score, traffic estimate, or search-visibility prediction; this
+          system has no real data source for those and will not simulate one. It flags things you can fix directly.
         </p>
       </div>
 
@@ -73,6 +99,30 @@ export const SeoIssuesPage: React.FC = () => {
           <p className="text-2xl font-bold text-amber-500">{warningCount}</p>
           <p className="text-xs" style={{ color: "var(--text-muted)" }}>
             Warnings
+          </p>
+        </Card>
+        <Card className="p-4">
+          <p className="text-2xl font-bold" style={{ color: "var(--text-primary)" }}>
+            {cleanCount ?? "—"}
+          </p>
+          <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+            Posts/pages with no flagged issues
+          </p>
+        </Card>
+        <Card className="p-4">
+          <p className="text-2xl font-bold" style={{ color: "var(--text-primary)" }}>
+            {counts ? `${counts.activeRedirects} / ${counts.totalRedirects}` : "—"}
+          </p>
+          <p className="text-xs flex items-center gap-1" style={{ color: "var(--text-muted)" }}>
+            <ArrowRightLeft className="w-3 h-3" /> Active redirects
+          </p>
+        </Card>
+        <Card className="p-4">
+          <p className="text-2xl font-bold" style={{ color: "var(--text-primary)" }}>
+            {counts ? counts.totalPosts + counts.totalPages : "—"}
+          </p>
+          <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+            Total posts + pages audited
           </p>
         </Card>
       </div>

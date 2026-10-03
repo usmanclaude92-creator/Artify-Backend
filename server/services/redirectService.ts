@@ -17,10 +17,27 @@ async function loadRedirectOrThrow(id: string, organizationId: string): Promise<
   return redirect;
 }
 
+/**
+ * Walks the chain starting at `toPath` the way the public resolver would
+ * (one hop at a time, following each redirect's own toPath) and throws if
+ * it ever lands back on `fromPath` — the new/updated redirect would form a
+ * loop (A -> B -> ... -> A). Mirrors pageService's assertParentUsable
+ * cycle walk. Bounded so a very long legitimate chain can't hang this.
+ */
+async function assertNoRedirectCycle(organizationId: string, fromPath: string, toPath: string): Promise<void> {
+  let cursor: string | null = toPath;
+  let guard = 0;
+  while (cursor && guard < 100) {
+    if (cursor === fromPath) throw new ConflictError("This redirect would create a loop (it eventually points back to its own source path).");
+    cursor = await redirectRepository.findToPathByFromPathInOrg(organizationId, cursor);
+    guard += 1;
+  }
+}
+
 export const redirectService = {
   async listRedirects(
     organizationId: string,
-    filters: { search?: string },
+    filters: { search?: string; isActive?: boolean },
     page: number,
     limit: number,
     sort: string,
@@ -37,6 +54,7 @@ export const redirectService = {
     const organizationId = caller.organizationId;
     const dup = await redirectRepository.findByFromPathInOrg(organizationId, input.fromPath);
     if (dup) throw new ConflictError(`A redirect from "${input.fromPath}" already exists.`, { existingRedirectId: dup.id });
+    await assertNoRedirectCycle(organizationId, input.fromPath, input.toPath);
 
     let redirect: Redirect;
     try {
@@ -45,6 +63,8 @@ export const redirectService = {
         fromPath: input.fromPath,
         toPath: input.toPath,
         statusCode: input.statusCode,
+        isActive: input.isActive,
+        notes: input.notes,
         createdById: caller.id,
       });
     } catch (err) {
@@ -70,9 +90,15 @@ export const redirectService = {
     const organizationId = caller.organizationId;
     const existing = await loadRedirectOrThrow(id, organizationId);
 
+    if (input.toPath !== undefined) {
+      await assertNoRedirectCycle(organizationId, existing.fromPath, input.toPath);
+    }
+
     const patch: Record<string, unknown> = {};
     if (input.toPath !== undefined) patch.toPath = input.toPath;
     if (input.statusCode !== undefined) patch.statusCode = input.statusCode;
+    if (input.isActive !== undefined) patch.isActive = input.isActive;
+    if (input.notes !== undefined) patch.notes = input.notes;
 
     const updated = await redirectRepository.update(id, patch);
 
