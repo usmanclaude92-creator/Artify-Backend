@@ -50,6 +50,15 @@ router.get(
   })
 );
 
+router.get(
+  "/:id/children",
+  requirePermission("content.read"),
+  asyncHandler(async (req, res) => {
+    const children = await pageService.getChildren(req.user!.organizationId, req.params.id!);
+    sendSuccess(res, { children });
+  })
+);
+
 router.post(
   "/",
   requirePermission("content.create"),

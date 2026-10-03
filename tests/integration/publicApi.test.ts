@@ -218,6 +218,74 @@ describe("public website API", () => {
     expect(res.status).toBe(404);
   });
 
+  // Phase 5 (Navigation + Pages + Homepage) — the homepage resolves
+  // dynamically, with the exact same safe-fallback contract as `template`
+  // above: never an error, `page: null` whenever nothing qualifies yet.
+  it("GET /public/homepage returns null until a PUBLISHED page is designated the homepage", async () => {
+    const none = await request(app).get("/api/v1/public/homepage");
+    expect(none.status).toBe(200);
+    expect(none.body.data.page).toBeNull();
+
+    const draftHome = await prisma.page.create({ data: { organizationId: PUBLIC_ORG_ID, slug: "draft-home", title: "Draft Home", status: "DRAFT", isHomepage: true } });
+    const stillNone = await request(app).get("/api/v1/public/homepage");
+    expect(stillNone.body.data.page).toBeNull();
+
+    const revision = await prisma.contentRevision.create({ data: { pageId: draftHome.id, version: 1, status: "PUBLISHED", title: "Draft Home", body: "<p>home</p>", metadata: {} } });
+    await prisma.page.update({ where: { id: draftHome.id }, data: { status: "PUBLISHED", currentRevisionId: revision.id, publishedAt: new Date() } });
+
+    const nowPublished = await request(app).get("/api/v1/public/homepage");
+    expect(nowPublished.status).toBe(200);
+    expect(nowPublished.body.data.page.slug).toBe("draft-home");
+    expect(nowPublished.body.data.page.isHomepage).toBe(true);
+  });
+
+  // Phase 5 — navigation menu resolution: each item's link target is
+  // resolved to a real URL, and an item whose target doesn't resolve is
+  // silently dropped (never a broken link, never a thrown error).
+  it("GET /public/navigation-menus/:type resolves item link targets and drops broken ones", async () => {
+    const linkedPage = await prisma.page.create({ data: { organizationId: PUBLIC_ORG_ID, slug: "nav-target-page", title: "Nav Target", status: "DRAFT" } });
+    const linkedRevision = await prisma.contentRevision.create({
+      data: { pageId: linkedPage.id, version: 1, status: "PUBLISHED", title: "Nav Target", body: "<p>x</p>", metadata: {} },
+    });
+    await prisma.page.update({ where: { id: linkedPage.id }, data: { status: "PUBLISHED", currentRevisionId: linkedRevision.id, publishedAt: new Date() } });
+
+    const menu = await prisma.navigationMenu.create({ data: { organizationId: PUBLIC_ORG_ID, type: "PRIMARY", slug: "public-primary-menu", name: "Public Primary Menu", status: "PUBLISHED" } });
+    const menuRevision = await prisma.navigationMenuRevision.create({
+      data: {
+        navigationMenuId: menu.id,
+        version: 1,
+        status: "PUBLISHED",
+        name: "Public Primary Menu",
+        publishedAt: new Date(),
+        items: [
+          { id: "i1", label: "Nav Target", linkType: "page", targetId: linkedPage.id, openInNewTab: false, children: [] },
+          { id: "i2", label: "Broken", linkType: "page", targetId: "00000000-0000-0000-0000-000000000000", openInNewTab: false, children: [] },
+          { id: "i3", label: "External", linkType: "custom", url: "https://example.com", openInNewTab: true, children: [] },
+        ],
+      },
+    });
+    await prisma.navigationMenu.update({ where: { id: menu.id }, data: { currentRevisionId: menuRevision.id } });
+
+    const res = await request(app).get("/api/v1/public/navigation-menus/PRIMARY");
+    expect(res.status).toBe(200);
+    expect(res.body.data.menu.type).toBe("PRIMARY");
+    expect(res.body.data.menu.items).toHaveLength(2);
+    expect(res.body.data.menu.items.find((i: { label: string }) => i.label === "Broken")).toBeUndefined();
+    expect(res.body.data.menu.items.find((i: { label: string }) => i.label === "Nav Target").url).toBe("/nav-target-page");
+    expect(res.body.data.menu.items.find((i: { label: string }) => i.label === "External")).toEqual({
+      label: "External",
+      url: "https://example.com",
+      openInNewTab: true,
+      children: [],
+    });
+
+    const noneForUnusedLocation = await request(app).get("/api/v1/public/navigation-menus/FOOTER");
+    expect(noneForUnusedLocation.body.data.menu).toBeNull();
+
+    const badType = await request(app).get("/api/v1/public/navigation-menus/NOT_A_TYPE");
+    expect(badType.status).toBe(400);
+  });
+
   it("never leaks a page belonging to a different organization even with a matching-looking slug", async () => {
     const res = await request(app).get(`/api/v1/public/pages/${otherOrgPageSlug}`);
     expect(res.status).toBe(404);

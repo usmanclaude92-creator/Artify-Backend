@@ -12,10 +12,13 @@ import { pageRepository, type PageWithPublicRelations } from "../repositories/pa
 import { postRepository, type PostWithPublicRelations } from "../repositories/postRepository";
 import { categoryRepository } from "../repositories/categoryRepository";
 import { tagRepository } from "../repositories/tagRepository";
+import { productRepository } from "../repositories/productRepository";
+import { navigationMenuRepository } from "../repositories/navigationMenuRepository";
 import { redirectRepository } from "../repositories/redirectRepository";
 import { mediaRepository } from "../repositories/mediaRepository";
 import { templatePartRepository } from "../repositories/templatePartRepository";
 import { normalizeRegions } from "../utils/templateStructure";
+import type { MenuItemInput } from "../schemas/navigationMenuSchemas";
 import { siteSettingsService } from "./siteSettingsService";
 import { SITE_IDENTITY_MEDIA_FIELDS } from "../schemas/siteSettingsSchemas";
 import { getStorageProvider } from "../storage";
@@ -132,6 +135,63 @@ async function projectPage(page: PageWithPublicRelations) {
   };
 }
 
+export interface PublicMenuItem {
+  label: string;
+  url: string;
+  openInNewTab: boolean;
+  children: PublicMenuItem[];
+}
+
+/**
+ * Phase 5 — resolves a navigation menu item's link target to a real URL,
+ * same "safe handling of broken links" requirement as the Template region
+ * resolution above: an item whose target no longer resolves (unpublished/
+ * deleted/cross-org) is silently dropped, never surfaced as a broken
+ * link or a thrown error. `custom` links pass their URL through verbatim
+ * (already required present by navigationMenuSchemas.ts).
+ */
+async function resolveMenuItem(item: MenuItemInput, organizationId: string): Promise<PublicMenuItem | null> {
+  let url: string | null = null;
+  switch (item.linkType) {
+    case "custom":
+      url = item.url ?? null;
+      break;
+    case "page": {
+      const page = item.targetId ? await pageRepository.findPublishedByIdInOrg(item.targetId, organizationId) : null;
+      url = page ? `/${page.slug}` : null;
+      break;
+    }
+    case "post": {
+      const post = item.targetId ? await postRepository.findPublishedByIdInOrg(item.targetId, organizationId) : null;
+      url = post ? `/blog/${post.slug}` : null;
+      break;
+    }
+    case "category": {
+      const category = item.targetId ? await categoryRepository.findByIdInOrg(item.targetId, organizationId) : null;
+      url = category ? `/blog?category=${category.slug}` : null;
+      break;
+    }
+    case "tag": {
+      const tag = item.targetId ? await tagRepository.findByIdInOrg(item.targetId, organizationId) : null;
+      url = tag ? `/blog?tag=${tag.slug}` : null;
+      break;
+    }
+    case "product": {
+      const product = item.targetId ? await productRepository.findById(item.targetId) : null;
+      url = product && product.status === "ACTIVE" ? `/ai-solutions/${product.slug}` : null;
+      break;
+    }
+  }
+
+  if (!url) return null;
+
+  const children = (
+    await Promise.all((item.children ?? []).map((child) => resolveMenuItem(child, organizationId)))
+  ).filter((c): c is PublicMenuItem => c !== null);
+
+  return { label: item.label, url, openInNewTab: item.openInNewTab, children };
+}
+
 function projectAuthor(author: PostWithPublicRelations["author"]) {
   if (!author) return null;
   return { name: `${author.user.firstName} ${author.user.lastName}`.trim(), bio: author.bio, avatarUrl: author.avatarUrl };
@@ -221,6 +281,43 @@ export const publicSiteService = {
     const page = await pageRepository.findPublishedBySlugWithMedia(config.publicWebsiteOrganizationId, slug);
     if (!page) throw new NotFoundError("Page not found.");
     return projectPage(page);
+  },
+
+  /**
+   * Phase 5 — "Homepage resolves dynamically." Returns `null` (never an
+   * error) when no public org is configured OR no page is currently
+   * designated as the homepage OR that page isn't PUBLISHED — a caller
+   * (artifysolscom) is expected to fall back to its own existing static
+   * homepage in every one of those cases, exactly the same safe-fallback
+   * contract `template`/`editorBlocks` already use elsewhere in this file.
+   * This is what "prevent accidental blank/broken homepage" means on the
+   * public side: resolution can never produce a broken page, only "not
+   * configured yet."
+   */
+  async getHomepage() {
+    if (!hasPublicWebsiteOrganization()) return null;
+    const page = await pageRepository.findPublishedHomepageWithMedia(config.publicWebsiteOrganizationId);
+    if (!page) return null;
+    return projectPage(page);
+  },
+
+  /**
+   * Phase 5 — the org's active (most recently published) menu for a given
+   * location (PRIMARY/HEADER/FOOTER/MOBILE/CUSTOM), with every item's link
+   * target resolved to a real URL and broken ones silently dropped. Returns
+   * `null` when none is configured/published — same safe-fallback contract
+   * as getHomepage above.
+   */
+  async getNavigationMenu(type: string) {
+    if (!hasPublicWebsiteOrganization()) return null;
+    const organizationId = config.publicWebsiteOrganizationId;
+    const menu = await navigationMenuRepository.findPublishedByTypeInOrg(organizationId, type);
+    if (!menu || !menu.currentRevision || menu.currentRevision.status !== "PUBLISHED") return null;
+
+    const rawItems = Array.isArray(menu.currentRevision.items) ? (menu.currentRevision.items as unknown as MenuItemInput[]) : [];
+    const items = (await Promise.all(rawItems.map((item) => resolveMenuItem(item, organizationId)))).filter((i): i is PublicMenuItem => i !== null);
+
+    return { type: menu.type, slug: menu.slug, name: menu.name, items };
   },
 
   async listPosts(filters: { search?: string; categorySlug?: string; tagSlug?: string }, page: number, limit: number, sort: string, order: "asc" | "desc") {

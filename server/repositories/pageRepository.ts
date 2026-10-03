@@ -57,6 +57,16 @@ export const pageRepository = {
     return prisma.page.findFirst({ where: { organizationId, slug, status: "PUBLISHED", deletedAt: null }, ...withPublicRelations });
   },
 
+  /** Phase 5 — the org's designated homepage, PUBLISHED only (same safety as findPublishedBySlugWithMedia). */
+  async findPublishedHomepageWithMedia(organizationId: string): Promise<PageWithPublicRelations | null> {
+    return prisma.page.findFirst({ where: { organizationId, isHomepage: true, status: "PUBLISHED", deletedAt: null }, ...withPublicRelations });
+  },
+
+  /** Phase 5 — resolves a navigation-menu "page" link target to its slug, PUBLISHED only (never leaks a draft page's existence/slug). */
+  async findPublishedByIdInOrg(id: string, organizationId: string): Promise<Pick<Page, "slug"> | null> {
+    return prisma.page.findFirst({ where: { id, organizationId, status: "PUBLISHED", deletedAt: null }, select: { slug: true } });
+  },
+
   /**
    * Cross-organization by design (see postRepository.findDueScheduled) —
    * backs the system cron job that promotes SCHEDULED pages to PUBLISHED.
@@ -99,6 +109,21 @@ export const pageRepository = {
 
   async listRevisions(pageId: string) {
     return prisma.contentRevision.findMany({ where: { pageId }, orderBy: { version: "desc" } });
+  },
+
+  /** Phase 5 — page hierarchy: this page's own parentId (for cycle-checking a reparent), org-scoped. */
+  async findParentId(id: string, organizationId: string): Promise<string | null> {
+    const row = await prisma.page.findFirst({ where: { id, organizationId, deletedAt: null }, select: { parentId: true } });
+    return row?.parentId ?? null;
+  },
+
+  /** Phase 5 — direct children of a page, for the Pages hierarchy UI. */
+  async listChildren(parentId: string, organizationId: string) {
+    return prisma.page.findMany({
+      where: { parentId, organizationId, deletedAt: null },
+      select: { id: true, title: true, slug: true, status: true },
+      orderBy: { title: "asc" },
+    });
   },
 
   async softDelete(id: string): Promise<void> {

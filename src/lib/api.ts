@@ -897,7 +897,8 @@ export type BlockType =
   | "card"
   | "spacer"
   | "divider"
-  | "templatePart";
+  | "templatePart"
+  | "navigationMenu";
 
 export interface EditorBlock {
   id: string;
@@ -979,6 +980,8 @@ export interface CmsPage {
   templateId: string | null;
   pageType: PageTypeValue;
   isHomepage: boolean;
+  // Phase 5 — additive; every page created before this phase reads parentId: null.
+  parentId: string | null;
 }
 
 export interface CmsCategory {
@@ -1039,6 +1042,10 @@ const contentUpdateBody = (payload: {
   editorBlocks?: EditorDocument | null;
   status?: PatchableContentStatus;
   featuredMediaId?: string | null;
+  templateId?: string | null;
+  pageType?: PageTypeValue;
+  isHomepage?: boolean;
+  parentId?: string | null;
   expectedUpdatedAt?: string;
 }) => payload;
 
@@ -1058,8 +1065,10 @@ export const pagesApi = {
     templateId?: string;
     pageType?: PageTypeValue;
     isHomepage?: boolean;
+    parentId?: string;
   }) => apiClient.post<{ page: CmsPage }>("/pages", payload),
   update: (id: string, payload: Parameters<typeof contentUpdateBody>[0]) => apiClient.patch<{ page: CmsPage }>(`/pages/${id}`, contentUpdateBody(payload)),
+  children: (id: string) => apiClient.get<{ children: { id: string; title: string; slug: string; status: string }[] }>(`/pages/${id}/children`),
   submitForReview: (id: string) => apiClient.post<{ page: CmsPage }>(`/pages/${id}/submit-review`),
   publish: (id: string) => apiClient.post<{ page: CmsPage }>(`/pages/${id}/publish`),
   schedule: (id: string, scheduledAt: string) => apiClient.post<{ page: CmsPage }>(`/pages/${id}/schedule`, { scheduledAt }),
@@ -1244,6 +1253,82 @@ export const templatePartsApi = {
       templates: { id: string; name: string; slug: string; status: string }[];
       pages: { id: string; title: string; slug: string; status: string }[];
     }>(`/template-parts/${id}/usage`),
+};
+
+// ---------------------------------------------------------------------------
+// Phase 5 (Navigation + Pages + Homepage) — Navigation Menus. Mirrors
+// Templates/Template Parts' own draft/publish/revision/usage shape above.
+// ---------------------------------------------------------------------------
+
+export type NavigationMenuTypeValue = "PRIMARY" | "HEADER" | "FOOTER" | "MOBILE" | "CUSTOM";
+export type MenuLinkType = "page" | "post" | "category" | "tag" | "product" | "custom";
+
+export interface MenuItem {
+  id: string;
+  label: string;
+  linkType: MenuLinkType;
+  targetId?: string;
+  url?: string;
+  openInNewTab: boolean;
+  children: MenuItem[];
+}
+
+export interface NavigationMenuRevision {
+  id: string;
+  navigationMenuId: string;
+  version: number;
+  status: TemplateWorkflowStatus;
+  name: string;
+  items: MenuItem[];
+  createdById: string | null;
+  createdAt: string;
+  publishedAt: string | null;
+}
+
+export interface NavigationMenu {
+  id: string;
+  organizationId: string;
+  type: NavigationMenuTypeValue;
+  name: string;
+  slug: string;
+  status: TemplateWorkflowStatus;
+  isSystem: boolean;
+  currentRevisionId: string | null;
+  currentRevision: NavigationMenuRevision | null;
+  createdById: string | null;
+  createdAt: string;
+  updatedAt: string;
+  deletedAt: string | null;
+}
+
+export const navigationMenusApi = {
+  list: (
+    params: {
+      page?: number;
+      limit?: number;
+      search?: string;
+      status?: TemplateWorkflowStatus;
+      type?: NavigationMenuTypeValue;
+      sort?: string;
+      order?: "asc" | "desc";
+    } = {}
+  ) => paginatedGet<NavigationMenu>("/navigation-menus", "navigationMenus", params),
+  get: (id: string) => apiClient.get<{ navigationMenu: NavigationMenu }>(`/navigation-menus/${id}`),
+  revisions: (id: string) => apiClient.get<{ revisions: NavigationMenuRevision[] }>(`/navigation-menus/${id}/revisions`),
+  create: (payload: { type: NavigationMenuTypeValue; name: string; slug?: string; items?: MenuItem[] }) =>
+    apiClient.post<{ navigationMenu: NavigationMenu }>("/navigation-menus", payload),
+  update: (id: string, payload: Partial<{ name: string; slug: string; items: MenuItem[]; expectedUpdatedAt: string }>) =>
+    apiClient.patch<{ navigationMenu: NavigationMenu }>(`/navigation-menus/${id}`, payload),
+  publish: (id: string) => apiClient.post<{ navigationMenu: NavigationMenu }>(`/navigation-menus/${id}/publish`),
+  archive: (id: string) => apiClient.post<{ navigationMenu: NavigationMenu }>(`/navigation-menus/${id}/archive`),
+  revert: (id: string, revisionId: string) => apiClient.post<{ navigationMenu: NavigationMenu }>(`/navigation-menus/${id}/revert`, { revisionId }),
+  duplicate: (id: string, name?: string) => apiClient.post<{ navigationMenu: NavigationMenu }>(`/navigation-menus/${id}/duplicate`, name ? { name } : {}),
+  remove: (id: string) => apiClient.delete<{ message: string }>(`/navigation-menus/${id}`),
+  usage: (id: string) =>
+    apiClient.get<{
+      templateParts: { id: string; name: string; slug: string; status: string }[];
+      pages: { id: string; title: string; slug: string; status: string }[];
+    }>(`/navigation-menus/${id}/usage`),
 };
 
 export const postsApi = {

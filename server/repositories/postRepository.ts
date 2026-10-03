@@ -65,6 +65,11 @@ export const postRepository = {
     return prisma.post.findFirst({ where: { organizationId, slug, status: "PUBLISHED", deletedAt: null }, ...withPublicRelations });
   },
 
+  /** Phase 5 — resolves a navigation-menu "post" link target to its slug, PUBLISHED only. */
+  async findPublishedByIdInOrg(id: string, organizationId: string): Promise<Pick<Post, "slug"> | null> {
+    return prisma.post.findFirst({ where: { id, organizationId, status: "PUBLISHED", deletedAt: null }, select: { slug: true } });
+  },
+
   /** Phase 11 public projection — PUBLISHED only, paginated, with the same relations as findPublishedBySlugWithMedia. */
   async listPublished(
     organizationId: string,

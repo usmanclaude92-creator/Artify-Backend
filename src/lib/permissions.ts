@@ -54,6 +54,8 @@ import {
   Wand2,
   Globe,
   Palette,
+  Menu,
+  Home,
 } from "lucide-react";
 import { DashboardPage } from "../components/modules/DashboardPage";
 
@@ -85,6 +87,8 @@ const WorkspacesPage = lazyPage(() => import("../components/modules/WorkspacesPa
 const ProductsPage = lazyPage(() => import("../components/modules/ProductsPage"), "ProductsPage");
 const TemplatesPage = lazyPage(() => import("../components/modules/TemplatesPage"), "TemplatesPage");
 const TemplatePartsPage = lazyPage(() => import("../components/modules/TemplatePartsPage"), "TemplatePartsPage");
+const NavigationMenusPage = lazyPage(() => import("../components/modules/NavigationMenusPage"), "NavigationMenusPage");
+const HomepageManagerPage = lazyPage(() => import("../components/modules/HomepageManagerPage"), "HomepageManagerPage");
 const PagesPage = lazyPage(() => import("../components/modules/PagesPage"), "PagesPage");
 const SiteEditorPage = lazyPage(() => import("../components/modules/SiteEditorPage"), "SiteEditorPage");
 const SiteIdentityPage = lazyPage(() => import("../components/modules/SiteIdentityPage"), "SiteIdentityPage");
@@ -306,6 +310,24 @@ export const NAV_ITEMS: NavItem[] = [
     icon: PanelsTopLeft,
     requiresAnyPermission: ["template_parts.read"],
     component: TemplatePartsPage,
+    section: "Website",
+  },
+  {
+    id: "website-navigation-menus",
+    label: "Navigation Menus",
+    path: "/website/navigation-menus",
+    icon: Menu,
+    requiresAnyPermission: ["navigation_menus.read"],
+    component: NavigationMenusPage,
+    section: "Website",
+  },
+  {
+    id: "website-homepage",
+    label: "Homepage",
+    path: "/website/homepage",
+    icon: Home,
+    requiresAnyPermission: ["content.read"],
+    component: HomepageManagerPage,
     section: "Website",
   },
   {

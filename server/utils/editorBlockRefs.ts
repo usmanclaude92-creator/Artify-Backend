@@ -7,27 +7,44 @@
  * legacy content (anything not shaped like a real editor document yields []),
  * matching editorSchemas.ts's own "pass through unchanged" tolerance for
  * non-editor JSON.
+ *
+ * Phase 5 — extended with the same walk for `navigationMenu` blocks, so
+ * NavigationMenu usage/dependency checks (navigationMenuRepository.findUsage)
+ * see the id a HEADER/FOOTER/MOBILE TemplatePart (or a Page) assigned.
  */
 interface BlockLike {
   type?: unknown;
-  props?: { templatePartId?: unknown };
+  props?: { templatePartId?: unknown; navigationMenuId?: unknown };
   children?: unknown;
 }
 
-function walk(blocks: unknown[], out: Set<string>): void {
+function walk(blocks: unknown[], templatePartIds: Set<string>, navigationMenuIds: Set<string>): void {
   for (const raw of blocks) {
     if (!raw || typeof raw !== "object") continue;
     const block = raw as BlockLike;
     if (block.type === "templatePart" && typeof block.props?.templatePartId === "string") {
-      out.add(block.props.templatePartId);
+      templatePartIds.add(block.props.templatePartId);
     }
-    if (Array.isArray(block.children)) walk(block.children, out);
+    if (block.type === "navigationMenu" && typeof block.props?.navigationMenuId === "string") {
+      navigationMenuIds.add(block.props.navigationMenuId);
+    }
+    if (Array.isArray(block.children)) walk(block.children, templatePartIds, navigationMenuIds);
   }
 }
 
-export function collectTemplatePartIds(doc: unknown): string[] {
+function blocksOf(doc: unknown): unknown[] {
   if (!doc || typeof doc !== "object" || !Array.isArray((doc as { blocks?: unknown }).blocks)) return [];
-  const out = new Set<string>();
-  walk((doc as { blocks: unknown[] }).blocks, out);
-  return [...out];
+  return (doc as { blocks: unknown[] }).blocks;
+}
+
+export function collectTemplatePartIds(doc: unknown): string[] {
+  const templatePartIds = new Set<string>();
+  walk(blocksOf(doc), templatePartIds, new Set());
+  return [...templatePartIds];
+}
+
+export function collectNavigationMenuIds(doc: unknown): string[] {
+  const navigationMenuIds = new Set<string>();
+  walk(blocksOf(doc), new Set(), navigationMenuIds);
+  return [...navigationMenuIds];
 }

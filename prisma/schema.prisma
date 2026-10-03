@@ -93,6 +93,7 @@ model Organization {
   redirects                  Redirect[]
   templates                  Template[]
   templateParts              TemplatePart[]
+  navigationMenus            NavigationMenu[]
   opportunities              Opportunity[]
   forms                      Form[]
   formSubmissions            FormSubmission[]
@@ -169,69 +170,71 @@ model User {
   deletedAt           DateTime?  @map("deleted_at")
   version             Int        @default(1)
 
-  organization                 Organization                @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  role                         Role                        @relation(fields: [roleId], references: [id], onDelete: Restrict)
-  memberships                  OrganizationMembership[]
-  sessions                     Session[]
-  passwordResetTokens          PasswordResetToken[]
-  author                       Author?
-  assignedLeads                Lead[]                      @relation("LeadAssignee")
-  managedClients               Client[]                    @relation("ClientAccountManager")
-  assignedOpportunities        Opportunity[]               @relation("OpportunityAssignee")
-  createdOpportunities         Opportunity[]               @relation("OpportunityCreatedBy")
-  createdForms                 Form[]                      @relation("FormCreatedBy")
-  createdPages                 Page[]                      @relation("PageCreatedBy")
-  createdPosts                 Post[]                      @relation("PostCreatedBy")
-  createdRedirects             Redirect[]                  @relation("RedirectCreatedBy")
-  createdRevisions             ContentRevision[]           @relation("RevisionCreatedBy")
-  createdTemplates             Template[]                  @relation("TemplateCreatedBy")
-  createdTemplateRevisions     TemplateRevision[]          @relation("TemplateRevisionCreatedBy")
-  createdTemplateParts         TemplatePart[]              @relation("TemplatePartCreatedBy")
-  createdTemplatePartRevisions TemplatePartRevision[]      @relation("TemplatePartRevisionCreatedBy")
-  uploadedMedia                MediaAsset[]                @relation("MediaUploadedBy")
-  uploadSessions               MediaUploadSession[]        @relation("UploadSessionUploadedBy")
-  notifications                Notification[]
-  notificationPreferences      NotificationPreference[]
-  updatedSystemSettings        SystemSetting[]             @relation("SettingUpdatedBy")
-  auditLogs                    AuditLog[]                  @relation("AuditActor")
-  createdOnboardings           ClientOnboarding[]          @relation("OnboardingCreatedBy")
-  completedOnboardings         ClientOnboarding[]          @relation("OnboardingCompletedBy")
-  sentInvitations              WorkspaceInvitation[]       @relation("InvitationInvitedBy")
-  acceptedInvitations          WorkspaceInvitation[]       @relation("InvitationAcceptedUser")
-  createdProducts              Product[]                   @relation("ProductCreatedBy")
-  updatedProducts              Product[]                   @relation("ProductUpdatedBy")
-  createdContracts             Contract[]                  @relation("ContractCreatedBy")
-  createdContractVariations    ContractVariation[]         @relation("ContractVariationCreatedBy")
-  createdSubscriptions         Subscription[]              @relation("SubscriptionCreatedBy")
-  cancelledSubscriptions       Subscription[]              @relation("SubscriptionCancelledBy")
-  createdInvoices              Invoice[]                   @relation("InvoiceCreatedBy")
-  createdPayments              Payment[]                   @relation("PaymentCreatedBy")
-  reversedPayments             Payment[]                   @relation("PaymentReversedBy")
-  createdAIPromptTemplates     AIPromptTemplate[]          @relation("AIPromptTemplateCreatedBy")
-  updatedAIPromptTemplates     AIPromptTemplate[]          @relation("AIPromptTemplateUpdatedBy")
-  createdAIPromptVersions      AIPromptVersion[]           @relation("AIPromptVersionCreatedBy")
-  createdAIWorkflows           AIWorkflow[]                @relation("AIWorkflowCreatedBy")
-  updatedAIWorkflows           AIWorkflow[]                @relation("AIWorkflowUpdatedBy")
-  aiExecutions                 AIExecution[]               @relation("AIExecutionUser")
-  requestedAIApprovals         AIApprovalRequest[]         @relation("AIApprovalRequestedBy")
-  approvedAIApprovals          AIApprovalRequest[]         @relation("AIApprovalApprovedBy")
+  organization                   Organization                @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  role                           Role                        @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  memberships                    OrganizationMembership[]
+  sessions                       Session[]
+  passwordResetTokens            PasswordResetToken[]
+  author                         Author?
+  assignedLeads                  Lead[]                      @relation("LeadAssignee")
+  managedClients                 Client[]                    @relation("ClientAccountManager")
+  assignedOpportunities          Opportunity[]               @relation("OpportunityAssignee")
+  createdOpportunities           Opportunity[]               @relation("OpportunityCreatedBy")
+  createdForms                   Form[]                      @relation("FormCreatedBy")
+  createdPages                   Page[]                      @relation("PageCreatedBy")
+  createdPosts                   Post[]                      @relation("PostCreatedBy")
+  createdRedirects               Redirect[]                  @relation("RedirectCreatedBy")
+  createdRevisions               ContentRevision[]           @relation("RevisionCreatedBy")
+  createdTemplates               Template[]                  @relation("TemplateCreatedBy")
+  createdTemplateRevisions       TemplateRevision[]          @relation("TemplateRevisionCreatedBy")
+  createdTemplateParts           TemplatePart[]              @relation("TemplatePartCreatedBy")
+  createdTemplatePartRevisions   TemplatePartRevision[]      @relation("TemplatePartRevisionCreatedBy")
+  createdNavigationMenus         NavigationMenu[]            @relation("NavigationMenuCreatedBy")
+  createdNavigationMenuRevisions NavigationMenuRevision[]    @relation("NavigationMenuRevisionCreatedBy")
+  uploadedMedia                  MediaAsset[]                @relation("MediaUploadedBy")
+  uploadSessions                 MediaUploadSession[]        @relation("UploadSessionUploadedBy")
+  notifications                  Notification[]
+  notificationPreferences        NotificationPreference[]
+  updatedSystemSettings          SystemSetting[]             @relation("SettingUpdatedBy")
+  auditLogs                      AuditLog[]                  @relation("AuditActor")
+  createdOnboardings             ClientOnboarding[]          @relation("OnboardingCreatedBy")
+  completedOnboardings           ClientOnboarding[]          @relation("OnboardingCompletedBy")
+  sentInvitations                WorkspaceInvitation[]       @relation("InvitationInvitedBy")
+  acceptedInvitations            WorkspaceInvitation[]       @relation("InvitationAcceptedUser")
+  createdProducts                Product[]                   @relation("ProductCreatedBy")
+  updatedProducts                Product[]                   @relation("ProductUpdatedBy")
+  createdContracts               Contract[]                  @relation("ContractCreatedBy")
+  createdContractVariations      ContractVariation[]         @relation("ContractVariationCreatedBy")
+  createdSubscriptions           Subscription[]              @relation("SubscriptionCreatedBy")
+  cancelledSubscriptions         Subscription[]              @relation("SubscriptionCancelledBy")
+  createdInvoices                Invoice[]                   @relation("InvoiceCreatedBy")
+  createdPayments                Payment[]                   @relation("PaymentCreatedBy")
+  reversedPayments               Payment[]                   @relation("PaymentReversedBy")
+  createdAIPromptTemplates       AIPromptTemplate[]          @relation("AIPromptTemplateCreatedBy")
+  updatedAIPromptTemplates       AIPromptTemplate[]          @relation("AIPromptTemplateUpdatedBy")
+  createdAIPromptVersions        AIPromptVersion[]           @relation("AIPromptVersionCreatedBy")
+  createdAIWorkflows             AIWorkflow[]                @relation("AIWorkflowCreatedBy")
+  updatedAIWorkflows             AIWorkflow[]                @relation("AIWorkflowUpdatedBy")
+  aiExecutions                   AIExecution[]               @relation("AIExecutionUser")
+  requestedAIApprovals           AIApprovalRequest[]         @relation("AIApprovalRequestedBy")
+  approvedAIApprovals            AIApprovalRequest[]         @relation("AIApprovalApprovedBy")
   // Phase 13 — Autonomous AI Workflows & Business Automation (imported)
-  createdAutomationWorkflows   AutomationWorkflow[]        @relation("AutomationWorkflowCreatedBy")
-  updatedAutomationWorkflows   AutomationWorkflow[]        @relation("AutomationWorkflowUpdatedBy")
-  publishedWorkflowVersions    AutomationWorkflowVersion[] @relation("WorkflowVersionPublishedBy")
-  decidedAutomationApprovals   AutomationApproval[]        @relation("AutomationApprovalDecidedBy")
-  assignedAutomationTasks      AutomationTask[]            @relation("AutomationTaskAssignedUser")
-  automationNotifications      AutomationNotification[]    @relation("AutomationNotificationUser")
+  createdAutomationWorkflows     AutomationWorkflow[]        @relation("AutomationWorkflowCreatedBy")
+  updatedAutomationWorkflows     AutomationWorkflow[]        @relation("AutomationWorkflowUpdatedBy")
+  publishedWorkflowVersions      AutomationWorkflowVersion[] @relation("WorkflowVersionPublishedBy")
+  decidedAutomationApprovals     AutomationApproval[]        @relation("AutomationApprovalDecidedBy")
+  assignedAutomationTasks        AutomationTask[]            @relation("AutomationTaskAssignedUser")
+  automationNotifications        AutomationNotification[]    @relation("AutomationNotificationUser")
   // Phase 14 — Enterprise Knowledge, Document Intelligence & RAG (imported)
-  createdKnowledgeCollections  KnowledgeCollection[]       @relation("KnowledgeCollectionCreatedBy")
-  createdKnowledgeDocuments    KnowledgeDocument[]         @relation("KnowledgeDocumentCreatedBy")
-  uploadedKnowledgeVersions    KnowledgeDocumentVersion[]  @relation("KnowledgeVersionCreatedBy")
-  searchedKnowledgeLogs        KnowledgeSearchLog[]        @relation("KnowledgeSearchUser")
+  createdKnowledgeCollections    KnowledgeCollection[]       @relation("KnowledgeCollectionCreatedBy")
+  createdKnowledgeDocuments      KnowledgeDocument[]         @relation("KnowledgeDocumentCreatedBy")
+  uploadedKnowledgeVersions      KnowledgeDocumentVersion[]  @relation("KnowledgeVersionCreatedBy")
+  searchedKnowledgeLogs          KnowledgeSearchLog[]        @relation("KnowledgeSearchUser")
   // Phase 15 — AI Copilot & Conversational Workspace (imported)
-  createdCopilotWorkspaces     CopilotWorkspace[]          @relation("CopilotWorkspaceCreatedBy")
-  copilotConversations         CopilotConversation[]       @relation("CopilotConversationUser")
-  confirmedCopilotActions      CopilotActionPreview[]      @relation("CopilotActionConfirmedBy")
-  copilotUsages                CopilotUsage[]              @relation("CopilotUsageUser")
+  createdCopilotWorkspaces       CopilotWorkspace[]          @relation("CopilotWorkspaceCreatedBy")
+  copilotConversations           CopilotConversation[]       @relation("CopilotConversationUser")
+  confirmedCopilotActions        CopilotActionPreview[]      @relation("CopilotActionConfirmedBy")
+  copilotUsages                  CopilotUsage[]              @relation("CopilotUsageUser")
 
   @@index([organizationId])
   @@map("users")
@@ -1330,16 +1333,26 @@ model Page {
   pageType   PageType @default(STANDARD) @map("page_type")
   isHomepage Boolean  @default(false) @map("is_homepage")
 
+  // Phase 5 — optional parent for a simple page hierarchy (breadcrumbs,
+  // nested URLs are NOT auto-derived from this; `slug` stays the single
+  // source of truth for a page's own URL, unaffected by its parent).
+  // SetNull on delete: removing a parent page never cascades into
+  // deleting or orphaning its children's own content.
+  parentId String? @map("parent_id")
+
   organization    Organization      @relation(fields: [organizationId], references: [id], onDelete: Restrict)
   createdBy       User?             @relation("PageCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
   currentRevision ContentRevision?  @relation("PageCurrentRevision", fields: [currentRevisionId], references: [id], onDelete: SetNull)
   revisions       ContentRevision[] @relation("PageRevisions")
   featuredMedia   MediaAsset?       @relation("PageFeaturedMedia", fields: [featuredMediaId], references: [id], onDelete: SetNull)
   template        Template?         @relation("PageTemplate", fields: [templateId], references: [id], onDelete: SetNull)
+  parent          Page?             @relation("PageHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
+  children        Page[]            @relation("PageHierarchy")
 
   @@unique([organizationId, slug])
   @@index([organizationId, status])
   @@index([templateId])
+  @@index([parentId])
   @@map("pages")
 }
 
@@ -1425,18 +1438,18 @@ model Redirect {
 // published at the application layer (no update-after-publish service
 // method) — see docs/DATABASE_SCHEMA.md.
 model ContentRevision {
-  id          String        @id @default(uuid())
-  pageId      String?       @map("page_id")
-  postId      String?       @map("post_id")
-  version     Int
-  status      ContentStatus
-  title       String
-  body        String
-  metadata    Json          @default("{}")
-  editorBlocks Json?        @map("editor_blocks")
-  createdById String?       @map("created_by")
-  createdAt   DateTime      @default(now()) @map("created_at")
-  publishedAt DateTime?     @map("published_at")
+  id           String        @id @default(uuid())
+  pageId       String?       @map("page_id")
+  postId       String?       @map("post_id")
+  version      Int
+  status       ContentStatus
+  title        String
+  body         String
+  metadata     Json          @default("{}")
+  editorBlocks Json?         @map("editor_blocks")
+  createdById  String?       @map("created_by")
+  createdAt    DateTime      @default(now()) @map("created_at")
+  publishedAt  DateTime?     @map("published_at")
 
   page           Page? @relation("PageRevisions", fields: [pageId], references: [id], onDelete: Cascade)
   post           Post? @relation("PostRevisions", fields: [postId], references: [id], onDelete: Cascade)
@@ -1559,6 +1572,73 @@ model TemplatePartRevision {
 
   @@index([templatePartId])
   @@map("template_part_revisions")
+}
+
+// Phase 5 — a canonical "slot" a menu can be built for; purely
+// descriptive/organizational (like TemplateType), it does not force
+// exactly one menu per location — an org may have several HEADER menus
+// in DRAFT while only one is actually PUBLISHED and consumed publicly.
+enum NavigationMenuType {
+  PRIMARY
+  HEADER
+  FOOTER
+  MOBILE
+  CUSTOM
+}
+
+// Navigation menu — mirrors Template/TemplatePart's own draft/publish/
+// revision/system-protection architecture exactly (no second CMS
+// pattern introduced here). The nested item tree lives as JSON on the
+// revision (NavigationMenuRevision.items), the same way Template keeps
+// its region list on TemplateRevision.structure and TemplatePart keeps
+// its block document on TemplatePartRevision.content — there is no
+// separate relational "MenuItem" table, since every other revisioned
+// content type in this schema already stores its structured content as
+// JSON on the revision rather than as child rows.
+model NavigationMenu {
+  id                String             @id @default(uuid())
+  organizationId    String             @map("organization_id")
+  type              NavigationMenuType
+  name              String
+  slug              String
+  status            ContentStatus      @default(DRAFT)
+  isSystem          Boolean            @default(false) @map("is_system")
+  currentRevisionId String?            @unique @map("current_revision_id")
+  createdById       String?            @map("created_by")
+  createdAt         DateTime           @default(now()) @map("created_at")
+  updatedAt         DateTime           @updatedAt @map("updated_at")
+  deletedAt         DateTime?          @map("deleted_at")
+
+  organization    Organization             @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  createdBy       User?                    @relation("NavigationMenuCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  currentRevision NavigationMenuRevision?  @relation("NavigationMenuCurrentRevision", fields: [currentRevisionId], references: [id], onDelete: SetNull)
+  revisions       NavigationMenuRevision[] @relation("NavigationMenuRevisions")
+
+  @@unique([organizationId, slug])
+  @@index([organizationId, status])
+  @@index([organizationId, type])
+  @@map("navigation_menus")
+}
+
+model NavigationMenuRevision {
+  id               String        @id @default(uuid())
+  navigationMenuId String        @map("navigation_menu_id")
+  version          Int
+  status           ContentStatus
+  name             String
+  // Nested item tree: [{ id, label, linkType: "page"|"post"|"category"|
+  // "tag"|"product"|"custom", targetId?, url?, openInNewTab, children: [...] }]
+  items            Json          @default("[]")
+  createdById      String?       @map("created_by")
+  createdAt        DateTime      @default(now()) @map("created_at")
+  publishedAt      DateTime?     @map("published_at")
+
+  navigationMenu           NavigationMenu  @relation("NavigationMenuRevisions", fields: [navigationMenuId], references: [id], onDelete: Cascade)
+  createdBy                User?           @relation("NavigationMenuRevisionCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  navigationMenuCurrentFor NavigationMenu? @relation("NavigationMenuCurrentRevision")
+
+  @@index([navigationMenuId])
+  @@map("navigation_menu_revisions")
 }
 
 // =============================================================================

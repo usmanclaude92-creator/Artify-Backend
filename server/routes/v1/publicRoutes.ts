@@ -21,6 +21,7 @@ import {
   listPublicPostsQuerySchema,
   listPublicProductsQuerySchema,
   publicRedirectLookupQuerySchema,
+  publicNavigationMenuTypeSchema,
 } from "../../schemas/publicSchemas";
 import { publicFormSubmitSchema } from "../../schemas/formSchemas";
 
@@ -50,6 +51,23 @@ router.get(
   asyncHandler(async (req, res) => {
     const page = await publicSiteService.getPageBySlug(req.params.slug!);
     sendSuccess(res, { page });
+  })
+);
+
+router.get(
+  "/homepage",
+  asyncHandler(async (_req, res) => {
+    const page = await publicSiteService.getHomepage();
+    sendSuccess(res, { page });
+  })
+);
+
+router.get(
+  "/navigation-menus/:type",
+  asyncHandler(async (req, res) => {
+    const type = publicNavigationMenuTypeSchema.parse(req.params.type);
+    const menu = await publicSiteService.getNavigationMenu(type);
+    sendSuccess(res, { menu });
   })
 );
 

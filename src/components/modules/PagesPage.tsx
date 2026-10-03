@@ -4,7 +4,7 @@ import { FileText, Plus, Search, Send, Rocket, CalendarClock, Archive, History, 
 import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
 import { useRouter } from "../../lib/router";
-import { pagesApi, mediaApi, type CmsPage, type CmsMedia, type ContentRevision, type ContentStatusValue } from "../../lib/api";
+import { pagesApi, mediaApi, templatesApi, type CmsPage, type CmsMedia, type ContentRevision, type ContentStatusValue, type Template } from "../../lib/api";
 import { ApiClientError } from "../../lib/apiClient";
 import { Card, Button, Input, Select, Badge, LoadingState, ErrorState, EmptyState, Pagination, Modal, Field, ConfirmDialog } from "../ui/ui";
 import { hasPermission } from "../../lib/permissions";
@@ -80,17 +80,21 @@ const STATUS_TONE: Record<ContentStatusValue, "success" | "warning" | "danger" |
   ARCHIVED: "danger",
 };
 
-const PageFormModal: React.FC<{ open: boolean; onClose: () => void; onSaved: (page?: CmsPage) => void; mode: "create" | "edit"; page?: CmsPage }> = ({
-  open,
-  onClose,
-  onSaved,
-  mode,
-  page,
-}) => {
+const PageFormModal: React.FC<{
+  open: boolean;
+  onClose: () => void;
+  onSaved: (page?: CmsPage) => void;
+  mode: "create" | "edit";
+  page?: CmsPage;
+  allPages: CmsPage[];
+  templates: Template[];
+}> = ({ open, onClose, onSaved, mode, page, allPages, templates }) => {
   const [title, setTitle] = useState(page?.title ?? "");
   const [slug, setSlug] = useState(page?.slug ?? "");
   const [body, setBody] = useState(page?.currentRevision?.body ?? "");
   const [featuredMediaId, setFeaturedMediaId] = useState<string | undefined>(page?.featuredMediaId ?? undefined);
+  const [parentId, setParentId] = useState(page?.parentId ?? "");
+  const [templateId, setTemplateId] = useState(page?.templateId ?? "");
   const [metaTitle, setMetaTitle] = useState((page?.currentRevision?.metadata?.metaTitle as string) ?? "");
   const [metaDescription, setMetaDescription] = useState((page?.currentRevision?.metadata?.metaDescription as string) ?? "");
   const [ogImage, setOgImage] = useState((page?.currentRevision?.metadata?.ogImage as string) ?? "");
@@ -103,12 +107,16 @@ const PageFormModal: React.FC<{ open: boolean; onClose: () => void; onSaved: (pa
       setSlug(page?.slug ?? "");
       setBody(page?.currentRevision?.body ?? "");
       setFeaturedMediaId(page?.featuredMediaId ?? undefined);
+      setParentId(page?.parentId ?? "");
+      setTemplateId(page?.templateId ?? "");
       setMetaTitle((page?.currentRevision?.metadata?.metaTitle as string) ?? "");
       setMetaDescription((page?.currentRevision?.metadata?.metaDescription as string) ?? "");
       setOgImage((page?.currentRevision?.metadata?.ogImage as string) ?? "");
       setError(null);
     }
   }, [open, page]);
+
+  const parentOptions = allPages.filter((p) => p.id !== page?.id);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -121,7 +129,15 @@ const PageFormModal: React.FC<{ open: boolean; onClose: () => void; onSaved: (pa
     };
     try {
       if (mode === "create") {
-        const res = await pagesApi.create({ title, slug: slug || undefined, body, metadata, featuredMediaId });
+        const res = await pagesApi.create({
+          title,
+          slug: slug || undefined,
+          body,
+          metadata,
+          featuredMediaId,
+          parentId: parentId || undefined,
+          templateId: templateId || undefined,
+        });
         onSaved(res.page);
       } else if (page) {
         const res = await pagesApi.update(page.id, {
@@ -130,6 +146,8 @@ const PageFormModal: React.FC<{ open: boolean; onClose: () => void; onSaved: (pa
           body,
           metadata,
           featuredMediaId: featuredMediaId ?? null,
+          parentId: parentId || null,
+          templateId: templateId || null,
           expectedUpdatedAt: page.updatedAt,
         });
         onSaved(res.page);
@@ -151,6 +169,26 @@ const PageFormModal: React.FC<{ open: boolean; onClose: () => void; onSaved: (pa
         </Field>
         <Field label="Slug" hint="Leave blank to auto-generate from the title.">
           <Input value={slug} onChange={(e) => setSlug(e.target.value)} placeholder="auto-generated" />
+        </Field>
+        <Field label="Parent page" hint="Builds a simple page hierarchy. Doesn't change this page's own URL.">
+          <Select value={parentId} onChange={(e) => setParentId(e.target.value)}>
+            <option value="">— No parent (top-level) —</option>
+            {parentOptions.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.title}
+              </option>
+            ))}
+          </Select>
+        </Field>
+        <Field label="Template" hint="Only PUBLISHED templates can be assigned.">
+          <Select value={templateId} onChange={(e) => setTemplateId(e.target.value)}>
+            <option value="">— Default rendering —</option>
+            {templates.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.name}
+              </option>
+            ))}
+          </Select>
         </Field>
         <FeaturedImageField mediaId={featuredMediaId} onChange={setFeaturedMediaId} />
         <Field label="Body">
@@ -214,7 +252,12 @@ const ScheduleModal: React.FC<{ open: boolean; onClose: () => void; onSchedule: 
   );
 };
 
-const PageDetail: React.FC<{ page: CmsPage; onChanged: (p?: CmsPage) => void }> = ({ page, onChanged }) => {
+const PageDetail: React.FC<{ page: CmsPage; allPages: CmsPage[]; templates: Template[]; onChanged: (p?: CmsPage) => void }> = ({
+  page,
+  allPages,
+  templates,
+  onChanged,
+}) => {
   const { user } = useAuth();
   const { notify } = useToast();
   const { navigate } = useRouter();
@@ -229,6 +272,14 @@ const PageDetail: React.FC<{ page: CmsPage; onChanged: (p?: CmsPage) => void }> 
   const [revisions, setRevisions] = useState<ContentRevision[]>([]);
   const [revisionsLoading, setRevisionsLoading] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [children, setChildren] = useState<{ id: string; title: string; slug: string; status: string }[]>([]);
+
+  useEffect(() => {
+    void pagesApi.children(page.id).then((res) => setChildren(res.children)).catch(() => undefined);
+  }, [page.id]);
+
+  const parentPage = page.parentId ? allPages.find((p) => p.id === page.parentId) ?? null : null;
+  const assignedTemplate = page.templateId ? templates.find((t) => t.id === page.templateId) ?? null : null;
 
   const loadRevisions = async () => {
     setRevisionsLoading(true);
@@ -280,6 +331,9 @@ const PageDetail: React.FC<{ page: CmsPage; onChanged: (p?: CmsPage) => void }> 
           <p className="text-[11px]" style={{ color: "var(--text-muted)" }}>
             /{page.slug} · v{page.currentRevision?.version ?? "—"}
             {page.scheduledAt && page.status === "SCHEDULED" && <> · scheduled for {new Date(page.scheduledAt).toLocaleString()}</>}
+            {parentPage && <> · child of {parentPage.title}</>}
+            {assignedTemplate && <> · template: {assignedTemplate.name}</>}
+            {page.isHomepage && <> · homepage</>}
           </p>
         </div>
         <div className="flex gap-1.5 flex-wrap justify-end shrink-0">
@@ -343,7 +397,23 @@ const PageDetail: React.FC<{ page: CmsPage; onChanged: (p?: CmsPage) => void }> 
         </div>
       )}
 
-      <PageFormModal open={editOpen} onClose={() => setEditOpen(false)} onSaved={(updated) => onChanged(updated)} mode="edit" page={page} />
+      {children.length > 0 && (
+        <div className="px-4 py-3 border-t" style={{ borderColor: "var(--border)" }}>
+          <p className="text-xs font-bold uppercase tracking-wide mb-1.5" style={{ color: "var(--text-muted)" }}>
+            Child pages
+          </p>
+          <ul className="space-y-1">
+            {children.map((c) => (
+              <li key={c.id} className="text-[11px] flex items-center justify-between gap-2" style={{ color: "var(--text-secondary)" }}>
+                <span>{c.title}</span>
+                <Badge tone={STATUS_TONE[c.status as ContentStatusValue]}>{c.status}</Badge>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      <PageFormModal open={editOpen} onClose={() => setEditOpen(false)} onSaved={(updated) => onChanged(updated)} mode="edit" page={page} allPages={allPages} templates={templates} />
       <ScheduleModal open={scheduleOpen} onClose={() => setScheduleOpen(false)} onSchedule={handleSchedule} />
       <ConfirmDialog
         open={archiveOpen}
@@ -397,10 +467,26 @@ export const PagesPage: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
+  const [allPages, setAllPages] = useState<CmsPage[]>([]);
+  const [templates, setTemplates] = useState<Template[]>([]);
 
   // Command Center "New Page" deep link (?new=1)
   useEffect(() => {
     if (consumeNewFlag()) setCreateOpen(true);
+  }, []);
+
+  // Full page list (for the parent picker) and PUBLISHED templates (for
+  // the template-assignment picker) — fetched once, not paginated with
+  // the main list below.
+  useEffect(() => {
+    void pagesApi
+      .list({ limit: 100 })
+      .then((res) => setAllPages(res.items))
+      .catch(() => undefined);
+    void templatesApi
+      .list({ limit: 100, status: "PUBLISHED" })
+      .then((res) => setTemplates(res.items))
+      .catch(() => undefined);
   }, []);
 
   useEffect(() => {
@@ -489,11 +575,13 @@ export const PagesPage: React.FC = () => {
             <Pagination page={pageNum} totalPages={totalPages} onChange={setPageNum} />
           </Card>
 
-          {selected && <PageDetail page={selected} onChanged={(updated) => (updated ? setSelected(updated) : void load())} />}
+          {selected && (
+            <PageDetail page={selected} allPages={allPages} templates={templates} onChanged={(updated) => (updated ? setSelected(updated) : void load())} />
+          )}
         </div>
       )}
 
-      <PageFormModal open={createOpen} onClose={() => setCreateOpen(false)} onSaved={() => load()} mode="create" />
+      <PageFormModal open={createOpen} onClose={() => setCreateOpen(false)} onSaved={() => load()} mode="create" allPages={allPages} templates={templates} />
     </div>
   );
 };

@@ -33,6 +33,7 @@ import {
   ArrowLeft,
   PanelsTopLeft,
   AlertTriangle,
+  Menu as MenuIcon,
 } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
@@ -42,6 +43,7 @@ import {
   pagesApi,
   templatesApi,
   templatePartsApi,
+  navigationMenusApi,
   siteSettingsApi,
   mediaApi,
   normalizeTemplateRegions,
@@ -51,6 +53,7 @@ import {
   type BlockType,
   type Template,
   type TemplatePart,
+  type NavigationMenu,
   type TemplateRegionEntry,
   type TemplatePartRevision,
   type ContentRevision,
@@ -90,9 +93,23 @@ const BLOCK_LABELS: Record<BlockType, string> = {
   spacer: "Spacer",
   divider: "Divider",
   templatePart: "Template part",
+  navigationMenu: "Navigation menu",
 };
 
-const ADDABLE_TYPES: BlockType[] = ["section", "container", "columns", "heading", "text", "image", "button", "card", "spacer", "divider", "templatePart"];
+const ADDABLE_TYPES: BlockType[] = [
+  "section",
+  "container",
+  "columns",
+  "heading",
+  "text",
+  "image",
+  "button",
+  "card",
+  "spacer",
+  "divider",
+  "templatePart",
+  "navigationMenu",
+];
 
 const VIEWPORT_WIDTH: Record<"desktop" | "tablet" | "mobile", string> = { desktop: "100%", tablet: "768px", mobile: "375px" };
 type Viewport = keyof typeof VIEWPORT_WIDTH;
@@ -255,8 +272,9 @@ const CanvasBlock: React.FC<{
   mediaCache: Record<string, string>;
   onMediaResolved: (id: string, url: string) => void;
   templatePartNames: Record<string, string>;
+  navigationMenuNames: Record<string, string>;
   globalStyles: GlobalStyles | null;
-}> = ({ block, depth, selectedId, onSelect, onDelete, onDuplicate, onMove, onAddChild, mediaCache, onMediaResolved, templatePartNames, globalStyles }) => {
+}> = ({ block, depth, selectedId, onSelect, onDelete, onDuplicate, onMove, onAddChild, mediaCache, onMediaResolved, templatePartNames, navigationMenuNames, globalStyles }) => {
   const selected = block.id === selectedId;
   const [addChildOpen, setAddChildOpen] = useState(false);
 
@@ -324,6 +342,7 @@ const CanvasBlock: React.FC<{
               mediaCache={mediaCache}
               onMediaResolved={onMediaResolved}
               templatePartNames={templatePartNames}
+              navigationMenuNames={navigationMenuNames}
               globalStyles={globalStyles}
             />
           ))}
@@ -441,6 +460,15 @@ const CanvasBlock: React.FC<{
         </div>
       );
     }
+    case "navigationMenu": {
+      const id = String(block.props.navigationMenuId ?? "");
+      return frame(
+        <div className="text-xs italic flex items-center gap-1.5" style={{ color: "var(--text-muted)" }}>
+          <MenuIcon className="w-3.5 h-3.5" />
+          {id ? (navigationMenuNames[id] ?? "Navigation menu") : "No navigation menu selected"}
+        </div>
+      );
+    }
   }
 };
 
@@ -454,7 +482,8 @@ const Inspector: React.FC<{
   onChangeProps: (id: string, patch: Record<string, unknown>) => void;
   onMoveInto: (id: string, parentId: string | null) => void;
   templateParts: TemplatePart[];
-}> = ({ doc, block, onChangeProps, onMoveInto, templateParts }) => {
+  navigationMenus: NavigationMenu[];
+}> = ({ doc, block, onChangeProps, onMoveInto, templateParts, navigationMenus }) => {
   const [pickerOpen, setPickerOpen] = useState(false);
 
   if (!block) {
@@ -646,6 +675,19 @@ const Inspector: React.FC<{
               {templateParts.map((p) => (
                 <option key={p.id} value={p.id}>
                   {p.name} ({p.status})
+                </option>
+              ))}
+            </Select>
+          </Field>
+        );
+      case "navigationMenu":
+        return (
+          <Field label="Navigation menu" hint="Only PUBLISHED menus render reliably on the live site.">
+            <Select value={String(block.props.navigationMenuId ?? "")} onChange={(e) => onChangeProps(block.id, { navigationMenuId: e.target.value })}>
+              <option value="">Select…</option>
+              {navigationMenus.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.name} ({m.status})
                 </option>
               ))}
             </Select>
@@ -1082,6 +1124,7 @@ const PageOrPartEditor: React.FC = () => {
   const [template, setTemplate] = useState<Template | null>(null);
   const [templateRegionParts, setTemplateRegionParts] = useState<Record<string, TemplatePart>>({});
   const [templateParts, setTemplateParts] = useState<TemplatePart[]>([]);
+  const [navigationMenus, setNavigationMenus] = useState<NavigationMenu[]>([]);
   const [globalStyles, setGlobalStyles] = useState<GlobalStyles | null>(null);
 
   const [mediaCache, setMediaCache] = useState<Record<string, string>>({});
@@ -1186,6 +1229,10 @@ const PageOrPartEditor: React.FC = () => {
     void templatePartsApi.list({ limit: 100, sort: "name", order: "asc" }).then((res) => setTemplateParts(res.items));
   }, []);
 
+  useEffect(() => {
+    void navigationMenusApi.list({ limit: 100, sort: "name", order: "asc" }).then((res) => setNavigationMenus(res.items));
+  }, []);
+
   // Phase 3 — make Global Styles available to the canvas preview, scoped
   // to rendered block content only (never the Control Center's own chrome
   // theme). Reads the PUBLISHED values, same as what the live site shows,
@@ -1224,6 +1271,7 @@ const PageOrPartEditor: React.FC = () => {
   }, [doc]);
 
   const templatePartNames = useMemo(() => Object.fromEntries(templateParts.map((p) => [p.id, p.name])), [templateParts]);
+  const navigationMenuNames = useMemo(() => Object.fromEntries(navigationMenus.map((m) => [m.id, m.name])), [navigationMenus]);
   const selectedBlock = selectedId ? findBlock(doc, selectedId) : null;
 
   const mutate = (fn: (d: EditorDocument) => EditorDocument) => setDoc((d) => fn(d));
@@ -1534,6 +1582,7 @@ const PageOrPartEditor: React.FC = () => {
                   mediaCache={mediaCache}
                   onMediaResolved={(id, url) => setMediaCache((prev) => ({ ...prev, [id]: url }))}
                   templatePartNames={templatePartNames}
+                  navigationMenuNames={navigationMenuNames}
                   globalStyles={globalStyles}
                 />
               ))}
@@ -1565,7 +1614,14 @@ const PageOrPartEditor: React.FC = () => {
 
         {/* Right: inspector */}
         <div className="lg:sticky lg:top-16">
-          <Inspector doc={doc} block={selectedBlock} onChangeProps={handleChangeProps} onMoveInto={handleMoveInto} templateParts={templateParts} />
+          <Inspector
+            doc={doc}
+            block={selectedBlock}
+            onChangeProps={handleChangeProps}
+            onMoveInto={handleMoveInto}
+            templateParts={templateParts}
+            navigationMenus={navigationMenus}
+          />
         </div>
       </div>
 
@@ -1574,7 +1630,7 @@ const PageOrPartEditor: React.FC = () => {
           {doc.blocks.length === 0 ? (
             <EmptyState title="Nothing to preview yet" description="Add blocks to see a preview." />
           ) : (
-            <BlockTreeRenderer blocks={doc.blocks} templatePartNames={templatePartNames} globalStyles={globalStyles} />
+            <BlockTreeRenderer blocks={doc.blocks} templatePartNames={templatePartNames} navigationMenuNames={navigationMenuNames} globalStyles={globalStyles} />
           )}
         </div>
       </Modal>

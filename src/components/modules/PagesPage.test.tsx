@@ -1,5 +1,5 @@
 /** Phase 8 — CMS pages list/detail, create form, workflow actions (submit-review/publish/schedule/archive/revert), empty/error states, permission-gated actions, no fabricated pages. */
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { PagesPage } from "./PagesPage";
 
@@ -12,6 +12,8 @@ const scheduleMock = vi.fn();
 const archiveMock = vi.fn();
 const revertMock = vi.fn();
 const revisionsMock = vi.fn();
+const childrenMock = vi.fn();
+const templatesListMock = vi.fn();
 const notifyMock = vi.fn();
 
 vi.mock("../../lib/api", () => ({
@@ -19,6 +21,7 @@ vi.mock("../../lib/api", () => ({
     list: (...args: unknown[]) => listMock(...args),
     get: vi.fn(),
     revisions: (...args: unknown[]) => revisionsMock(...args),
+    children: (...args: unknown[]) => childrenMock(...args),
     create: (...args: unknown[]) => createMock(...args),
     update: (...args: unknown[]) => updateMock(...args),
     submitForReview: (...args: unknown[]) => submitForReviewMock(...args),
@@ -26,6 +29,9 @@ vi.mock("../../lib/api", () => ({
     schedule: (...args: unknown[]) => scheduleMock(...args),
     archive: (...args: unknown[]) => archiveMock(...args),
     revert: (...args: unknown[]) => revertMock(...args),
+  },
+  templatesApi: {
+    list: (...args: unknown[]) => templatesListMock(...args),
   },
 }));
 
@@ -68,6 +74,11 @@ const page = {
   deletedAt: null,
 };
 
+beforeEach(() => {
+  childrenMock.mockResolvedValue({ children: [] });
+  templatesListMock.mockResolvedValue({ items: [], page: 1, limit: 100, total: 0, totalPages: 1 });
+});
+
 afterEach(() => {
   cleanup();
   listMock.mockReset();
@@ -79,6 +90,8 @@ afterEach(() => {
   archiveMock.mockReset();
   revertMock.mockReset();
   revisionsMock.mockReset();
+  childrenMock.mockReset();
+  templatesListMock.mockReset();
   notifyMock.mockReset();
   navigateMock.mockReset();
   mockPermissions = ["content.read", "content.create", "content.update", "content.publish", "content.delete"];
@@ -202,5 +215,35 @@ describe("PagesPage", () => {
 
     fireEvent.change(screen.getByRole("combobox"), { target: { value: "PUBLISHED" } });
     await vi.waitFor(() => expect(listMock).toHaveBeenCalledWith(expect.objectContaining({ status: "PUBLISHED" })));
+  });
+
+  // Phase 5 (Navigation + Pages + Homepage) — page hierarchy + template assignment pickers.
+  it("creates a page with a parent and a template assignment through the real API", async () => {
+    const parentPage = { ...page, id: "page-parent", title: "Parent Page", slug: "parent-page" };
+    listMock.mockResolvedValue({ items: [parentPage], page: 1, limit: 20, total: 1, totalPages: 1 });
+    templatesListMock.mockResolvedValue({ items: [{ id: "tpl-1", name: "Landing Template" }], page: 1, limit: 100, total: 1, totalPages: 1 });
+    createMock.mockResolvedValue({ page });
+    render(<PagesPage />);
+    await screen.findAllByText("Parent Page");
+
+    fireEvent.click(screen.getByRole("button", { name: /new page/i }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.change(within(dialog).getByLabelText(/^title$/i), { target: { value: "Child Page" } });
+    fireEvent.change(within(dialog).getByLabelText(/parent page/i), { target: { value: "page-parent" } });
+    fireEvent.change(within(dialog).getByLabelText(/^template/i), { target: { value: "tpl-1" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: /create page/i }));
+
+    await vi.waitFor(() =>
+      expect(createMock).toHaveBeenCalledWith(expect.objectContaining({ title: "Child Page", parentId: "page-parent", templateId: "tpl-1" }))
+    );
+  });
+
+  it("shows child pages in the detail pane", async () => {
+    listMock.mockResolvedValue({ items: [page], page: 1, limit: 20, total: 1, totalPages: 1 });
+    childrenMock.mockResolvedValue({ children: [{ id: "page-child", title: "Child Page", slug: "child-page", status: "DRAFT" }] });
+    render(<PagesPage />);
+    await screen.findByText("Hello world");
+
+    expect(await screen.findByText("Child Page")).toBeInTheDocument();
   });
 });

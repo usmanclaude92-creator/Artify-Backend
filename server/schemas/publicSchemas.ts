@@ -30,6 +30,10 @@ export type ListPublicProductsQuery = z.infer<typeof listPublicProductsQuerySche
 // Phase 5 — SEO Control Center. The public site queries this when a slug it
 // tried to render 404s, to check whether it's an old slug with a redirect
 // on file before showing a hard not-found page.
+// Phase 5 — which of the four canonical menu locations the public site is
+// asking for (GET /public/navigation-menus/:type).
+export const publicNavigationMenuTypeSchema = z.enum(["PRIMARY", "HEADER", "FOOTER", "MOBILE", "CUSTOM"]);
+
 export const publicRedirectLookupQuerySchema = z.object({
   path: z
     .string()

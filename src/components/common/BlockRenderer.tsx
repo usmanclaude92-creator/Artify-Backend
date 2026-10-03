@@ -8,7 +8,7 @@
  * caller only needs to pass `blocks`.
  */
 import React, { useEffect, useState } from "react";
-import { Image as ImageIcon, PanelsTopLeft } from "lucide-react";
+import { Image as ImageIcon, PanelsTopLeft, Menu as MenuIcon } from "lucide-react";
 import { mediaApi, type EditorBlock, type GlobalStyles } from "../../lib/api";
 import { collectImageMediaIds } from "../../lib/editorBlocks";
 
@@ -35,8 +35,9 @@ const ReadOnlyBlock: React.FC<{
   depth: number;
   mediaCache: Record<string, string>;
   templatePartNames: Record<string, string>;
+  navigationMenuNames: Record<string, string>;
   globalStyles: GlobalStyles | null;
-}> = ({ block, depth, mediaCache, templatePartNames, globalStyles }) => {
+}> = ({ block, depth, mediaCache, templatePartNames, navigationMenuNames, globalStyles }) => {
   const wrap = (inner: React.ReactNode) => <div className="mb-2">{inner}</div>;
 
   switch (block.type) {
@@ -49,7 +50,15 @@ const ReadOnlyBlock: React.FC<{
           style={block.type === "columns" ? { gridTemplateColumns: `repeat(${Number(block.props.columnCount) || 2}, minmax(0,1fr))` } : undefined}
         >
           {(block.children ?? []).map((c) => (
-            <ReadOnlyBlock key={c.id} block={c} depth={depth + 1} mediaCache={mediaCache} templatePartNames={templatePartNames} globalStyles={globalStyles} />
+            <ReadOnlyBlock
+              key={c.id}
+              block={c}
+              depth={depth + 1}
+              mediaCache={mediaCache}
+              templatePartNames={templatePartNames}
+              navigationMenuNames={navigationMenuNames}
+              globalStyles={globalStyles}
+            />
           ))}
         </div>
       );
@@ -134,6 +143,15 @@ const ReadOnlyBlock: React.FC<{
         </div>
       );
     }
+    case "navigationMenu": {
+      const id = String(block.props.navigationMenuId ?? "");
+      return wrap(
+        <div className="text-xs italic flex items-center gap-1.5" style={{ color: "var(--text-muted)" }}>
+          <MenuIcon className="w-3.5 h-3.5" />
+          {id ? (navigationMenuNames[id] ?? "Navigation menu") : "No navigation menu selected"}
+        </div>
+      );
+    }
     default:
       return null;
   }
@@ -143,8 +161,9 @@ const ReadOnlyBlock: React.FC<{
 export const BlockTreeRenderer: React.FC<{
   blocks: EditorBlock[];
   templatePartNames?: Record<string, string>;
+  navigationMenuNames?: Record<string, string>;
   globalStyles?: GlobalStyles | null;
-}> = ({ blocks, templatePartNames = {}, globalStyles = null }) => {
+}> = ({ blocks, templatePartNames = {}, navigationMenuNames = {}, globalStyles = null }) => {
   const [mediaCache, setMediaCache] = useState<Record<string, string>>({});
 
   useEffect(() => {
@@ -174,7 +193,15 @@ export const BlockTreeRenderer: React.FC<{
   return (
     <>
       {blocks.map((b) => (
-        <ReadOnlyBlock key={b.id} block={b} depth={0} mediaCache={mediaCache} templatePartNames={templatePartNames} globalStyles={globalStyles} />
+        <ReadOnlyBlock
+          key={b.id}
+          block={b}
+          depth={0}
+          mediaCache={mediaCache}
+          templatePartNames={templatePartNames}
+          navigationMenuNames={navigationMenuNames}
+          globalStyles={globalStyles}
+        />
       ))}
     </>
   );

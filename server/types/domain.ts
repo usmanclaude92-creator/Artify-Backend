@@ -117,6 +117,13 @@ export const PERMISSION_KEYS = [
   "template_parts.update",
   "template_parts.publish",
   "template_parts.delete",
+  // Phase 5 (Navigation Menus) — same {read,create,update,publish,delete}
+  // shape as templates.*/template_parts.* above, same reasoning.
+  "navigation_menus.read",
+  "navigation_menus.create",
+  "navigation_menus.update",
+  "navigation_menus.publish",
+  "navigation_menus.delete",
   "reports.read",
   "reports.export",
   "settings.read",

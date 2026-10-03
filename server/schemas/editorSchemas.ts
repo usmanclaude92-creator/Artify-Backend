@@ -139,6 +139,19 @@ const templatePartBlockSchema = z.object({
   }),
 });
 
+// References a NavigationMenu by id (Phase 5) — resolved at render time,
+// same reuse model as templatePartBlockSchema above. This is how a menu
+// gets "assigned to a template/template part" (e.g. a HEADER TemplatePart's
+// content includes one of these) without inventing a second, parallel
+// navigation system.
+const navigationMenuBlockSchema = z.object({
+  ...baseFields,
+  type: z.literal("navigationMenu"),
+  props: z.object({
+    navigationMenuId: z.string().trim().uuid(),
+  }),
+});
+
 export const blockSchema: z.ZodType<unknown> = z.lazy(() =>
   z.discriminatedUnion("type", [
     sectionBlockSchema,
@@ -152,6 +165,7 @@ export const blockSchema: z.ZodType<unknown> = z.lazy(() =>
     spacerBlockSchema,
     dividerBlockSchema,
     templatePartBlockSchema,
+    navigationMenuBlockSchema,
   ])
 );
 export type Block = z.infer<typeof sectionBlockSchema> | Record<string, unknown>;
@@ -215,4 +229,5 @@ export const BLOCK_TYPES = [
   "spacer",
   "divider",
   "templatePart",
+  "navigationMenu",
 ] as const;
