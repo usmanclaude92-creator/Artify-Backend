@@ -7,7 +7,14 @@ import React, { useEffect, useState } from "react";
 import { PanelsTopLeft, Plus, Search, Rocket, Archive, History, RotateCcw, Copy, Pencil } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
-import { templatePartsApi, type TemplatePart, type TemplatePartRevision, type TemplatePartTypeValue, type TemplateWorkflowStatus } from "../../lib/api";
+import {
+  templatePartsApi,
+  type TemplatePart,
+  type TemplatePartRevision,
+  type TemplatePartTypeValue,
+  type TemplateWorkflowStatus,
+  type EditorDocument,
+} from "../../lib/api";
 import { ApiClientError } from "../../lib/apiClient";
 import { Card, Button, Input, Select, Badge, LoadingState, ErrorState, EmptyState, Pagination, Modal, Field, ConfirmDialog } from "../ui/ui";
 import { hasPermission } from "../../lib/permissions";
@@ -32,11 +39,13 @@ const STATUS_TONE: Record<TemplateWorkflowStatus, "success" | "danger" | "neutra
   ARCHIVED: "danger",
 };
 
-function formatContent(content: Record<string, unknown> | undefined): string {
+const EMPTY_DOCUMENT: EditorDocument = { version: 1, blocks: [] };
+
+function formatContent(content: EditorDocument | undefined): string {
   try {
-    return JSON.stringify(content ?? {}, null, 2);
+    return JSON.stringify(content ?? EMPTY_DOCUMENT, null, 2);
   } catch {
-    return "{}";
+    return JSON.stringify(EMPTY_DOCUMENT);
   }
 }
 
@@ -67,9 +76,9 @@ const PartFormModal: React.FC<{ open: boolean; onClose: () => void; onSaved: (p?
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
-    let content: Record<string, unknown>;
+    let content: EditorDocument;
     try {
-      content = contentText.trim() ? JSON.parse(contentText) : {};
+      content = contentText.trim() ? (JSON.parse(contentText) as EditorDocument) : EMPTY_DOCUMENT;
     } catch {
       setError("Content must be valid JSON.");
       return;

@@ -1,5 +1,5 @@
 /**
- * One-time catch-up for 5 migrations that were merged into prisma/migrations
+ * One-time catch-up for migrations that were merged into prisma/migrations
  * but never applied to production (confirmed via Vercel runtime logs: P2021
  * "table does not exist" on template_parts). `prisma migrate deploy` can't
  * run against this environment's DATABASE_URL — it's a Supabase PgBouncer
@@ -352,6 +352,12 @@ ALTER TABLE "template_part_revisions" ADD CONSTRAINT "template_part_revisions_cr
 -- rows are all is_homepage = false (the column's own DEFAULT), so this can
 -- never conflict with data that already exists.
 CREATE UNIQUE INDEX "pages_one_homepage_per_org" ON "pages"("organization_id") WHERE "is_homepage" = true AND "deleted_at" IS NULL;
+`,
+  },
+  {
+    name: "20261001070708_phase2_editor_blocks",
+    sql: `-- AlterTable
+ALTER TABLE "content_revisions" ADD COLUMN "editor_blocks" JSONB;
 `,
   },
 ];

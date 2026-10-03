@@ -58,16 +58,27 @@ export const listTemplatesQuerySchema = z.object({
 });
 export type ListTemplatesQuery = z.infer<typeof listTemplatesQuerySchema>;
 
-// `structure`'s shape is deliberately unconstrained JSON in this phase —
-// see the Template model's own doc comment in schema.prisma: the
-// slot/region shape should be proven against a real page before being
-// generalized, not committed to prematurely here.
+// `structure`'s shape stays deliberately unconstrained JSON (unchanged
+// since Phase 1 — see the Template model's own doc comment in
+// schema.prisma: the slot/region shape should be proven against a real
+// page before being generalized, not locked down prematurely). Phase 2
+// (Site Editor) reads an optional `regions` convention off of it — a map
+// of region key ("header", "footer", ...) to the id of the TemplatePart
+// rendered there, used only to show the resolved template structure in
+// the editor — but never requires or defaults it: existing callers that
+// store a different shape (tests included) are unaffected.
+export const templateStructureSchema = z.record(z.unknown());
+export interface TemplateStructure {
+  regions?: Record<string, string>;
+  [key: string]: unknown;
+}
+
 export const createTemplateSchema = z.object({
   type: templateTypeSchema,
   name: z.string().trim().min(1).max(150),
   slug: slugSchema.optional(),
   description: z.string().trim().max(2000).optional(),
-  structure: z.record(z.unknown()).default({}),
+  structure: templateStructureSchema.default({}),
 });
 export type CreateTemplateInput = z.infer<typeof createTemplateSchema>;
 
@@ -76,7 +87,7 @@ export const updateTemplateSchema = z
     name: z.string().trim().min(1).max(150).optional(),
     slug: slugSchema.optional(),
     description: z.string().trim().max(2000).nullable().optional(),
-    structure: z.record(z.unknown()).optional(),
+    structure: templateStructureSchema.optional(),
     expectedUpdatedAt: expectedUpdatedAtSchema,
   })
   .refine((v) => Object.keys(v).filter((k) => k !== "expectedUpdatedAt").length > 0, { message: "At least one field must be provided." });
@@ -103,6 +114,15 @@ export const listTemplatePartsQuerySchema = z.object({
 });
 export type ListTemplatePartsQuery = z.infer<typeof listTemplatePartsQuerySchema>;
 
+// `content`'s shape stays deliberately unconstrained JSON, same as before
+// Phase 2 and same reasoning as Template.structure above: validating it
+// strictly against editorDocumentSchema would silently strip any
+// differently-shaped content an existing Template Part already has (zod
+// drops unrecognized object keys by default) — real data loss on an
+// ordinary edit, not just a validation change. The Site Editor (Phase 2)
+// always writes a real {version, blocks} document through this same
+// loose field; templatePartService.ts only applies editorDocumentSchema's
+// HTML-sanitizing pass when content actually matches that shape.
 export const createTemplatePartSchema = z.object({
   type: templatePartTypeSchema,
   name: z.string().trim().min(1).max(150),

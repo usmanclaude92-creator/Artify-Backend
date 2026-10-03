@@ -1433,6 +1433,7 @@ model ContentRevision {
   title       String
   body        String
   metadata    Json          @default("{}")
+  editorBlocks Json?        @map("editor_blocks")
   createdById String?       @map("created_by")
   createdAt   DateTime      @default(now()) @map("created_at")
   publishedAt DateTime?     @map("published_at")

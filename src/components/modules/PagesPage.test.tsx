@@ -35,6 +35,9 @@ vi.mock("../../context/AuthContext", () => ({
 }));
 vi.mock("../../context/ToastContext", () => ({ useToast: () => ({ notify: notifyMock }) }));
 
+const navigateMock = vi.fn();
+vi.mock("../../lib/router", () => ({ useRouter: () => ({ path: "/cms/pages", navigate: navigateMock }) }));
+
 const revision = {
   id: "rev-1",
   pageId: "page-1",
@@ -77,6 +80,7 @@ afterEach(() => {
   revertMock.mockReset();
   revisionsMock.mockReset();
   notifyMock.mockReset();
+  navigateMock.mockReset();
   mockPermissions = ["content.read", "content.create", "content.update", "content.publish", "content.delete"];
 });
 
@@ -86,6 +90,14 @@ describe("PagesPage", () => {
     render(<PagesPage />);
     expect(await screen.findAllByText("About Us")).not.toHaveLength(0);
     expect(await screen.findByText("Hello world")).toBeInTheDocument();
+  });
+
+  it("navigates to the Site Editor with the page's id when 'Open Site Editor' is clicked", async () => {
+    listMock.mockResolvedValue({ items: [page], page: 1, limit: 20, total: 1, totalPages: 1 });
+    render(<PagesPage />);
+    const button = await screen.findByRole("button", { name: /open site editor/i });
+    fireEvent.click(button);
+    expect(navigateMock).toHaveBeenCalledWith("/website/site-editor?pageId=page-1");
   });
 
   it("shows an empty state when there are no pages", async () => {

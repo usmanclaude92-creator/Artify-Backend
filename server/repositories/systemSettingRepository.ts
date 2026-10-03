@@ -7,6 +7,10 @@ export const systemSettingRepository = {
     return prisma.systemSetting.findMany({ where: { organizationId }, orderBy: { key: "asc" } });
   },
 
+  async findByKey(organizationId: string, key: string) {
+    return prisma.systemSetting.findUnique({ where: { organizationId_key: { organizationId, key } } });
+  },
+
   async upsert(data: {
     organizationId: string;
     key: string;

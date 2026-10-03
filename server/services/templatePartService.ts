@@ -12,6 +12,7 @@
  */
 import { templatePartRepository, type TemplatePartWithRevision } from "../repositories/templatePartRepository";
 import { auditLogRepository } from "../repositories/auditLogRepository";
+import { sanitizeContentIfEditorDocument } from "../schemas/editorSchemas";
 import { prisma } from "../db/prisma";
 import { AuthorizationError, ConflictError, NotFoundError } from "../core/errors";
 import type { SanitizedUser } from "../types/domain";
@@ -63,6 +64,7 @@ export const templatePartService = {
       if (dup) throw new ConflictError(`A template part with slug "${input.slug}" already exists.`, { existingTemplatePartId: dup.id });
     }
     const slug = input.slug ?? (await templatePartRepository.findUniqueSlugInOrg(organizationId, input.name));
+    const content = sanitizeContentIfEditorDocument(input.content);
 
     let createdId: string;
     try {
@@ -83,7 +85,7 @@ export const templatePartService = {
             version: 1,
             status: "DRAFT",
             name: input.name,
-            content: input.content as Prisma.InputJsonValue,
+            content: content as Prisma.InputJsonValue,
             createdById: caller.id,
           },
         });
@@ -115,6 +117,7 @@ export const templatePartService = {
     assertNotSystem(existing, "edited");
 
     const hasContentEdit = input.name !== undefined || input.slug !== undefined || input.content !== undefined;
+    const sanitizedContent = input.content !== undefined ? sanitizeContentIfEditorDocument(input.content) : undefined;
 
     if (input.slug !== undefined && input.slug !== existing.slug) {
       const dup = await templatePartRepository.findBySlugInOrg(organizationId, input.slug);
@@ -136,7 +139,7 @@ export const templatePartService = {
               version: currentRevision.version + 1,
               status: "DRAFT",
               name: input.name ?? currentRevision.name,
-              content: (input.content ?? currentRevision.content) as Prisma.InputJsonValue,
+              content: (sanitizedContent ?? currentRevision.content) as Prisma.InputJsonValue,
               createdById: caller.id,
             },
           });
@@ -144,7 +147,7 @@ export const templatePartService = {
         } else if (hasContentEdit && currentRevision) {
           const revisionPatch: Record<string, unknown> = {};
           if (input.name !== undefined) revisionPatch.name = input.name;
-          if (input.content !== undefined) revisionPatch.content = input.content as Prisma.InputJsonValue;
+          if (sanitizedContent !== undefined) revisionPatch.content = sanitizedContent as Prisma.InputJsonValue;
           if (Object.keys(revisionPatch).length > 0) {
             await tx.templatePartRevision.update({ where: { id: currentRevision.id }, data: revisionPatch });
           }

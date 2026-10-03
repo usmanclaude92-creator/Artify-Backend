@@ -109,6 +109,28 @@ describe("public website API", () => {
     expect(res.body.data.page).not.toHaveProperty("createdById");
   });
 
+  it("a page with no editor composition reports editorBlocks: null — pure body-HTML rendering, unchanged from before Phase 2", async () => {
+    const res = await request(app).get(`/api/v1/public/pages/${publishedPageSlug}`);
+    expect(res.status).toBe(200);
+    expect(res.body.data.page.editorBlocks).toBeNull();
+  });
+
+  it("surfaces editorBlocks only once the current revision has a genuinely non-empty saved block document (Phase 2 safe-fallback)", async () => {
+    const page = await prisma.page.create({ data: { organizationId: PUBLIC_ORG_ID, slug: "block-built-page", title: "Block Built Page", status: "DRAFT" } });
+    const doc = { version: 1, blocks: [{ id: "h1", type: "heading", props: { text: "Hi", level: 2 } }] };
+    const revision = await prisma.contentRevision.create({
+      data: { pageId: page.id, version: 1, status: "PUBLISHED", title: "Block Built Page", body: "<h2>Hi</h2>", metadata: {}, editorBlocks: doc },
+    });
+    await prisma.page.update({ where: { id: page.id }, data: { status: "PUBLISHED", currentRevisionId: revision.id, publishedAt: new Date() } });
+
+    const res = await request(app).get("/api/v1/public/pages/block-built-page");
+    expect(res.status).toBe(200);
+    expect(res.body.data.page.editorBlocks).toEqual(doc);
+    // The flattened body fallback is still present too — a renderer that
+    // doesn't yet understand editorBlocks shows this instead.
+    expect(res.body.data.page.body).toContain("<h2>Hi</h2>");
+  });
+
   // Phase 1 (Website module) — the public page projection additively
   // surfaces pageType/isHomepage/template
   // (docs/control-center-public-site-integration.md). A page with no

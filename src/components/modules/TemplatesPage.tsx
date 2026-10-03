@@ -14,7 +14,14 @@ import React, { useEffect, useState } from "react";
 import { LayoutTemplate, Plus, Search, Rocket, Archive, History, RotateCcw, Copy, Pencil } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
-import { templatesApi, type Template, type TemplateRevision, type TemplateTypeValue, type TemplateWorkflowStatus } from "../../lib/api";
+import {
+  templatesApi,
+  type Template,
+  type TemplateRevision,
+  type TemplateTypeValue,
+  type TemplateWorkflowStatus,
+  type TemplateStructure,
+} from "../../lib/api";
 import { ApiClientError } from "../../lib/apiClient";
 import { Card, Button, Input, Select, Badge, LoadingState, ErrorState, EmptyState, Pagination, Modal, Field, ConfirmDialog } from "../ui/ui";
 import { hasPermission } from "../../lib/permissions";
@@ -44,11 +51,13 @@ const STATUS_TONE: Record<TemplateWorkflowStatus, "success" | "danger" | "neutra
   ARCHIVED: "danger",
 };
 
-function formatStructure(structure: Record<string, unknown> | undefined): string {
+const EMPTY_STRUCTURE: TemplateStructure = { regions: {} };
+
+function formatStructure(structure: TemplateStructure | undefined): string {
   try {
-    return JSON.stringify(structure ?? {}, null, 2);
+    return JSON.stringify(structure ?? EMPTY_STRUCTURE, null, 2);
   } catch {
-    return "{}";
+    return JSON.stringify(EMPTY_STRUCTURE);
   }
 }
 
@@ -81,9 +90,9 @@ const TemplateFormModal: React.FC<{ open: boolean; onClose: () => void; onSaved:
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
-    let structure: Record<string, unknown>;
+    let structure: TemplateStructure;
     try {
-      structure = structureText.trim() ? JSON.parse(structureText) : {};
+      structure = structureText.trim() ? (JSON.parse(structureText) as TemplateStructure) : EMPTY_STRUCTURE;
     } catch {
       setError("Structure must be valid JSON.");
       return;

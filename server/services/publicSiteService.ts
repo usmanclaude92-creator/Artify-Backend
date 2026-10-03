@@ -13,6 +13,9 @@ import { postRepository, type PostWithPublicRelations } from "../repositories/po
 import { categoryRepository } from "../repositories/categoryRepository";
 import { tagRepository } from "../repositories/tagRepository";
 import { redirectRepository } from "../repositories/redirectRepository";
+import { mediaRepository } from "../repositories/mediaRepository";
+import { siteSettingsService } from "./siteSettingsService";
+import { SITE_IDENTITY_MEDIA_FIELDS } from "../schemas/siteSettingsSchemas";
 import { getStorageProvider } from "../storage";
 import { config } from "../config/env";
 import { NotFoundError } from "../core/errors";
@@ -71,12 +74,26 @@ function projectPageTemplate(page: PageWithPublicRelations) {
   return { type: template.type, slug: template.slug, structure: revision.structure as Record<string, unknown> };
 }
 
+// Phase 2 (Site Editor) — additive, same backward-compatible pattern as
+// `template` above: a page with no editor composition (the overwhelming
+// majority of existing pages) gets `editorBlocks: null` exactly as
+// before, and the public renderer's safe fallback (render `body` HTML) is
+// unaffected. Only a page whose current revision has a genuinely saved
+// block document gets a non-null value here — never partial/unsaved
+// editor state, since this reads the same persisted revision `body` does.
+function projectPageEditorBlocks(revision: PageWithPublicRelations["currentRevision"]): Record<string, unknown> | null {
+  const blocks = revision?.editorBlocks as Record<string, unknown> | null | undefined;
+  if (!blocks || !Array.isArray(blocks.blocks) || blocks.blocks.length === 0) return null;
+  return blocks;
+}
+
 async function projectPage(page: PageWithPublicRelations) {
   const revision = page.currentRevision;
   return {
     slug: page.slug,
     title: page.title,
     body: revision?.body ?? "",
+    editorBlocks: projectPageEditorBlocks(revision),
     seo: (revision?.metadata as Record<string, unknown> | undefined) ?? {},
     featuredMedia: await projectPublicMedia(page.featuredMedia),
     pageType: page.pageType,
@@ -108,8 +125,68 @@ async function projectPost(post: PostWithPublicRelations) {
   };
 }
 
+/**
+ * Phase 3 (Site Identity) — resolves each `*MediaId` reference to the same
+ * public-safe projection (`url`/`altText`/`caption`/dimensions, ACTIVE +
+ * PUBLIC only) every other public media field already uses, rather than
+ * leaking an internal MediaAsset id to an anonymous caller.
+ */
+async function projectSiteIdentityMedia(
+  identity: Awaited<ReturnType<typeof siteSettingsService.getPublishedSiteIdentity>>,
+  organizationId: string
+): Promise<Record<(typeof SITE_IDENTITY_MEDIA_FIELDS)[number], PublicMedia | null>> {
+  const entries = await Promise.all(
+    SITE_IDENTITY_MEDIA_FIELDS.map(async (field) => {
+      const mediaId = identity[field];
+      if (!mediaId) return [field, null] as const;
+      const media = await mediaRepository.findByIdInOrg(mediaId, organizationId);
+      return [field, await projectPublicMedia(media)] as const;
+    })
+  );
+  return Object.fromEntries(entries) as Record<(typeof SITE_IDENTITY_MEDIA_FIELDS)[number], PublicMedia | null>;
+}
+
 export const publicSiteService = {
   isConfigured: hasPublicWebsiteOrganization,
+
+  /**
+   * Phase 3 (Site Identity + Global Styles) — published-only, resolved for
+   * safe anonymous consumption. Returns `null` when no public org is
+   * configured (same "not yet set up" signal every other method here uses,
+   * per `/public/site`'s `configured` flag) — never partial/fabricated
+   * data. A freshly-configured organization that has never published
+   * anything still gets a complete object: the schema's own defaults
+   * (siteSettingsSchemas.ts) are the current artifysolscom values, so the
+   * public site sees no change until something is genuinely published.
+   */
+  async getSiteSettings() {
+    if (!hasPublicWebsiteOrganization()) return null;
+    const organizationId = config.publicWebsiteOrganizationId;
+    const [identity, globalStyles] = await Promise.all([
+      siteSettingsService.getPublishedSiteIdentity(organizationId),
+      siteSettingsService.getPublishedGlobalStyles(organizationId),
+    ]);
+    const media = await projectSiteIdentityMedia(identity, organizationId);
+    const {
+      logoMediaId: _logoMediaId,
+      logoDarkMediaId: _logoDarkMediaId,
+      logoMobileMediaId: _logoMobileMediaId,
+      faviconMediaId: _faviconMediaId,
+      socialImageMediaId: _socialImageMediaId,
+      ...rest
+    } = identity;
+    return {
+      identity: {
+        ...rest,
+        logo: media.logoMediaId,
+        logoDark: media.logoDarkMediaId,
+        logoMobile: media.logoMobileMediaId,
+        favicon: media.faviconMediaId,
+        socialImage: media.socialImageMediaId,
+      },
+      globalStyles,
+    };
+  },
 
   async getPageBySlug(slug: string) {
     if (!hasPublicWebsiteOrganization()) throw new NotFoundError("Page not found.");

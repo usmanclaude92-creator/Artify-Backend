@@ -239,6 +239,113 @@ export const settingsApi = {
 };
 
 // ---------------------------------------------------------------------------
+// Phase 3 (Site Identity + Global Styles) — typed convenience endpoints on
+// top of the generic SystemSetting store (server/schemas/siteSettingsSchemas.ts).
+// ---------------------------------------------------------------------------
+
+export interface SiteIdentity {
+  siteName: string;
+  tagline: string;
+  description: string;
+  logoMediaId: string | null;
+  logoDarkMediaId: string | null;
+  logoMobileMediaId: string | null;
+  faviconMediaId: string | null;
+  socialImageMediaId: string | null;
+  defaultMetaTitle: string;
+  defaultMetaDescription: string;
+  contactEmail?: string;
+  contactPhone?: string;
+  address?: string;
+  organizationLegalName?: string;
+}
+
+export type FontWeightValue = number | "normal" | "bold";
+
+export interface GlobalStyles {
+  colors: {
+    primary: string;
+    primaryHover: string;
+    primaryForeground: string;
+    secondary: string;
+    secondaryForeground: string;
+    background: string;
+    surface: string;
+    textPrimary: string;
+    textSecondary: string;
+    link: string;
+    linkHover: string;
+    border: string;
+  };
+  typography: {
+    fontFamilyBase: string;
+    fontFamilyHeading: string;
+    fontSizeBase: string;
+    headingScale: { h1: string; h2: string; h3: string; h4: string; h5: string; h6: string };
+    lineHeightBase: number;
+    lineHeightHeading: number;
+    fontWeightBase: FontWeightValue;
+    fontWeightHeading: FontWeightValue;
+    fontWeightBold: FontWeightValue;
+  };
+  layout: {
+    containerMaxWidth: string;
+    spacingScale: { xs: string; sm: string; md: string; lg: string; xl: string };
+    borderRadius: { sm: string; md: string; lg: string; full: string };
+  };
+  effects: {
+    borderColor: string;
+    borderWidth: string;
+    shadowSm: string;
+    shadowMd: string;
+    shadowLg: string;
+  };
+  buttons: {
+    radius: string;
+    paddingX: string;
+    paddingY: string;
+    fontWeight: FontWeightValue;
+    primaryBg: string;
+    primaryText: string;
+    primaryHoverBg: string;
+    secondaryBg: string;
+    secondaryText: string;
+    secondaryBorder: string;
+  };
+  forms: {
+    radius: string;
+    borderColor: string;
+    focusColor: string;
+    background: string;
+    text: string;
+  };
+  responsive: {
+    tablet: { containerMaxWidth?: string; fontSizeBase?: string };
+    mobile: { containerMaxWidth?: string; fontSizeBase?: string };
+  };
+}
+
+export interface SettingsGroupState<T> {
+  draft: T;
+  published: T;
+  isDirty: boolean;
+  updatedAt: string | null;
+  publishedAt: string | null;
+}
+
+export const siteSettingsApi = {
+  getIdentity: () => apiClient.get<SettingsGroupState<SiteIdentity>>("/site-settings/identity"),
+  saveIdentityDraft: (input: SiteIdentity) => apiClient.put<{ draft: SiteIdentity }>("/site-settings/identity/draft", input),
+  publishIdentity: () => apiClient.post<{ published: SiteIdentity }>("/site-settings/identity/publish"),
+  revertIdentity: () => apiClient.post<{ draft: SiteIdentity }>("/site-settings/identity/revert"),
+
+  getGlobalStyles: () => apiClient.get<SettingsGroupState<GlobalStyles>>("/site-settings/global-styles"),
+  saveGlobalStylesDraft: (input: GlobalStyles) => apiClient.put<{ draft: GlobalStyles }>("/site-settings/global-styles/draft", input),
+  publishGlobalStyles: () => apiClient.post<{ published: GlobalStyles }>("/site-settings/global-styles/publish"),
+  revertGlobalStyles: () => apiClient.post<{ draft: GlobalStyles }>("/site-settings/global-styles/revert"),
+};
+
+// ---------------------------------------------------------------------------
 // Phase 5 — CRM (leads, clients, contacts)
 // ---------------------------------------------------------------------------
 
@@ -774,6 +881,37 @@ export const productModulesApi = {
 };
 
 // ---------------------------------------------------------------------------
+// Phase 2 (Site Editor) — block tree shared by a Page's own canvas
+// (ContentRevision.editorBlocks) and a Template Part's content
+// (TemplatePart.content). Mirrors server/schemas/editorSchemas.ts exactly.
+// ---------------------------------------------------------------------------
+
+export type BlockType =
+  | "section"
+  | "container"
+  | "columns"
+  | "text"
+  | "heading"
+  | "image"
+  | "button"
+  | "card"
+  | "spacer"
+  | "divider"
+  | "templatePart";
+
+export interface EditorBlock {
+  id: string;
+  type: BlockType;
+  props: Record<string, unknown>;
+  children?: EditorBlock[];
+}
+
+export interface EditorDocument {
+  version: 1;
+  blocks: EditorBlock[];
+}
+
+// ---------------------------------------------------------------------------
 // Phase 8 — CMS (pages, posts, categories, tags, authors, revisions)
 // ---------------------------------------------------------------------------
 
@@ -813,6 +951,7 @@ export interface ContentRevision {
   title: string;
   body: string;
   metadata: PostSeoMetadata;
+  editorBlocks: EditorDocument | null;
   createdById: string | null;
   createdAt: string;
   publishedAt: string | null;
@@ -897,6 +1036,7 @@ const contentUpdateBody = (payload: {
   slug?: string;
   body?: string;
   metadata?: PostSeoMetadata;
+  editorBlocks?: EditorDocument | null;
   status?: PatchableContentStatus;
   featuredMediaId?: string | null;
   expectedUpdatedAt?: string;
@@ -908,8 +1048,17 @@ export const pagesApi = {
   ) => paginatedGet<CmsPage>("/pages", "pages", params),
   get: (id: string) => apiClient.get<{ page: CmsPage }>(`/pages/${id}`),
   revisions: (id: string) => apiClient.get<{ revisions: ContentRevision[] }>(`/pages/${id}/revisions`),
-  create: (payload: { title: string; slug?: string; body?: string; metadata?: PostSeoMetadata; featuredMediaId?: string }) =>
-    apiClient.post<{ page: CmsPage }>("/pages", payload),
+  create: (payload: {
+    title: string;
+    slug?: string;
+    body?: string;
+    metadata?: PostSeoMetadata;
+    editorBlocks?: EditorDocument;
+    featuredMediaId?: string;
+    templateId?: string;
+    pageType?: PageTypeValue;
+    isHomepage?: boolean;
+  }) => apiClient.post<{ page: CmsPage }>("/pages", payload),
   update: (id: string, payload: Parameters<typeof contentUpdateBody>[0]) => apiClient.patch<{ page: CmsPage }>(`/pages/${id}`, contentUpdateBody(payload)),
   submitForReview: (id: string) => apiClient.post<{ page: CmsPage }>(`/pages/${id}/submit-review`),
   publish: (id: string) => apiClient.post<{ page: CmsPage }>(`/pages/${id}/publish`),
@@ -955,13 +1104,22 @@ export type TemplatePartTypeValue =
   | "CONTACT_SECTION"
   | "SOCIAL_SECTION";
 
+// `structure` stays unconstrained JSON (server/schemas/templateSchemas.ts).
+// Phase 2 (Site Editor) reads an optional `regions` convention off of it —
+// a map of region key ("header", "footer", ...) to the id of the
+// TemplatePart rendered there — but never requires it.
+export interface TemplateStructure {
+  regions?: Record<string, string>;
+  [key: string]: unknown;
+}
+
 export interface TemplateRevision {
   id: string;
   templateId: string;
   version: number;
   status: TemplateWorkflowStatus;
   name: string;
-  structure: Record<string, unknown>;
+  structure: TemplateStructure;
   createdById: string | null;
   createdAt: string;
   publishedAt: string | null;
@@ -991,7 +1149,7 @@ export interface TemplatePartRevision {
   version: number;
   status: TemplateWorkflowStatus;
   name: string;
-  content: Record<string, unknown>;
+  content: EditorDocument;
   createdById: string | null;
   createdAt: string;
   publishedAt: string | null;
@@ -1027,11 +1185,11 @@ export const templatesApi = {
   ) => paginatedGet<Template>("/templates", "templates", params),
   get: (id: string) => apiClient.get<{ template: Template }>(`/templates/${id}`),
   revisions: (id: string) => apiClient.get<{ revisions: TemplateRevision[] }>(`/templates/${id}/revisions`),
-  create: (payload: { type: TemplateTypeValue; name: string; slug?: string; description?: string; structure?: Record<string, unknown> }) =>
+  create: (payload: { type: TemplateTypeValue; name: string; slug?: string; description?: string; structure?: TemplateStructure }) =>
     apiClient.post<{ template: Template }>("/templates", payload),
   update: (
     id: string,
-    payload: Partial<{ name: string; slug: string; description: string | null; structure: Record<string, unknown>; expectedUpdatedAt: string }>
+    payload: Partial<{ name: string; slug: string; description: string | null; structure: TemplateStructure; expectedUpdatedAt: string }>
   ) => apiClient.patch<{ template: Template }>(`/templates/${id}`, payload),
   publish: (id: string) => apiClient.post<{ template: Template }>(`/templates/${id}/publish`),
   archive: (id: string) => apiClient.post<{ template: Template }>(`/templates/${id}/archive`),
@@ -1054,9 +1212,9 @@ export const templatePartsApi = {
   ) => paginatedGet<TemplatePart>("/template-parts", "templateParts", params),
   get: (id: string) => apiClient.get<{ templatePart: TemplatePart }>(`/template-parts/${id}`),
   revisions: (id: string) => apiClient.get<{ revisions: TemplatePartRevision[] }>(`/template-parts/${id}/revisions`),
-  create: (payload: { type: TemplatePartTypeValue; name: string; slug?: string; content?: Record<string, unknown> }) =>
+  create: (payload: { type: TemplatePartTypeValue; name: string; slug?: string; content?: EditorDocument }) =>
     apiClient.post<{ templatePart: TemplatePart }>("/template-parts", payload),
-  update: (id: string, payload: Partial<{ name: string; slug: string; content: Record<string, unknown>; expectedUpdatedAt: string }>) =>
+  update: (id: string, payload: Partial<{ name: string; slug: string; content: EditorDocument; expectedUpdatedAt: string }>) =>
     apiClient.patch<{ templatePart: TemplatePart }>(`/template-parts/${id}`, payload),
   publish: (id: string) => apiClient.post<{ templatePart: TemplatePart }>(`/template-parts/${id}/publish`),
   archive: (id: string) => apiClient.post<{ templatePart: TemplatePart }>(`/template-parts/${id}/archive`),

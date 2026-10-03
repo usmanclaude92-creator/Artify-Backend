@@ -73,6 +73,30 @@ describe("Template Parts", () => {
     expect(audit).not.toBeNull();
   });
 
+  it("accepts a real Site Editor block document as content and sanitizes embedded script content (Phase 2)", async () => {
+    const created = await request(app)
+      .post("/api/v1/template-parts")
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({
+        type: "FOOTER",
+        name: "Editor Footer",
+        content: { version: 1, blocks: [{ id: "t1", type: "text", props: { html: "<p>ok</p><script>alert(1)</script>" } }] },
+      });
+    expect(created.status).toBe(201);
+    const html = created.body.data.templatePart.currentRevision.content.blocks[0].props.html;
+    expect(html).toContain("ok");
+    expect(html).not.toContain("<script>");
+  });
+
+  it("preserves legacy free-form content verbatim — never silently strips unrecognized keys (backward compatibility)", async () => {
+    const created = await request(app)
+      .post("/api/v1/template-parts")
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({ type: "SIDEBAR", name: "Legacy Part", content: { logo: "artify", links: ["/", "/about"] } });
+    expect(created.status).toBe(201);
+    expect(created.body.data.templatePart.currentRevision.content).toEqual({ logo: "artify", links: ["/", "/about"] });
+  });
+
   it("protects a system template part from update/publish/archive/delete", async () => {
     const created = await request(app).post("/api/v1/template-parts").set("Authorization", `Bearer ${adminToken}`).send({ type: "FOOTER", name: "System Footer" });
     const id = created.body.data.templatePart.id;
