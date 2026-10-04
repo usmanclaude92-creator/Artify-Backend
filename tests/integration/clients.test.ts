@@ -64,6 +64,49 @@ describe("clients", () => {
     expect(audit).not.toBeNull();
   });
 
+  // Phase 13 — Client Management: source/industry/accountManager profile fields.
+  it("creates and updates a client's source, industry, and account manager, returning the real industry relation", async () => {
+    const industry = await prisma.industry.create({ data: { slug: "clients-test-industry", name: "Clients Test Industry" } });
+
+    const created = await request(app)
+      .post("/api/v1/clients")
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({ clientCode: "PROFILE-01", name: "Profile Fields Co", source: "referral", industryId: industry.id });
+    expect(created.status).toBe(201);
+    const clientId = created.body.data.client.id;
+
+    const get = await request(app).get(`/api/v1/clients/${clientId}`).set("Authorization", `Bearer ${adminToken}`);
+    expect(get.body.data.client.source).toBe("referral");
+    expect(get.body.data.client.industry).toMatchObject({ id: industry.id, name: "Clients Test Industry" });
+
+    const otherIndustry = await prisma.industry.create({ data: { slug: "clients-test-industry-2", name: "Second Industry" } });
+    const updated = await request(app)
+      .patch(`/api/v1/clients/${clientId}`)
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({ source: "converted_lead", industryId: otherIndustry.id });
+    expect(updated.status).toBe(200);
+    expect(updated.body.data.client.source).toBe("converted_lead");
+    expect(updated.body.data.client.industryId).toBe(otherIndustry.id);
+  });
+
+  it("rejects a client create/update with an unknown industryId (400, not a raw FK error)", async () => {
+    const created = await request(app)
+      .post("/api/v1/clients")
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({ clientCode: "BAD-INDUSTRY-CLIENT-01", name: "Bad Industry Client Co", industryId: "00000000-0000-0000-0000-000000000000" });
+    expect(created.status).toBe(400);
+
+    const existing = await request(app)
+      .post("/api/v1/clients")
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({ clientCode: "BAD-INDUSTRY-CLIENT-02", name: "Bad Industry Client Co 2" });
+    const updated = await request(app)
+      .patch(`/api/v1/clients/${existing.body.data.client.id}`)
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({ industryId: "00000000-0000-0000-0000-000000000000" });
+    expect(updated.status).toBe(400);
+  });
+
   it("rejects a duplicate clientCode and a duplicate name within the same organization", async () => {
     const dupCode = await request(app)
       .post("/api/v1/clients")
@@ -170,5 +213,30 @@ describe("clients", () => {
 
     const delRes = await request(app).delete(`/api/v1/clients/${clientId}`).set("Authorization", `Bearer ${otherToken}`);
     expect(delRes.status).toBe(404);
+  });
+
+  it("exposes a real activity timeline via GET /clients/:id/activity, scoped to the caller's organization", async () => {
+    const created = await request(app)
+      .post("/api/v1/clients")
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({ clientCode: "ACTIVITY-01", name: "Activity Client Co" });
+    const clientId = created.body.data.client.id;
+    await request(app).patch(`/api/v1/clients/${clientId}`).set("Authorization", `Bearer ${adminToken}`).send({ notes: "Updated." });
+
+    const activity = await request(app).get(`/api/v1/clients/${clientId}/activity`).set("Authorization", `Bearer ${adminToken}`);
+    expect(activity.status).toBe(200);
+    const actions = activity.body.data.activity.map((a: { action: string }) => a.action);
+    expect(actions).toContain("CLIENT_CREATED");
+    expect(actions).toContain("CLIENT_UPDATED");
+
+    const other = await request(app).post("/api/v1/auth/register").send({
+      email: "clients-activity-other@example.com",
+      password: "OriginalPassword123",
+      firstName: "A",
+      lastName: "O",
+      organizationName: "Activity Other Co",
+    });
+    const crossOrg = await request(app).get(`/api/v1/clients/${clientId}/activity`).set("Authorization", `Bearer ${other.body.data.session.token}`);
+    expect(crossOrg.status).toBe(404);
   });
 });

@@ -84,7 +84,16 @@ router.get(
     const query = listMediaQuerySchema.parse(req.query);
     const { rows, total } = await mediaService.listMedia(
       req.user!.organizationId,
-      { search: query.search, status: query.status, mimeType: query.mimeType, uploadedById: query.uploadedById, dateFrom: query.dateFrom, dateTo: query.dateTo },
+      {
+        search: query.search,
+        status: query.status,
+        mimeType: query.mimeType,
+        uploadedById: query.uploadedById,
+        dateFrom: query.dateFrom,
+        dateTo: query.dateTo,
+        clientId: query.clientId,
+        onboardingId: query.onboardingId,
+      },
       query.page,
       query.limit,
       query.sort,

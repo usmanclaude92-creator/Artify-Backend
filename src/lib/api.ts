@@ -393,6 +393,9 @@ export interface CrmClient {
   address: string | null;
   accountManager: string | null;
   notes: string | null;
+  source: string | null;
+  industryId: string | null;
+  industry: { id: string; slug: string; name: string } | null;
   workspaceOrganizationId: string | null;
   /** Backend-computed (Phase 6 §32) — never inferred client-side. */
   provisioningStatus: "NOT_PROVISIONED" | "PROVISIONING" | "PROVISIONED" | "SUSPENDED";
@@ -469,6 +472,13 @@ export interface CrmSummary {
     byStage: Record<string, { count: number; value: string }>;
     recent: Opportunity[];
   } | null;
+  onboarding: {
+    active: number;
+    inProgress: number;
+    overdue: number;
+    pendingForCaller: number;
+    documentsAwaiting: number;
+  } | null;
   recentActivity: AuditLogEntry[] | null;
 }
 
@@ -521,16 +531,21 @@ export const clientsApi = {
     address?: string;
     accountManager?: string;
     notes?: string;
+    source?: string;
+    industryId?: string;
   }) => apiClient.post<{ client: CrmClient }>("/clients", payload),
-  update: (id: string, payload: Partial<Omit<CrmClient, "id" | "organizationId" | "clientCode" | "createdAt" | "updatedAt">>) =>
-    apiClient.patch<{ client: CrmClient }>(`/clients/${id}`, payload),
+  update: (
+    id: string,
+    payload: Partial<Omit<CrmClient, "id" | "organizationId" | "clientCode" | "createdAt" | "updatedAt" | "industry" | "provisioningStatus">>
+  ) => apiClient.patch<{ client: CrmClient }>(`/clients/${id}`, payload),
   remove: (id: string) => apiClient.delete<{ message: string }>(`/clients/${id}`),
   contacts: (clientId: string, params: { page?: number; limit?: number } = {}) =>
     paginatedGet<CrmContact>(`/clients/${clientId}/contacts`, "contacts", params),
   addContact: (clientId: string, payload: { firstName: string; lastName: string; email?: string; phone?: string; jobTitle?: string; isPrimary?: boolean }) =>
     apiClient.post<{ contact: CrmContact }>(`/clients/${clientId}/contacts`, payload),
   // Phase 6 — onboarding/workspace provisioning, nested under the owning client (docs/CLIENT_ONBOARDING_ARCHITECTURE.md).
-  startOnboarding: (clientId: string) => apiClient.post<{ onboarding: Onboarding }>(`/clients/${clientId}/onboarding/start`),
+  startOnboarding: (clientId: string, payload: { ownerId?: string; dueDate?: string } = {}) =>
+    apiClient.post<{ onboarding: Onboarding }>(`/clients/${clientId}/onboarding/start`, payload),
   getOnboarding: (clientId: string) => apiClient.get<{ onboarding: Onboarding | null }>(`/clients/${clientId}/onboarding`),
   provisionWorkspace: (clientId: string, payload: { name?: string; timezone?: string; currency?: string; locale?: string } = {}) =>
     apiClient.post<{ workspace: Workspace }>(`/clients/${clientId}/workspace/provision`, payload),
@@ -720,6 +735,11 @@ export interface OnboardingChecklistItem {
   completed: boolean;
   completedAt: string | null;
   completedById: string | null;
+  dueDate?: string | null;
+  assignedTo?: string | null;
+  notes?: string | null;
+  requiresDocument?: boolean;
+  documentMediaId?: string | null;
 }
 
 export interface Onboarding {
@@ -732,9 +752,21 @@ export interface Onboarding {
   startedAt: string | null;
   completedAt: string | null;
   cancelledAt: string | null;
+  ownerId: string | null;
+  dueDate: string | null;
   createdAt: string;
   updatedAt: string;
   client?: { id: string; name: string; clientCode: string; workspaceOrganization?: Workspace | null };
+}
+
+export interface OnboardingTemplateStep {
+  key: string;
+  label: string;
+  requiresDocument: boolean;
+}
+export interface OnboardingTemplate {
+  steps: OnboardingTemplateStep[];
+  isCustom: boolean;
 }
 
 export interface Workspace {
@@ -795,12 +827,23 @@ export interface InvitationPreview {
 }
 
 export const onboardingApi = {
-  list: (params: { page?: number; limit?: number; status?: OnboardingStatusValue; search?: string } = {}) =>
-    paginatedGet<Onboarding>("/onboarding", "onboarding", params),
+  list: (
+    params: { page?: number; limit?: number; status?: OnboardingStatusValue; search?: string; ownerId?: string; overdue?: boolean } = {}
+  ) => paginatedGet<Onboarding>("/onboarding", "onboarding", params),
   get: (id: string) => apiClient.get<{ onboarding: Onboarding }>(`/onboarding/${id}`),
+  activity: (id: string) => apiClient.get<{ activity: AuditLogEntry[] }>(`/onboarding/${id}/activity`),
   completeStep: (id: string, step: string) => apiClient.patch<{ onboarding: Onboarding }>(`/onboarding/${id}`, { completeStep: step }),
+  updateStep: (
+    id: string,
+    step: string,
+    payload: Partial<{ dueDate: string | null; assignedTo: string | null; notes: string | null; documentMediaId: string | null }>
+  ) => apiClient.patch<{ onboarding: Onboarding }>(`/onboarding/${id}/steps/${step}`, payload),
+  updateOwner: (id: string, payload: Partial<{ ownerId: string | null; dueDate: string | null }>) =>
+    apiClient.patch<{ onboarding: Onboarding }>(`/onboarding/${id}`, payload),
   cancel: (id: string) => apiClient.patch<{ onboarding: Onboarding }>(`/onboarding/${id}`, { status: "CANCELLED" }),
   complete: (id: string) => apiClient.post<{ onboarding: Onboarding }>(`/onboarding/${id}/complete`),
+  getTemplate: () => apiClient.get<OnboardingTemplate>("/onboarding/template"),
+  updateTemplate: (steps: OnboardingTemplateStep[]) => apiClient.put<OnboardingTemplate>("/onboarding/template", steps),
 };
 
 export const workspacesApi = {
@@ -1732,6 +1775,10 @@ export interface CmsMedia {
   visibility: MediaVisibilityValue;
   status: MediaStatusValue;
   uploadedById: string | null;
+  clientId: string | null;
+  onboardingId: string | null;
+  documentCategory: string | null;
+  isClientVisible: boolean;
   createdAt: string;
   updatedAt: string;
   deletedAt: string | null;
@@ -1752,6 +1799,8 @@ export const mediaApi = {
       status?: MediaStatusValue;
       mimeType?: AllowedMediaMimeType;
       uploadedById?: string;
+      clientId?: string;
+      onboardingId?: string;
       sort?: string;
       order?: "asc" | "desc";
     } = {}
@@ -1759,11 +1808,29 @@ export const mediaApi = {
   get: (id: string) => apiClient.get<{ media: CmsMedia }>(`/media/${id}`),
   getReadUrl: (id: string) => apiClient.get<{ url: string; expiresAt: string }>(`/media/${id}/url`),
   getEmbedUrl: (id: string) => apiClient.get<{ url: string }>(`/media/${id}/embed-url`),
-  createUploadSession: (payload: { filename: string; mimeType: AllowedMediaMimeType; sizeBytes: number; displayName?: string; altText?: string; caption?: string }) =>
-    apiClient.post<UploadSessionResult>("/media/upload-session", payload),
+  createUploadSession: (payload: {
+    filename: string;
+    mimeType: AllowedMediaMimeType;
+    sizeBytes: number;
+    displayName?: string;
+    altText?: string;
+    caption?: string;
+    clientId?: string;
+    onboardingId?: string;
+    documentCategory?: string;
+  }) => apiClient.post<UploadSessionResult>("/media/upload-session", payload),
   complete: (id: string, token: string) => apiClient.post<{ media: CmsMedia }>(`/media/${id}/complete`, { token }),
-  update: (id: string, payload: Partial<{ displayName: string | null; altText: string | null; caption: string | null; visibility: MediaVisibilityValue }>) =>
-    apiClient.patch<{ media: CmsMedia }>(`/media/${id}`, payload),
+  update: (
+    id: string,
+    payload: Partial<{
+      displayName: string | null;
+      altText: string | null;
+      caption: string | null;
+      visibility: MediaVisibilityValue;
+      documentCategory: string | null;
+      isClientVisible: boolean;
+    }>
+  ) => apiClient.patch<{ media: CmsMedia }>(`/media/${id}`, payload),
   archive: (id: string) => apiClient.post<{ media: CmsMedia }>(`/media/${id}/archive`),
   remove: (id: string) => apiClient.delete<{ message: string }>(`/media/${id}`),
   /**
@@ -1779,7 +1846,15 @@ export const mediaApi = {
   /** Full flow: create the session, upload the bytes, then confirm — the shape every uploader (Media Library, CMS media picker) uses. */
   async uploadFile(
     file: File,
-    meta: { mimeType: AllowedMediaMimeType; displayName?: string; altText?: string; caption?: string }
+    meta: {
+      mimeType: AllowedMediaMimeType;
+      displayName?: string;
+      altText?: string;
+      caption?: string;
+      clientId?: string;
+      onboardingId?: string;
+      documentCategory?: string;
+    }
   ): Promise<CmsMedia> {
     const session = await mediaApi.createUploadSession({ filename: file.name, mimeType: meta.mimeType, sizeBytes: file.size, ...meta });
     await mediaApi.uploadToSignedUrl(session.upload, file);
@@ -2094,6 +2169,26 @@ export interface ClientPortalDashboard {
   recentPayments: Payment[];
 }
 
+/** Phase 13 — a safe, server-projected subset of the client's onboarding record (never the internal Control Center shape: no staff notes, assignee ids, or who-completed-it). */
+export interface PortalOnboardingChecklistItem {
+  key: string;
+  label: string;
+  completed: boolean;
+  completedAt: string | null;
+  dueDate: string | null;
+  requiresDocument: boolean;
+  documentMediaId: string | null;
+}
+export interface PortalOnboarding {
+  id: string;
+  status: OnboardingStatusValue;
+  currentStep: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  dueDate: string | null;
+  checklist: PortalOnboardingChecklistItem[];
+}
+
 /** Read-only — the client portal never exposes create/update/issue/void/reverse (§25/§26). */
 export const portalApi = {
   dashboard: () => apiClient.get<{ dashboard: ClientPortalDashboard }>("/portal/dashboard"),
@@ -2104,4 +2199,6 @@ export const portalApi = {
   invoices: (params: { page?: number; limit?: number; status?: InvoiceStatusValue } = {}) => paginatedGet<Invoice>("/portal/invoices", "invoices", params),
   invoice: (id: string) => apiClient.get<{ invoice: Invoice }>(`/portal/invoices/${id}`),
   payments: (params: { page?: number; limit?: number } = {}) => paginatedGet<Payment>("/portal/payments", "payments", params),
+  documents: (params: { page?: number; limit?: number } = {}) => paginatedGet<CmsMedia>("/portal/documents", "documents", params),
+  onboarding: () => apiClient.get<{ onboarding: PortalOnboarding | null }>("/portal/onboarding"),
 };

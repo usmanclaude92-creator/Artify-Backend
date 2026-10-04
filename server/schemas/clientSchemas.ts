@@ -28,6 +28,8 @@ export const createClientSchema = z.object({
   address: z.string().trim().max(500).optional(),
   accountManager: z.string().trim().uuid().optional(),
   notes: z.string().trim().max(5000).optional(),
+  source: z.string().trim().max(100).optional(),
+  industryId: z.string().trim().uuid().optional(),
 });
 export type CreateClientInput = z.infer<typeof createClientSchema>;
 
@@ -42,6 +44,8 @@ export const updateClientSchema = z
     address: z.string().trim().max(500).nullable().optional(),
     accountManager: z.string().trim().uuid().nullable().optional(),
     notes: z.string().trim().max(5000).nullable().optional(),
+    source: z.string().trim().max(100).nullable().optional(),
+    industryId: z.string().trim().uuid().nullable().optional(),
   })
   .refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
 export type UpdateClientInput = z.infer<typeof updateClientSchema>;

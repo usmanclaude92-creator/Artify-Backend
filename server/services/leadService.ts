@@ -6,6 +6,7 @@
 import { prisma } from "../db/prisma";
 import { leadRepository, type LeadFilters } from "../repositories/leadRepository";
 import { clientRepository } from "../repositories/clientRepository";
+import { industryRepository } from "../repositories/industryRepository";
 import { auditLogRepository } from "../repositories/auditLogRepository";
 import { auditLogQueryRepository } from "../repositories/auditLogQueryRepository";
 import { notificationService } from "./notificationService";
@@ -180,18 +181,37 @@ export const leadService = {
     if (existingCode) {
       throw new ConflictError(`A client with code "${input.clientCode}" already exists in this organization.`);
     }
+    // Phase 13 — prevent duplicate client creation: the same case-insensitive
+    // name-collision guard clientService.createClient already enforces for
+    // a manually-created client (§19) applies here too, since convertLead
+    // creates its own Client row directly rather than going through
+    // clientService.
+    const newClientName = input.name ?? lead.companyName;
+    const existingName = await clientRepository.findByNameInOrg(caller.organizationId, newClientName);
+    if (existingName) {
+      throw new ConflictError(`A client named "${newClientName}" already exists in this organization.`, { existingClientId: existingName.id });
+    }
+    if (input.industryId && !(await industryRepository.findById(input.industryId))) {
+      throw new ValidationError("industryId does not refer to a known industry.");
+    }
 
     const result = await prisma.$transaction(async (tx) => {
       const client = await tx.client.create({
         data: {
           organizationId: caller.organizationId,
           clientCode: input.clientCode,
-          name: input.name ?? lead.companyName,
+          name: newClientName,
           status: "ACTIVE",
           email: input.email ?? lead.email ?? undefined,
           phone: input.phone ?? lead.phone ?? undefined,
           website: input.website,
           address: input.address,
+          // Assign owner/industry at conversion — defaults to the lead's
+          // own assignedTo/source so CRM ownership and attribution carry
+          // forward rather than resetting on handoff (§2 "assign owner/team").
+          accountManager: input.accountManager ?? lead.assignedTo ?? undefined,
+          industryId: input.industryId,
+          source: lead.source ?? undefined,
         },
       });
 

@@ -56,5 +56,10 @@ export const convertLeadSchema = z.object({
   website: z.string().trim().max(255).optional(),
   address: z.string().trim().max(500).optional(),
   createContact: z.boolean().default(true),
+  // Phase 13 — CRM -> Client handoff: assign the new client's owner/
+  // industry at the moment of conversion, defaulting to the lead's own
+  // assignedTo/source when omitted (see leadService.convertLead).
+  accountManager: z.string().trim().uuid().optional(),
+  industryId: z.string().trim().uuid().optional(),
 });
 export type ConvertLeadInput = z.infer<typeof convertLeadSchema>;

@@ -1,8 +1,9 @@
 /** Client management (Phase 5 — docs/CRM_ARCHITECTURE.md). Every method is scoped to the caller's own session organization. */
 import { clientRepository, type ClientFilters, type ClientWithWorkspace } from "../repositories/clientRepository";
+import { industryRepository } from "../repositories/industryRepository";
 import { auditLogRepository } from "../repositories/auditLogRepository";
 import { auditLogQueryRepository } from "../repositories/auditLogQueryRepository";
-import { ConflictError, NotFoundError } from "../core/errors";
+import { ConflictError, NotFoundError, ValidationError } from "../core/errors";
 import type { SanitizedUser } from "../types/domain";
 import type { CreateClientInput, UpdateClientInput } from "../schemas/clientSchemas";
 import type { RequestMeta } from "./authService";
@@ -54,6 +55,9 @@ export const clientService = {
     if (byName) {
       throw new ConflictError(`A client named "${input.name}" already exists in this organization.`, { existingClientId: byName.id });
     }
+    if (input.industryId && !(await industryRepository.findById(input.industryId))) {
+      throw new ValidationError("industryId does not refer to a known industry.");
+    }
 
     const client = await clientRepository.create({
       organizationId: caller.organizationId,
@@ -67,6 +71,8 @@ export const clientService = {
       address: input.address,
       accountManager: input.accountManager,
       notes: input.notes,
+      source: input.source,
+      industryId: input.industryId,
     });
 
     await auditLogRepository.record({
@@ -93,6 +99,9 @@ export const clientService = {
         throw new ConflictError(`A client named "${input.name}" already exists in this organization.`);
       }
     }
+    if (input.industryId && !(await industryRepository.findById(input.industryId))) {
+      throw new ValidationError("industryId does not refer to a known industry.");
+    }
 
     const patch: Record<string, unknown> = {};
     if (input.name !== undefined) patch.name = input.name;
@@ -104,6 +113,8 @@ export const clientService = {
     if (input.address !== undefined) patch.address = input.address;
     if (input.accountManager !== undefined) patch.accountManager = input.accountManager;
     if (input.notes !== undefined) patch.notes = input.notes;
+    if (input.source !== undefined) patch.source = input.source;
+    if (input.industryId !== undefined) patch.industryId = input.industryId;
 
     const updated = await clientRepository.update(id, patch);
 

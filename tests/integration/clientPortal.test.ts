@@ -188,4 +188,66 @@ describe("client portal", () => {
     expect((await request(app).get("/api/v1/portal/dashboard")).status).toBe(401);
     expect((await request(app).get("/api/v1/portal/invoices")).status).toBe(401);
   });
+
+  // Phase 13 — Client Portal: documents (isClientVisible filtering) and onboarding
+  // (safe projection that never exposes internal Control Center fields).
+  it("portal documents: only isClientVisible=true documents for this client are listed, never internal-only or another client's documents", async () => {
+    const { testStorageProvider } = await import("../../server/storage/testStorageProvider");
+    const PNG_BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]);
+
+    async function uploadClientDoc(filename: string, clientId: string, isClientVisible: boolean) {
+      const session = await request(app)
+        .post("/api/v1/media/upload-session")
+        .set("Authorization", `Bearer ${agencyAdminToken}`)
+        .send({ filename, mimeType: "image/png", sizeBytes: PNG_BYTES.length, clientId, documentCategory: "contract" });
+      const { media, uploadToken } = session.body.data;
+      testStorageProvider.seedObject(media.storageKey, PNG_BYTES, "image/png");
+      await request(app).post(`/api/v1/media/${media.id}/complete`).set("Authorization", `Bearer ${agencyAdminToken}`).send({ token: uploadToken });
+      if (isClientVisible) {
+        await request(app)
+          .patch(`/api/v1/media/${media.id}`)
+          .set("Authorization", `Bearer ${agencyAdminToken}`)
+          .send({ isClientVisible: true });
+      }
+      return media.id as string;
+    }
+
+    const visibleDocId = await uploadClientDoc("visible-a.png", clientAId, true);
+    await uploadClientDoc("internal-a.png", clientAId, false); // stays internal-only
+    await uploadClientDoc("visible-b.png", clientBId, true); // belongs to a different client
+
+    const res = await request(app).get("/api/v1/portal/documents").set("Authorization", `Bearer ${clientAPortalToken}`);
+    expect(res.status).toBe(200);
+    const ids = res.body.data.documents.map((d: { id: string }) => d.id);
+    expect(ids).toContain(visibleDocId);
+    expect(ids.length).toBe(1); // neither the internal-only doc nor client B's doc leak through
+  });
+
+  it("portal onboarding: returns a safe projection (no ownerId/notes/assignedTo/completedById/createdById) scoped to this client only", async () => {
+    // workspace/provision (beforeAll) already auto-starts onboarding for client A.
+    const existing = await prisma.clientOnboarding.findFirstOrThrow({ where: { clientId: clientAId } });
+    const onboardingId = existing.id;
+
+    await request(app)
+      .patch(`/api/v1/onboarding/${onboardingId}/steps/CLIENT_VERIFIED`)
+      .set("Authorization", `Bearer ${agencyAdminToken}`)
+      .send({ notes: "Internal-only note about verification." });
+
+    const res = await request(app).get("/api/v1/portal/onboarding").set("Authorization", `Bearer ${clientAPortalToken}`);
+    expect(res.status).toBe(200);
+    const onboarding = res.body.data.onboarding;
+    expect(onboarding.id).toBe(onboardingId);
+    expect(onboarding).not.toHaveProperty("ownerId");
+    expect(onboarding).not.toHaveProperty("completedById");
+    expect(onboarding).not.toHaveProperty("createdById");
+    for (const item of onboarding.checklist) {
+      expect(item).not.toHaveProperty("assignedTo");
+      expect(item).not.toHaveProperty("notes");
+    }
+
+    // Client B has its own, separate onboarding record — must never see client A's.
+    const bRes = await request(app).get("/api/v1/portal/onboarding").set("Authorization", `Bearer ${clientBPortalToken}`);
+    expect(bRes.status).toBe(200);
+    expect(bRes.body.data.onboarding.id).not.toBe(onboardingId);
+  });
 });

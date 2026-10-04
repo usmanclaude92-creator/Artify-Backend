@@ -15,6 +15,8 @@
 import { randomUUID } from "node:crypto";
 import { mediaRepository, toApiMedia, type ApiMediaAsset, type MediaFilters } from "../repositories/mediaRepository";
 import { mediaUploadSessionRepository } from "../repositories/mediaUploadSessionRepository";
+import { clientRepository } from "../repositories/clientRepository";
+import { clientOnboardingRepository } from "../repositories/clientOnboardingRepository";
 import { auditLogRepository } from "../repositories/auditLogRepository";
 import { getStorageProvider, type SignedUpload } from "../storage";
 import { generateUploadToken, hashToken } from "../utils/crypto";
@@ -99,6 +101,18 @@ export const mediaService = {
     if (input.sizeBytes > maxSize) {
       throw new ValidationError(`File exceeds the maximum allowed size for ${mediaCategoryFor(input.mimeType)}s (${maxSize} bytes).`);
     }
+    // Phase 13 (Client Documents) — the client/onboarding record must
+    // belong to this same organization; never trust a cross-tenant id.
+    if (input.clientId && !(await clientRepository.findByIdInOrg(input.clientId, organizationId))) {
+      throw new ValidationError("clientId does not refer to a client in this organization.");
+    }
+    if (input.onboardingId) {
+      const onboarding = await clientOnboardingRepository.findByIdInOrg(input.onboardingId, organizationId);
+      if (!onboarding) throw new ValidationError("onboardingId does not refer to an onboarding record in this organization.");
+      if (input.clientId && onboarding.clientId !== input.clientId) {
+        throw new ValidationError("onboardingId does not belong to the given clientId.");
+      }
+    }
 
     const mediaId = randomUUID();
     const storageKey = buildStorageKey(organizationId, mediaId, input.filename);
@@ -117,6 +131,9 @@ export const mediaService = {
       altText: input.altText,
       caption: input.caption,
       uploadedById: caller.id,
+      clientId: input.clientId,
+      onboardingId: input.onboardingId,
+      documentCategory: input.documentCategory,
     });
 
     const upload = await provider.createSignedUploadUrl({ key: storageKey, contentType: input.mimeType, maxSizeBytes: maxSize });
@@ -287,6 +304,13 @@ export const mediaService = {
     if (input.altText !== undefined) patch.altText = input.altText;
     if (input.caption !== undefined) patch.caption = input.caption;
     if (input.visibility !== undefined) patch.visibility = input.visibility;
+    if (input.documentCategory !== undefined) patch.documentCategory = input.documentCategory;
+    if (input.isClientVisible !== undefined) {
+      if (input.isClientVisible && !existing.clientId) {
+        throw new ValidationError("This media is not associated with a client — it cannot be made client-visible.");
+      }
+      patch.isClientVisible = input.isClientVisible;
+    }
 
     const updated = await mediaRepository.update(id, patch);
 

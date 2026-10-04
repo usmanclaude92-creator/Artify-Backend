@@ -4,7 +4,7 @@ import { onboardingService } from "../../services/onboardingService";
 import { authenticateToken, requirePermission } from "../../middleware/auth";
 import { asyncHandler } from "../../utils/asyncHandler";
 import { sendSuccess } from "../../core/apiResponse";
-import { listOnboardingQuerySchema, updateOnboardingSchema } from "../../schemas/onboardingSchemas";
+import { listOnboardingQuerySchema, updateOnboardingSchema, updateOnboardingStepSchema, onboardingTemplateSchema } from "../../schemas/onboardingSchemas";
 
 const router = Router();
 
@@ -21,11 +21,31 @@ router.get(
     const query = listOnboardingQuerySchema.parse(req.query);
     const { rows, total } = await onboardingService.listOnboarding(
       req.user!.organizationId,
-      { status: query.status, search: query.search },
+      { status: query.status, search: query.search, ownerId: query.ownerId, overdue: query.overdue },
       query.page,
       query.limit
     );
     sendSuccess(res, { onboarding: rows }, 200, { page: query.page, limit: query.limit, total });
+  })
+);
+
+// Mounted before "/:id" so "template" is never captured as an onboarding id.
+router.get(
+  "/template",
+  requirePermission("onboarding.read"),
+  asyncHandler(async (req, res) => {
+    const template = await onboardingService.getTemplate(req.user!.organizationId);
+    sendSuccess(res, template);
+  })
+);
+
+router.put(
+  "/template",
+  requirePermission("onboarding.update"),
+  asyncHandler(async (req, res) => {
+    const steps = onboardingTemplateSchema.parse(req.body);
+    const template = await onboardingService.updateTemplate(req.user!, steps, requestMeta(req));
+    sendSuccess(res, template);
   })
 );
 
@@ -38,12 +58,31 @@ router.get(
   })
 );
 
+router.get(
+  "/:id/activity",
+  requirePermission("onboarding.read"),
+  asyncHandler(async (req, res) => {
+    const activity = await onboardingService.getActivity(req.user!.organizationId, req.params.id!);
+    sendSuccess(res, { activity });
+  })
+);
+
 router.patch(
   "/:id",
   requirePermission("onboarding.update"),
   asyncHandler(async (req, res) => {
     const input = updateOnboardingSchema.parse(req.body);
     const record = await onboardingService.updateOnboarding(req.user!, req.params.id!, input, requestMeta(req));
+    sendSuccess(res, { onboarding: record });
+  })
+);
+
+router.patch(
+  "/:id/steps/:key",
+  requirePermission("onboarding.update"),
+  asyncHandler(async (req, res) => {
+    const input = updateOnboardingStepSchema.parse(req.body);
+    const record = await onboardingService.updateStep(req.user!, req.params.id!, req.params.key!, input, requestMeta(req));
     sendSuccess(res, { onboarding: record });
   })
 );

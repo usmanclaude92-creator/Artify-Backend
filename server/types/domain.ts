@@ -239,6 +239,10 @@ export const PERMISSION_KEYS = [
   "portal.subscriptions.read",
   "portal.invoices.read",
   "portal.payments.read",
+  // Phase 13 — same reasoning as the portal keys above, extended to
+  // onboarding progress and client-visible documents.
+  "portal.onboarding.read",
+  "portal.documents.read",
   // Phase 5 (SEO Control Center, docs/SEO_ARCHITECTURE.md) — redirects
   // and the rule-based SEO audit are their own permission domain rather
   // than folded into content.*, since a redirect isn't itself content

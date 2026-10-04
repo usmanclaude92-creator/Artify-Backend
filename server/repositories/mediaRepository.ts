@@ -26,6 +26,9 @@ export interface MediaFilters {
   uploadedById?: string;
   dateFrom?: Date;
   dateTo?: Date;
+  clientId?: string;
+  onboardingId?: string;
+  isClientVisible?: boolean;
 }
 
 function buildWhere(organizationId: string, filters: MediaFilters): Prisma.MediaAssetWhereInput {
@@ -33,6 +36,9 @@ function buildWhere(organizationId: string, filters: MediaFilters): Prisma.Media
   if (filters.status) where.status = filters.status;
   if (filters.mimeType) where.mimeType = filters.mimeType;
   if (filters.uploadedById) where.uploadedById = filters.uploadedById;
+  if (filters.clientId) where.clientId = filters.clientId;
+  if (filters.onboardingId) where.onboardingId = filters.onboardingId;
+  if (filters.isClientVisible !== undefined) where.isClientVisible = filters.isClientVisible;
   if (filters.dateFrom || filters.dateTo) {
     where.createdAt = {
       ...(filters.dateFrom ? { gte: filters.dateFrom } : {}),
@@ -76,6 +82,9 @@ export const mediaRepository = {
     altText?: string;
     caption?: string;
     uploadedById: string;
+    clientId?: string;
+    onboardingId?: string;
+    documentCategory?: string;
   }): Promise<MediaAsset> {
     return prisma.mediaAsset.create({
       data: { ...data, sizeBytes: BigInt(data.sizeBytes), status: "PENDING" },

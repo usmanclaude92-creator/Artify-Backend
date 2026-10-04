@@ -77,6 +77,7 @@ export const workspaceService = {
 
     const name = input.name?.trim() || client.name;
     const slug = await workspaceRepository.findUniqueSlug(name);
+    const { steps } = await onboardingService.getTemplate(caller.organizationId);
 
     let result: { workspace: Organization; onboardingStarted: boolean };
     try {
@@ -106,6 +107,7 @@ export const workspaceService = {
 
         let onboarding = await tx.clientOnboarding.findUnique({ where: { clientId } });
         if (!onboarding) {
+          const checklist = freshChecklist(steps);
           onboarding = await tx.clientOnboarding.create({
             data: {
               organizationId: caller.organizationId,
@@ -113,8 +115,8 @@ export const workspaceService = {
               createdById: caller.id,
               status: "IN_PROGRESS",
               startedAt: new Date(),
-              checklist: freshChecklist() as never,
-              currentStep: "CLIENT_VERIFIED",
+              checklist: checklist as never,
+              currentStep: checklist[0]!.key,
             },
           });
         }

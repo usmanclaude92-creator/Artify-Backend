@@ -201,6 +201,7 @@ model User {
   auditLogs                      AuditLog[]                  @relation("AuditActor")
   createdOnboardings             ClientOnboarding[]          @relation("OnboardingCreatedBy")
   completedOnboardings           ClientOnboarding[]          @relation("OnboardingCompletedBy")
+  ownedOnboardings               ClientOnboarding[]          @relation("OnboardingOwner")
   sentInvitations                WorkspaceInvitation[]       @relation("InvitationInvitedBy")
   acceptedInvitations            WorkspaceInvitation[]       @relation("InvitationAcceptedUser")
   createdProducts                Product[]                   @relation("ProductCreatedBy")
@@ -724,6 +725,12 @@ model Client {
   address                 String?
   accountManager          String?      @map("account_manager")
   notes                   String?
+  // Phase 13 (Client Management) — source mirrors Lead.source (free text,
+  // e.g. "referral", "converted_lead"); industryId reuses the existing
+  // Industry catalog (Phase 11, shared with Product/CaseStudy) rather than
+  // inventing a second industry taxonomy.
+  source                  String?      @map("source")
+  industryId              String?      @map("industry_id")
   workspaceOrganizationId String?      @unique @map("workspace_organization_id")
   createdAt               DateTime     @default(now()) @map("created_at")
   updatedAt               DateTime     @updatedAt @map("updated_at")
@@ -731,6 +738,7 @@ model Client {
 
   organization          Organization      @relation(fields: [organizationId], references: [id], onDelete: Restrict)
   manager               User?             @relation("ClientAccountManager", fields: [accountManager], references: [id], onDelete: SetNull)
+  industry              Industry?         @relation(fields: [industryId], references: [id], onDelete: SetNull)
   workspaceOrganization Organization?     @relation("ClientWorkspace", fields: [workspaceOrganizationId], references: [id], onDelete: SetNull)
   contacts              Contact[]
   convertedLeads        Lead[]            @relation("LeadConvertedClient")
@@ -739,12 +747,14 @@ model Client {
   invoices              Invoice[]
   onboarding            ClientOnboarding?
   opportunities         Opportunity[]
+  documents             MediaAsset[]      @relation("ClientDocuments")
 
   @@unique([organizationId, clientCode])
   @@index([organizationId])
   @@index([status])
   @@index([createdAt])
   @@index([email])
+  @@index([industryId])
   @@map("clients")
 }
 
@@ -821,6 +831,12 @@ model ClientOnboarding {
   cancelledAt    DateTime?        @map("cancelled_at")
   createdById    String?          @map("created_by")
   completedById  String?          @map("completed_by")
+  // Phase 13 — overall onboarding owner/target date, distinct from each
+  // checklist item's own (JSON-stored) assignee/dueDate: these are the
+  // record-level fields the dashboard's "pending actions"/"overdue
+  // onboarding" counts filter on, so they're real columns, not JSON.
+  ownerId        String?          @map("owner_id")
+  dueDate        DateTime?        @map("due_date")
   createdAt      DateTime         @default(now()) @map("created_at")
   updatedAt      DateTime         @updatedAt @map("updated_at")
 
@@ -828,9 +844,13 @@ model ClientOnboarding {
   client       Client       @relation(fields: [clientId], references: [id], onDelete: Restrict)
   createdBy    User?        @relation("OnboardingCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
   completedBy  User?        @relation("OnboardingCompletedBy", fields: [completedById], references: [id], onDelete: SetNull)
+  owner        User?        @relation("OnboardingOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  documents    MediaAsset[]
 
   @@index([organizationId])
   @@index([status])
+  @@index([ownerId])
+  @@index([dueDate])
   @@map("client_onboarding")
 }
 
@@ -1040,6 +1060,7 @@ model Industry {
 
   products    ProductIndustry[]
   caseStudies CaseStudy[]
+  clients     Client[]
 
   @@map("industries")
 }
@@ -2000,18 +2021,33 @@ model MediaAsset {
   visibility       MediaVisibility @default(PRIVATE)
   status           MediaStatus     @default(PENDING)
   uploadedById     String?         @map("uploaded_by")
+  // Phase 13 (Client Documents) — reuses this same Media Library/storage
+  // pipeline rather than a second document system. clientId/onboardingId
+  // are both optional: a document can belong to a client generally or to
+  // one specific onboarding record (or neither, for ordinary CMS media).
+  // `isClientVisible` is the Client Portal visibility gate — separate from
+  // `visibility` (PRIVATE/PUBLIC), which governs the public *website*; a
+  // client document is never PUBLIC but can still be client-visible.
+  clientId         String?         @map("client_id")
+  onboardingId     String?         @map("onboarding_id")
+  documentCategory String?         @map("document_category")
+  isClientVisible  Boolean         @default(false) @map("is_client_visible")
   createdAt        DateTime        @default(now()) @map("created_at")
   updatedAt        DateTime        @updatedAt @map("updated_at")
   deletedAt        DateTime?       @map("deleted_at")
 
   organization           Organization        @relation(fields: [organizationId], references: [id], onDelete: Restrict)
   uploadedBy             User?               @relation("MediaUploadedBy", fields: [uploadedById], references: [id], onDelete: SetNull)
+  client                 Client?             @relation("ClientDocuments", fields: [clientId], references: [id], onDelete: SetNull)
+  onboarding             ClientOnboarding?   @relation(fields: [onboardingId], references: [id], onDelete: SetNull)
   uploadSession          MediaUploadSession?
   featuredForPages       Page[]              @relation("PageFeaturedMedia")
   featuredForPosts       Post[]              @relation("PostFeaturedMedia")
   featuredForCaseStudies CaseStudy[]         @relation("CaseStudyFeaturedMedia")
 
   @@index([organizationId, status])
+  @@index([clientId])
+  @@index([onboardingId])
   @@map("media_assets")
 }
 

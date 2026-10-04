@@ -1,6 +1,6 @@
 /** Phase 5 §24-26 — Clients: list/search/filter/pagination + master-detail with embedded contact management. Phase 6 §28 adds onboarding/workspace provisioning. */
 import React, { useEffect, useState } from "react";
-import { Building2, Plus, Search, UserPlus, Star, Trash2, Rocket, ClipboardCheck, Ban } from "lucide-react";
+import { Building2, Plus, Search, UserPlus, Star, Trash2, Rocket, ClipboardCheck, Ban, History, TrendingUp, FileSignature, Repeat, Receipt } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
 import {
@@ -8,15 +8,42 @@ import {
   contactsApi,
   workspacesApi,
   onboardingApi,
+  usersApi,
+  industriesApi,
+  opportunitiesApi,
+  contractsApi,
+  subscriptionsApi,
+  invoicesApi,
+  mediaApi,
   type CrmClient,
   type CrmContact,
   type ClientStatusValue,
   type Onboarding,
+  type OnboardingChecklistItem,
+  type SanitizedUser,
+  type Industry,
+  type Opportunity,
+  type Contract,
+  type Subscription,
+  type Invoice,
+  type CmsMedia,
 } from "../../lib/api";
 import { ApiClientError } from "../../lib/apiClient";
 import { Card, Button, Input, Select, Badge, LoadingState, ErrorState, EmptyState, Pagination, Modal, Field, ConfirmDialog } from "../ui/ui";
 import { hasPermission } from "../../lib/permissions";
 import { initialSearchFromQuery, consumeNewFlag } from "../../lib/deepLink";
+import { formatMoney } from "../../lib/money";
+import { STAGE_LABEL, STAGE_TONE } from "./OpportunitiesPage";
+import { ActivityTimelineModal } from "./ActivityTimelineModal";
+import { ClientDocumentsPanel } from "./ClientDocumentsPanel";
+
+/** Generic status-badge tone for Contract/Subscription/Invoice statuses — these three resources don't share one enum, but ACTIVE/PAID-like "good" statuses and TERMINATED/VOID/CANCELLED-like "bad" statuses are consistent in spirit, so one small heuristic covers all three without duplicating three full tone tables here. */
+function genericStatusTone(status: string): "success" | "warning" | "danger" | "info" | "neutral" {
+  if (["ACTIVE", "PAID", "READY", "COMPLETED"].includes(status)) return "success";
+  if (["DRAFT", "PROSPECT"].includes(status)) return "neutral";
+  if (["TERMINATED", "VOID", "CANCELLED", "EXPIRED", "OVERDUE", "FAILED"].includes(status)) return "danger";
+  return "info";
+}
 
 const PROVISIONING_TONE: Record<string, "success" | "warning" | "danger" | "info" | "neutral"> = {
   NOT_PROVISIONED: "neutral",
@@ -58,8 +85,13 @@ const ClientFormModal: React.FC<{
   const [website, setWebsite] = useState(client?.website ?? "");
   const [address, setAddress] = useState(client?.address ?? "");
   const [notes, setNotes] = useState(client?.notes ?? "");
+  const [source, setSource] = useState(client?.source ?? "");
+  const [industryId, setIndustryId] = useState(client?.industryId ?? "");
+  const [accountManager, setAccountManager] = useState(client?.accountManager ?? "");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [industries, setIndustries] = useState<Industry[]>([]);
+  const [users, setUsers] = useState<SanitizedUser[]>([]);
 
   useEffect(() => {
     if (open) {
@@ -72,7 +104,12 @@ const ClientFormModal: React.FC<{
       setWebsite(client?.website ?? "");
       setAddress(client?.address ?? "");
       setNotes(client?.notes ?? "");
+      setSource(client?.source ?? "");
+      setIndustryId(client?.industryId ?? "");
+      setAccountManager(client?.accountManager ?? "");
       setError(null);
+      void industriesApi.list().then((res) => setIndustries(res.industries));
+      void usersApi.list({ limit: 100 }).then((res) => setUsers(res.items));
     }
   }, [open, client]);
 
@@ -82,11 +119,36 @@ const ClientFormModal: React.FC<{
     setSubmitting(true);
     try {
       if (mode === "create") {
-        const res = await clientsApi.create({ clientCode, name, legalName, status, email, phone, website, address, notes });
+        const res = await clientsApi.create({
+          clientCode,
+          name,
+          legalName,
+          status,
+          email,
+          phone,
+          website,
+          address,
+          notes,
+          source: source || undefined,
+          industryId: industryId || undefined,
+          accountManager: accountManager || undefined,
+        });
         notify("Client created.", "success");
         onSaved(res.client);
       } else if (client) {
-        const res = await clientsApi.update(client.id, { name, legalName, status, email, phone, website, address, notes });
+        const res = await clientsApi.update(client.id, {
+          name,
+          legalName,
+          status,
+          email,
+          phone,
+          website,
+          address,
+          notes,
+          source: source || null,
+          industryId: industryId || null,
+          accountManager: accountManager || null,
+        });
         notify("Client updated.", "success");
         onSaved(res.client);
       }
@@ -137,6 +199,31 @@ const ClientFormModal: React.FC<{
         </div>
         <Field label="Address">
           <Input value={address} onChange={(e) => setAddress(e.target.value)} />
+        </Field>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Industry">
+            <Select value={industryId} onChange={(e) => setIndustryId(e.target.value)}>
+              <option value="">Unspecified</option>
+              {industries.map((i) => (
+                <option key={i.id} value={i.id}>
+                  {i.name}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <Field label="Source" hint="e.g. referral, converted_lead">
+            <Input value={source} onChange={(e) => setSource(e.target.value)} />
+          </Field>
+        </div>
+        <Field label="Account manager">
+          <Select value={accountManager} onChange={(e) => setAccountManager(e.target.value)}>
+            <option value="">Unassigned</option>
+            {users.map((u) => (
+              <option key={u.id} value={u.id}>
+                {u.firstName} {u.lastName}
+              </option>
+            ))}
+          </Select>
         </Field>
         <Field label="Notes">
           <textarea
@@ -314,19 +401,196 @@ const InviteAdminModal: React.FC<{ open: boolean; onClose: () => void; workspace
   );
 };
 
+/** Phase 13 — per-step due date/assignee/notes, and (if the step requires one) attaching an already-uploaded client document. */
+const StepEditModal: React.FC<{
+  open: boolean;
+  onClose: () => void;
+  onboardingId: string;
+  step: OnboardingChecklistItem | null;
+  users: SanitizedUser[];
+  documents: CmsMedia[];
+  onSaved: () => void;
+}> = ({ open, onClose, onboardingId, step, users, documents, onSaved }) => {
+  const { notify } = useToast();
+  const [dueDate, setDueDate] = useState("");
+  const [assignedTo, setAssignedTo] = useState("");
+  const [notes, setNotes] = useState("");
+  const [documentMediaId, setDocumentMediaId] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (open && step) {
+      setDueDate(step.dueDate?.slice(0, 10) ?? "");
+      setAssignedTo(step.assignedTo ?? "");
+      setNotes(step.notes ?? "");
+      setDocumentMediaId(step.documentMediaId ?? "");
+    }
+  }, [open, step]);
+
+  if (!step) return null;
+
+  const handleSave = async () => {
+    setSubmitting(true);
+    try {
+      await onboardingApi.updateStep(onboardingId, step.key, {
+        dueDate: dueDate || null,
+        assignedTo: assignedTo || null,
+        notes: notes || null,
+        documentMediaId: documentMediaId || null,
+      });
+      notify("Step updated.", "success");
+      onSaved();
+      onClose();
+    } catch (err) {
+      notify(err instanceof ApiClientError ? err.message : "Could not update step.", "error");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <Modal open={open} onClose={onClose} title={`Step — ${step.label}`}>
+      <div className="space-y-3">
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Due date">
+            <Input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
+          </Field>
+          <Field label="Assigned to">
+            <Select value={assignedTo} onChange={(e) => setAssignedTo(e.target.value)}>
+              <option value="">Unassigned</option>
+              {users.map((u) => (
+                <option key={u.id} value={u.id}>
+                  {u.firstName} {u.lastName}
+                </option>
+              ))}
+            </Select>
+          </Field>
+        </div>
+        {step.requiresDocument && (
+          <Field label="Attached document" hint="From this client's uploaded documents.">
+            <Select value={documentMediaId} onChange={(e) => setDocumentMediaId(e.target.value)}>
+              <option value="">None</option>
+              {documents.map((d) => (
+                <option key={d.id} value={d.id}>
+                  {d.displayName ?? d.originalFilename}
+                </option>
+              ))}
+            </Select>
+          </Field>
+        )}
+        <Field label="Notes">
+          <textarea
+            className="w-full px-3 py-2 rounded-lg text-sm focus:outline-none"
+            style={{ background: "var(--bg-app)", border: "1px solid var(--border)", color: "var(--text-primary)" }}
+            rows={3}
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+          />
+        </Field>
+        <div className="pt-2 border-t flex justify-end gap-2" style={{ borderColor: "var(--border)" }}>
+          <Button type="button" variant="secondary" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button type="button" variant="primary" disabled={submitting} onClick={() => void handleSave()}>
+            Save
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  );
+};
+
+/** Phase 13 — overall onboarding owner/target date (record-level, distinct from each step's own assignee/dueDate). */
+const OnboardingOwnerModal: React.FC<{ open: boolean; onClose: () => void; onboarding: Onboarding; users: SanitizedUser[]; onSaved: () => void }> = ({
+  open,
+  onClose,
+  onboarding,
+  users,
+  onSaved,
+}) => {
+  const { notify } = useToast();
+  const [ownerId, setOwnerId] = useState("");
+  const [dueDate, setDueDate] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (open) {
+      setOwnerId(onboarding.ownerId ?? "");
+      setDueDate(onboarding.dueDate?.slice(0, 10) ?? "");
+    }
+  }, [open, onboarding]);
+
+  const handleSave = async () => {
+    setSubmitting(true);
+    try {
+      await onboardingApi.updateOwner(onboarding.id, { ownerId: ownerId || null, dueDate: dueDate || null });
+      notify("Onboarding owner/due date updated.", "success");
+      onSaved();
+      onClose();
+    } catch (err) {
+      notify(err instanceof ApiClientError ? err.message : "Could not update onboarding.", "error");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <Modal open={open} onClose={onClose} title="Onboarding owner & target date">
+      <div className="space-y-3">
+        <Field label="Owner">
+          <Select value={ownerId} onChange={(e) => setOwnerId(e.target.value)}>
+            <option value="">Unassigned</option>
+            {users.map((u) => (
+              <option key={u.id} value={u.id}>
+                {u.firstName} {u.lastName}
+              </option>
+            ))}
+          </Select>
+        </Field>
+        <Field label="Target completion date">
+          <Input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
+        </Field>
+        <div className="pt-2 border-t flex justify-end gap-2" style={{ borderColor: "var(--border)" }}>
+          <Button type="button" variant="secondary" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button type="button" variant="primary" disabled={submitting} onClick={() => void handleSave()}>
+            Save
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  );
+};
+
 const OnboardingWorkspaceSection: React.FC<{ client: CrmClient; onClientChanged: () => void }> = ({ client, onClientChanged }) => {
   const { user } = useAuth();
   const { notify } = useToast();
   const canStartOnboarding = hasPermission(user?.role.permissions, "onboarding.create");
   const canCompleteOnboarding = hasPermission(user?.role.permissions, "onboarding.complete");
+  const canUpdateOnboarding = hasPermission(user?.role.permissions, "onboarding.update");
   const canProvision = hasPermission(user?.role.permissions, "workspaces.create");
   const canSuspend = hasPermission(user?.role.permissions, "workspaces.suspend");
   const canInvite = hasPermission(user?.role.permissions, "invitations.create");
+  const canSeeUsers = hasPermission(user?.role.permissions, "users.read");
+  const canSeeDocuments = hasPermission(user?.role.permissions, "media.read");
 
   const [onboarding, setOnboarding] = useState<Onboarding | null>(null);
   const [loading, setLoading] = useState(true);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [suspendConfirm, setSuspendConfirm] = useState(false);
+  const [users, setUsers] = useState<SanitizedUser[]>([]);
+  const [documents, setDocuments] = useState<CmsMedia[]>([]);
+  const [stepEditTarget, setStepEditTarget] = useState<OnboardingChecklistItem | null>(null);
+  const [ownerEditOpen, setOwnerEditOpen] = useState(false);
+
+  useEffect(() => {
+    if (canSeeUsers) void usersApi.list({ limit: 100 }).then((res) => setUsers(res.items));
+  }, [canSeeUsers]);
+
+  useEffect(() => {
+    if (canSeeDocuments) void mediaApi.list({ clientId: client.id, limit: 100 }).then((res) => setDocuments(res.items));
+  }, [canSeeDocuments, client.id]);
 
   const load = React.useCallback(async () => {
     setLoading(true);
@@ -404,15 +668,39 @@ const OnboardingWorkspaceSection: React.FC<{ client: CrmClient; onClientChanged:
         <div className="space-y-3">
           {onboarding ? (
             <div className="space-y-2">
-              <div className="flex items-center gap-2 text-xs">
+              <div className="flex items-center gap-2 text-xs flex-wrap">
                 <span style={{ color: "var(--text-muted)" }}>Onboarding:</span>
                 <Badge tone={ONBOARDING_TONE[onboarding.status]}>{onboarding.status}</Badge>
                 {onboarding.currentStep && <span style={{ color: "var(--text-muted)" }}>· current step: {onboarding.currentStep}</span>}
+                {onboarding.dueDate && <span style={{ color: "var(--text-muted)" }}>· target: {onboarding.dueDate.slice(0, 10)}</span>}
+                {onboarding.ownerId && (
+                  <span style={{ color: "var(--text-muted)" }}>
+                    · owner: {users.find((u) => u.id === onboarding.ownerId)?.firstName ?? "—"}
+                  </span>
+                )}
+                {canUpdateOnboarding && (
+                  <Button variant="ghost" onClick={() => setOwnerEditOpen(true)}>
+                    Set owner/due date
+                  </Button>
+                )}
               </div>
               <ul className="grid sm:grid-cols-2 gap-1">
                 {onboarding.checklist.map((item) => (
-                  <li key={item.key} className="text-[11px] flex items-center gap-1.5" style={{ color: item.completed ? "var(--text-primary)" : "var(--text-muted)" }}>
-                    <span>{item.completed ? "✓" : "○"}</span> {item.label}
+                  <li
+                    key={item.key}
+                    className="text-[11px] flex items-center gap-1.5 justify-between"
+                    style={{ color: item.completed ? "var(--text-primary)" : "var(--text-muted)" }}
+                  >
+                    <span className="flex items-center gap-1.5 flex-wrap">
+                      <span>{item.completed ? "✓" : "○"}</span> {item.label}
+                      {item.dueDate && <span style={{ color: "var(--text-muted)" }}>(due {item.dueDate.slice(0, 10)})</span>}
+                      {item.requiresDocument && !item.documentMediaId && <Badge tone="warning">Doc needed</Badge>}
+                    </span>
+                    {canUpdateOnboarding && !item.completed && (
+                      <Button variant="ghost" onClick={() => setStepEditTarget(item)}>
+                        Edit
+                      </Button>
+                    )}
                   </li>
                 ))}
               </ul>
@@ -465,9 +753,77 @@ const OnboardingWorkspaceSection: React.FC<{ client: CrmClient; onClientChanged:
         onConfirm={handleSuspend}
         onCancel={() => setSuspendConfirm(false)}
       />
+      {onboarding && (
+        <>
+          <StepEditModal
+            open={!!stepEditTarget}
+            onClose={() => setStepEditTarget(null)}
+            onboardingId={onboarding.id}
+            step={stepEditTarget}
+            users={users}
+            documents={documents}
+            onSaved={load}
+          />
+          <OnboardingOwnerModal open={ownerEditOpen} onClose={() => setOwnerEditOpen(false)} onboarding={onboarding} users={users} onSaved={load} />
+        </>
+      )}
     </div>
   );
 };
+
+/** Shared read-only "related records" list — used for Opportunities/Contracts/Subscriptions/Invoices on the Client detail view, each a thin window (most-recent 10) into that resource's own full page. */
+function RelatedRecordsSection<T extends { id: string }>({
+  title,
+  icon: Icon,
+  load,
+  renderItem,
+  emptyLabel,
+}: {
+  title: string;
+  icon: React.ElementType;
+  load: () => Promise<{ items: T[] }>;
+  renderItem: (item: T) => React.ReactNode;
+  emptyLabel: string;
+}) {
+  const [items, setItems] = useState<T[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    load()
+      .then((res) => !cancelled && setItems(res.items))
+      .catch(() => !cancelled && setItems([]))
+      .finally(() => !cancelled && setLoading(false));
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  return (
+    <div className="px-4 py-3 border-b" style={{ borderColor: "var(--border)" }}>
+      <h3 className="text-xs font-bold uppercase tracking-wide mb-2 flex items-center gap-1.5" style={{ color: "var(--text-muted)" }}>
+        <Icon className="w-3.5 h-3.5" /> {title}
+      </h3>
+      {loading ? (
+        <LoadingState />
+      ) : items.length === 0 ? (
+        <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+          {emptyLabel}
+        </p>
+      ) : (
+        <ul className="divide-y" style={{ borderColor: "var(--border)" }}>
+          {items.map((item) => (
+            <li key={item.id} className="py-2 text-xs">
+              {renderItem(item)}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
 
 const ClientDetail: React.FC<{ client: CrmClient; onChanged: (c?: CrmClient) => void }> = ({ client, onChanged }) => {
   const { user } = useAuth();
@@ -477,6 +833,12 @@ const ClientDetail: React.FC<{ client: CrmClient; onChanged: (c?: CrmClient) => 
   const canCreateContact = hasPermission(user?.role.permissions, "contacts.create");
   const canUpdateContact = hasPermission(user?.role.permissions, "contacts.update");
   const canDeleteContact = hasPermission(user?.role.permissions, "contacts.delete");
+  const canSeeUsers = hasPermission(user?.role.permissions, "users.read");
+  const canSeeOpportunities = hasPermission(user?.role.permissions, "opportunities.read");
+  const canSeeContracts = hasPermission(user?.role.permissions, "contracts.read");
+  const canSeeSubscriptions = hasPermission(user?.role.permissions, "subscriptions.read");
+  const canSeeInvoices = hasPermission(user?.role.permissions, "invoices.read");
+  const canSeeDocuments = hasPermission(user?.role.permissions, "media.read");
 
   const [contacts, setContacts] = useState<CrmContact[]>([]);
   const [contactsLoading, setContactsLoading] = useState(false);
@@ -484,6 +846,15 @@ const ClientDetail: React.FC<{ client: CrmClient; onChanged: (c?: CrmClient) => 
   const [addContactOpen, setAddContactOpen] = useState(false);
   const [archiveOpen, setArchiveOpen] = useState(false);
   const [removeContact, setRemoveContact] = useState<CrmContact | null>(null);
+  const [users, setUsers] = useState<SanitizedUser[]>([]);
+  const [activityOpen, setActivityOpen] = useState(false);
+
+  useEffect(() => {
+    if (!canSeeUsers) return;
+    void usersApi.list({ limit: 100 }).then((res) => setUsers(res.items));
+  }, [canSeeUsers]);
+
+  const accountManagerName = users.find((u) => u.id === client.accountManager);
 
   const loadContacts = React.useCallback(async () => {
     setContactsLoading(true);
@@ -549,6 +920,9 @@ const ClientDetail: React.FC<{ client: CrmClient; onChanged: (c?: CrmClient) => 
           </p>
         </div>
         <div className="flex gap-2 shrink-0">
+          <Button variant="ghost" onClick={() => setActivityOpen(true)} aria-label="View activity">
+            <History className="w-3.5 h-3.5" />
+          </Button>
           {canUpdate && (
             <Button variant="secondary" onClick={() => setEditOpen(true)}>
               Edit
@@ -578,6 +952,20 @@ const ClientDetail: React.FC<{ client: CrmClient; onChanged: (c?: CrmClient) => 
         <div>
           <p style={{ color: "var(--text-muted)" }}>Address</p>
           <p style={{ color: "var(--text-primary)" }}>{client.address ?? "—"}</p>
+        </div>
+        <div>
+          <p style={{ color: "var(--text-muted)" }}>Industry</p>
+          <p style={{ color: "var(--text-primary)" }}>{client.industry?.name ?? "—"}</p>
+        </div>
+        <div>
+          <p style={{ color: "var(--text-muted)" }}>Source</p>
+          <p style={{ color: "var(--text-primary)" }}>{client.source ?? "—"}</p>
+        </div>
+        <div>
+          <p style={{ color: "var(--text-muted)" }}>Account manager</p>
+          <p style={{ color: "var(--text-primary)" }}>
+            {accountManagerName ? `${accountManagerName.firstName} ${accountManagerName.lastName}` : "Unassigned"}
+          </p>
         </div>
         {client.notes && (
           <div className="sm:col-span-2">
@@ -634,6 +1022,80 @@ const ClientDetail: React.FC<{ client: CrmClient; onChanged: (c?: CrmClient) => 
         </ul>
       )}
 
+      {canSeeOpportunities && (
+        <RelatedRecordsSection<Opportunity>
+          title="Opportunities"
+          icon={TrendingUp}
+          load={() => opportunitiesApi.list({ clientId: client.id, limit: 10, sort: "updatedAt", order: "desc" })}
+          emptyLabel="No opportunities for this client."
+          renderItem={(o) => (
+            <div className="flex items-center justify-between gap-3">
+              <span style={{ color: "var(--text-primary)" }}>{o.name}</span>
+              <div className="flex items-center gap-2 shrink-0">
+                <span style={{ color: "var(--text-muted)" }}>{formatMoney(o.value, o.currency)}</span>
+                <Badge tone={STAGE_TONE[o.stage]}>{STAGE_LABEL[o.stage]}</Badge>
+              </div>
+            </div>
+          )}
+        />
+      )}
+
+      {canSeeContracts && (
+        <RelatedRecordsSection<Contract>
+          title="Contracts"
+          icon={FileSignature}
+          load={() => contractsApi.list({ clientId: client.id, limit: 10 })}
+          emptyLabel="No contracts for this client."
+          renderItem={(c) => (
+            <div className="flex items-center justify-between gap-3">
+              <span style={{ color: "var(--text-primary)" }}>{c.title}</span>
+              <div className="flex items-center gap-2 shrink-0">
+                <span style={{ color: "var(--text-muted)" }}>{formatMoney(c.contractValue, c.currency)}</span>
+                <Badge tone={genericStatusTone(c.status)}>{c.status}</Badge>
+              </div>
+            </div>
+          )}
+        />
+      )}
+
+      {canSeeSubscriptions && (
+        <RelatedRecordsSection<Subscription>
+          title="Subscriptions"
+          icon={Repeat}
+          load={() => subscriptionsApi.list({ clientId: client.id, limit: 10 })}
+          emptyLabel="No subscriptions for this client."
+          renderItem={(s) => (
+            <div className="flex items-center justify-between gap-3">
+              <span style={{ color: "var(--text-primary)" }}>{s.subscriptionNumber}</span>
+              <div className="flex items-center gap-2 shrink-0">
+                <span style={{ color: "var(--text-muted)" }}>{formatMoney(s.price, s.currency)}</span>
+                <Badge tone={genericStatusTone(s.status)}>{s.status}</Badge>
+              </div>
+            </div>
+          )}
+        />
+      )}
+
+      {canSeeInvoices && (
+        <RelatedRecordsSection<Invoice>
+          title="Invoices"
+          icon={Receipt}
+          load={() => invoicesApi.list({ clientId: client.id, limit: 10 })}
+          emptyLabel="No invoices for this client."
+          renderItem={(i) => (
+            <div className="flex items-center justify-between gap-3">
+              <span style={{ color: "var(--text-primary)" }}>{i.invoiceNumber}</span>
+              <div className="flex items-center gap-2 shrink-0">
+                <span style={{ color: "var(--text-muted)" }}>{formatMoney(i.total, i.currency)}</span>
+                <Badge tone={genericStatusTone(i.effectiveStatus)}>{i.effectiveStatus}</Badge>
+              </div>
+            </div>
+          )}
+        />
+      )}
+
+      {canSeeDocuments && <ClientDocumentsPanel clientId={client.id} />}
+
       <ClientFormModal
         open={editOpen}
         onClose={() => setEditOpen(false)}
@@ -642,6 +1104,12 @@ const ClientDetail: React.FC<{ client: CrmClient; onChanged: (c?: CrmClient) => 
         client={client}
       />
       <ContactFormModal open={addContactOpen} onClose={() => setAddContactOpen(false)} onSaved={loadContacts} clientId={client.id} />
+      <ActivityTimelineModal
+        open={activityOpen}
+        onClose={() => setActivityOpen(false)}
+        title={`Activity — ${client.name}`}
+        load={() => clientsApi.activity(client.id)}
+      />
       <ConfirmDialog
         open={archiveOpen}
         title="Archive client"

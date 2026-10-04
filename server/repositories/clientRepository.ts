@@ -2,7 +2,7 @@
 import type { Client, Prisma } from "@prisma/client";
 import { prisma } from "../db/prisma";
 
-const clientWithWorkspace = { include: { workspaceOrganization: true } } as const;
+const clientWithWorkspace = { include: { workspaceOrganization: true, industry: true } } as const;
 export type ClientWithWorkspace = Prisma.ClientGetPayload<typeof clientWithWorkspace>;
 
 export interface ClientFilters {
@@ -92,6 +92,8 @@ export const clientRepository = {
     address?: string;
     accountManager?: string;
     notes?: string;
+    source?: string;
+    industryId?: string;
   }): Promise<Client> {
     return prisma.client.create({
       data: {
@@ -106,6 +108,8 @@ export const clientRepository = {
         address: data.address,
         accountManager: data.accountManager,
         notes: data.notes,
+        source: data.source,
+        industryId: data.industryId,
       },
     });
   },
