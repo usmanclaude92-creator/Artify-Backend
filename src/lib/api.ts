@@ -1543,6 +1543,113 @@ export const postsApi = {
   bulkRestore: (ids: string[]) => apiClient.post<BulkActionResult>("/posts/bulk/restore", { ids }),
 };
 
+// ---------------------------------------------------------------------------
+// Phase 11 — Case Studies + Content Relationships. Mirrors CmsPost/pagesApi's
+// own shape exactly — the structured fields unique to a Case Study
+// (challenge/solution/implementation/results/testimonial/technologies/
+// gallery/CTA) travel in `content`, the same ContentRevision.metadata slot
+// Page/Post already use for SEO (`CaseStudyContent` extends `PostSeoMetadata`).
+// ---------------------------------------------------------------------------
+
+export interface CaseStudyContent extends PostSeoMetadata {
+  challenge?: string;
+  solutionApproach?: string;
+  implementation?: string;
+  results?: string;
+  testimonialQuote?: string;
+  testimonialAuthorName?: string;
+  testimonialAuthorTitle?: string;
+  technologies?: string[];
+  galleryMediaIds?: string[];
+  ctaFormId?: string;
+}
+
+export interface CmsCaseStudy {
+  id: string;
+  organizationId: string;
+  slug: string;
+  title: string;
+  status: ContentStatusValue;
+  clientName: string | null;
+  industryId: string | null;
+  currentRevisionId: string | null;
+  currentRevision: ContentRevision | null;
+  featuredMediaId: string | null;
+  industry: Industry | null;
+  products: { caseStudyId: string; productId: string; product: { id: string; slug: string; name: string; type: ProductTypeValue; status: ProductStatusValue } }[];
+  relatedPages: { caseStudyId: string; pageId: string; page: { id: string; slug: string; title: string; status: ContentStatusValue } }[];
+  relatedPosts: { caseStudyId: string; postId: string; post: { id: string; slug: string; title: string; status: ContentStatusValue } }[];
+  createdById: string | null;
+  publishedAt: string | null;
+  scheduledAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  deletedAt: string | null;
+}
+
+const caseStudyUpdateBody = (payload: {
+  title?: string;
+  slug?: string;
+  body?: string;
+  excerpt?: string | null;
+  content?: CaseStudyContent;
+  editorBlocks?: EditorDocument | null;
+  status?: PatchableContentStatus;
+  clientName?: string | null;
+  industryId?: string | null;
+  featuredMediaId?: string | null;
+  productIds?: string[];
+  relatedPageIds?: string[];
+  relatedPostIds?: string[];
+  expectedUpdatedAt?: string;
+}) => payload;
+
+export const caseStudiesApi = {
+  list: (
+    params: {
+      page?: number;
+      limit?: number;
+      search?: string;
+      status?: ContentStatusValue;
+      industryId?: string;
+      productId?: string;
+      fromDate?: string;
+      toDate?: string;
+      sort?: string;
+      order?: "asc" | "desc";
+    } = {}
+  ) => paginatedGet<CmsCaseStudy>("/case-studies", "caseStudies", params),
+  get: (id: string) => apiClient.get<{ caseStudy: CmsCaseStudy }>(`/case-studies/${id}`),
+  revisions: (id: string) => apiClient.get<{ revisions: ContentRevision[] }>(`/case-studies/${id}/revisions`),
+  create: (payload: {
+    title: string;
+    slug?: string;
+    body?: string;
+    excerpt?: string;
+    content?: CaseStudyContent;
+    editorBlocks?: EditorDocument;
+    clientName?: string;
+    industryId?: string;
+    featuredMediaId?: string;
+    productIds?: string[];
+    relatedPageIds?: string[];
+    relatedPostIds?: string[];
+  }) => apiClient.post<{ caseStudy: CmsCaseStudy }>("/case-studies", payload),
+  update: (id: string, payload: Parameters<typeof caseStudyUpdateBody>[0]) =>
+    apiClient.patch<{ caseStudy: CmsCaseStudy }>(`/case-studies/${id}`, caseStudyUpdateBody(payload)),
+  submitForReview: (id: string) => apiClient.post<{ caseStudy: CmsCaseStudy }>(`/case-studies/${id}/submit-review`),
+  publish: (id: string) => apiClient.post<{ caseStudy: CmsCaseStudy }>(`/case-studies/${id}/publish`),
+  schedule: (id: string, scheduledAt: string) => apiClient.post<{ caseStudy: CmsCaseStudy }>(`/case-studies/${id}/schedule`, { scheduledAt }),
+  archive: (id: string) => apiClient.post<{ caseStudy: CmsCaseStudy }>(`/case-studies/${id}/archive`),
+  revert: (id: string, revisionId: string) => apiClient.post<{ caseStudy: CmsCaseStudy }>(`/case-studies/${id}/revert`, { revisionId }),
+  remove: (id: string) => apiClient.delete<{ message: string }>(`/case-studies/${id}`),
+  trash: (params: { page?: number; limit?: number } = {}) => paginatedGet<CmsCaseStudy>("/case-studies/trash", "caseStudies", params),
+  restore: (id: string) => apiClient.post<{ message: string }>(`/case-studies/${id}/restore`),
+  bulkArchive: (ids: string[]) => apiClient.post<BulkActionResult>("/case-studies/bulk/archive", { ids }),
+  bulkTrash: (ids: string[]) => apiClient.post<BulkActionResult>("/case-studies/bulk/trash", { ids }),
+  bulkRestore: (ids: string[]) => apiClient.post<BulkActionResult>("/case-studies/bulk/restore", { ids }),
+};
+
 export const categoriesApi = {
   list: () => apiClient.get<{ categories: CmsCategory[] }>("/categories"),
   get: (id: string) => apiClient.get<{ category: CmsCategory }>(`/categories/${id}`),

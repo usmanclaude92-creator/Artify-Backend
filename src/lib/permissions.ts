@@ -95,6 +95,7 @@ const SiteEditorPage = lazyPage(() => import("../components/modules/SiteEditorPa
 const SiteIdentityPage = lazyPage(() => import("../components/modules/SiteIdentityPage"), "SiteIdentityPage");
 const GlobalStylesPage = lazyPage(() => import("../components/modules/GlobalStylesPage"), "GlobalStylesPage");
 const PostsPage = lazyPage(() => import("../components/modules/PostsPage"), "PostsPage");
+const CaseStudiesPage = lazyPage(() => import("../components/modules/CaseStudiesPage"), "CaseStudiesPage");
 const CmsTaxonomyPage = lazyPage(() => import("../components/modules/CmsTaxonomyPage"), "CmsTaxonomyPage");
 const AuthorsPage = lazyPage(() => import("../components/modules/AuthorsPage"), "AuthorsPage");
 const MediaLibraryPage = lazyPage(() => import("../components/modules/MediaLibraryPage"), "MediaLibraryPage");
@@ -404,6 +405,15 @@ export const NAV_ITEMS: NavItem[] = [
     icon: Newspaper,
     requiresAnyPermission: ["content.read"],
     component: PostsPage,
+    section: "CMS",
+  },
+  {
+    id: "cms-case-studies",
+    label: "Case Studies",
+    path: "/cms/case-studies",
+    icon: Briefcase,
+    requiresAnyPermission: ["content.read"],
+    component: CaseStudiesPage,
     section: "CMS",
   },
   {

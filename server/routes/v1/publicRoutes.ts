@@ -20,6 +20,7 @@ import {
   createPublicLeadSchema,
   listPublicPostsQuerySchema,
   listPublicProductsQuerySchema,
+  listPublicCaseStudiesQuerySchema,
   publicRedirectLookupQuerySchema,
   publicNavigationMenuTypeSchema,
 } from "../../schemas/publicSchemas";
@@ -96,6 +97,31 @@ router.get(
   asyncHandler(async (req, res) => {
     const post = await publicSiteService.getPostBySlug(req.params.slug!);
     sendSuccess(res, { post });
+  })
+);
+
+// Phase 11 — Case Studies. Registered before "/case-studies/:slug" so the
+// literal "/case-studies" list path is never swallowed by the param route.
+router.get(
+  "/case-studies",
+  asyncHandler(async (req, res) => {
+    const query = listPublicCaseStudiesQuerySchema.parse(req.query);
+    const { rows, total } = await publicSiteService.listCaseStudies(
+      { search: query.search, industrySlug: query.industrySlug, productSlug: query.productSlug },
+      query.page,
+      query.limit,
+      query.sort,
+      query.order
+    );
+    sendSuccess(res, { caseStudies: rows }, 200, { page: query.page, limit: query.limit, total });
+  })
+);
+
+router.get(
+  "/case-studies/:slug",
+  asyncHandler(async (req, res) => {
+    const caseStudy = await publicSiteService.getCaseStudyBySlug(req.params.slug!);
+    sendSuccess(res, { caseStudy });
   })
 );
 

@@ -31,6 +31,19 @@ export const listPublicProductsQuerySchema = z.object({
 });
 export type ListPublicProductsQuery = z.infer<typeof listPublicProductsQuerySchema>;
 
+// Phase 11 — Case Studies. `industrySlug`/`productSlug` filter by the real
+// taxonomy, by slug (same public-id convention as listPublicProductsQuerySchema).
+export const listPublicCaseStudiesQuerySchema = z.object({
+  page: z.coerce.number().int().positive().default(1),
+  limit: z.coerce.number().int().positive().max(50).default(12),
+  search: z.string().trim().max(200).optional(),
+  industrySlug: z.string().trim().max(100).optional(),
+  productSlug: z.string().trim().max(150).optional(),
+  sort: z.enum(SORT_FIELDS).default("publishedAt"),
+  order: z.enum(["asc", "desc"]).default("desc"),
+});
+export type ListPublicCaseStudiesQuery = z.infer<typeof listPublicCaseStudiesQuerySchema>;
+
 // Phase 5 — SEO Control Center. The public site queries this when a slug it
 // tried to render 404s, to check whether it's an old slug with a redirect
 // on file before showing a hard not-found page.

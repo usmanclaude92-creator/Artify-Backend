@@ -16,6 +16,7 @@
 import { prisma } from "../db/prisma";
 import { postRepository } from "../repositories/postRepository";
 import { pageRepository } from "../repositories/pageRepository";
+import { caseStudyRepository } from "../repositories/caseStudyRepository";
 import { auditLogRepository } from "../repositories/auditLogRepository";
 import { logger } from "../core/logger";
 
@@ -24,12 +25,17 @@ function hasPublishableContent(revision: { title: string; body: string } | null)
 }
 
 export const contentSchedulingService = {
-  async publishDueScheduled(): Promise<{ postsPublished: number; pagesPublished: number; skipped: number }> {
+  async publishDueScheduled(): Promise<{ postsPublished: number; pagesPublished: number; caseStudiesPublished: number; skipped: number }> {
     const now = new Date();
-    const [duePosts, duePages] = await Promise.all([postRepository.findDueScheduled(now), pageRepository.findDueScheduled(now)]);
+    const [duePosts, duePages, dueCaseStudies] = await Promise.all([
+      postRepository.findDueScheduled(now),
+      pageRepository.findDueScheduled(now),
+      caseStudyRepository.findDueScheduled(now),
+    ]);
 
     let postsPublished = 0;
     let pagesPublished = 0;
+    let caseStudiesPublished = 0;
     let skipped = 0;
 
     for (const post of duePosts) {
@@ -90,6 +96,33 @@ export const contentSchedulingService = {
       }
     }
 
-    return { postsPublished, pagesPublished, skipped };
+    for (const caseStudy of dueCaseStudies) {
+      if (!caseStudy.currentRevisionId || !hasPublishableContent(caseStudy.currentRevision)) {
+        skipped++;
+        logger.warn({ caseStudyId: caseStudy.id }, "[contentSchedulingService] Skipped due scheduled case study with no publishable content");
+        continue;
+      }
+      try {
+        await prisma.$transaction([
+          prisma.contentRevision.update({ where: { id: caseStudy.currentRevisionId }, data: { status: "PUBLISHED", publishedAt: now } }),
+          prisma.caseStudy.update({ where: { id: caseStudy.id }, data: { status: "PUBLISHED", publishedAt: now, scheduledAt: null } }),
+        ]);
+        await auditLogRepository.record({
+          organizationId: caseStudy.organizationId,
+          actorType: "SYSTEM",
+          actorName: "content-scheduler",
+          action: "CASE_STUDY_PUBLISHED",
+          resourceType: "case_study",
+          resourceId: caseStudy.id,
+          beforeData: { status: "SCHEDULED", scheduledAt: caseStudy.scheduledAt },
+          afterData: { status: "PUBLISHED" },
+        });
+        caseStudiesPublished++;
+      } catch (err) {
+        logger.error({ err, caseStudyId: caseStudy.id }, "[contentSchedulingService] Failed to publish due scheduled case study");
+      }
+    }
+
+    return { postsPublished, pagesPublished, caseStudiesPublished, skipped };
   },
 };

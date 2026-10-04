@@ -57,6 +57,12 @@ export const pageRepository = {
     return prisma.page.findFirst({ where: { organizationId, slug, deletedAt: null } });
   },
 
+  /** Phase 11 — bulk existence check for Case Study "related pages" selection, org-scoped. */
+  async findByIdsInOrg(ids: string[], organizationId: string): Promise<Page[]> {
+    if (ids.length === 0) return [];
+    return prisma.page.findMany({ where: { id: { in: ids }, organizationId, deletedAt: null } });
+  },
+
   /** Phase 11 public projection — PUBLISHED only, with the revision content and featured media needed to render the page (docs/PUBLIC_API_ARCHITECTURE.md). Never returns DRAFT/IN_REVIEW/SCHEDULED/ARCHIVED. */
   async findPublishedBySlugWithMedia(organizationId: string, slug: string): Promise<PageWithPublicRelations | null> {
     return prisma.page.findFirst({ where: { organizationId, slug, status: "PUBLISHED", deletedAt: null }, ...withPublicRelations });

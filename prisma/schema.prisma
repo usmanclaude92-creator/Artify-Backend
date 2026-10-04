@@ -87,6 +87,7 @@ model Organization {
   payments                   Payment[]
   pages                      Page[]
   posts                      Post[]
+  caseStudies                CaseStudy[]
   categories                 Category[]
   tags                       Tag[]
   mediaAssets                MediaAsset[]
@@ -183,6 +184,7 @@ model User {
   createdForms                   Form[]                      @relation("FormCreatedBy")
   createdPages                   Page[]                      @relation("PageCreatedBy")
   createdPosts                   Post[]                      @relation("PostCreatedBy")
+  createdCaseStudies             CaseStudy[]                 @relation("CaseStudyCreatedBy")
   createdRedirects               Redirect[]                  @relation("RedirectCreatedBy")
   createdRevisions               ContentRevision[]           @relation("RevisionCreatedBy")
   createdTemplates               Template[]                  @relation("TemplateCreatedBy")
@@ -901,16 +903,17 @@ model Product {
   categoryId        String? @map("category_id")
   currentRevisionId String? @unique @map("current_revision_id")
 
-  createdBy       User?             @relation("ProductCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
-  updatedBy       User?             @relation("ProductUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
-  category        ProductCategory?  @relation(fields: [categoryId], references: [id], onDelete: SetNull)
-  currentRevision ProductRevision?  @relation("ProductCurrentRevision", fields: [currentRevisionId], references: [id], onDelete: SetNull)
-  revisions       ProductRevision[] @relation("ProductRevisions")
+  createdBy       User?              @relation("ProductCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy       User?              @relation("ProductUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  category        ProductCategory?   @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  currentRevision ProductRevision?   @relation("ProductCurrentRevision", fields: [currentRevisionId], references: [id], onDelete: SetNull)
+  revisions       ProductRevision[]  @relation("ProductRevisions")
   modules         ProductModule[]
   subscriptions   Subscription[]
   industries      ProductIndustry[]
-  relatedFrom     ProductRelation[] @relation("ProductRelationFrom")
-  relatedTo       ProductRelation[] @relation("ProductRelationTo")
+  relatedFrom     ProductRelation[]  @relation("ProductRelationFrom")
+  relatedTo       ProductRelation[]  @relation("ProductRelationTo")
+  caseStudies     CaseStudyProduct[]
 
   @@index([status])
   @@index([type])
@@ -995,7 +998,8 @@ model Industry {
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at")
 
-  products ProductIndustry[]
+  products    ProductIndustry[]
+  caseStudies CaseStudy[]
 
   @@map("industries")
 }
@@ -1506,14 +1510,15 @@ model Page {
   // deleting or orphaning its children's own content.
   parentId String? @map("parent_id")
 
-  organization    Organization      @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  createdBy       User?             @relation("PageCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
-  currentRevision ContentRevision?  @relation("PageCurrentRevision", fields: [currentRevisionId], references: [id], onDelete: SetNull)
-  revisions       ContentRevision[] @relation("PageRevisions")
-  featuredMedia   MediaAsset?       @relation("PageFeaturedMedia", fields: [featuredMediaId], references: [id], onDelete: SetNull)
-  template        Template?         @relation("PageTemplate", fields: [templateId], references: [id], onDelete: SetNull)
-  parent          Page?             @relation("PageHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
-  children        Page[]            @relation("PageHierarchy")
+  organization    Organization           @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  createdBy       User?                  @relation("PageCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  currentRevision ContentRevision?       @relation("PageCurrentRevision", fields: [currentRevisionId], references: [id], onDelete: SetNull)
+  revisions       ContentRevision[]      @relation("PageRevisions")
+  featuredMedia   MediaAsset?            @relation("PageFeaturedMedia", fields: [featuredMediaId], references: [id], onDelete: SetNull)
+  template        Template?              @relation("PageTemplate", fields: [templateId], references: [id], onDelete: SetNull)
+  parent          Page?                  @relation("PageHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
+  children        Page[]                 @relation("PageHierarchy")
+  caseStudies     CaseStudyRelatedPage[]
 
   @@unique([organizationId, slug])
   @@index([organizationId, status])
@@ -1539,14 +1544,15 @@ model Post {
   updatedAt         DateTime      @updatedAt @map("updated_at")
   deletedAt         DateTime?     @map("deleted_at")
 
-  organization    Organization      @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  category        Category?         @relation(fields: [categoryId], references: [id], onDelete: SetNull)
-  author          Author?           @relation(fields: [authorId], references: [id], onDelete: SetNull)
-  createdBy       User?             @relation("PostCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
-  currentRevision ContentRevision?  @relation("PostCurrentRevision", fields: [currentRevisionId], references: [id], onDelete: SetNull)
-  revisions       ContentRevision[] @relation("PostRevisions")
+  organization    Organization           @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  category        Category?              @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  author          Author?                @relation(fields: [authorId], references: [id], onDelete: SetNull)
+  createdBy       User?                  @relation("PostCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  currentRevision ContentRevision?       @relation("PostCurrentRevision", fields: [currentRevisionId], references: [id], onDelete: SetNull)
+  revisions       ContentRevision[]      @relation("PostRevisions")
   tags            PostTag[]
-  featuredMedia   MediaAsset?       @relation("PostFeaturedMedia", fields: [featuredMediaId], references: [id], onDelete: SetNull)
+  featuredMedia   MediaAsset?            @relation("PostFeaturedMedia", fields: [featuredMediaId], references: [id], onDelete: SetNull)
+  caseStudies     CaseStudyRelatedPost[]
 
   @@unique([organizationId, slug])
   @@index([organizationId, status])
@@ -1565,6 +1571,89 @@ model PostTag {
   @@id([postId, tagId])
   @@index([tagId])
   @@map("post_tags")
+}
+
+// Phase 11 (Case Studies + Content Relationships) — mirrors Post's own
+// draft/review/schedule/publish/archive + ContentRevision pattern exactly
+// (see postService.ts), so it gets the Site Editor/editorBlocks integration
+// and the existing content.* RBAC permissions for free, with zero new
+// permission keys. `clientName`/`industryId` are the only fields that
+// don't exist on Post; everything else structured (challenge, solution,
+// implementation, results, testimonial, technologies, gallery, CTA form)
+// lives in ContentRevision.metadata via caseStudyContentSchema, the same
+// place Page/Post already keep their SEO metadata.
+model CaseStudy {
+  id                String        @id @default(uuid())
+  organizationId    String        @map("organization_id")
+  slug              String
+  title             String
+  status            ContentStatus @default(DRAFT)
+  clientName        String?       @map("client_name")
+  industryId        String?       @map("industry_id")
+  currentRevisionId String?       @unique @map("current_revision_id")
+  featuredMediaId   String?       @map("featured_media_id")
+  createdById       String?       @map("created_by")
+  publishedAt       DateTime?     @map("published_at")
+  scheduledAt       DateTime?     @map("scheduled_at")
+  createdAt         DateTime      @default(now()) @map("created_at")
+  updatedAt         DateTime      @updatedAt @map("updated_at")
+  deletedAt         DateTime?     @map("deleted_at")
+
+  organization    Organization           @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  industry        Industry?              @relation(fields: [industryId], references: [id], onDelete: SetNull)
+  createdBy       User?                  @relation("CaseStudyCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  currentRevision ContentRevision?       @relation("CaseStudyCurrentRevision", fields: [currentRevisionId], references: [id], onDelete: SetNull)
+  revisions       ContentRevision[]      @relation("CaseStudyRevisions")
+  featuredMedia   MediaAsset?            @relation("CaseStudyFeaturedMedia", fields: [featuredMediaId], references: [id], onDelete: SetNull)
+  products        CaseStudyProduct[]
+  relatedPages    CaseStudyRelatedPage[]
+  relatedPosts    CaseStudyRelatedPost[]
+
+  @@unique([organizationId, slug])
+  @@index([organizationId, status])
+  @@index([industryId])
+  @@map("case_studies")
+}
+
+// Case Study <-> Product/Service/Solution. All three are `Product` rows
+// differentiated by `type` (see Phase 10), so one join table covers all
+// three relationships the brief asks for.
+model CaseStudyProduct {
+  caseStudyId String @map("case_study_id")
+  productId   String @map("product_id")
+
+  caseStudy CaseStudy @relation(fields: [caseStudyId], references: [id], onDelete: Cascade)
+  product   Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@id([caseStudyId, productId])
+  @@index([productId])
+  @@map("case_study_products")
+}
+
+// Case Study <-> related Page (manually curated "related content").
+model CaseStudyRelatedPage {
+  caseStudyId String @map("case_study_id")
+  pageId      String @map("page_id")
+
+  caseStudy CaseStudy @relation(fields: [caseStudyId], references: [id], onDelete: Cascade)
+  page      Page      @relation(fields: [pageId], references: [id], onDelete: Cascade)
+
+  @@id([caseStudyId, pageId])
+  @@index([pageId])
+  @@map("case_study_related_pages")
+}
+
+// Case Study <-> related Post (manually curated "related content").
+model CaseStudyRelatedPost {
+  caseStudyId String @map("case_study_id")
+  postId      String @map("post_id")
+
+  caseStudy CaseStudy @relation(fields: [caseStudyId], references: [id], onDelete: Cascade)
+  post      Post      @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  @@id([caseStudyId, postId])
+  @@index([postId])
+  @@map("case_study_related_posts")
 }
 
 // Phase 5 — SEO Control Center (docs/SEO_ARCHITECTURE.md). A redirect is a
@@ -1609,6 +1698,10 @@ model ContentRevision {
   id           String        @id @default(uuid())
   pageId       String?       @map("page_id")
   postId       String?       @map("post_id")
+  // Phase 11 — additive third parent. The exactly-one-parent CHECK
+  // constraint (content_revisions_exactly_one_parent) is widened in the
+  // Phase 11 migration to num_nonnulls(page_id, post_id, case_study_id) = 1.
+  caseStudyId  String?       @map("case_study_id")
   version      Int
   status       ContentStatus
   title        String
@@ -1625,14 +1718,17 @@ model ContentRevision {
   createdAt    DateTime      @default(now()) @map("created_at")
   publishedAt  DateTime?     @map("published_at")
 
-  page           Page? @relation("PageRevisions", fields: [pageId], references: [id], onDelete: Cascade)
-  post           Post? @relation("PostRevisions", fields: [postId], references: [id], onDelete: Cascade)
-  createdBy      User? @relation("RevisionCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
-  pageCurrentFor Page? @relation("PageCurrentRevision")
-  postCurrentFor Post? @relation("PostCurrentRevision")
+  page                Page?      @relation("PageRevisions", fields: [pageId], references: [id], onDelete: Cascade)
+  post                Post?      @relation("PostRevisions", fields: [postId], references: [id], onDelete: Cascade)
+  caseStudy           CaseStudy? @relation("CaseStudyRevisions", fields: [caseStudyId], references: [id], onDelete: Cascade)
+  createdBy           User?      @relation("RevisionCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  pageCurrentFor      Page?      @relation("PageCurrentRevision")
+  postCurrentFor      Post?      @relation("PostCurrentRevision")
+  caseStudyCurrentFor CaseStudy? @relation("CaseStudyCurrentRevision")
 
   @@index([pageId])
   @@index([postId])
+  @@index([caseStudyId])
   @@map("content_revisions")
 }
 
@@ -1868,11 +1964,12 @@ model MediaAsset {
   updatedAt        DateTime        @updatedAt @map("updated_at")
   deletedAt        DateTime?       @map("deleted_at")
 
-  organization     Organization        @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  uploadedBy       User?               @relation("MediaUploadedBy", fields: [uploadedById], references: [id], onDelete: SetNull)
-  uploadSession    MediaUploadSession?
-  featuredForPages Page[]              @relation("PageFeaturedMedia")
-  featuredForPosts Post[]              @relation("PostFeaturedMedia")
+  organization           Organization        @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  uploadedBy             User?               @relation("MediaUploadedBy", fields: [uploadedById], references: [id], onDelete: SetNull)
+  uploadSession          MediaUploadSession?
+  featuredForPages       Page[]              @relation("PageFeaturedMedia")
+  featuredForPosts       Post[]              @relation("PostFeaturedMedia")
+  featuredForCaseStudies CaseStudy[]         @relation("CaseStudyFeaturedMedia")
 
   @@index([organizationId, status])
   @@map("media_assets")
