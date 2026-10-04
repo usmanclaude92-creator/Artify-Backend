@@ -605,12 +605,23 @@ export const notificationsApi = {
 // being a parallel, CRM-disconnected record — see docs/FORMS_ARCHITECTURE.md.
 // ---------------------------------------------------------------------------
 export type FormStatusValue = "ACTIVE" | "ARCHIVED";
-export type FormFieldTypeValue = "text" | "email" | "tel" | "textarea";
+// "file" deliberately omitted — see server/schemas/formSchemas.ts's header
+// comment: no safe anonymous-upload path exists in this codebase yet.
+export type FormFieldTypeValue = "text" | "email" | "tel" | "number" | "select" | "multiselect" | "checkbox" | "radio" | "date" | "textarea" | "hidden";
+export interface FormFieldOption {
+  value: string;
+  label: string;
+}
 export interface FormFieldDef {
   key: string;
   label: string;
   type: FormFieldTypeValue;
   required: boolean;
+  placeholder?: string;
+  options?: FormFieldOption[];
+  min?: number;
+  max?: number;
+  visibleWhen?: { fieldKey: string; equals: string };
 }
 export interface MarketingForm {
   id: string;
@@ -620,6 +631,7 @@ export interface MarketingForm {
   status: FormStatusValue;
   fields: FormFieldDef[];
   successMessage: string | null;
+  notifyUserIds: string[];
   createdById: string | null;
   createdAt: string;
   updatedAt: string;
@@ -628,12 +640,15 @@ export interface FormSubmission {
   id: string;
   formId: string;
   organizationId: string;
-  data: Record<string, string>;
+  data: Record<string, string | string[]>;
   utmSource: string | null;
   utmMedium: string | null;
   utmCampaign: string | null;
   utmTerm: string | null;
   utmContent: string | null;
+  landingPagePath: string | null;
+  referrer: string | null;
+  consentGiven: boolean | null;
   leadId: string | null;
   createdAt: string;
 }
@@ -642,13 +657,26 @@ export const formsApi = {
   list: (params: { page?: number; limit?: number; search?: string; status?: FormStatusValue; sort?: string; order?: "asc" | "desc" } = {}) =>
     paginatedGet<MarketingForm>("/forms", "forms", params),
   get: (id: string) => apiClient.get<{ form: MarketingForm }>(`/forms/${id}`),
-  create: (payload: { name: string; slug?: string; fields: FormFieldDef[]; successMessage?: string }) =>
+  create: (payload: { name: string; slug?: string; fields: FormFieldDef[]; successMessage?: string; notifyUserIds?: string[] }) =>
     apiClient.post<{ form: MarketingForm }>("/forms", payload),
-  update: (id: string, payload: Partial<{ name: string; slug: string; fields: FormFieldDef[]; successMessage: string | null; status: FormStatusValue }>) =>
-    apiClient.patch<{ form: MarketingForm }>(`/forms/${id}`, payload),
+  update: (
+    id: string,
+    payload: Partial<{ name: string; slug: string; fields: FormFieldDef[]; successMessage: string | null; status: FormStatusValue; notifyUserIds: string[] }>
+  ) => apiClient.patch<{ form: MarketingForm }>(`/forms/${id}`, payload),
   remove: (id: string) => apiClient.delete<{ message: string }>(`/forms/${id}`),
   listSubmissions: (id: string, params: { page?: number; limit?: number } = {}) =>
     paginatedGet<FormSubmission>(`/forms/${id}/submissions`, "submissions", params),
+  downloadSubmissionsExport: async (id: string, filename: string): Promise<void> => {
+    const blob = await apiClient.getBlob(`/forms/${id}/submissions/export`);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -898,7 +926,9 @@ export type BlockType =
   | "spacer"
   | "divider"
   | "templatePart"
-  | "navigationMenu";
+  | "navigationMenu"
+  | "form"
+  | "testimonial";
 
 export interface EditorBlock {
   id: string;

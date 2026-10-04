@@ -584,6 +584,13 @@ model Form {
   status         FormStatus @default(ACTIVE)
   fields         Json
   successMessage String?    @map("success_message")
+  // Phase 9 (Forms + Landing Pages + Conversion) — a JSON array of userIds
+  // (within this Form's own organization, validated at save time by
+  // formService) to notify in-app when a real submission lands. No new
+  // table: this is config with no independent lifecycle, same reasoning
+  // `fields` itself already uses. Never claims email delivery — this
+  // codebase has no mail transport (see notificationService.ts).
+  notifyUserIds  Json       @default("[]") @map("notify_user_ids")
   createdById    String?    @map("created_by")
   createdAt      DateTime   @default(now()) @map("created_at")
   updatedAt      DateTime   @updatedAt @map("updated_at")
@@ -609,19 +616,29 @@ model Form {
 // still the honest record even in the (should-never-happen) case that
 // step fails after this one committed.
 model FormSubmission {
-  id             String   @id @default(uuid())
-  formId         String   @map("form_id")
-  organizationId String   @map("organization_id")
-  data           Json
-  utmSource      String?  @map("utm_source")
-  utmMedium      String?  @map("utm_medium")
-  utmCampaign    String?  @map("utm_campaign")
-  utmTerm        String?  @map("utm_term")
-  utmContent     String?  @map("utm_content")
-  leadId         String?  @map("lead_id")
-  ipAddress      String?  @map("ip_address")
-  userAgent      String?  @map("user_agent")
-  createdAt      DateTime @default(now()) @map("created_at")
+  id              String   @id @default(uuid())
+  formId          String   @map("form_id")
+  organizationId  String   @map("organization_id")
+  data            Json
+  utmSource       String?  @map("utm_source")
+  utmMedium       String?  @map("utm_medium")
+  utmCampaign     String?  @map("utm_campaign")
+  utmTerm         String?  @map("utm_term")
+  utmContent      String?  @map("utm_content")
+  leadId          String?  @map("lead_id")
+  ipAddress       String?  @map("ip_address")
+  userAgent       String?  @map("user_agent")
+  // Phase 9 — real signals captured at submission time, never fabricated:
+  // consentGiven mirrors a checkbox field keyed "consent" when the form
+  // defines one (null when the form has no such field, not false — "no
+  // consent field" and "declined consent" are different facts).
+  // landingPagePath is the site-relative path the visitor submitted from
+  // (sent by the public form component); referrer is read server-side
+  // from the request's own Referer header, never trusted from the body.
+  consentGiven    Boolean? @map("consent_given")
+  landingPagePath String?  @map("landing_page_path")
+  referrer        String?
+  createdAt       DateTime @default(now()) @map("created_at")
 
   form         Form         @relation(fields: [formId], references: [id], onDelete: Cascade)
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)

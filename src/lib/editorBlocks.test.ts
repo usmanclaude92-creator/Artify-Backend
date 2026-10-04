@@ -39,11 +39,19 @@ describe("createBlock", () => {
     }
   });
 
-  it("leaf types (text/heading/image/button/spacer/divider/templatePart) have no children", () => {
-    for (const t of ["text", "heading", "image", "button", "spacer", "divider", "templatePart"] as const) {
+  it("leaf types (text/heading/image/button/spacer/divider/templatePart/navigationMenu/form/testimonial) have no children", () => {
+    for (const t of ["text", "heading", "image", "button", "spacer", "divider", "templatePart", "navigationMenu", "form", "testimonial"] as const) {
       expect(createBlock(t).children).toBeUndefined();
       expect(isContainerBlock(t)).toBe(false);
     }
+  });
+
+  it("creates a form block referencing no Form yet, and a testimonial block with empty text fields", () => {
+    const form = createBlock("form");
+    expect(form.props.formId).toBe("");
+    const testimonial = createBlock("testimonial");
+    expect(testimonial.props.quote).toBe("");
+    expect(testimonial.props.authorName).toBe("");
   });
 });
 
@@ -212,6 +220,24 @@ describe("blocksToPlainHtml (public safe-fallback body)", () => {
     expect(blocksToPlainHtml(d, {})).toBe("");
   });
 
+  it("never inlines a form block — it needs real interactivity the static fallback can't provide", () => {
+    const d = doc([{ id: "f", type: "form", props: { formId: "form-1" } }]);
+    expect(blocksToPlainHtml(d, {})).toBe("");
+  });
+
+  it("renders a testimonial block as a blockquote with the author as a <cite>, HTML-escaped", () => {
+    const d = doc([{ id: "t", type: "testimonial", props: { quote: "Great <product>!", authorName: "Jane <Doe>" } }]);
+    const html = blocksToPlainHtml(d, {});
+    expect(html).toContain("<blockquote>");
+    expect(html).toContain("Great &lt;product&gt;!");
+    expect(html).toContain("<cite>Jane &lt;Doe&gt;</cite>");
+  });
+
+  it("omits a testimonial block entirely when it has no quote", () => {
+    const d = doc([{ id: "t", type: "testimonial", props: { quote: "" } }]);
+    expect(blocksToPlainHtml(d, {})).toBe("");
+  });
+
   it("escapes HTML-significant characters in heading text and button label/href", () => {
     const d = doc([{ id: "h", type: "heading", props: { text: '<img src=x onerror=alert(1)>', level: 2 } }]);
     const html = blocksToPlainHtml(d, {});
@@ -235,5 +261,10 @@ describe("collectImageMediaIds", () => {
   it("ignores image blocks with no mediaId set yet", () => {
     const d = doc([{ id: "i", type: "image", props: { mediaId: "" } }]);
     expect(collectImageMediaIds(d.blocks)).toEqual([]);
+  });
+
+  it("also collects a testimonial block's avatarMediaId", () => {
+    const d = doc([{ id: "t", type: "testimonial", props: { quote: "x", avatarMediaId: "avatar-1" } }]);
+    expect(collectImageMediaIds(d.blocks)).toEqual(["avatar-1"]);
   });
 });

@@ -34,6 +34,7 @@ import {
   PanelsTopLeft,
   AlertTriangle,
   Menu as MenuIcon,
+  ClipboardList,
 } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
@@ -44,6 +45,7 @@ import {
   templatesApi,
   templatePartsApi,
   navigationMenusApi,
+  formsApi,
   siteSettingsApi,
   mediaApi,
   normalizeTemplateRegions,
@@ -54,6 +56,7 @@ import {
   type Template,
   type TemplatePart,
   type NavigationMenu,
+  type MarketingForm,
   type TemplateRegionEntry,
   type TemplatePartRevision,
   type ContentRevision,
@@ -94,6 +97,8 @@ const BLOCK_LABELS: Record<BlockType, string> = {
   divider: "Divider",
   templatePart: "Template part",
   navigationMenu: "Navigation menu",
+  form: "Form",
+  testimonial: "Testimonial",
 };
 
 const ADDABLE_TYPES: BlockType[] = [
@@ -109,6 +114,8 @@ const ADDABLE_TYPES: BlockType[] = [
   "divider",
   "templatePart",
   "navigationMenu",
+  "form",
+  "testimonial",
 ];
 
 const VIEWPORT_WIDTH: Record<"desktop" | "tablet" | "mobile", string> = { desktop: "100%", tablet: "768px", mobile: "375px" };
@@ -273,8 +280,9 @@ const CanvasBlock: React.FC<{
   onMediaResolved: (id: string, url: string) => void;
   templatePartNames: Record<string, string>;
   navigationMenuNames: Record<string, string>;
+  formNames: Record<string, string>;
   globalStyles: GlobalStyles | null;
-}> = ({ block, depth, selectedId, onSelect, onDelete, onDuplicate, onMove, onAddChild, mediaCache, onMediaResolved, templatePartNames, navigationMenuNames, globalStyles }) => {
+}> = ({ block, depth, selectedId, onSelect, onDelete, onDuplicate, onMove, onAddChild, mediaCache, onMediaResolved, templatePartNames, navigationMenuNames, formNames, globalStyles }) => {
   const selected = block.id === selectedId;
   const [addChildOpen, setAddChildOpen] = useState(false);
 
@@ -343,6 +351,7 @@ const CanvasBlock: React.FC<{
               onMediaResolved={onMediaResolved}
               templatePartNames={templatePartNames}
               navigationMenuNames={navigationMenuNames}
+              formNames={formNames}
               globalStyles={globalStyles}
             />
           ))}
@@ -469,6 +478,32 @@ const CanvasBlock: React.FC<{
         </div>
       );
     }
+    case "form": {
+      const id = String(block.props.formId ?? "");
+      return frame(
+        <div
+          className="text-xs flex items-center gap-1.5 p-2 rounded-lg border border-dashed"
+          style={{ color: "var(--text-secondary)", borderColor: "var(--border)" }}
+        >
+          <ClipboardList className="w-3.5 h-3.5 shrink-0" />
+          {id ? (formNames[id] ?? "Form") : "No form selected"}
+        </div>
+      );
+    }
+    case "testimonial":
+      return frame(
+        <div className="p-3 rounded-lg" style={{ background: "var(--bg-app)" }}>
+          <p className="text-xs italic" style={{ color: "var(--text-primary)" }}>
+            “{String(block.props.quote ?? "") || "Testimonial quote…"}”
+          </p>
+          {!!block.props.authorName && (
+            <p className="text-[11px] mt-1 font-semibold" style={{ color: "var(--text-muted)" }}>
+              {String(block.props.authorName)}
+              {!!block.props.authorTitle && <span className="font-normal"> — {String(block.props.authorTitle)}</span>}
+            </p>
+          )}
+        </div>
+      );
   }
 };
 
@@ -483,8 +518,10 @@ const Inspector: React.FC<{
   onMoveInto: (id: string, parentId: string | null) => void;
   templateParts: TemplatePart[];
   navigationMenus: NavigationMenu[];
-}> = ({ doc, block, onChangeProps, onMoveInto, templateParts, navigationMenus }) => {
+  forms: MarketingForm[];
+}> = ({ doc, block, onChangeProps, onMoveInto, templateParts, navigationMenus, forms }) => {
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [avatarPickerOpen, setAvatarPickerOpen] = useState(false);
 
   if (!block) {
     return (
@@ -692,6 +729,58 @@ const Inspector: React.FC<{
               ))}
             </Select>
           </Field>
+        );
+      case "form":
+        return (
+          <Field label="Form" hint="Embeds a real Marketing Form — a lead form, newsletter signup, or contact block are all just a Form with the right fields. Only ACTIVE forms render on the live site.">
+            <Select value={String(block.props.formId ?? "")} onChange={(e) => onChangeProps(block.id, { formId: e.target.value })}>
+              <option value="">Select…</option>
+              {forms.map((f) => (
+                <option key={f.id} value={f.id}>
+                  {f.name} ({f.status})
+                </option>
+              ))}
+            </Select>
+            {forms.length === 0 && (
+              <p className="text-[11px] mt-1" style={{ color: "var(--text-muted)" }}>
+                No ACTIVE forms yet — create one in Marketing → Forms first.
+              </p>
+            )}
+          </Field>
+        );
+      case "testimonial":
+        return (
+          <>
+            <Field label="Quote">
+              <textarea
+                className="w-full px-3 py-2 rounded-lg text-sm focus:outline-none"
+                style={{ background: "var(--bg-app)", border: "1px solid var(--border)", color: "var(--text-primary)" }}
+                rows={3}
+                maxLength={2000}
+                value={String(block.props.quote ?? "")}
+                onChange={(e) => onChangeProps(block.id, { quote: e.target.value })}
+              />
+            </Field>
+            <Field label="Author name">
+              <Input value={String(block.props.authorName ?? "")} onChange={(e) => onChangeProps(block.id, { authorName: e.target.value })} />
+            </Field>
+            <Field label="Author title" hint="e.g. a role and company.">
+              <Input value={String(block.props.authorTitle ?? "")} onChange={(e) => onChangeProps(block.id, { authorTitle: e.target.value })} />
+            </Field>
+            <Field label="Avatar">
+              <Button type="button" variant="secondary" onClick={() => setAvatarPickerOpen(true)}>
+                {block.props.avatarMediaId ? "Change avatar" : "Choose avatar"}
+              </Button>
+            </Field>
+            <MediaPickerModal
+              open={avatarPickerOpen}
+              onClose={() => setAvatarPickerOpen(false)}
+              onSelect={(m) => {
+                onChangeProps(block.id, { avatarMediaId: m.id });
+                setAvatarPickerOpen(false);
+              }}
+            />
+          </>
         );
     }
   })();
@@ -1125,6 +1214,7 @@ const PageOrPartEditor: React.FC = () => {
   const [templateRegionParts, setTemplateRegionParts] = useState<Record<string, TemplatePart>>({});
   const [templateParts, setTemplateParts] = useState<TemplatePart[]>([]);
   const [navigationMenus, setNavigationMenus] = useState<NavigationMenu[]>([]);
+  const [forms, setForms] = useState<MarketingForm[]>([]);
   const [globalStyles, setGlobalStyles] = useState<GlobalStyles | null>(null);
 
   const [mediaCache, setMediaCache] = useState<Record<string, string>>({});
@@ -1233,6 +1323,10 @@ const PageOrPartEditor: React.FC = () => {
     void navigationMenusApi.list({ limit: 100, sort: "name", order: "asc" }).then((res) => setNavigationMenus(res.items));
   }, []);
 
+  useEffect(() => {
+    void formsApi.list({ limit: 100, status: "ACTIVE", sort: "name", order: "asc" }).then((res) => setForms(res.items));
+  }, []);
+
   // Phase 3 — make Global Styles available to the canvas preview, scoped
   // to rendered block content only (never the Control Center's own chrome
   // theme). Reads the PUBLISHED values, same as what the live site shows,
@@ -1272,6 +1366,7 @@ const PageOrPartEditor: React.FC = () => {
 
   const templatePartNames = useMemo(() => Object.fromEntries(templateParts.map((p) => [p.id, p.name])), [templateParts]);
   const navigationMenuNames = useMemo(() => Object.fromEntries(navigationMenus.map((m) => [m.id, m.name])), [navigationMenus]);
+  const formNames = useMemo(() => Object.fromEntries(forms.map((f) => [f.id, f.name])), [forms]);
   const selectedBlock = selectedId ? findBlock(doc, selectedId) : null;
 
   const mutate = (fn: (d: EditorDocument) => EditorDocument) => setDoc((d) => fn(d));
@@ -1583,6 +1678,7 @@ const PageOrPartEditor: React.FC = () => {
                   onMediaResolved={(id, url) => setMediaCache((prev) => ({ ...prev, [id]: url }))}
                   templatePartNames={templatePartNames}
                   navigationMenuNames={navigationMenuNames}
+                  formNames={formNames}
                   globalStyles={globalStyles}
                 />
               ))}
@@ -1621,6 +1717,7 @@ const PageOrPartEditor: React.FC = () => {
             onMoveInto={handleMoveInto}
             templateParts={templateParts}
             navigationMenus={navigationMenus}
+            forms={forms}
           />
         </div>
       </div>
@@ -1630,7 +1727,7 @@ const PageOrPartEditor: React.FC = () => {
           {doc.blocks.length === 0 ? (
             <EmptyState title="Nothing to preview yet" description="Add blocks to see a preview." />
           ) : (
-            <BlockTreeRenderer blocks={doc.blocks} templatePartNames={templatePartNames} navigationMenuNames={navigationMenuNames} globalStyles={globalStyles} />
+            <BlockTreeRenderer blocks={doc.blocks} templatePartNames={templatePartNames} navigationMenuNames={navigationMenuNames} formNames={formNames} globalStyles={globalStyles} />
           )}
         </div>
       </Modal>

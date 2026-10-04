@@ -105,6 +105,36 @@ async function projectPageTemplate(page: PageWithPublicRelations) {
   return { type: template.type, slug: template.slug, structure: revision.structure, regions: Object.fromEntries(regions) };
 }
 
+/**
+ * Phase 9 (Forms + Landing Pages + Conversion) — the public block
+ * renderer has no authenticated media-read path (unlike the Control
+ * Center's own Site Editor, which fetches signed read URLs per image via
+ * mediaApi), and there is no public-by-id media endpoint to add one
+ * without risking leaking arbitrary internal media. So every `mediaId`/
+ * `avatarMediaId` an editorBlocks tree references is resolved here,
+ * server-side, to the same public-safe projection (ACTIVE + PUBLIC only)
+ * every other public media reference already uses — the public response
+ * carries a real `resolvedUrl` next to the id, never the id alone.
+ */
+async function resolveBlockMedia(block: Record<string, unknown>, organizationId: string): Promise<Record<string, unknown>> {
+  const props = { ...(block.props as Record<string, unknown>) };
+  if (block.type === "image" && typeof props.mediaId === "string" && props.mediaId) {
+    const media = await mediaRepository.findByIdInOrg(props.mediaId, organizationId);
+    const projected = await projectPublicMedia(media);
+    props.resolvedUrl = projected?.url ?? null;
+  }
+  if (block.type === "testimonial" && typeof props.avatarMediaId === "string" && props.avatarMediaId) {
+    const media = await mediaRepository.findByIdInOrg(props.avatarMediaId, organizationId);
+    const projected = await projectPublicMedia(media);
+    props.resolvedAvatarUrl = projected?.url ?? null;
+  }
+  const next: Record<string, unknown> = { ...block, props };
+  if (Array.isArray(block.children)) {
+    next.children = await Promise.all((block.children as Record<string, unknown>[]).map((c) => resolveBlockMedia(c, organizationId)));
+  }
+  return next;
+}
+
 // Phase 2 (Site Editor) — additive, same backward-compatible pattern as
 // `template` above: a page with no editor composition (the overwhelming
 // majority of existing pages) gets `editorBlocks: null` exactly as
@@ -112,10 +142,11 @@ async function projectPageTemplate(page: PageWithPublicRelations) {
 // unaffected. Only a page whose current revision has a genuinely saved
 // block document gets a non-null value here — never partial/unsaved
 // editor state, since this reads the same persisted revision `body` does.
-function projectPageEditorBlocks(revision: PageWithPublicRelations["currentRevision"]): Record<string, unknown> | null {
+async function projectPageEditorBlocks(revision: PageWithPublicRelations["currentRevision"], organizationId: string): Promise<Record<string, unknown> | null> {
   const blocks = revision?.editorBlocks as Record<string, unknown> | null | undefined;
   if (!blocks || !Array.isArray(blocks.blocks) || blocks.blocks.length === 0) return null;
-  return blocks;
+  const resolvedBlocks = await Promise.all((blocks.blocks as Record<string, unknown>[]).map((b) => resolveBlockMedia(b, organizationId)));
+  return { ...blocks, blocks: resolvedBlocks };
 }
 
 /**
@@ -151,7 +182,7 @@ async function projectPage(page: PageWithPublicRelations) {
     title: page.title,
     body: revision?.body ?? "",
     excerpt: revision?.excerpt ?? null,
-    editorBlocks: projectPageEditorBlocks(revision),
+    editorBlocks: await projectPageEditorBlocks(revision, page.organizationId),
     seo: await applySeoDefaults((revision?.metadata as Record<string, unknown> | undefined) ?? {}, page.organizationId, !!featuredMedia),
     featuredMedia,
     pageType: page.pageType,

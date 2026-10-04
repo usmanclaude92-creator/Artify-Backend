@@ -4,7 +4,7 @@ import { FileText, Plus, Search, Send, Rocket, CalendarClock, Archive, History, 
 import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
 import { useRouter } from "../../lib/router";
-import { pagesApi, mediaApi, templatesApi, type CmsPage, type CmsMedia, type ContentRevision, type ContentStatusValue, type Template } from "../../lib/api";
+import { pagesApi, mediaApi, templatesApi, type CmsPage, type CmsMedia, type ContentRevision, type ContentStatusValue, type Template, type PageTypeValue } from "../../lib/api";
 import { ApiClientError } from "../../lib/apiClient";
 import { Card, Button, Input, Select, Badge, LoadingState, ErrorState, EmptyState, Pagination, Modal, Field, ConfirmDialog } from "../ui/ui";
 import { hasPermission } from "../../lib/permissions";
@@ -97,6 +97,7 @@ const PageFormModal: React.FC<{
   const [featuredMediaId, setFeaturedMediaId] = useState<string | undefined>(page?.featuredMediaId ?? undefined);
   const [parentId, setParentId] = useState(page?.parentId ?? "");
   const [templateId, setTemplateId] = useState(page?.templateId ?? "");
+  const [pageType, setPageType] = useState<PageTypeValue>(page?.pageType ?? "STANDARD");
   const [seo, setSeo] = useState<SeoFieldsValue>(page ? seoFieldsFromMetadata(page.currentRevision?.metadata) : EMPTY_SEO_FIELDS);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -110,6 +111,7 @@ const PageFormModal: React.FC<{
       setFeaturedMediaId(page?.featuredMediaId ?? undefined);
       setParentId(page?.parentId ?? "");
       setTemplateId(page?.templateId ?? "");
+      setPageType(page?.pageType ?? "STANDARD");
       setSeo(page ? seoFieldsFromMetadata(page.currentRevision?.metadata) : EMPTY_SEO_FIELDS);
       setError(null);
     }
@@ -133,6 +135,7 @@ const PageFormModal: React.FC<{
           featuredMediaId,
           parentId: parentId || undefined,
           templateId: templateId || undefined,
+          pageType,
         });
         onSaved(res.page);
       } else if (page) {
@@ -145,6 +148,7 @@ const PageFormModal: React.FC<{
           featuredMediaId: featuredMediaId ?? null,
           parentId: parentId || null,
           templateId: templateId || null,
+          pageType,
           expectedUpdatedAt: page.updatedAt,
         });
         onSaved(res.page);
@@ -176,6 +180,12 @@ const PageFormModal: React.FC<{
             value={excerpt}
             onChange={(e) => setExcerpt(e.target.value)}
           />
+        </Field>
+        <Field label="Page type" hint="Landing pages are built for Site Editor conversion content (forms, CTAs, testimonials) — this doesn't change where the page is reachable.">
+          <Select value={pageType} onChange={(e) => setPageType(e.target.value as PageTypeValue)}>
+            <option value="STANDARD">Standard</option>
+            <option value="LANDING">Landing page</option>
+          </Select>
         </Field>
         <Field label="Parent page" hint="Builds a simple page hierarchy. Doesn't change this page's own URL.">
           <Select value={parentId} onChange={(e) => setParentId(e.target.value)}>
@@ -325,6 +335,7 @@ const PageDetail: React.FC<{ page: CmsPage; allPages: CmsPage[]; templates: Temp
           <h2 className="text-sm font-bold flex items-center gap-2" style={{ color: "var(--text-primary)" }}>
             {page.title}
             <Badge tone={STATUS_TONE[page.status]}>{page.status}</Badge>
+            {page.pageType === "LANDING" && <Badge tone="info">Landing page</Badge>}
           </h2>
           <p className="text-[11px]" style={{ color: "var(--text-muted)" }}>
             /{page.slug} · v{page.currentRevision?.version ?? "—"}

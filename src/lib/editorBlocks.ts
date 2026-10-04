@@ -40,6 +40,12 @@ export function createBlock(type: BlockType): EditorBlock {
       return { id, type, props: { style: "solid" } };
     case "templatePart":
       return { id, type, props: { templatePartId: "" } };
+    case "navigationMenu":
+      return { id, type, props: { navigationMenuId: "" } };
+    case "form":
+      return { id, type, props: { formId: "" } };
+    case "testimonial":
+      return { id, type, props: { quote: "", authorName: "", authorTitle: "" } };
   }
 }
 
@@ -209,6 +215,22 @@ function renderBlockToHtml(block: EditorBlock, mediaUrlCache: Record<string, str
       // inlined into a page's own body fallback (it would duplicate the
       // Header/Footer content that already renders around every page).
       return "";
+    case "navigationMenu":
+      return "";
+    case "form":
+      // A real form needs controlled inputs/fetch submission — the static
+      // body-HTML fallback can't provide that (same reasoning
+      // templatePart/navigationMenu already use for their own
+      // render-time-only resolution). The public site's own block-aware
+      // renderer (not this flattened fallback) is what actually renders
+      // this block live — see artifysolscom's PublicBlockRenderer.
+      return "";
+    case "testimonial": {
+      const quote = typeof block.props.quote === "string" ? block.props.quote : "";
+      const authorName = typeof block.props.authorName === "string" ? block.props.authorName : "";
+      if (!quote) return "";
+      return `<blockquote>${escapeHtml(quote)}${authorName ? `<cite>${escapeHtml(authorName)}</cite>` : ""}</blockquote>`;
+    }
   }
 }
 
@@ -216,6 +238,7 @@ export function collectImageMediaIds(blocks: EditorBlock[]): string[] {
   const ids: string[] = [];
   for (const b of blocks) {
     if (b.type === "image" && typeof b.props.mediaId === "string" && b.props.mediaId) ids.push(b.props.mediaId);
+    if (b.type === "testimonial" && typeof b.props.avatarMediaId === "string" && b.props.avatarMediaId) ids.push(b.props.avatarMediaId);
     if (b.children) ids.push(...collectImageMediaIds(b.children));
   }
   return [...new Set(ids)];
