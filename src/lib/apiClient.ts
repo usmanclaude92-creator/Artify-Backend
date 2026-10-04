@@ -140,9 +140,27 @@ async function apiRequest<T>(path: string, options: ApiRequestOptions = {}): Pro
   return envelope.data;
 }
 
+/**
+ * Phase 9 — the one non-JSON response this client needs to handle (CSV
+ * export). Mirrors apiRequestEnvelope's auth/base-URL/timeout handling but
+ * returns a Blob instead of parsing a success envelope, since the server
+ * genuinely isn't sending one for this endpoint.
+ */
+async function fetchBlob(path: string): Promise<Blob> {
+  const baseUrl = resolveBaseUrl();
+  const url = `${baseUrl}${path.startsWith("/") ? path : `/${path}`}`;
+  const headers: Record<string, string> = {};
+  const token = authTokenGetter?.();
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const response = await fetch(url, { headers, credentials: "include" });
+  if (!response.ok) throw new ApiClientError(`Export failed with status ${response.status}`, { code: "EXPORT_FAILED", status: response.status });
+  return response.blob();
+}
+
 export const apiClient = {
   get: <T>(path: string, options?: Omit<ApiRequestOptions, "method" | "body">) =>
     apiRequest<T>(path, { ...options, method: "GET" }),
+  getBlob: fetchBlob,
   /** Returns the full envelope (incl. `meta.pagination`) — used by list endpoints; everything else uses the plain data-only helpers below. */
   getRaw: <T>(path: string, options?: Omit<ApiRequestOptions, "method" | "body">) =>
     apiRequestEnvelope<T>(path, { ...options, method: "GET" }),

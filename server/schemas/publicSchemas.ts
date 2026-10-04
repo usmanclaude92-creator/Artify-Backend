@@ -23,13 +23,21 @@ export const listPublicProductsQuerySchema = z.object({
   page: z.coerce.number().int().positive().default(1),
   limit: z.coerce.number().int().positive().max(50).default(20),
   search: z.string().trim().max(200).optional(),
-  type: z.enum(["PRODUCT", "SERVICE"]).optional(),
+  type: z.enum(["PRODUCT", "SERVICE", "SOLUTION"]).optional(),
+  // Phase 10 — filter by the real category/industry taxonomy, by slug
+  // (never an internal id crossing the public boundary).
+  categorySlug: z.string().trim().max(100).optional(),
+  industrySlug: z.string().trim().max(100).optional(),
 });
 export type ListPublicProductsQuery = z.infer<typeof listPublicProductsQuerySchema>;
 
 // Phase 5 — SEO Control Center. The public site queries this when a slug it
 // tried to render 404s, to check whether it's an old slug with a redirect
 // on file before showing a hard not-found page.
+// Phase 5 — which of the four canonical menu locations the public site is
+// asking for (GET /public/navigation-menus/:type).
+export const publicNavigationMenuTypeSchema = z.enum(["PRIMARY", "HEADER", "FOOTER", "MOBILE", "CUSTOM"]);
+
 export const publicRedirectLookupQuerySchema = z.object({
   path: z
     .string()

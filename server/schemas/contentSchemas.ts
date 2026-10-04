@@ -61,6 +61,9 @@ export const listContentQuerySchema = z.object({
   limit: z.coerce.number().int().positive().max(100).default(20),
   search: z.string().trim().max(200).optional(),
   status: contentStatusSchema.optional(),
+  // Phase 7 — Content Dashboard date filtering, inclusive range over createdAt.
+  fromDate: z.coerce.date().optional(),
+  toDate: z.coerce.date().optional(),
   sort: z.enum(SORT_FIELDS).default("updatedAt"),
   order: z.enum(["asc", "desc"]).default("desc"),
 });
@@ -82,6 +85,8 @@ export const createCategorySchema = z.object({
   name: z.string().trim().min(1).max(150),
   slug: slugSchema.optional(),
   description: z.string().trim().max(2000).optional(),
+  // Phase 7 — optional parent for a simple hierarchy (Category.parentId).
+  parentId: z.string().trim().uuid().optional(),
 });
 export type CreateCategoryInput = z.infer<typeof createCategorySchema>;
 
@@ -90,6 +95,7 @@ export const updateCategorySchema = z
     name: z.string().trim().min(1).max(150).optional(),
     slug: slugSchema.optional(),
     description: z.string().trim().max(2000).nullable().optional(),
+    parentId: z.string().trim().uuid().nullable().optional(),
   })
   .refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
 export type UpdateCategoryInput = z.infer<typeof updateCategorySchema>;
@@ -97,11 +103,23 @@ export type UpdateCategoryInput = z.infer<typeof updateCategorySchema>;
 export const createTagSchema = z.object({
   name: z.string().trim().min(1).max(100),
   slug: slugSchema.optional(),
+  // Phase 7 — optional description, matching Category's own field.
+  description: z.string().trim().max(2000).optional(),
 });
 export type CreateTagInput = z.infer<typeof createTagSchema>;
 
 export const updateTagSchema = z.object({
   name: z.string().trim().min(1).max(100).optional(),
   slug: slugSchema.optional(),
+  description: z.string().trim().max(2000).nullable().optional(),
 }).refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
 export type UpdateTagInput = z.infer<typeof updateTagSchema>;
+
+// Phase 7 — bulk workflow actions for Posts/Pages list views (Content
+// Dashboard). Each action reuses the exact single-item service method
+// under the hood; this schema is shared by the bulk routes for both
+// resources.
+export const bulkContentIdsSchema = z.object({
+  ids: z.array(z.string().trim().uuid()).min(1).max(100),
+});
+export type BulkContentIdsInput = z.infer<typeof bulkContentIdsSchema>;

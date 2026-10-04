@@ -26,6 +26,10 @@ const moduleUpdateMock = vi.fn();
 const moduleArchiveMock = vi.fn();
 const notifyMock = vi.fn();
 
+const categoriesListMock = vi.fn();
+const industriesListMock = vi.fn();
+const formsListMock = vi.fn();
+
 vi.mock("../../lib/api", () => ({
   productsApi: {
     list: (...args: unknown[]) => listMock(...args),
@@ -33,6 +37,10 @@ vi.mock("../../lib/api", () => ({
     create: (...args: unknown[]) => createMock(...args),
     update: (...args: unknown[]) => updateMock(...args),
     archive: (...args: unknown[]) => archiveMock(...args),
+    bulkArchive: vi.fn(),
+    duplicate: vi.fn(),
+    listRevisions: vi.fn().mockResolvedValue({ revisions: [] }),
+    revert: vi.fn(),
     modules: (...args: unknown[]) => modulesMock(...args),
     addModule: (...args: unknown[]) => addModuleMock(...args),
     reorderModules: (...args: unknown[]) => reorderModulesMock(...args),
@@ -42,6 +50,10 @@ vi.mock("../../lib/api", () => ({
     update: (...args: unknown[]) => moduleUpdateMock(...args),
     archive: (...args: unknown[]) => moduleArchiveMock(...args),
   },
+  productCategoriesApi: { list: (...args: unknown[]) => categoriesListMock(...args) },
+  industriesApi: { list: (...args: unknown[]) => industriesListMock(...args) },
+  formsApi: { list: (...args: unknown[]) => formsListMock(...args) },
+  mediaApi: { get: vi.fn(), getReadUrl: vi.fn() },
 }));
 
 let mockPermissions: string[] = [
@@ -72,6 +84,9 @@ const product = {
   isFeatured: false,
   displayOrder: 0,
   version: "1.0.0",
+  featuredMediaId: null,
+  categoryId: null,
+  currentRevisionId: null,
   createdById: null,
   updatedById: null,
   createdAt: "2026-01-01T00:00:00.000Z",
@@ -105,6 +120,9 @@ afterEach(() => {
   reorderModulesMock.mockReset();
   moduleUpdateMock.mockReset();
   moduleArchiveMock.mockReset();
+  categoriesListMock.mockReset();
+  industriesListMock.mockReset();
+  formsListMock.mockReset();
   notifyMock.mockReset();
   mockPermissions = [
     "products.read",
@@ -121,6 +139,9 @@ afterEach(() => {
 
 beforeEach(() => {
   modulesMock.mockResolvedValue({ items: [moduleA, moduleB], page: 1, limit: 100, total: 2, totalPages: 1 });
+  categoriesListMock.mockResolvedValue({ categories: [] });
+  industriesListMock.mockResolvedValue({ industries: [] });
+  formsListMock.mockResolvedValue({ items: [], page: 1, limit: 100, total: 0, totalPages: 1 });
 });
 
 describe("ProductsPage", () => {
@@ -249,5 +270,80 @@ describe("ProductsPage", () => {
     const selects = screen.getAllByRole("combobox");
     fireEvent.change(selects[0]!, { target: { value: "SERVICE" } });
     await vi.waitFor(() => expect(listMock).toHaveBeenCalledWith(expect.objectContaining({ type: "SERVICE" })));
+  });
+
+  // --- Phase 10 (Products + Services + Solutions) ---
+
+  it("locks the catalog to SERVICE when reached via /services, hiding the type selector", async () => {
+    window.history.pushState({}, "", "/services");
+    listMock.mockResolvedValue({ items: [{ ...product, type: "SERVICE" }], page: 1, limit: 20, total: 1, totalPages: 1 });
+    renderProductsPage();
+
+    expect(await screen.findByText("Services")).toBeInTheDocument();
+    await vi.waitFor(() => expect(listMock).toHaveBeenCalledWith(expect.objectContaining({ type: "SERVICE" })));
+    // No type selector when the route already fixes it — only status remains.
+    expect(screen.getAllByRole("combobox")).toHaveLength(2);
+    window.history.pushState({}, "", "/");
+  });
+
+  it("locks the catalog to SOLUTION when reached via /solutions", async () => {
+    window.history.pushState({}, "", "/solutions");
+    listMock.mockResolvedValue({ items: [], page: 1, limit: 20, total: 0, totalPages: 1 });
+    renderProductsPage();
+
+    expect(await screen.findByText("Solutions")).toBeInTheDocument();
+    await vi.waitFor(() => expect(listMock).toHaveBeenCalledWith(expect.objectContaining({ type: "SOLUTION" })));
+    window.history.pushState({}, "", "/");
+  });
+
+  it("duplicates a product through the real API", async () => {
+    listMock.mockResolvedValue({ items: [product], page: 1, limit: 20, total: 1, totalPages: 1 });
+    const duplicated = { ...product, id: "product-2", code: "HCMS-01-COPY", slug: "artify-hcms-copy" };
+    const productsApiModule = await import("../../lib/api");
+    vi.mocked(productsApiModule.productsApi.duplicate).mockResolvedValue({ product: duplicated });
+    renderProductsPage();
+
+    await screen.findByText("Employee Management");
+    fireEvent.click(screen.getByRole("button", { name: /duplicate/i }));
+    await vi.waitFor(() => expect(productsApiModule.productsApi.duplicate).toHaveBeenCalledWith("product-1"));
+  });
+
+  it("bulk-archives selected items via the real API after confirming", async () => {
+    listMock.mockResolvedValue({ items: [product, { ...product, id: "product-2", code: "HCMS-02", name: "Second" }], page: 1, limit: 20, total: 2, totalPages: 1 });
+    const productsApiModule = await import("../../lib/api");
+    vi.mocked(productsApiModule.productsApi.bulkArchive).mockResolvedValue({ archived: 1, skipped: [] });
+    renderProductsPage();
+
+    await screen.findByText("Employee Management");
+    const checkboxes = screen.getAllByLabelText(/^select /i);
+    fireEvent.click(checkboxes[0]!);
+
+    fireEvent.click(screen.getByRole("button", { name: /archive 1 selected/i }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: /^archive$/i }));
+
+    await vi.waitFor(() => expect(productsApiModule.productsApi.bulkArchive).toHaveBeenCalledWith(["product-1"]));
+  });
+
+  it("opens revision history and reverts to a prior version through the real API", async () => {
+    listMock.mockResolvedValue({ items: [product], page: 1, limit: 20, total: 1, totalPages: 1 });
+    const productsApiModule = await import("../../lib/api");
+    vi.mocked(productsApiModule.productsApi.listRevisions).mockResolvedValue({
+      revisions: [
+        { id: "rev-2", productId: "product-1", version: 2, name: "Artify HCMS", content: {}, createdById: null, createdAt: "2026-01-02T00:00:00.000Z" },
+        { id: "rev-1", productId: "product-1", version: 1, name: "Artify HCMS", content: {}, createdById: null, createdAt: "2026-01-01T00:00:00.000Z" },
+      ],
+    });
+    vi.mocked(productsApiModule.productsApi.revert).mockResolvedValue({ product: { ...product, currentRevisionId: "rev-3" } });
+    renderProductsPage();
+
+    await screen.findByText("Employee Management");
+    fireEvent.click(screen.getByRole("button", { name: /revisions/i }));
+
+    expect(await screen.findByText("Version 2")).toBeInTheDocument();
+    expect(screen.getByText("Version 1")).toBeInTheDocument();
+    fireEvent.click(screen.getAllByRole("button", { name: /revert to this/i })[0]!);
+
+    await vi.waitFor(() => expect(productsApiModule.productsApi.revert).toHaveBeenCalledWith("product-1", "rev-2"));
   });
 });

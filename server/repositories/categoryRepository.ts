@@ -10,9 +10,20 @@ function slugify(input: string): string {
     .slice(0, 150);
 }
 
+// Phase 7 — category hierarchy + usage counts for the Content Organization
+// UI. `postCount` powers both "Prevent accidental deletion of terms in
+// use" (categoryService checks it before deleting) and the plain display
+// count every CMS category list shows.
+export type CategoryWithCounts = Category & { postCount: number; parent: Pick<Category, "id" | "name" | "slug"> | null };
+
 export const categoryRepository = {
-  async list(organizationId: string): Promise<Category[]> {
-    return prisma.category.findMany({ where: { organizationId }, orderBy: { name: "asc" } });
+  async list(organizationId: string): Promise<CategoryWithCounts[]> {
+    const rows = await prisma.category.findMany({
+      where: { organizationId },
+      orderBy: { name: "asc" },
+      include: { _count: { select: { posts: true } }, parent: { select: { id: true, name: true, slug: true } } },
+    });
+    return rows.map(({ _count, ...c }) => ({ ...c, postCount: _count.posts }));
   },
 
   async findByIdInOrg(id: string, organizationId: string): Promise<Category | null> {
@@ -35,7 +46,18 @@ export const categoryRepository = {
     return slug;
   },
 
-  async create(data: { organizationId: string; name: string; slug: string; description?: string }): Promise<Category> {
+  /** Phase 7 — this category's own parentId, org-scoped (for cycle-checking a reparent), mirrors pageRepository.findParentId. */
+  async findParentId(id: string, organizationId: string): Promise<string | null> {
+    const row = await prisma.category.findFirst({ where: { id, organizationId }, select: { parentId: true } });
+    return row?.parentId ?? null;
+  },
+
+  /** Phase 7 — how many posts currently reference this category, for the delete-in-use guard. */
+  async countPostsUsing(id: string): Promise<number> {
+    return prisma.post.count({ where: { categoryId: id, deletedAt: null } });
+  },
+
+  async create(data: { organizationId: string; name: string; slug: string; description?: string; parentId?: string }): Promise<Category> {
     return prisma.category.create({ data });
   },
 

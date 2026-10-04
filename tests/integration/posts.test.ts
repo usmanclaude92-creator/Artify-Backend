@@ -254,4 +254,98 @@ describe("CMS posts", () => {
     expect((await request(app).patch(`/api/v1/posts/${foreignId}`).set("Authorization", `Bearer ${adminToken}`).send({ title: "Hijack" })).status).toBe(404);
     expect((await request(app).delete(`/api/v1/posts/${foreignId}`).set("Authorization", `Bearer ${adminToken}`).send()).status).toBe(404);
   });
+
+  // Phase 7 (Content Management upgrade) — excerpt, trash/restore, bulk actions, date filtering.
+  describe("Phase 7 — excerpt, trash, bulk actions, date filtering", () => {
+    it("persists and carries excerpt through create, publish, a live edit, and revert", async () => {
+      const created = await request(app)
+        .post("/api/v1/posts")
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ title: "Excerpt Post", body: "v1", excerpt: "v1 summary" });
+      expect(created.body.data.post.currentRevision.excerpt).toBe("v1 summary");
+      const id = created.body.data.post.id;
+      const v1RevisionId = created.body.data.post.currentRevisionId;
+
+      await request(app).post(`/api/v1/posts/${id}/publish`).set("Authorization", `Bearer ${adminToken}`).send();
+
+      // A live edit (post stays PUBLISHED) forks a new revision — the
+      // excerpt update lands on the fork, never mutating v1 in place.
+      const liveEdit = await request(app).patch(`/api/v1/posts/${id}`).set("Authorization", `Bearer ${adminToken}`).send({ excerpt: "v2 summary" });
+      expect(liveEdit.body.data.post.currentRevision.excerpt).toBe("v2 summary");
+
+      const revert = await request(app).post(`/api/v1/posts/${id}/revert`).set("Authorization", `Bearer ${adminToken}`).send({ revisionId: v1RevisionId });
+      expect(revert.body.data.post.currentRevision.excerpt).toBe("v1 summary");
+    });
+
+    it("soft-deletes into Trash, lists it there, and restores it back to DRAFT", async () => {
+      const created = await request(app).post("/api/v1/posts").set("Authorization", `Bearer ${adminToken}`).send({ title: "Trash Me" });
+      const id = created.body.data.post.id;
+
+      await request(app).delete(`/api/v1/posts/${id}`).set("Authorization", `Bearer ${adminToken}`).send();
+
+      const trash = await request(app).get("/api/v1/posts/trash").set("Authorization", `Bearer ${adminToken}`);
+      expect(trash.status).toBe(200);
+      expect(trash.body.data.posts.some((p: { id: string }) => p.id === id)).toBe(true);
+
+      const restore = await request(app).post(`/api/v1/posts/${id}/restore`).set("Authorization", `Bearer ${adminToken}`).send();
+      expect(restore.status).toBe(200);
+
+      const get = await request(app).get(`/api/v1/posts/${id}`).set("Authorization", `Bearer ${adminToken}`);
+      expect(get.status).toBe(200);
+      expect(get.body.data.post.status).toBe("DRAFT");
+
+      const trashAfter = await request(app).get("/api/v1/posts/trash").set("Authorization", `Bearer ${adminToken}`);
+      expect(trashAfter.body.data.posts.some((p: { id: string }) => p.id === id)).toBe(false);
+    });
+
+    it("rejects restoring a post that isn't actually in trash", async () => {
+      const created = await request(app).post("/api/v1/posts").set("Authorization", `Bearer ${adminToken}`).send({ title: "Not Trashed" });
+      const res = await request(app).post(`/api/v1/posts/${created.body.data.post.id}/restore`).set("Authorization", `Bearer ${adminToken}`).send();
+      expect(res.status).toBe(404);
+    });
+
+    it("bulk-archives a mix of valid and already-archived ids, reporting per-id success/failure without aborting the batch", async () => {
+      const a = await request(app).post("/api/v1/posts").set("Authorization", `Bearer ${adminToken}`).send({ title: "Bulk A" });
+      const b = await request(app).post("/api/v1/posts").set("Authorization", `Bearer ${adminToken}`).send({ title: "Bulk B" });
+      const idA = a.body.data.post.id;
+      const idB = b.body.data.post.id;
+      await request(app).post(`/api/v1/posts/${idB}/archive`).set("Authorization", `Bearer ${adminToken}`).send();
+
+      const bulk = await request(app)
+        .post("/api/v1/posts/bulk/archive")
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ ids: [idA, idB] });
+      expect(bulk.status).toBe(200);
+      expect(bulk.body.data.succeeded).toEqual([idA]);
+      expect(bulk.body.data.failed).toEqual([{ id: idB, error: expect.stringContaining("already archived") }]);
+
+      const checkA = await request(app).get(`/api/v1/posts/${idA}`).set("Authorization", `Bearer ${adminToken}`);
+      expect(checkA.body.data.post.status).toBe("ARCHIVED");
+    });
+
+    it("bulk-trashes then bulk-restores, and enforces content.delete for both", async () => {
+      const a = await request(app).post("/api/v1/posts").set("Authorization", `Bearer ${adminToken}`).send({ title: "Bulk Trash A" });
+      const idA = a.body.data.post.id;
+
+      expect(
+        (await request(app).post("/api/v1/posts/bulk/trash").set("Authorization", `Bearer ${viewerToken}`).send({ ids: [idA] })).status
+      ).toBe(403);
+
+      const trash = await request(app).post("/api/v1/posts/bulk/trash").set("Authorization", `Bearer ${adminToken}`).send({ ids: [idA] });
+      expect(trash.body.data.succeeded).toEqual([idA]);
+
+      const restore = await request(app).post("/api/v1/posts/bulk/restore").set("Authorization", `Bearer ${adminToken}`).send({ ids: [idA] });
+      expect(restore.body.data.succeeded).toEqual([idA]);
+
+      const get = await request(app).get(`/api/v1/posts/${idA}`).set("Authorization", `Bearer ${adminToken}`);
+      expect(get.status).toBe(200);
+    });
+
+    it("filters the list by a createdAt date range", async () => {
+      const future = new Date(Date.now() + 86400000).toISOString();
+      const filtered = await request(app).get("/api/v1/posts").query({ fromDate: future }).set("Authorization", `Bearer ${adminToken}`);
+      expect(filtered.status).toBe(200);
+      expect(filtered.body.data.posts).toHaveLength(0);
+    });
+  });
 });

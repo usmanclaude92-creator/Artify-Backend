@@ -413,6 +413,123 @@ describe("CMS pages", () => {
     expect(otherHomepage.status).toBe(201);
   });
 
+  // Phase 5 (Navigation + Pages + Homepage) — switching the homepage to a
+  // different page is just reassigning the boolean on two pages; rollback
+  // (switching back) must be equally trivial and never destroy content.
+  it("reassigns the homepage to a different page and rolls back cleanly", async () => {
+    // A dedicated org, since the shared adminToken org may already have a
+    // homepage assigned by an earlier test in this file (resetDb runs once
+    // per file, not per test).
+    const reg = await request(app).post("/api/v1/auth/register").send({
+      email: "pages-homepage-rollback@example.com",
+      password: "OriginalPassword123",
+      firstName: "Rollback",
+      lastName: "Org",
+      organizationName: "Homepage Rollback Co",
+    });
+    const token = reg.body.data.session.token;
+
+    const original = await request(app).post("/api/v1/pages").set("Authorization", `Bearer ${token}`).send({ title: "Original Home", isHomepage: true });
+    const originalId = original.body.data.page.id;
+
+    const candidate = await request(app).post("/api/v1/pages").set("Authorization", `Bearer ${token}`).send({ title: "New Home Candidate" });
+    const candidateId = candidate.body.data.page.id;
+
+    // Unset the current homepage first (the DB constraint allows only one at a time).
+    const unset = await request(app).patch(`/api/v1/pages/${originalId}`).set("Authorization", `Bearer ${token}`).send({ isHomepage: false });
+    expect(unset.status).toBe(200);
+    expect(unset.body.data.page.isHomepage).toBe(false);
+
+    const promote = await request(app).patch(`/api/v1/pages/${candidateId}`).set("Authorization", `Bearer ${token}`).send({ isHomepage: true });
+    expect(promote.status).toBe(200);
+    expect(promote.body.data.page.isHomepage).toBe(true);
+
+    // Roll back: demote the candidate, restore the original.
+    await request(app).patch(`/api/v1/pages/${candidateId}`).set("Authorization", `Bearer ${token}`).send({ isHomepage: false });
+    const rollback = await request(app).patch(`/api/v1/pages/${originalId}`).set("Authorization", `Bearer ${token}`).send({ isHomepage: true });
+    expect(rollback.status).toBe(200);
+    expect(rollback.body.data.page.isHomepage).toBe(true);
+
+    // The original page's own content/title was never touched by any of this.
+    const reloaded = await request(app).get(`/api/v1/pages/${originalId}`).set("Authorization", `Bearer ${token}`);
+    expect(reloaded.body.data.page.title).toBe("Original Home");
+  });
+
+  // Phase 5 — page hierarchy (parentId): clear parent/child relationships,
+  // cross-org and self/circular-parent protection, and listing children.
+  describe("page hierarchy (parentId)", () => {
+    it("assigns a parent and lists it as a child via GET /:id/children", async () => {
+      const parent = await request(app).post("/api/v1/pages").set("Authorization", `Bearer ${adminToken}`).send({ title: "Parent Page" });
+      const parentId = parent.body.data.page.id;
+
+      const child = await request(app).post("/api/v1/pages").set("Authorization", `Bearer ${adminToken}`).send({ title: "Child Page", parentId });
+      expect(child.status).toBe(201);
+      expect(child.body.data.page.parentId).toBe(parentId);
+
+      const children = await request(app).get(`/api/v1/pages/${parentId}/children`).set("Authorization", `Bearer ${adminToken}`);
+      expect(children.status).toBe(200);
+      expect(children.body.data.children.map((c: { id: string }) => c.id)).toContain(child.body.data.page.id);
+    });
+
+    it("rejects a parentId that doesn't exist or belongs to another organization", async () => {
+      const nonexistent = await request(app)
+        .post("/api/v1/pages")
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ title: "Orphan Attempt", parentId: "00000000-0000-0000-0000-000000000000" });
+      expect(nonexistent.status).toBe(400);
+
+      const otherReg = await request(app).post("/api/v1/auth/register").send({
+        email: "pages-hierarchy-other@example.com",
+        password: "OriginalPassword123",
+        firstName: "Other",
+        lastName: "Org",
+        organizationName: "Hierarchy Other Co",
+      });
+      const otherToken = otherReg.body.data.session.token;
+      const foreignParent = await request(app).post("/api/v1/pages").set("Authorization", `Bearer ${otherToken}`).send({ title: "Foreign Parent" });
+
+      const crossOrg = await request(app)
+        .post("/api/v1/pages")
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ title: "Cross Org Child", parentId: foreignParent.body.data.page.id });
+      expect(crossOrg.status).toBe(400);
+    });
+
+    it("rejects a page being its own parent, and rejects a circular hierarchy", async () => {
+      const page = await request(app).post("/api/v1/pages").set("Authorization", `Bearer ${adminToken}`).send({ title: "Self Parent Attempt" });
+      const pageId = page.body.data.page.id;
+
+      const selfParent = await request(app).patch(`/api/v1/pages/${pageId}`).set("Authorization", `Bearer ${adminToken}`).send({ parentId: pageId });
+      expect(selfParent.status).toBe(400);
+
+      const grandparent = await request(app).post("/api/v1/pages").set("Authorization", `Bearer ${adminToken}`).send({ title: "Grandparent" });
+      const parent = await request(app)
+        .post("/api/v1/pages")
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ title: "Parent", parentId: grandparent.body.data.page.id });
+
+      // grandparent -> parent is now established; making grandparent a
+      // child of parent would create a 2-node cycle.
+      const circular = await request(app)
+        .patch(`/api/v1/pages/${grandparent.body.data.page.id}`)
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ parentId: parent.body.data.page.id });
+      expect(circular.status).toBe(400);
+    });
+
+    it("clearing a parent (parentId: null) promotes a page back to top-level", async () => {
+      const parent = await request(app).post("/api/v1/pages").set("Authorization", `Bearer ${adminToken}`).send({ title: "Promotable Parent" });
+      const child = await request(app)
+        .post("/api/v1/pages")
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ title: "Promotable Child", parentId: parent.body.data.page.id });
+
+      const cleared = await request(app).patch(`/api/v1/pages/${child.body.data.page.id}`).set("Authorization", `Bearer ${adminToken}`).send({ parentId: null });
+      expect(cleared.status).toBe(200);
+      expect(cleared.body.data.page.parentId).toBeNull();
+    });
+  });
+
   it("concurrency: two simultaneous creates with the same explicit slug produce exactly one success and one clean conflict", async () => {
     const [first, second] = await Promise.all([
       request(app).post("/api/v1/pages").set("Authorization", `Bearer ${adminToken}`).send({ title: "Race A", slug: "race-page" }),
@@ -521,6 +638,56 @@ describe("CMS pages", () => {
 
       const crossOrgRead = await request(app).get(`/api/v1/pages/${id}`).set("Authorization", `Bearer ${otherOrgAdminToken}`);
       expect(crossOrgRead.status).toBe(404);
+    });
+  });
+
+  // Phase 7 (Content Management upgrade) — excerpt, trash/restore, bulk actions.
+  describe("Phase 7 — excerpt, trash, bulk actions", () => {
+    it("persists excerpt through create and update", async () => {
+      const created = await request(app)
+        .post("/api/v1/pages")
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ title: "Excerpt Page", body: "v1", excerpt: "page summary" });
+      expect(created.body.data.page.currentRevision.excerpt).toBe("page summary");
+
+      const updated = await request(app)
+        .patch(`/api/v1/pages/${created.body.data.page.id}`)
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ excerpt: "page summary edited" });
+      expect(updated.body.data.page.currentRevision.excerpt).toBe("page summary edited");
+    });
+
+    it("soft-deletes into Trash, lists it there, and restores it", async () => {
+      const created = await request(app).post("/api/v1/pages").set("Authorization", `Bearer ${adminToken}`).send({ title: "Trash Page Me" });
+      const id = created.body.data.page.id;
+
+      await request(app).delete(`/api/v1/pages/${id}`).set("Authorization", `Bearer ${adminToken}`).send();
+
+      const trash = await request(app).get("/api/v1/pages/trash").set("Authorization", `Bearer ${adminToken}`);
+      expect(trash.status).toBe(200);
+      expect(trash.body.data.pages.some((p: { id: string }) => p.id === id)).toBe(true);
+
+      const restore = await request(app).post(`/api/v1/pages/${id}/restore`).set("Authorization", `Bearer ${adminToken}`).send();
+      expect(restore.status).toBe(200);
+
+      const get = await request(app).get(`/api/v1/pages/${id}`).set("Authorization", `Bearer ${adminToken}`);
+      expect(get.status).toBe(200);
+    });
+
+    it("bulk-trashes and bulk-restores pages through dedicated endpoints distinct from /:id/restore", async () => {
+      const a = await request(app).post("/api/v1/pages").set("Authorization", `Bearer ${adminToken}`).send({ title: "Bulk Page A" });
+      const idA = a.body.data.page.id;
+
+      const trash = await request(app).post("/api/v1/pages/bulk/trash").set("Authorization", `Bearer ${adminToken}`).send({ ids: [idA] });
+      expect(trash.status).toBe(200);
+      expect(trash.body.data.succeeded).toEqual([idA]);
+
+      const restore = await request(app).post("/api/v1/pages/bulk/restore").set("Authorization", `Bearer ${adminToken}`).send({ ids: [idA] });
+      expect(restore.status).toBe(200);
+      expect(restore.body.data.succeeded).toEqual([idA]);
+
+      const get = await request(app).get(`/api/v1/pages/${idA}`).set("Authorization", `Bearer ${adminToken}`);
+      expect(get.status).toBe(200);
     });
   });
 });

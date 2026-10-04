@@ -1,116 +1,160 @@
-# Forms Architecture — Phase 9 (MVP slice)
+# Forms Architecture — Phase 9 (Forms + Landing Pages + Conversion)
 
-Closes the "Marketing" domain's zero-backend-presence gap identified in
-`control-center-gap-analysis.md` — but only the slice the roadmap actually
-scoped: a Form/FormSubmission model reusing the existing Lead-intake
-pattern, UTM capture, and a Forms list in the Control Center. Campaigns,
-attribution reporting, and landing-page authoring (which depends on Phase
-4's still-not-started section-driven renderer) are explicitly out of
-scope — see `control-center-roadmap.md`'s Phase 9 row.
+Supersedes the Phase 9 MVP slice. Closes the "Marketing" domain's gap
+identified in `control-center-gap-analysis.md`: a production-grade Form
+Builder, Landing Page Builder, and Conversion system, built entirely by
+extending the existing Form/FormSubmission/Lead/Page/Template/editorBlocks
+architecture — no second form, CMS, or CRM system.
 
 ## Schema
 
-Two new tables, `Form` and `FormSubmission` (`prisma/schema.prisma`,
-migration `20260927153805_phase9_forms`):
+`Form` and `FormSubmission` (`prisma/schema.prisma`), across two
+migrations: `20260927153805_phase9_forms` (MVP slice) and
+`20261004024343_phase9_forms_landing_pages_conversion` (this phase).
 
-- **`Form`**: organization-scoped (same `findByIdInOrg`-only convention as
-  every domain since Phase 5), `name`/`slug` (`@@unique([organizationId,
-  slug])`), `status` (`ACTIVE`/`ARCHIVED`), and `fields` — a JSON array of
-  `{key, label, type, required}`. Deliberately **not** a normalized
-  `FormField` table: this is UI config with no independent lifecycle,
-  audit trail, or query pattern of its own, the same reasoning
-  `ContentRevision.metadata` already uses for Post/Page SEO fields. There
-  is no dynamic form-builder canvas or drag-and-drop UI in this slice —
-  the Control Center's `FieldsEditor` is a plain add/remove row list.
-- **`FormSubmission`**: the raw submitted `data` (JSON, keyed by field
-  `key`) plus `utmSource`/`utmMedium`/`utmCampaign`/`utmTerm`/
-  `utmContent` — this is the roadmap's "UTM capture on the existing lead
-  source field": `Lead` itself gets **no new columns**; UTM values are
-  captured here, on the submission, and folded into the created Lead's
-  `source`/`notes` the same way `publicLeadService.ts` already encodes
-  `subject`/`productInterest` into free-text notes. `leadId` links to the
-  Lead the submission produced.
+- **`Form`**: unchanged shape from the MVP slice (`name`/`slug`/`status`/
+  `fields` JSON array), plus `notifyUserIds: Json` — org-member user ids to
+  notify (in-app only; this codebase has no mail transport) on each new
+  submission, validated against real org users (`prisma.user.count`) at
+  create/update time so a stale or foreign id can never be stored.
+- **`FormSubmission`**: adds `consentGiven: Boolean?`, `landingPagePath:
+  String?`, `referrer: String?` (read server-side from the request's own
+  `Referer` header — never trusted from the request body) alongside the
+  MVP slice's `data`/UTM columns/`leadId`.
+- **`Field` type set** (`server/schemas/formSchemas.ts`): `text`, `email`,
+  `tel`, `number`, `select`, `multiselect`, `checkbox`, `radio`, `date`,
+  `textarea`, `hidden`. Each field supports `placeholder`, `required`,
+  `options` (for `select`/`multiselect`/`radio`), `min`/`max` (for
+  `number`), and `visibleWhen: {fieldKey, equals}` for conditional
+  visibility — validated server-side in both directions: a field's
+  `visibleWhen.fieldKey` must reference a real field on the same form, and
+  a visible-and-required field cannot be satisfied by hiding it client-side
+  (`isFieldActive()` in `publicFormService.ts` re-derives visibility from
+  the submitted data before enforcing `required`).
+- **No `file` field type.** No safe anonymous-upload path exists in this
+  codebase (every upload path requires an authenticated session and a
+  pre-authorized media record) — rather than build an insecure
+  half-measure, file upload is not implemented. Documented at the top of
+  `formFieldTypeSchema`.
+- **No booking/scheduling field or block.** No booking/scheduling backend
+  exists to attach one to — out of scope by the same reasoning.
 
 ## Every real submission reuses the Lead-intake pattern
 
-This is the roadmap's explicit instruction — "reusing the existing
-Lead-intake pattern (`publicLeadService.ts`) instead of a parallel one" —
-and it's why `publicFormService.ts` exists as its own file rather than
-folding form logic into `formService.ts`: it mirrors
-`publicLeadService.createLead`'s exact shape (same honeypot contract, same
-`SYSTEM`-attributed audit log, same "never a caller-supplied organization"
-rule, resolving the single configured `PUBLIC_WEBSITE_ORGANIZATION_ID`),
-generalized to any Control-Center-authored Form instead of the one
-hardcoded Contact/Brief form.
+Unchanged from the MVP slice in spirit: `publicFormService.ts` mirrors
+`publicLeadService.createLead`'s shape (honeypot contract, `SYSTEM`-
+attributed audit log, the single configured
+`PUBLIC_WEBSITE_ORGANIZATION_ID`, never a caller-supplied organization).
 
-- **Required-field validation is dynamic.** A `Form`'s `fields` are
-  author-defined, so there's no static Zod schema for a submission's
-  `data` shape the way `createPublicLeadSchema` has for the one hardcoded
-  lead form. `publicFormSubmitSchema` only bounds the overall envelope
-  (max 30 keys, each value capped at 2000 chars) against abuse;
-  `publicFormService.submit` loads the target Form's own `fields` and
-  checks required-field presence against that.
-- **Identity requirement.** `formFieldsSchema` (`server/schemas/
-  formSchemas.ts`) refuses to save a Form whose fields don't include at
-  least one of key `"name"` or `"email"` — `Lead.companyName` is a
-  required, non-null column with no universal sane fallback otherwise.
-  `publicFormService.submit` falls back company name to
-  `data.company || data.name || data.email || "Website form submission"`.
-- **Lead.source encoding**: `form:<form-slug>` optionally suffixed with
-  `:<utmSource>` (e.g. `form:demo-request:google`) — mirrors
-  `publicLeadService`'s `website:<source>` convention exactly.
-- **Honeypot**: a non-empty `website` field is accepted-but-discarded,
-  same §8 contract as the lead form — the response is identical whether
-  the submission was real or silently dropped, so a bot learns nothing.
+- **Duplicate handling**: an anonymous submission whose email matches an
+  existing Lead in the org (`leadRepository.findByEmailInOrg`) **merges**
+  into that Lead — updates contact name/phone, appends the new submission's
+  notes (separated by `\n\n---\n\n`), refreshes `source` — rather than
+  hard-rejecting (which would leak existing-lead information to an
+  anonymous caller, the behavior reserved for the *authenticated*
+  `leadService.createLead` 409 path) or silently duplicating (which would
+  pollute the CRM with redundant Lead rows for the same person).
+- **Consent tracking**: a `checkbox` field keyed `"consent"` is detected and
+  its value stored on `FormSubmission.consentGiven` and folded into the
+  Lead's notes as an explicit "Consent to be contacted: given/not given"
+  line — real, auditable consent state, never inferred.
+- **UTM + landing page + referrer attribution**: captured on
+  `FormSubmission` and folded into Lead `source`/notes, same as the MVP
+  slice, now joined by `landingPagePath` (client-supplied, the page the
+  visitor was on) and `referrer` (server-read from the `Referer` header).
+- **Notifications**: each of `Form.notifyUserIds` gets a real, persisted
+  in-app `Notification` (`type: "FORM_SUBMITTED"`) on every new submission
+  — no email, consistent with `notificationService.ts`'s existing
+  architecture.
+- **Honeypot**: unchanged — a non-empty `website` value is
+  accepted-but-discarded, identical response to a real submission.
 
-## RBAC
+## Landing pages — reusing Page + Template + editorBlocks, not a new system
 
-`forms.read/create/update/delete` — ADMIN full, MANAGER read/create/update
-(no delete, same "reversible day-to-day, ADMIN-only for delete" tiering
-`seo.redirects.*` uses), USER/VIEWER read-only. "read" covers both the
-form-definition list and its submissions — a submission has no
-independent lifecycle of its own to gate separately from the form it
-belongs to (unlike Opportunity's separate `.close` key for a real,
-distinct action).
+`PageType.LANDING` and `TemplateType.LANDING_PAGE` enum values existed in
+the schema since Phase 1 but no UI ever exposed them. Phase 9 closes that
+gap only: `PagesPage.tsx` now has a "Page type" selector (Standard/Landing
+page) and a badge on landing pages — the Page itself is authored exactly
+like any other Page, through the same Site Editor, Template system, and
+SEO panel every Page already uses.
 
-## Public endpoint
+## Conversion elements — two new editorBlocks block types
 
-`POST /api/v1/public/forms/:slug/submit` (`server/routes/v1/
-publicRoutes.ts`) — anonymous, shares `publicLeadLimiter`'s rate-limit
-budget with `/public/leads` rather than getting a near-duplicate limiter
-(same abuse class: an anonymous, IP-keyed write endpoint). Looks up the
-Form by `(organizationId, slug)` and requires `status: "ACTIVE"` — an
-`ARCHIVED` form 404s the same as an unknown slug, so a form taken down
-stops accepting submissions without needing a separate "is this form
-live" flag.
+`form` and `testimonial` are added end-to-end through the existing
+editorBlocks pipeline (`server/schemas/editorSchemas.ts`'s discriminated
+union, the Site Editor's `SiteEditorPage.tsx` canvas/inspector, the
+read-only `BlockRenderer.tsx` preview) — the same data model and validation
+layer as every other block type, not a second page-builder. `form` holds a
+`formId` reference to a real, org-owned Form; `testimonial` holds a quote/
+author/title/`avatarMediaId`. CTA/button, card, and section/columns blocks
+already existed and are reused as-is for feature/benefit and trust
+sections.
 
-## Control Center UI
+Reusable "booking/request" blocks are explicitly **not** implemented — no
+booking backend exists to back one.
 
-`src/components/modules/FormsPage.tsx` — a new "Marketing" nav section
-(`src/lib/permissions.ts`), gated on `forms.read`. List + create/edit
-modal (name, auto-generated-or-custom slug, the field-row editor,
-success message) + archive/restore toggle + delete, plus a per-form
-"Submissions" modal (paginated, shows each submission's field values, UTM
-summary, and whether it produced a Lead). Wired into the Ctrl/Cmd+K
-command palette's quick actions and entity search, same as every other
-domain since Phase 1.
+## Public rendering (artifysolscom)
 
-## Known, deliberate gaps (MVP slice, not oversights)
+Before this phase, artifysolscom never rendered a Page's `editorBlocks` at
+all — only the flattened `body` HTML snapshot taken at save time, meaning
+a Page composed in the Site Editor couldn't contain anything interactive.
+`CmsPageRoute.tsx` now renders `page.editorBlocks` via a new
+`PublicBlockRenderer.tsx` when present and non-empty, falling back to the
+flattened body otherwise (so every existing page is unaffected).
 
-- **No public-facing form renderer.** This slice ships the backend
-  submission endpoint and the Control Center's authoring UI; it does not
-  add a dynamic `<Form slug="...">` widget to `artifysolscom`. Embedding a
-  Form on the public site today means hand-building a small fetch-and-post
-  component against the documented endpoint — the existing hardcoded
-  Contact/Brief form is untouched and keeps using `publicLeadService`
-  directly. Building a generic public renderer is landing-page-authoring
-  scope, which the roadmap explicitly sequences after Phase 4's
-  section-driven renderer.
-- **No campaign/attribution reporting.** UTM values are captured and
-  stored per submission (queryable via Prisma/SQL) but there is no
-  Control Center dashboard aggregating them yet — that's Phase 10
-  (Analytics) territory, itself blocked on a product decision.
-- **No dynamic field types beyond text/email/tel/textarea** (no
-  checkboxes, selects, file uploads) — the MVP's field type set covers
-  the Contact/Brief-class use case the roadmap named; a real need for
-  richer field types is a natural follow-up, not pre-built speculatively.
+- **`publicSiteService.ts`** resolves every `mediaId`/`avatarMediaId`
+  reference in a page's `editorBlocks` tree server-side into a real
+  `resolvedUrl`/`resolvedAvatarUrl` (the same ACTIVE+PUBLIC-only public
+  media projection every other public field already uses) — artifysolscom
+  has no authenticated media-read path to do this itself, so a raw
+  internal `mediaId` is never sent to the public site.
+- **`PublicForm.tsx`** (new) is the first genuinely interactive public
+  widget this site has — fetches a Form's real field definitions
+  (`GET /public/forms/:slug` or `/public/forms/by-id/:id`, both new,
+  unauthenticated, unrated-limited reads, same policy as every other public
+  GET), renders real controlled inputs per field type, enforces
+  client-side required/visibility validation (using `aria-required` rather
+  than the native `required` attribute, so the browser's own constraint
+  validation never preempts the component's per-field error messages),
+  captures UTM params from the current URL and `landingPagePath` from
+  `window.location.pathname`, and submits to the real
+  `POST /public/forms/:slug/submit` endpoint. Honeypot markup is copied
+  verbatim from `ContactAndBrief.tsx`'s existing CSS-hidden-input pattern
+  (not `type="hidden"`, which real bots specifically skip).
+- Both new public GET routes and the existing submit route are mounted in
+  `server/routes/v1/publicRoutes.ts`; only the submit route is
+  rate-limited (shares `publicLeadLimiter`'s budget with `/public/leads`,
+  unchanged from the MVP slice).
+
+## RBAC, validation, deletion protection
+
+Unchanged `forms.read/create/update/delete` tiering from the MVP slice.
+New in this phase:
+
+- **Deletion protection**: a Form with existing submissions cannot be
+  deleted (`ConflictError` naming the submission count) — archive instead,
+  so submission history stays traceable. A Form with zero submissions can
+  still be deleted outright.
+- **CSV export** (`GET /forms/:id/submissions/export`, `forms.read`):
+  every field value and UTM param is attacker-controllable data from an
+  anonymous caller, so every exported cell is checked for a leading
+  `=`/`+`/`-`/`@` (CSV formula injection) and neutralized with a leading
+  literal quote before quoting — applied uniformly, not just to
+  "suspicious-looking" values.
+
+## Known, deliberate gaps (still out of scope, not oversights)
+
+- **No file-upload field type** — no safe anonymous-upload path exists;
+  see above.
+- **No booking/scheduling elements** — no booking backend exists to back
+  one.
+- **No campaign/attribution reporting dashboard** — UTM/landing-page/
+  referrer values are captured and stored per submission (queryable via
+  Prisma/SQL) but there is no Control Center dashboard aggregating them;
+  that remains Phase 10+ (Analytics) territory.
+- **`templatePart`/`navigationMenu` editorBlocks references are not
+  resolved for public page-body rendering** — those are Template-level
+  whole-page composition concerns (a separate, already-existing
+  region-resolution pathway), not something a Page's own body content
+  needs to embed. `PublicBlockRenderer.tsx` renders nothing for these
+  block types rather than a confusing, non-functional placeholder.

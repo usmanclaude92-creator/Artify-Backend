@@ -47,6 +47,11 @@ export async function resetDb(): Promise<void> {
   // as pages/posts above, broken the same way before either side is deleted.
   await prisma.template.updateMany({ data: { currentRevisionId: null } });
   await prisma.templatePart.updateMany({ data: { currentRevisionId: null } });
+  // Phase 5 — same currentRevisionId <-> revisions cycle for NavigationMenu,
+  // plus Page's own new self-reference (parentId -> pages.id), both broken
+  // the same way before either side is deleted.
+  await prisma.navigationMenu.updateMany({ data: { currentRevisionId: null } });
+  await prisma.page.updateMany({ data: { parentId: null } });
 
   // Delete in FK-dependency order, leaves first. organization_memberships
   // and sessions cascade automatically when their user/organization is
@@ -64,8 +69,18 @@ export async function resetDb(): Promise<void> {
   // covered by the organization cascade below, so wiped explicitly. Must
   // come after subscription/subscriptionItem (RESTRICT/SetNull on
   // productId/productModuleId respectively).
+  // Phase 10 — product_relations/product_industries/product_revisions all
+  // Cascade off Product itself, but are deleted explicitly first (same
+  // "clarity over relying on cascade order" rationale as elsewhere in this
+  // file) since product_categories/industries below must outlive Product's
+  // own delete (categoryId is SetNull, not Cascade) to be wiped cleanly.
+  await prisma.productRelation.deleteMany();
+  await prisma.productIndustry.deleteMany();
+  await prisma.productRevision.deleteMany();
   await prisma.productModule.deleteMany();
   await prisma.product.deleteMany();
+  await prisma.productCategory.deleteMany();
+  await prisma.industry.deleteMany();
   // ai_providers is platform-global (no organizationId), same as products
   // above — wiped explicitly. Cascades to ai_models (onDelete: Cascade) and
   // nulls out any ai_executions/ai_usage_records provider/model references
@@ -109,6 +124,10 @@ export async function resetDb(): Promise<void> {
   await prisma.template.deleteMany();
   await prisma.templatePartRevision.deleteMany();
   await prisma.templatePart.deleteMany();
+  // Phase 5 — navigation_menus.organization_id RESTRICTs, same convention
+  // as templates/template_parts above.
+  await prisma.navigationMenuRevision.deleteMany();
+  await prisma.navigationMenu.deleteMany();
   await prisma.category.deleteMany();
   await prisma.tag.deleteMany();
   // redirects CASCADEs on organization_id, but delete explicitly for

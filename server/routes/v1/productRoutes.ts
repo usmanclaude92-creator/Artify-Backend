@@ -5,7 +5,14 @@ import { productModuleService } from "../../services/productModuleService";
 import { authenticateToken, requirePermission } from "../../middleware/auth";
 import { asyncHandler } from "../../utils/asyncHandler";
 import { sendSuccess } from "../../core/apiResponse";
-import { createProductSchema, listProductsQuerySchema, updateProductSchema } from "../../schemas/productSchemas";
+import {
+  createProductSchema,
+  listProductsQuerySchema,
+  updateProductSchema,
+  revertProductSchema,
+  duplicateProductSchema,
+  bulkArchiveProductsSchema,
+} from "../../schemas/productSchemas";
 import { createProductModuleSchema, listProductModulesQuerySchema, reorderProductModulesSchema } from "../../schemas/productModuleSchemas";
 
 const router = Router();
@@ -22,13 +29,24 @@ router.get(
   asyncHandler(async (req, res) => {
     const query = listProductsQuerySchema.parse(req.query);
     const { rows, total } = await productService.listProducts(
-      { search: query.search, type: query.type, status: query.status, isFeatured: query.isFeatured },
+      { search: query.search, type: query.type, status: query.status, isFeatured: query.isFeatured, categoryId: query.categoryId, industryId: query.industryId },
       query.page,
       query.limit,
       query.sort,
       query.order
     );
     sendSuccess(res, { products: rows }, 200, { page: query.page, limit: query.limit, total });
+  })
+);
+
+// Registered before `/:id` — otherwise Express would match "bulk" as an :id.
+router.post(
+  "/bulk/archive",
+  requirePermission("products.archive"),
+  asyncHandler(async (req, res) => {
+    const input = bulkArchiveProductsSchema.parse(req.body);
+    const result = await productService.bulkArchiveProducts(req.user!, input.ids, requestMeta(req));
+    sendSuccess(res, result);
   })
 );
 
@@ -67,6 +85,35 @@ router.post(
   asyncHandler(async (req, res) => {
     const product = await productService.archiveProduct(req.user!, req.params.id!, requestMeta(req));
     sendSuccess(res, { product });
+  })
+);
+
+router.get(
+  "/:id/revisions",
+  requirePermission("products.read"),
+  asyncHandler(async (req, res) => {
+    const revisions = await productService.listRevisions(req.params.id!);
+    sendSuccess(res, { revisions });
+  })
+);
+
+router.post(
+  "/:id/revert",
+  requirePermission("products.update"),
+  asyncHandler(async (req, res) => {
+    const input = revertProductSchema.parse(req.body);
+    const product = await productService.revertProduct(req.user!, req.params.id!, input.revisionId, requestMeta(req));
+    sendSuccess(res, { product });
+  })
+);
+
+router.post(
+  "/:id/duplicate",
+  requirePermission("products.create"),
+  asyncHandler(async (req, res) => {
+    const input = duplicateProductSchema.parse(req.body ?? {});
+    const product = await productService.duplicateProduct(req.user!, req.params.id!, input.name, requestMeta(req));
+    sendSuccess(res, { product }, 201);
   })
 );
 

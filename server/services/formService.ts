@@ -5,9 +5,10 @@
  * Phase 5. Public submission handling (the anonymous write path) lives in
  * publicFormService.ts, not here.
  */
+import { prisma } from "../db/prisma";
 import { formRepository, type FormFilters } from "../repositories/formRepository";
 import { auditLogRepository } from "../repositories/auditLogRepository";
-import { ConflictError, NotFoundError } from "../core/errors";
+import { ConflictError, NotFoundError, ValidationError } from "../core/errors";
 import type { SanitizedUser } from "../types/domain";
 import type { CreateFormInput, UpdateFormInput } from "../schemas/formSchemas";
 import type { RequestMeta } from "./authService";
@@ -17,6 +18,13 @@ async function loadFormOrThrow(id: string, organizationId: string): Promise<Form
   const form = await formRepository.findByIdInOrg(id, organizationId);
   if (!form) throw new NotFoundError("Form not found.");
   return form;
+}
+
+/** Every id in `notifyUserIds` must be a real user in the form's own organization — never another tenant's user id. */
+async function assertNotifyUserIdsUsable(ids: string[] | undefined, organizationId: string): Promise<void> {
+  if (!ids || ids.length === 0) return;
+  const count = await prisma.user.count({ where: { id: { in: ids }, organizationId } });
+  if (count !== ids.length) throw new ValidationError("notifyUserIds must refer to real users in this organization.");
 }
 
 export const formService = {
@@ -36,6 +44,7 @@ export const formService = {
       if (dup) throw new ConflictError(`A form with slug "${input.slug}" already exists.`, { existingFormId: dup.id });
     }
     const slug = input.slug ?? (await formRepository.findUniqueSlugInOrg(organizationId, input.name));
+    await assertNotifyUserIdsUsable(input.notifyUserIds, organizationId);
 
     const form = await formRepository.create({
       organizationId,
@@ -43,6 +52,7 @@ export const formService = {
       slug,
       fields: input.fields,
       successMessage: input.successMessage,
+      notifyUserIds: input.notifyUserIds ?? [],
       createdById: caller.id,
     });
 
@@ -69,6 +79,7 @@ export const formService = {
       const dup = await formRepository.findBySlugInOrg(organizationId, input.slug);
       if (dup && dup.id !== id) throw new ConflictError(`A form with slug "${input.slug}" already exists.`, { existingFormId: dup.id });
     }
+    await assertNotifyUserIdsUsable(input.notifyUserIds, organizationId);
 
     const patch: Record<string, unknown> = {};
     if (input.name !== undefined) patch.name = input.name;
@@ -76,6 +87,7 @@ export const formService = {
     if (input.fields !== undefined) patch.fields = input.fields;
     if (input.successMessage !== undefined) patch.successMessage = input.successMessage;
     if (input.status !== undefined) patch.status = input.status;
+    if (input.notifyUserIds !== undefined) patch.notifyUserIds = input.notifyUserIds;
 
     const updated = await formRepository.update(id, patch);
 
@@ -98,6 +110,14 @@ export const formService = {
   async deleteForm(caller: SanitizedUser, id: string, meta: RequestMeta = {}): Promise<void> {
     const organizationId = caller.organizationId;
     await loadFormOrThrow(id, organizationId);
+    // Deletion protection: a Form with real submission history stays
+    // recoverable — archive it instead (same ACTIVE/ARCHIVED toggle the
+    // Control Center already exposes) so its submissions/Leads keep a
+    // legible origin rather than pointing at a vanished Form.
+    const submissionCount = await formRepository.countSubmissions(id);
+    if (submissionCount > 0) {
+      throw new ConflictError(`This form has ${submissionCount} submission${submissionCount === 1 ? "" : "s"} — archive it instead of deleting, so its history stays traceable.`);
+    }
     await formRepository.softDelete(id);
 
     await auditLogRepository.record({

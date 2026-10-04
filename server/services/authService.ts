@@ -32,6 +32,8 @@ export interface RequestMeta {
   ip?: string;
   userAgent?: string;
   requestId?: string;
+  /** Phase 9 — the request's own Referer header, read server-side (never client-supplied) for public form attribution. */
+  referrer?: string;
 }
 
 export interface LoginResult {

@@ -20,6 +20,8 @@ const RedirectFormModal: React.FC<{ open: boolean; onClose: () => void; onSaved:
   const [fromPath, setFromPath] = useState(redirect?.fromPath ?? "");
   const [toPath, setToPath] = useState(redirect?.toPath ?? "");
   const [statusCode, setStatusCode] = useState<number>(redirect?.statusCode ?? 301);
+  const [isActive, setIsActive] = useState(redirect?.isActive ?? true);
+  const [notes, setNotes] = useState(redirect?.notes ?? "");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -28,6 +30,8 @@ const RedirectFormModal: React.FC<{ open: boolean; onClose: () => void; onSaved:
       setFromPath(redirect?.fromPath ?? "");
       setToPath(redirect?.toPath ?? "");
       setStatusCode(redirect?.statusCode ?? 301);
+      setIsActive(redirect?.isActive ?? true);
+      setNotes(redirect?.notes ?? "");
       setError(null);
     }
   }, [open, redirect]);
@@ -38,9 +42,9 @@ const RedirectFormModal: React.FC<{ open: boolean; onClose: () => void; onSaved:
     setSubmitting(true);
     try {
       if (redirect) {
-        await redirectsApi.update(redirect.id, { toPath, statusCode: statusCode as 301 | 302 | 307 | 308 });
+        await redirectsApi.update(redirect.id, { toPath, statusCode: statusCode as 301 | 302 | 307 | 308, isActive, notes: notes.trim() || null });
       } else {
-        await redirectsApi.create({ fromPath, toPath, statusCode: statusCode as 301 | 302 | 307 | 308 });
+        await redirectsApi.create({ fromPath, toPath, statusCode: statusCode as 301 | 302 | 307 | 308, isActive, notes: notes.trim() || undefined });
       }
       onSaved();
       onClose();
@@ -70,6 +74,20 @@ const RedirectFormModal: React.FC<{ open: boolean; onClose: () => void; onSaved:
             ))}
           </Select>
         </Field>
+        <Field label="Notes" hint="Optional context for your team — why this redirect exists, when it can be removed, etc.">
+          <textarea
+            className="w-full px-3 py-2 rounded-lg text-sm focus:outline-none"
+            style={{ background: "var(--bg-app)", border: "1px solid var(--border)", color: "var(--text-primary)" }}
+            rows={2}
+            maxLength={1000}
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+          />
+        </Field>
+        <label className="flex items-center gap-1.5 text-xs" style={{ color: "var(--text-secondary)" }}>
+          <input type="checkbox" checked={isActive} onChange={(e) => setIsActive(e.target.checked)} />
+          Active (inactive redirects are kept for reference but never followed on the live site)
+        </label>
         <div className="pt-2 border-t flex justify-end gap-2" style={{ borderColor: "var(--border)" }}>
           <Button type="button" variant="secondary" onClick={onClose}>
             Cancel
@@ -93,6 +111,7 @@ export const RedirectsPage: React.FC = () => {
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState(initialSearchFromQuery);
   const [debouncedSearch, setDebouncedSearch] = useState(search);
+  const [statusFilter, setStatusFilter] = useState<"all" | "active" | "inactive">("all");
   const [redirects, setRedirects] = useState<CmsRedirect[]>([]);
   const [totalPages, setTotalPages] = useState(1);
   const [loading, setLoading] = useState(true);
@@ -111,13 +130,18 @@ export const RedirectsPage: React.FC = () => {
 
   useEffect(() => {
     setPage(1);
-  }, [debouncedSearch]);
+  }, [debouncedSearch, statusFilter]);
 
   const load = React.useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const res = await redirectsApi.list({ page, limit: 20, search: debouncedSearch || undefined });
+      const res = await redirectsApi.list({
+        page,
+        limit: 20,
+        search: debouncedSearch || undefined,
+        isActive: statusFilter === "all" ? undefined : statusFilter === "active",
+      });
       setRedirects(res.items);
       setTotalPages(res.totalPages);
     } catch (err) {
@@ -125,7 +149,7 @@ export const RedirectsPage: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [page, debouncedSearch]);
+  }, [page, debouncedSearch, statusFilter]);
 
   useEffect(() => {
     void load();
@@ -163,11 +187,16 @@ export const RedirectsPage: React.FC = () => {
       </div>
 
       <Card>
-        <div className="p-3 border-b" style={{ borderColor: "var(--border)" }}>
+        <div className="p-3 border-b flex items-center gap-2 flex-wrap" style={{ borderColor: "var(--border)" }}>
           <div className="relative max-w-xs">
             <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2" style={{ color: "var(--text-muted)" }} />
             <Input placeholder="Search paths…" className="pl-8" value={search} onChange={(e) => setSearch(e.target.value)} />
           </div>
+          <Select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as "all" | "active" | "inactive")} className="max-w-[9rem]">
+            <option value="all">All statuses</option>
+            <option value="active">Active</option>
+            <option value="inactive">Inactive</option>
+          </Select>
         </div>
 
         {loading ? (
@@ -188,10 +217,12 @@ export const RedirectsPage: React.FC = () => {
                     </p>
                     <p style={{ color: "var(--text-muted)" }}>
                       {r.resourceType ? `Auto-created from a ${r.resourceType} slug change` : "Manually created"}
+                      {r.notes ? ` — ${r.notes}` : ""}
                     </p>
                   </div>
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
+                  <Badge tone={r.isActive ? "success" : "neutral"}>{r.isActive ? "Active" : "Inactive"}</Badge>
                   <Badge tone="neutral">{r.statusCode}</Badge>
                   {canUpdate && (
                     <Button variant="ghost" onClick={() => setModal({ open: true, redirect: r })} aria-label="Edit redirect">

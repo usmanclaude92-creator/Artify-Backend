@@ -10,7 +10,7 @@
  * regardless of that status — see postRepository/pageRepository's
  * SetNull-on-user-delete FK behavior).
  */
-import { authorRepository, type AuthorWithUser } from "../repositories/authorRepository";
+import { authorRepository, type AuthorWithUser, type AuthorWithCounts } from "../repositories/authorRepository";
 import { userRepository } from "../repositories/userRepository";
 import { auditLogRepository } from "../repositories/auditLogRepository";
 import { ConflictError, NotFoundError, ValidationError } from "../core/errors";
@@ -25,7 +25,7 @@ async function loadAuthorOrThrow(id: string): Promise<AuthorWithUser> {
 }
 
 export const authorService = {
-  async listAuthors(): Promise<AuthorWithUser[]> {
+  async listAuthors(): Promise<AuthorWithCounts[]> {
     return authorRepository.list();
   },
 

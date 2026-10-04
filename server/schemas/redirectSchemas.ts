@@ -22,6 +22,10 @@ export const listRedirectsQuerySchema = z.object({
   page: z.coerce.number().int().positive().default(1),
   limit: z.coerce.number().int().positive().max(100).default(20),
   search: z.string().trim().max(200).optional(),
+  isActive: z
+    .enum(["true", "false"])
+    .optional()
+    .transform((v) => (v === undefined ? undefined : v === "true")),
   sort: z.enum(["createdAt", "updatedAt", "fromPath", "toPath"]).default("createdAt"),
   order: z.enum(["asc", "desc"]).default("desc"),
 });
@@ -32,6 +36,8 @@ export const createRedirectSchema = z
     fromPath: sitePathSchema,
     toPath: sitePathSchema,
     statusCode: z.union([z.literal(301), z.literal(302), z.literal(307), z.literal(308)]).default(301),
+    isActive: z.boolean().default(true),
+    notes: z.string().trim().max(1000).optional(),
   })
   .strict()
   .refine((v) => v.fromPath !== v.toPath, { message: "fromPath and toPath must differ.", path: ["toPath"] });
@@ -41,6 +47,8 @@ export const updateRedirectSchema = z
   .object({
     toPath: sitePathSchema.optional(),
     statusCode: z.union([z.literal(301), z.literal(302), z.literal(307), z.literal(308)]).optional(),
+    isActive: z.boolean().optional(),
+    notes: z.string().trim().max(1000).nullable().optional(),
   })
   .strict()
   .refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });

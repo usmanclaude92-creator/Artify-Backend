@@ -59,6 +59,10 @@ const ROLE_PERMISSION_SETS: Record<RoleKey, readonly string[] | "*"> = {
     "product_modules.update",
     "product_modules.archive",
     "product_modules.reorder",
+    "product_categories.read",
+    "product_categories.manage",
+    "industries.read",
+    "industries.manage",
     "content.read",
     "content.create",
     "content.update",
@@ -76,6 +80,13 @@ const ROLE_PERMISSION_SETS: Record<RoleKey, readonly string[] | "*"> = {
     "template_parts.update",
     "template_parts.publish",
     "template_parts.delete",
+    // Phase 5 (Navigation Menus) — ADMIN gets full menu management, same
+    // tiering as templates.*/template_parts.* above.
+    "navigation_menus.read",
+    "navigation_menus.create",
+    "navigation_menus.update",
+    "navigation_menus.publish",
+    "navigation_menus.delete",
     "authors.read",
     "authors.create",
     "authors.update",
@@ -211,6 +222,10 @@ const ROLE_PERMISSION_SETS: Record<RoleKey, readonly string[] | "*"> = {
     "product_modules.create",
     "product_modules.update",
     "product_modules.reorder",
+    "product_categories.read",
+    "product_categories.manage",
+    "industries.read",
+    "industries.manage",
     "content.read",
     "content.create",
     "content.update",
@@ -222,6 +237,11 @@ const ROLE_PERMISSION_SETS: Record<RoleKey, readonly string[] | "*"> = {
     "template_parts.read",
     "template_parts.create",
     "template_parts.update",
+    // Phase 5 (Navigation Menus) — MANAGER can author but not
+    // publish/delete menus, same tiering as templates.* above.
+    "navigation_menus.read",
+    "navigation_menus.create",
+    "navigation_menus.update",
     "authors.read",
     "authors.update",
     "media.read",
@@ -314,6 +334,8 @@ const ROLE_PERMISSION_SETS: Record<RoleKey, readonly string[] | "*"> = {
     "opportunities.update",
     "products.read",
     "product_modules.read",
+    "product_categories.read",
+    "industries.read",
     "content.read",
     "content.create",
     // Phase 1 (Website module) — USER can read/create but not
@@ -322,6 +344,10 @@ const ROLE_PERMISSION_SETS: Record<RoleKey, readonly string[] | "*"> = {
     "templates.create",
     "template_parts.read",
     "template_parts.create",
+    // Phase 5 (Navigation Menus) — USER can read/create but not
+    // publish/update/delete menus, same tiering as templates.* above.
+    "navigation_menus.read",
+    "navigation_menus.create",
     "authors.read",
     "media.read",
     "media.upload",
@@ -373,10 +399,14 @@ const ROLE_PERMISSION_SETS: Record<RoleKey, readonly string[] | "*"> = {
     "opportunities.read",
     "products.read",
     "product_modules.read",
+    "product_categories.read",
+    "industries.read",
     "content.read",
     // Phase 1 (Website module) — VIEWER is read-only, same convention as everywhere else.
     "templates.read",
     "template_parts.read",
+    // Phase 5 (Navigation Menus) — VIEWER is read-only, same convention.
+    "navigation_menus.read",
     "authors.read",
     "media.read",
     "reports.read",

@@ -103,6 +103,49 @@ describe("SEO Control Center", () => {
       expect(auditDelete).not.toBeNull();
     });
 
+    it("rejects a redirect that would create a loop (direct and multi-hop), and supports isActive/notes", async () => {
+      const direct = await request(app).post("/api/v1/redirects").set("Authorization", `Bearer ${adminToken}`).send({ fromPath: "/loop-direct", toPath: "/loop-direct-target" });
+      expect(direct.status).toBe(201);
+      const directSelfLoop = await request(app)
+        .post("/api/v1/redirects")
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ fromPath: "/loop-direct-target", toPath: "/loop-direct" });
+      expect(directSelfLoop.status).toBe(409);
+
+      await request(app).post("/api/v1/redirects").set("Authorization", `Bearer ${adminToken}`).send({ fromPath: "/loop-a", toPath: "/loop-b" });
+      await request(app).post("/api/v1/redirects").set("Authorization", `Bearer ${adminToken}`).send({ fromPath: "/loop-b", toPath: "/loop-c" });
+      const multiHopLoop = await request(app)
+        .post("/api/v1/redirects")
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ fromPath: "/loop-c", toPath: "/loop-a" });
+      expect(multiHopLoop.status).toBe(409);
+
+      const withNotes = await request(app)
+        .post("/api/v1/redirects")
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ fromPath: "/paused", toPath: "/paused-target", isActive: false, notes: "Temporarily disabled during migration." });
+      expect(withNotes.status).toBe(201);
+      expect(withNotes.body.data.redirect.isActive).toBe(false);
+      expect(withNotes.body.data.redirect.notes).toBe("Temporarily disabled during migration.");
+
+      const patched = await request(app)
+        .patch(`/api/v1/redirects/${withNotes.body.data.redirect.id}`)
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ isActive: true, notes: null });
+      expect(patched.status).toBe(200);
+      expect(patched.body.data.redirect.isActive).toBe(true);
+      expect(patched.body.data.redirect.notes).toBeNull();
+
+      const updateIntoLoop = await request(app)
+        .patch(`/api/v1/redirects/${direct.body.data.redirect.id}`)
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ toPath: "/loop-direct" });
+      expect(updateIntoLoop.status).toBe(409);
+
+      const inactiveOnly = await request(app).get("/api/v1/redirects").set("Authorization", `Bearer ${adminToken}`).query({ isActive: "false" });
+      expect(inactiveOnly.body.data.redirects.every((r: { isActive: boolean }) => r.isActive === false)).toBe(true);
+    });
+
     it("VIEWER can read but not create redirects; a redirect never leaks across organizations", async () => {
       const created = await request(app).post("/api/v1/redirects").set("Authorization", `Bearer ${adminToken}`).send({ fromPath: "/tenant-scoped", toPath: "/target" });
       const id = created.body.data.redirect.id;
@@ -208,6 +251,13 @@ describe("SEO Control Center", () => {
       const missing = await request(app).get("/api/v1/public/redirects").query({ path: "/blog/never-existed" });
       expect(missing.status).toBe(200);
       expect(missing.body.data.redirect).toBeNull();
+
+      await prisma.redirect.create({
+        data: { organizationId: config.publicWebsiteOrganizationId, fromPath: "/blog/public-paused", toPath: "/blog/public-new", isActive: false },
+      });
+      const paused = await request(app).get("/api/v1/public/redirects").query({ path: "/blog/public-paused" });
+      expect(paused.status).toBe(200);
+      expect(paused.body.data.redirect).toBeNull();
     });
   });
 
@@ -219,7 +269,15 @@ describe("SEO Control Center", () => {
       const optimized = await request(app)
         .post("/api/v1/posts")
         .set("Authorization", `Bearer ${adminToken}`)
-        .send({ title: "Optimized Post", body: "v1", metadata: { metaTitle: "A well-sized SEO title", metaDescription: "A meta description that sits comfortably within the ideal fifty to one hundred sixty character range for search snippets." } });
+        .send({
+          title: "Optimized Post",
+          body: "v1",
+          metadata: {
+            metaTitle: "A well-sized SEO title",
+            metaDescription: "A meta description that sits comfortably within the ideal fifty to one hundred sixty character range for search snippets.",
+            ogImage: "https://example.com/og-image.jpg",
+          },
+        });
       await request(app).post(`/api/v1/posts/${optimized.body.data.post.id}/publish`).set("Authorization", `Bearer ${adminToken}`).send();
 
       const res = await request(app).get("/api/v1/seo/issues").set("Authorization", `Bearer ${adminToken}`);
@@ -227,7 +285,9 @@ describe("SEO Control Center", () => {
       const bareIssues = res.body.data.issues.filter((i: { resourceId: string }) => i.resourceId === bare.body.data.post.id);
       expect(bareIssues.some((i: { code: string }) => i.code === "missing_meta_title")).toBe(true);
       expect(bareIssues.some((i: { code: string }) => i.code === "missing_meta_description")).toBe(true);
-      expect(bareIssues.every((i: { severity: string }) => i.severity === "critical")).toBe(true);
+      expect(
+        bareIssues.filter((i: { code: string }) => i.code === "missing_meta_title" || i.code === "missing_meta_description").every((i: { severity: string }) => i.severity === "critical")
+      ).toBe(true);
 
       const optimizedIssues = res.body.data.issues.filter((i: { resourceId: string }) => i.resourceId === optimized.body.data.post.id);
       expect(optimizedIssues).toHaveLength(0);
@@ -254,6 +314,43 @@ describe("SEO Control Center", () => {
 
       const dupIssuesA = res.body.data.issues.filter((i: { resourceId: string; code: string }) => i.resourceId === a.body.data.post.id && i.code === "duplicate_meta_title");
       expect(dupIssuesA.length).toBeGreaterThan(0);
+    });
+
+    it("flags duplicate meta descriptions, invalid slug formats, and a missing social image on live content", async () => {
+      const sameDescA = await request(app)
+        .post("/api/v1/posts")
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ title: "Desc Dup A", body: "v1", metadata: { metaTitle: "Desc Dup A Title", metaDescription: "This exact description is reused across more than one post on purpose for this test." } });
+      const sameDescB = await request(app)
+        .post("/api/v1/posts")
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ title: "Desc Dup B", body: "v1", metadata: { metaTitle: "Desc Dup B Title", metaDescription: "This exact description is reused across more than one post on purpose for this test." } });
+
+      const noSocialImage = await request(app)
+        .post("/api/v1/posts")
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ title: "No Social Image Post", body: "v1", metadata: { metaTitle: "No Social Image Post Title", metaDescription: "A meta description long enough to clear the minimum useful-snippet length threshold." } });
+      await request(app).post(`/api/v1/posts/${noSocialImage.body.data.post.id}/publish`).set("Authorization", `Bearer ${adminToken}`).send();
+
+      const res = await request(app).get("/api/v1/seo/issues").set("Authorization", `Bearer ${adminToken}`);
+
+      const descIssuesA = res.body.data.issues.filter((i: { resourceId: string; code: string }) => i.resourceId === sameDescA.body.data.post.id && i.code === "duplicate_meta_description");
+      expect(descIssuesA.length).toBeGreaterThan(0);
+      const descIssuesB = res.body.data.issues.filter((i: { resourceId: string; code: string }) => i.resourceId === sameDescB.body.data.post.id && i.code === "duplicate_meta_description");
+      expect(descIssuesB.length).toBeGreaterThan(0);
+
+      const socialIssues = res.body.data.issues.filter((i: { resourceId: string; code: string }) => i.resourceId === noSocialImage.body.data.post.id && i.code === "missing_social_image");
+      expect(socialIssues.length).toBeGreaterThan(0);
+
+      // Passes the input schema's looser regex (lowercase + hyphens) but is not
+      // what this system's own slugify() would ever produce (double hyphen).
+      const oddSlug = await request(app)
+        .post("/api/v1/posts")
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ title: "Odd Slug Post", body: "v1", slug: "odd--slug" });
+      const auditAfterOddSlug = await request(app).get("/api/v1/seo/issues").set("Authorization", `Bearer ${adminToken}`);
+      const oddSlugIssues = auditAfterOddSlug.body.data.issues.filter((i: { resourceId: string; code: string }) => i.resourceId === oddSlug.body.data.post.id && i.code === "invalid_slug_format");
+      expect(oddSlugIssues.length).toBeGreaterThan(0);
     });
 
     it("never leaks another organization's SEO issues", async () => {

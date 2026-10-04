@@ -139,6 +139,51 @@ const templatePartBlockSchema = z.object({
   }),
 });
 
+// References a NavigationMenu by id (Phase 5) — resolved at render time,
+// same reuse model as templatePartBlockSchema above. This is how a menu
+// gets "assigned to a template/template part" (e.g. a HEADER TemplatePart's
+// content includes one of these) without inventing a second, parallel
+// navigation system.
+const navigationMenuBlockSchema = z.object({
+  ...baseFields,
+  type: z.literal("navigationMenu"),
+  props: z.object({
+    navigationMenuId: z.string().trim().uuid(),
+  }),
+});
+
+// References a Form by id (Phase 9 — Forms + Landing Pages + Conversion) —
+// resolved at render time against the real Form, same reuse model as
+// templatePart/navigationMenu above: the editor stores only the
+// reference, never a frozen copy of the form's fields, so an edit to the
+// Form is reflected everywhere it's embedded. This is the mechanism for
+// "lead forms"/"newsletter signup"/"contact blocks" as reusable
+// conversion elements — a newsletter signup is just a Form with one email
+// field embedded via this same block.
+const formBlockSchema = z.object({
+  ...baseFields,
+  type: z.literal("form"),
+  props: z.object({
+    formId: z.string().trim().uuid(),
+  }),
+});
+
+// A trust/testimonial section (Phase 9). Plain text fields only (never
+// rendered via dangerouslySetInnerHTML on either side) — a quote is
+// always attacker-influenceable content (anyone who can edit a page), so
+// keeping it as plain text rather than HTML is the simplest way to make
+// it inherently safe rather than relying on a sanitize pass.
+const testimonialBlockSchema = z.object({
+  ...baseFields,
+  type: z.literal("testimonial"),
+  props: z.object({
+    quote: z.string().trim().max(2000).default(""),
+    authorName: z.string().trim().max(150).optional(),
+    authorTitle: z.string().trim().max(150).optional(),
+    avatarMediaId: z.string().trim().uuid().optional(),
+  }),
+});
+
 export const blockSchema: z.ZodType<unknown> = z.lazy(() =>
   z.discriminatedUnion("type", [
     sectionBlockSchema,
@@ -152,6 +197,9 @@ export const blockSchema: z.ZodType<unknown> = z.lazy(() =>
     spacerBlockSchema,
     dividerBlockSchema,
     templatePartBlockSchema,
+    navigationMenuBlockSchema,
+    formBlockSchema,
+    testimonialBlockSchema,
   ])
 );
 export type Block = z.infer<typeof sectionBlockSchema> | Record<string, unknown>;
@@ -215,4 +263,7 @@ export const BLOCK_TYPES = [
   "spacer",
   "divider",
   "templatePart",
+  "navigationMenu",
+  "form",
+  "testimonial",
 ] as const;

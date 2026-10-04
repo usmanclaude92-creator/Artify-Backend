@@ -5,6 +5,8 @@ import { prisma } from "../db/prisma";
 export interface PageFilters {
   search?: string;
   status?: string;
+  fromDate?: Date;
+  toDate?: Date;
 }
 
 function slugify(input: string): string {
@@ -28,6 +30,9 @@ export type PageWithPublicRelations = Prisma.PageGetPayload<typeof withPublicRel
 function buildWhere(organizationId: string, filters: PageFilters): Prisma.PageWhereInput {
   const where: Prisma.PageWhereInput = { organizationId, deletedAt: null };
   if (filters.status) where.status = filters.status as Prisma.EnumContentStatusFilter["equals"];
+  if (filters.fromDate || filters.toDate) {
+    where.createdAt = { ...(filters.fromDate ? { gte: filters.fromDate } : {}), ...(filters.toDate ? { lte: filters.toDate } : {}) };
+  }
   if (filters.search) {
     where.OR = [{ title: { contains: filters.search, mode: "insensitive" } }, { slug: { contains: filters.search, mode: "insensitive" } }];
   }
@@ -55,6 +60,16 @@ export const pageRepository = {
   /** Phase 11 public projection — PUBLISHED only, with the revision content and featured media needed to render the page (docs/PUBLIC_API_ARCHITECTURE.md). Never returns DRAFT/IN_REVIEW/SCHEDULED/ARCHIVED. */
   async findPublishedBySlugWithMedia(organizationId: string, slug: string): Promise<PageWithPublicRelations | null> {
     return prisma.page.findFirst({ where: { organizationId, slug, status: "PUBLISHED", deletedAt: null }, ...withPublicRelations });
+  },
+
+  /** Phase 5 — the org's designated homepage, PUBLISHED only (same safety as findPublishedBySlugWithMedia). */
+  async findPublishedHomepageWithMedia(organizationId: string): Promise<PageWithPublicRelations | null> {
+    return prisma.page.findFirst({ where: { organizationId, isHomepage: true, status: "PUBLISHED", deletedAt: null }, ...withPublicRelations });
+  },
+
+  /** Phase 5 — resolves a navigation-menu "page" link target to its slug, PUBLISHED only (never leaks a draft page's existence/slug). */
+  async findPublishedByIdInOrg(id: string, organizationId: string): Promise<Pick<Page, "slug"> | null> {
+    return prisma.page.findFirst({ where: { id, organizationId, status: "PUBLISHED", deletedAt: null }, select: { slug: true } });
   },
 
   /**
@@ -101,7 +116,41 @@ export const pageRepository = {
     return prisma.contentRevision.findMany({ where: { pageId }, orderBy: { version: "desc" } });
   },
 
+  /** Phase 5 — page hierarchy: this page's own parentId (for cycle-checking a reparent), org-scoped. */
+  async findParentId(id: string, organizationId: string): Promise<string | null> {
+    const row = await prisma.page.findFirst({ where: { id, organizationId, deletedAt: null }, select: { parentId: true } });
+    return row?.parentId ?? null;
+  },
+
+  /** Phase 5 — direct children of a page, for the Pages hierarchy UI. */
+  async listChildren(parentId: string, organizationId: string) {
+    return prisma.page.findMany({
+      where: { parentId, organizationId, deletedAt: null },
+      select: { id: true, title: true, slug: true, status: true },
+      orderBy: { title: "asc" },
+    });
+  },
+
   async softDelete(id: string): Promise<void> {
     await prisma.page.update({ where: { id }, data: { deletedAt: new Date() } });
+  },
+
+  /** Phase 7 — Trash view: pages soft-deleted but not yet permanently gone, newest-deleted first. */
+  async listTrash(organizationId: string, page: number, limit: number): Promise<{ rows: Page[]; total: number }> {
+    const where: Prisma.PageWhereInput = { organizationId, deletedAt: { not: null } };
+    const [rows, total] = await Promise.all([
+      prisma.page.findMany({ where, orderBy: { deletedAt: "desc" }, skip: (page - 1) * limit, take: limit }),
+      prisma.page.count({ where }),
+    ]);
+    return { rows, total };
+  },
+
+  /** Phase 7 — Trash view: a single soft-deleted page, org-scoped (never a live one). */
+  async findTrashedByIdInOrg(id: string, organizationId: string): Promise<Page | null> {
+    return prisma.page.findFirst({ where: { id, organizationId, deletedAt: { not: null } } });
+  },
+
+  async restore(id: string): Promise<void> {
+    await prisma.page.update({ where: { id }, data: { deletedAt: null } });
   },
 };

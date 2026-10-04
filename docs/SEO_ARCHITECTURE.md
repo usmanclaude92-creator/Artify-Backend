@@ -120,3 +120,72 @@ registry between the two, not a bug.
 | `seo.redirects.update` | ✓ | ✓ | | |
 | `seo.redirects.delete` | ✓ | | | |
 | `seo.audit.read` | ✓ | ✓ | ✓ | ✓ |
+
+---
+
+# Phase 8 — Advanced SEO Control Center
+
+Extends Phase 5 rather than replacing it: same `Redirect` table, same `seoAuditService`, same per-content
+`metadata` JSON field (`server/schemas/contentSchemas.ts`'s `seoMetadataSchema`, already comprehensive).
+
+## Crawler-visible metadata (server-rendered, not just client-side)
+
+`artifysolscom` is a client-rendered SPA — before this phase, every `<meta>`/`<title>`/`<link rel="canonical">`
+tag was written by `updatePageSeo()` mutating `document.head` **after** hydration, which a crawler that doesn't
+execute JS (or times out before React mounts) never sees. `artifysolscom/api/index.ts`'s catch-all handler now
+resolves the same metadata server-side (`src/utils/ssrMeta.ts`: `renderSeoForPath`) and injects it into the
+real HTML response before it reaches the client — a lightweight "SSR for `<head>` only," not a full
+React-SSR rewrite. It mirrors each page's own client-side SEO-building logic exactly (reuses
+`generateBlogPostSeo`/`generateDefaultPlatformSeo`, mirrors `AiProductDetailPage.tsx`'s inline logic) so
+server- and client-rendered tags never drift apart; the client's own `updatePageSeo()` call after mount is a
+harmless no-op re-application of the same values. Also fixes two real bugs found during this work: a redirect
+cycle (A→B→A, however created) previously recursed forever instead of terminating in a not-found state
+(`CmsPageRoute.tsx`'s `resolveSlug`, and the server-side `resolveRedirectChain`, both now guarded by a
+`visited` set); and every unmatched path previously returned HTTP 200 (a soft-404) instead of a real 404 with
+`noindex, nofollow`.
+
+## Redirect Manager hardening
+
+- **Loop prevention**: `redirectService.assertNoRedirectCycle` walks the chain from a new/updated redirect's
+  `toPath` (same bounded-walk pattern as `pageService.assertParentUsable`'s parent-cycle check) and rejects
+  with 409 if it would ever land back on its own `fromPath` — both the 1-hop case (`A -> A` directly) and a
+  multi-hop cycle through other existing redirects (`A -> B -> C -> A`).
+- **Active/inactive + notes**: `isActive` (default `true`) and `notes` (nullable) columns
+  (migration `20261003192318_phase8_redirect_active_notes`). `publicSiteService.getRedirectForPath` skips an
+  inactive redirect entirely (treated as if it didn't exist) — a redirect can be kept for reference/history
+  without it being live. `GET /api/v1/redirects` accepts `?isActive=true|false` to filter the list.
+
+## Expanded rule-based SEO audit
+
+Three new checks added to `seoAuditService.ts`, same deterministic/explainable shape as Phase 5's:
+- `duplicate_meta_description` — same cross-content duplicate-detection as `duplicate_meta_title`, generalized
+  into one `findDuplicateField` helper.
+- `invalid_slug_format` — flags a slug outside `^[a-z0-9]+(-[a-z0-9]+)*$` (this system's own `slugify()` output
+  shape); the input schema's own regex is looser (allows doubled/leading/trailing hyphens), so this catches a
+  slug that's technically valid input but not what this system would ever generate itself.
+- `missing_social_image` — a `PUBLISHED`/`SCHEDULED` post or page with no `ogImage` **and** no featured image
+  set at all (one or the other is enough; this only fires when neither exists).
+
+## Global → content SEO defaults precedence
+
+Phase 3's Site Identity already had `defaultMetaTitle`/`defaultMetaDescription`/`socialImageMediaId` fields,
+but nothing read them for individual content — they were configurable but dead. `publicSiteService.
+applySeoDefaults` now fills a post/page's `metaTitle`/`metaDescription`/`ogImage` from the organization's
+published Site Identity **only when the content's own field is genuinely unset** — an explicit value on the
+post/page always wins, and a featured image still outranks the site-wide social image for `ogImage` specifically.
+This is the global layer of the precedence chain (global → content-type → template → page/post override);
+template- and content-type-level SEO defaults are not implemented in this phase — every post/page currently
+either sets its own values or falls straight through to the global Site Identity defaults.
+
+## Content SEO field coverage + previews (Control Center UI)
+
+`PostFormModal`/`PageFormModal`'s SEO section previously exposed only `metaTitle`/`metaDescription`/`ogImage` —
+`seoMetadataSchema` already supported `canonicalUrl`, `robotsDirective`, `ogTitle`, `ogDescription`,
+`twitterImage`, `ogType`, `twitterCard`, `focusKeywords`, and `schemaType` with no UI to set them. The new
+shared `src/components/common/SeoFieldsPanel.tsx` exposes every field (with character counts against the same
+limits `seoMetadataSchema` enforces) and renders a live Google-result preview and an Open Graph/Twitter card
+preview, both built from the same fallback chain the public site actually uses (explicit value → content
+title/excerpt → nothing) — never a fabricated example. The SEO Dashboard (`SeoIssuesPage.tsx`) was extended
+with real counts (active/total redirects, total posts+pages, posts/pages with no flagged issues) alongside the
+existing issue list — still no fabricated "SEO score," traffic estimate, or ranking prediction, since this
+system has no real data source for any of those.

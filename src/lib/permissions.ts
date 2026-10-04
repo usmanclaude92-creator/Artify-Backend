@@ -54,6 +54,8 @@ import {
   Wand2,
   Globe,
   Palette,
+  Menu,
+  Home,
 } from "lucide-react";
 import { DashboardPage } from "../components/modules/DashboardPage";
 
@@ -83,8 +85,11 @@ const ContactsPage = lazyPage(() => import("../components/modules/ContactsPage")
 const OnboardingPage = lazyPage(() => import("../components/modules/OnboardingPage"), "OnboardingPage");
 const WorkspacesPage = lazyPage(() => import("../components/modules/WorkspacesPage"), "WorkspacesPage");
 const ProductsPage = lazyPage(() => import("../components/modules/ProductsPage"), "ProductsPage");
+const ProductTaxonomyPage = lazyPage(() => import("../components/modules/ProductTaxonomyPage"), "ProductTaxonomyPage");
 const TemplatesPage = lazyPage(() => import("../components/modules/TemplatesPage"), "TemplatesPage");
 const TemplatePartsPage = lazyPage(() => import("../components/modules/TemplatePartsPage"), "TemplatePartsPage");
+const NavigationMenusPage = lazyPage(() => import("../components/modules/NavigationMenusPage"), "NavigationMenusPage");
+const HomepageManagerPage = lazyPage(() => import("../components/modules/HomepageManagerPage"), "HomepageManagerPage");
 const PagesPage = lazyPage(() => import("../components/modules/PagesPage"), "PagesPage");
 const SiteEditorPage = lazyPage(() => import("../components/modules/SiteEditorPage"), "SiteEditorPage");
 const SiteIdentityPage = lazyPage(() => import("../components/modules/SiteIdentityPage"), "SiteIdentityPage");
@@ -290,6 +295,36 @@ export const NAV_ITEMS: NavItem[] = [
     component: ProductsPage,
     section: "Products",
   },
+  // Phase 10 (Products + Services + Solutions) — same ProductsPage
+  // component, route-locked to a single catalog `type` (see its own
+  // `lockedType` derivation from `path`) — never a second catalog system.
+  {
+    id: "services-all",
+    label: "Services",
+    path: "/services",
+    icon: Briefcase,
+    requiresAnyPermission: ["products.read"],
+    component: ProductsPage,
+    section: "Products",
+  },
+  {
+    id: "solutions-all",
+    label: "Solutions",
+    path: "/solutions",
+    icon: Target,
+    requiresAnyPermission: ["products.read"],
+    component: ProductsPage,
+    section: "Products",
+  },
+  {
+    id: "products-taxonomy",
+    label: "Categories & Industries",
+    path: "/products/taxonomy",
+    icon: FolderTree,
+    requiresAnyPermission: ["product_categories.read", "industries.read"],
+    component: ProductTaxonomyPage,
+    section: "Products",
+  },
   {
     id: "website-templates",
     label: "Templates",
@@ -306,6 +341,24 @@ export const NAV_ITEMS: NavItem[] = [
     icon: PanelsTopLeft,
     requiresAnyPermission: ["template_parts.read"],
     component: TemplatePartsPage,
+    section: "Website",
+  },
+  {
+    id: "website-navigation-menus",
+    label: "Navigation Menus",
+    path: "/website/navigation-menus",
+    icon: Menu,
+    requiresAnyPermission: ["navigation_menus.read"],
+    component: NavigationMenusPage,
+    section: "Website",
+  },
+  {
+    id: "website-homepage",
+    label: "Homepage",
+    path: "/website/homepage",
+    icon: Home,
+    requiresAnyPermission: ["content.read"],
+    component: HomepageManagerPage,
     section: "Website",
   },
   {

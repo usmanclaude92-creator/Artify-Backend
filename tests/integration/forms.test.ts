@@ -159,6 +159,81 @@ describe("Forms (Phase 9 MVP slice)", () => {
       const crossOrgRead = await request(app).get(`/api/v1/forms/${id}`).set("Authorization", `Bearer ${otherOrgAdminToken}`);
       expect(crossOrgRead.status).toBe(404);
     });
+
+    it("accepts the full Phase 9 field-type set, requires options for select/multiselect/radio, and validates conditional visibility references a real field", async () => {
+      const richFields = [
+        { key: "name", label: "Full name", type: "text", required: true },
+        { key: "budget", label: "Budget", type: "number", required: false, min: 0, max: 100000 },
+        {
+          key: "plan",
+          label: "Plan",
+          type: "select",
+          required: true,
+          options: [
+            { value: "basic", label: "Basic" },
+            { value: "pro", label: "Pro" },
+          ],
+        },
+        { key: "consent", label: "I agree to be contacted", type: "checkbox", required: true },
+        {
+          key: "other_plan",
+          label: "Tell us more",
+          type: "textarea",
+          required: false,
+          visibleWhen: { fieldKey: "plan", equals: "pro" },
+        },
+      ];
+      const created = await request(app).post("/api/v1/forms").set("Authorization", `Bearer ${adminToken}`).send({ name: "Rich Fields Form", fields: richFields });
+      expect(created.status).toBe(201);
+
+      const missingOptions = await request(app)
+        .post("/api/v1/forms")
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ name: "No Options", fields: [{ key: "name", label: "Name", type: "text", required: true }, { key: "choice", label: "Choice", type: "radio", required: true, options: [] }] });
+      expect(missingOptions.status).toBe(400);
+
+      const badVisibility = await request(app)
+        .post("/api/v1/forms")
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({
+          name: "Bad Visibility",
+          fields: [
+            { key: "name", label: "Name", type: "text", required: true },
+            { key: "extra", label: "Extra", type: "text", required: false, visibleWhen: { fieldKey: "does_not_exist", equals: "x" } },
+          ],
+        });
+      expect(badVisibility.status).toBe(400);
+    });
+
+    it("rejects notifyUserIds that aren't real users of the form's own organization", async () => {
+      const foreignUser = await prisma.user.findFirst({ where: { email: "forms-admin@example.com" } });
+      const res = await request(app)
+        .post("/api/v1/forms")
+        .set("Authorization", `Bearer ${otherOrgAdminToken}`)
+        .send({ name: "Bad Notify", fields: CONTACT_FIELDS, notifyUserIds: [foreignUser!.id] });
+      expect(res.status).toBe(400);
+
+      const otherOrgSelf = await prisma.user.findFirst({ where: { email: "forms-other-admin@example.com" } });
+      const ok = await request(app)
+        .post("/api/v1/forms")
+        .set("Authorization", `Bearer ${otherOrgAdminToken}`)
+        .send({ name: "Good Notify", fields: CONTACT_FIELDS, notifyUserIds: [otherOrgSelf!.id] });
+      expect(ok.status).toBe(201);
+    });
+
+    it("protects a form with real submissions from deletion, but allows deletion once submissions are gone", async () => {
+      const ownForm = await request(app).post("/api/v1/forms").set("Authorization", `Bearer ${adminToken}`).send({ name: "Own Protected Form", fields: CONTACT_FIELDS });
+      const ownFormId = ownForm.body.data.form.id;
+      // This Form belongs to a non-public org (no public submit route reaches it) — insert a submission directly to exercise deletion protection in isolation.
+      await prisma.formSubmission.create({ data: { formId: ownFormId, organizationId: ownForm.body.data.form.organizationId, data: { name: "X", email: "x@example.com" } } });
+
+      const blockedDelete = await request(app).delete(`/api/v1/forms/${ownFormId}`).set("Authorization", `Bearer ${adminToken}`);
+      expect(blockedDelete.status).toBe(409);
+
+      await prisma.formSubmission.deleteMany({ where: { formId: ownFormId } });
+      const allowedDelete = await request(app).delete(`/api/v1/forms/${ownFormId}`).set("Authorization", `Bearer ${adminToken}`);
+      expect(allowedDelete.status).toBe(200);
+    });
   });
 
   describe("public submission (reuses the Lead-intake pattern)", () => {
@@ -253,6 +328,141 @@ describe("Forms (Phase 9 MVP slice)", () => {
       });
       const res = await request(app).post(`/api/v1/public/forms/${archived.slug}/submit`).send({ data: { name: "X", email: "x@example.com" } });
       expect(res.status).toBe(404);
+    });
+
+    it("exposes a form's real field definitions via GET /public/forms/:slug and /public/forms/by-id/:id, 404ing for ARCHIVED/unknown", async () => {
+      const { config } = await import("../../server/config/env");
+      if (!config.publicWebsiteOrganizationId) return;
+      const form = await prisma.form.upsert({
+        where: { organizationId_slug: { organizationId: config.publicWebsiteOrganizationId, slug: "renderable-form" } },
+        update: {},
+        create: { organizationId: config.publicWebsiteOrganizationId, name: "Renderable Form", slug: "renderable-form", fields: CONTACT_FIELDS },
+      });
+
+      const bySlug = await request(app).get(`/api/v1/public/forms/${form.slug}`);
+      expect(bySlug.status).toBe(200);
+      expect(bySlug.body.data.form.fields).toEqual(CONTACT_FIELDS);
+      expect(bySlug.body.data.form).not.toHaveProperty("organizationId");
+
+      const byId = await request(app).get(`/api/v1/public/forms/by-id/${form.id}`);
+      expect(byId.status).toBe(200);
+      expect(byId.body.data.form.slug).toBe("renderable-form");
+
+      const unknown = await request(app).get("/api/v1/public/forms/never-existed");
+      expect(unknown.status).toBe(404);
+
+      const archived = await prisma.form.update({ where: { id: form.id }, data: { status: "ARCHIVED" } });
+      const archivedRes = await request(app).get(`/api/v1/public/forms/${archived.slug}`);
+      expect(archivedRes.status).toBe(404);
+    });
+
+    it("merges a resubmission from the same email into the existing open Lead instead of creating a second one, and tracks consent", async () => {
+      const { config } = await import("../../server/config/env");
+      if (!config.publicWebsiteOrganizationId) return;
+      const consentFields = [...CONTACT_FIELDS, { key: "consent", label: "I agree to be contacted", type: "checkbox", required: true }];
+      const form = await prisma.form.upsert({
+        where: { organizationId_slug: { organizationId: config.publicWebsiteOrganizationId, slug: "dup-handling-form" } },
+        update: { fields: consentFields },
+        create: { organizationId: config.publicWebsiteOrganizationId, name: "Dup Handling Form", slug: "dup-handling-form", fields: consentFields },
+      });
+
+      const first = await request(app)
+        .post(`/api/v1/public/forms/${form.slug}/submit`)
+        .set("X-Forwarded-For", "203.0.113.50")
+        .set("Referer", "https://google.com/search")
+        .send({ data: { name: "Repeat Visitor", email: "repeat@example.com", message: "First message.", consent: "true" }, landingPagePath: "/landing/launch" });
+      expect(first.status).toBe(201);
+      const firstSubmission = await prisma.formSubmission.findFirst({ where: { formId: form.id, data: { path: ["email"], equals: "repeat@example.com" } }, orderBy: { createdAt: "desc" } });
+      expect(firstSubmission?.consentGiven).toBe(true);
+      expect(firstSubmission?.landingPagePath).toBe("/landing/launch");
+      expect(firstSubmission?.referrer).toBe("https://google.com/search");
+
+      const leadCountBefore = await prisma.lead.count({ where: { email: "repeat@example.com" } });
+      expect(leadCountBefore).toBe(1);
+      const leadId = firstSubmission!.leadId;
+
+      const second = await request(app)
+        .post(`/api/v1/public/forms/${form.slug}/submit`)
+        .set("X-Forwarded-For", "203.0.113.51")
+        .send({ data: { name: "Repeat Visitor", email: "repeat@example.com", message: "Second message.", consent: "false" } });
+      expect(second.status).toBe(201);
+
+      const leadCountAfter = await prisma.lead.count({ where: { email: "repeat@example.com" } });
+      expect(leadCountAfter).toBe(1);
+      const secondSubmission = await prisma.formSubmission.findFirst({ where: { formId: form.id, leadId }, orderBy: { createdAt: "desc" } });
+      expect(secondSubmission?.leadId).toBe(leadId);
+      expect(secondSubmission?.consentGiven).toBe(false);
+
+      const lead = await prisma.lead.findUnique({ where: { id: leadId! } });
+      expect(lead?.notes).toContain("First message.");
+      expect(lead?.notes).toContain("Second message.");
+    });
+
+    it("notifies every configured notifyUserIds recipient in-app when a real submission lands, never on a honeypot hit", async () => {
+      const { config } = await import("../../server/config/env");
+      if (!config.publicWebsiteOrganizationId) return;
+      const recipient = await prisma.user.findFirst({ where: { email: "forms-admin@example.com" } });
+      const form = await prisma.form.create({
+        data: {
+          organizationId: config.publicWebsiteOrganizationId,
+          name: "Notify Form",
+          slug: "notify-form",
+          fields: CONTACT_FIELDS,
+          notifyUserIds: [recipient!.id],
+        },
+      });
+
+      await request(app)
+        .post(`/api/v1/public/forms/${form.slug}/submit`)
+        .set("X-Forwarded-For", "203.0.113.52")
+        .send({ data: { name: "Notify Me", email: "notify-target@example.com" } });
+      const notification = await prisma.notification.findFirst({ where: { userId: recipient!.id, type: "FORM_SUBMITTED" } });
+      expect(notification).not.toBeNull();
+      expect(notification?.title).toContain("Notify Form");
+
+      const before = await prisma.notification.count({ where: { userId: recipient!.id, type: "FORM_SUBMITTED" } });
+      await request(app)
+        .post(`/api/v1/public/forms/${form.slug}/submit`)
+        .set("X-Forwarded-For", "203.0.113.53")
+        .send({ data: { name: "Bot", email: "bot2@example.com" }, website: "spam" });
+      const after = await prisma.notification.count({ where: { userId: recipient!.id, type: "FORM_SUBMITTED" } });
+      expect(after).toBe(before);
+    });
+  });
+
+  describe("submissions export (CSV)", () => {
+    it("exports real submission rows as CSV, scoped to the caller's own organization", async () => {
+      const form = await request(app).post("/api/v1/forms").set("Authorization", `Bearer ${adminToken}`).send({ name: "Export Form", fields: CONTACT_FIELDS });
+      const formId = form.body.data.form.id;
+      await prisma.formSubmission.create({
+        data: { formId, organizationId: form.body.data.form.organizationId, data: { name: "CSV Person", email: "csv@example.com" }, utmSource: "newsletter" },
+      });
+
+      const res = await request(app).get(`/api/v1/forms/${formId}/submissions/export`).set("Authorization", `Bearer ${adminToken}`);
+      expect(res.status).toBe(200);
+      expect(res.headers["content-type"]).toContain("text/csv");
+      expect(res.text).toContain("CSV Person");
+      expect(res.text).toContain("csv@example.com");
+      expect(res.text).toContain("newsletter");
+
+      const viewerExport = await request(app).get(`/api/v1/forms/${formId}/submissions/export`).set("Authorization", `Bearer ${viewerToken}`);
+      expect(viewerExport.status).toBe(200); // forms.read covers export, same as the JSON listing.
+
+      const crossOrgExport = await request(app).get(`/api/v1/forms/${formId}/submissions/export`).set("Authorization", `Bearer ${otherOrgAdminToken}`);
+      expect(crossOrgExport.status).toBe(404);
+    });
+
+    it("neutralizes a CSV-formula-injection payload in an exported cell", async () => {
+      const form = await request(app).post("/api/v1/forms").set("Authorization", `Bearer ${adminToken}`).send({ name: "Formula Export Form", fields: CONTACT_FIELDS });
+      const formId = form.body.data.form.id;
+      await prisma.formSubmission.create({
+        data: { formId, organizationId: form.body.data.form.organizationId, data: { name: "=SUM(A1:A9)", email: "formula@example.com" } },
+      });
+
+      const res = await request(app).get(`/api/v1/forms/${formId}/submissions/export`).set("Authorization", `Bearer ${adminToken}`);
+      expect(res.status).toBe(200);
+      expect(res.text).not.toContain('"=SUM(A1:A9)"');
+      expect(res.text).toContain("'=SUM(A1:A9)");
     });
   });
 });

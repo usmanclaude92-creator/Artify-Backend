@@ -67,7 +67,7 @@ async function assertTagsInOrg(tagIds: string[] | undefined, organizationId: str
 export const postService = {
   async listPosts(
     organizationId: string,
-    filters: Pick<ListPostsQuery, "search" | "status" | "categoryId" | "tagId">,
+    filters: Pick<ListPostsQuery, "search" | "status" | "categoryId" | "tagId" | "fromDate" | "toDate">,
     page: number,
     limit: number,
     sort: string,
@@ -120,6 +120,7 @@ export const postService = {
             version: 1,
             status: "DRAFT",
             title: input.title,
+            excerpt: input.excerpt,
             body,
             metadata: (input.metadata ?? {}) as Prisma.InputJsonValue,
             createdById: caller.id,
@@ -155,7 +156,8 @@ export const postService = {
     const existing = await loadPostOrThrow(id, organizationId);
     const sanitizedBody = input.body !== undefined ? sanitizeContentHtml(input.body) : undefined;
 
-    const hasContentEdit = input.title !== undefined || input.body !== undefined || input.metadata !== undefined || input.slug !== undefined;
+    const hasContentEdit =
+      input.title !== undefined || input.body !== undefined || input.excerpt !== undefined || input.metadata !== undefined || input.slug !== undefined;
     // Blocked only when the post STAYS archived — target status is always
     // existing.status unless input.status ("DRAFT" only, restoring it) is
     // supplied, so this never blocks a combined restore+edit.
@@ -206,6 +208,7 @@ export const postService = {
               version: currentRevision.version + 1,
               status: liveEditOfPublished ? "PUBLISHED" : "DRAFT",
               title: input.title ?? currentRevision.title,
+              excerpt: input.excerpt !== undefined ? input.excerpt : currentRevision.excerpt,
               body: sanitizedBody ?? currentRevision.body,
               metadata: (input.metadata ?? currentRevision.metadata) as Prisma.InputJsonValue,
               createdById: caller.id,
@@ -216,6 +219,7 @@ export const postService = {
         } else if (hasContentEdit && currentRevision) {
           const revisionPatch: Record<string, unknown> = {};
           if (input.title !== undefined) revisionPatch.title = input.title;
+          if (input.excerpt !== undefined) revisionPatch.excerpt = input.excerpt;
           if (sanitizedBody !== undefined) revisionPatch.body = sanitizedBody;
           if (input.metadata !== undefined) revisionPatch.metadata = input.metadata as Prisma.InputJsonValue;
           if (Object.keys(revisionPatch).length > 0) {
@@ -443,6 +447,7 @@ export const postService = {
           version: nextVersion,
           status: wasPublished ? "PUBLISHED" : "DRAFT",
           title: target.title,
+          excerpt: target.excerpt,
           body: target.body,
           metadata: target.metadata as Prisma.InputJsonValue,
           createdById: caller.id,
@@ -488,5 +493,62 @@ export const postService = {
       ipAddress: meta.ip,
       userAgent: meta.userAgent,
     });
+  },
+
+  /** Phase 7 — Trash view (Content Dashboard): soft-deleted posts, paginated. */
+  async listTrash(organizationId: string, page: number, limit: number) {
+    return postRepository.listTrash(organizationId, page, limit);
+  },
+
+  async restorePost(caller: SanitizedUser, id: string, meta: RequestMeta = {}): Promise<void> {
+    const organizationId = caller.organizationId;
+    const existing = await postRepository.findTrashedByIdInOrg(id, organizationId);
+    if (!existing) throw new NotFoundError("Post not found in trash.");
+
+    await postRepository.restore(id);
+
+    await auditLogRepository.record({
+      organizationId,
+      actorUserId: caller.id,
+      actorType: "USER",
+      action: "POST_RESTORED",
+      resourceType: "post",
+      resourceId: id,
+      beforeData: { status: existing.status, title: existing.title },
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent,
+    });
+  },
+
+  /**
+   * Phase 7 — bulk workflow actions for the Content Dashboard's list view.
+   * Each id is processed through the exact same single-item method used
+   * by its dedicated endpoint (no duplicated business logic), isolated in
+   * its own try/catch so one bad id (wrong status for the transition,
+   * already in the target state, a race with another editor) never aborts
+   * the rest of the batch — mirrors contentSchedulingService's per-item
+   * isolation for the same reason.
+   */
+  async bulkAction(
+    caller: SanitizedUser,
+    action: "archive" | "trash" | "restore",
+    ids: string[],
+    meta: RequestMeta = {}
+  ): Promise<{ succeeded: string[]; failed: { id: string; error: string }[] }> {
+    const succeeded: string[] = [];
+    const failed: { id: string; error: string }[] = [];
+
+    for (const id of ids) {
+      try {
+        if (action === "archive") await this.archivePost(caller, id, meta);
+        else if (action === "trash") await this.deletePost(caller, id, meta);
+        else await this.restorePost(caller, id, meta);
+        succeeded.push(id);
+      } catch (err) {
+        failed.push({ id, error: err instanceof Error ? err.message : "Action failed." });
+      }
+    }
+
+    return { succeeded, failed };
   },
 };

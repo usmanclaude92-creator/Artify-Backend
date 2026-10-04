@@ -81,8 +81,51 @@ Reuses the existing `ProductStatus` enum (Phase 2), with `DEPRECATED` renamed to
 - **Sort**: whitelisted fields only (`name`, `code`, `type`, `status`, `displayOrder`, `createdAt`, `updatedAt`) via a Zod enum — an arbitrary/unlisted sort value is rejected with a 400, never interpolated into the query.
 - **Pagination**: `page`/`limit` (capped at 100 per page).
 
-## Known limitations
+## Known limitations (Phase 7)
 
 - No pricing field exists in this phase — the brief's §28 explicitly scoped pricing out unless the schema already required it; it doesn't.
 - `configuration` (Phase 2's JSON field) is preserved but not exposed through any Phase 7 UI or validated schema — a future phase that needs structured per-product configuration should design that deliberately rather than inheriting an untyped blob.
 - No product-to-client/workspace assignment exists yet — intentional (§9/§41); that's Subscription's job, in a later phase.
+
+## Phase 10 — Products + Services + Solutions
+
+Closes the gap between "Service" existing only as a `ProductType` value
+with no real management UI, and "Solution" not existing at all, while
+staying inside the exact architecture above — **no new catalog table, no
+second CMS**. A Service is `Product.type = "SERVICE"`; a Solution is the
+new `Product.type = "SOLUTION"` value, the identical extension SERVICE
+itself got in Phase 7. The Control Center's "Products"/"Services"/
+"Solutions" nav entries are one React component (`ProductsPage.tsx`)
+whose catalog `type` filter is route-locked per entry — never three
+separate list/editor implementations.
+
+### New fields on `Product`
+
+| Field | Notes |
+|---|---|
+| `featuredMediaId` | Resolved/validated against the single configured `PUBLIC_WEBSITE_ORGANIZATION_ID` org's Media Library — the only org a *global* catalog row can safely borrow a *tenant-scoped* `MediaAsset` from, same bounding assumption `publicSiteService.ts` already uses for every other public media reference. |
+| `categoryId` | References the new `ProductCategory` model — platform-global like `Product` itself, not the existing organization-scoped `Category` (built for Posts; reusing it would force a global Product to pick an arbitrary owning org). |
+| `currentRevisionId` / `ProductRevision` | Mirrors Template/TemplatePart's stable-identity-plus-revisions pattern, but deliberately lighter: no separate per-revision publish status, because `Product.status` (DRAFT/ACTIVE/INACTIVE/ARCHIVED) already answers "is this published" — a second status would just be two sources of truth for the same question. A revision is an immutable snapshot of `{benefits, features, businessProblem, ctaFormId, seo}` taken on every content-affecting save; `revertProduct` clones an old snapshot into a new current revision, never mutating history. |
+
+### New relationships
+
+- **`ProductCategory`** — platform-global (no `organizationId`, same as `Product`), one per catalog row via `categoryId`. Deletion is refused while any product still references it.
+- **`Industry`** / **`ProductIndustry`** — platform-global taxonomy + many-to-many join, for Solution ↔ Industry tagging (the brief's explicit ask; no prior "Industry" concept existed anywhere in this schema). Usable by any type, not restricted to SOLUTION at the schema/validation level — only the Control Center UI surfaces the industries picker for SOLUTION by default.
+- **`ProductRelation`** — one symmetric "related to" edge per pair (`@@unique([fromProductId, toProductId])`), covering Product↔Service, Product↔Solution, Solution↔Service, etc. all at once, since they're all just `Product` rows differentiated by `type`. The repository queries both directions so an edge set once is visible from either row.
+
+### CTA (Phase 9 Forms integration)
+
+`content.ctaFormId` is validated at save time the same way `featuredMediaId` is — it must reference a real Form inside the configured public org. The public API resolves it to a real, safe Form projection (`publicFormService.getFormForRender`) and degrades to `ctaForm: null` (never a 500, never fabricated) if the form was since archived or deleted. The public site renders the real `PublicForm` (Phase 9) in place of the generic "Request a Consultation" fallback whenever a CTA form is present.
+
+### RBAC
+
+Reuses `products.read/create/update/archive` for every catalog action this phase adds (revisions/revert/duplicate/bulk-archive/relations/industries-on-a-product) — no new permission keys needed there, since they're all just richer forms of the same create/update/archive actions on the same `Product` row. Two new, narrow keys were added only for the two genuinely new reference-data tables: `product_categories.read`/`.manage` and `industries.read`/`.manage` (ADMIN/MANAGER get `.manage`, every role gets `.read`).
+
+### Public rendering
+
+`publicProductService.ts`'s detail projection (`GET /public/products/:slug`) now includes `category`, `featuredMedia` (resolved URL), `benefits`/`features`/`businessProblem`, `seo`, `ctaForm`, `relatedProducts` (ACTIVE-only), and `industries`. The list projection (`GET /public/products`) is unchanged — every existing consumer of the flat list shape is unaffected. `artifysolscom`'s `AiSolutionsPage`/`AiProductDetailPage` (Phase 11) render these fields when present and fall back to their original plain layout when absent, so every Product created before this phase renders exactly as it did before.
+
+### Known limitations (Phase 10)
+
+- The public site's hand-authored marketing pages for "Services" (`ServicesPage.tsx`) and "Solutions" (`EnterpriseSolutions.tsx`, `SolutionsByFunction.tsx`, `solutionsCatalogData.ts`) are **not** migrated onto this real catalog in this phase — they remain static, hand-authored copy. That is a large, separate content-migration exercise (hundreds of lines of existing marketing copy per page), not part of "build the management system." The real, CMS-driven path — `AiSolutionsPage`/`AiProductDetailPage`, already wired to the real API since Phase 11 — now fully supports SERVICE and SOLUTION rows end-to-end; a future phase can choose to retire the static pages in favor of it.
+- No campaign/attribution reporting ties a Product's CTA form submissions back to the Product itself — a submission is a real, persisted `FormSubmission`/`Lead` (Phase 9), but there's no "conversions per product" dashboard. Analytics-territory, out of scope here.

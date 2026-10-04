@@ -7,6 +7,8 @@ export interface PostFilters {
   status?: string;
   categoryId?: string;
   tagId?: string;
+  fromDate?: Date;
+  toDate?: Date;
 }
 
 function slugify(input: string): string {
@@ -36,6 +38,9 @@ function buildWhere(organizationId: string, filters: PostFilters): Prisma.PostWh
   if (filters.status) where.status = filters.status as Prisma.EnumContentStatusFilter["equals"];
   if (filters.categoryId) where.categoryId = filters.categoryId;
   if (filters.tagId) where.tags = { some: { tagId: filters.tagId } };
+  if (filters.fromDate || filters.toDate) {
+    where.createdAt = { ...(filters.fromDate ? { gte: filters.fromDate } : {}), ...(filters.toDate ? { lte: filters.toDate } : {}) };
+  }
   if (filters.search) {
     where.OR = [{ title: { contains: filters.search, mode: "insensitive" } }, { slug: { contains: filters.search, mode: "insensitive" } }];
   }
@@ -63,6 +68,11 @@ export const postRepository = {
   /** Phase 11 public projection — PUBLISHED only, with category/author/tags/featured media/revision content (docs/PUBLIC_API_ARCHITECTURE.md). Never returns DRAFT/IN_REVIEW/SCHEDULED/ARCHIVED. */
   async findPublishedBySlugWithMedia(organizationId: string, slug: string): Promise<PostWithPublicRelations | null> {
     return prisma.post.findFirst({ where: { organizationId, slug, status: "PUBLISHED", deletedAt: null }, ...withPublicRelations });
+  },
+
+  /** Phase 5 — resolves a navigation-menu "post" link target to its slug, PUBLISHED only. */
+  async findPublishedByIdInOrg(id: string, organizationId: string): Promise<Pick<Post, "slug"> | null> {
+    return prisma.post.findFirst({ where: { id, organizationId, status: "PUBLISHED", deletedAt: null }, select: { slug: true } });
   },
 
   /** Phase 11 public projection — PUBLISHED only, paginated, with the same relations as findPublishedBySlugWithMedia. */
@@ -138,5 +148,24 @@ export const postRepository = {
 
   async softDelete(id: string): Promise<void> {
     await prisma.post.update({ where: { id }, data: { deletedAt: new Date() } });
+  },
+
+  /** Phase 7 — Trash view: posts soft-deleted but not yet permanently gone, newest-deleted first. */
+  async listTrash(organizationId: string, page: number, limit: number): Promise<{ rows: Post[]; total: number }> {
+    const where: Prisma.PostWhereInput = { organizationId, deletedAt: { not: null } };
+    const [rows, total] = await Promise.all([
+      prisma.post.findMany({ where, orderBy: { deletedAt: "desc" }, skip: (page - 1) * limit, take: limit }),
+      prisma.post.count({ where }),
+    ]);
+    return { rows, total };
+  },
+
+  /** Phase 7 — Trash view: a single soft-deleted post, org-scoped (never a live one). */
+  async findTrashedByIdInOrg(id: string, organizationId: string): Promise<Post | null> {
+    return prisma.post.findFirst({ where: { id, organizationId, deletedAt: { not: null } } });
+  },
+
+  async restore(id: string): Promise<void> {
+    await prisma.post.update({ where: { id }, data: { deletedAt: null } });
   },
 };

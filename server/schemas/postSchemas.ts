@@ -12,6 +12,8 @@ export const createPostSchema = z.object({
   title: z.string().trim().min(1).max(200),
   slug: slugSchema.optional(),
   body: z.string().trim().max(500000).default(""),
+  // Phase 7 — short author-written summary, distinct from SEO metaDescription.
+  excerpt: z.string().trim().max(500).optional(),
   metadata: seoMetadataSchema.optional(),
   categoryId: z.string().trim().uuid().optional(),
   authorId: z.string().trim().uuid().optional(),
@@ -25,6 +27,7 @@ export const updatePostSchema = z
     title: z.string().trim().min(1).max(200).optional(),
     slug: slugSchema.optional(),
     body: z.string().trim().max(500000).optional(),
+    excerpt: z.string().trim().max(500).nullable().optional(),
     metadata: seoMetadataSchema.optional(),
     status: patchableContentStatusSchema.optional(),
     categoryId: z.string().trim().uuid().nullable().optional(),
@@ -43,6 +46,9 @@ export const listPostsQuerySchema = z.object({
   status: z.enum(["DRAFT", "IN_REVIEW", "SCHEDULED", "PUBLISHED", "ARCHIVED"]).optional(),
   categoryId: z.string().trim().uuid().optional(),
   tagId: z.string().trim().uuid().optional(),
+  // Phase 7 — Content Dashboard date filtering, inclusive range over createdAt.
+  fromDate: z.coerce.date().optional(),
+  toDate: z.coerce.date().optional(),
   sort: z.enum(["title", "slug", "status", "createdAt", "updatedAt", "publishedAt"]).default("updatedAt"),
   order: z.enum(["asc", "desc"]).default("desc"),
 });

@@ -24,6 +24,8 @@ const templateRevisionsMock = vi.fn();
 const templateRevertMock = vi.fn();
 const templateUsageMock = vi.fn();
 const templatePreviewMock = vi.fn();
+const navigationMenusListMock = vi.fn();
+const formsListMock = vi.fn();
 const notifyMock = vi.fn();
 const navigateMock = vi.fn();
 
@@ -57,6 +59,12 @@ vi.mock("../../lib/api", async () => {
       revisions: (...args: unknown[]) => templatePartRevisionsMock(...args),
       revert: (...args: unknown[]) => templatePartRevertMock(...args),
       usage: (...args: unknown[]) => templatePartUsageMock(...args),
+    },
+    navigationMenusApi: {
+      list: (...args: unknown[]) => navigationMenusListMock(...args),
+    },
+    formsApi: {
+      list: (...args: unknown[]) => formsListMock(...args),
     },
     mediaApi: {
       getReadUrl: vi.fn().mockResolvedValue({ url: "https://cdn.example.com/x.jpg", expiresAt: "2026-01-01" }),
@@ -169,6 +177,8 @@ function setUrl(search: string) {
 
 beforeEach(() => {
   templatePartsListMock.mockResolvedValue({ items: [], page: 1, limit: 100, total: 0, totalPages: 1 });
+  navigationMenusListMock.mockResolvedValue({ items: [], page: 1, limit: 100, total: 0, totalPages: 1 });
+  formsListMock.mockResolvedValue({ items: [], page: 1, limit: 100, total: 0, totalPages: 1 });
   templateGetMock.mockResolvedValue({ template: null });
   templateUsageMock.mockResolvedValue({ pages: [] });
   templatePartUsageMock.mockResolvedValue({ templates: [], pages: [] });
@@ -184,6 +194,8 @@ afterEach(() => {
   revisionsMock.mockReset();
   revertMock.mockReset();
   templatePartsListMock.mockReset();
+  navigationMenusListMock.mockReset();
+  formsListMock.mockReset();
   templatePartGetMock.mockReset();
   templatePartUpdateMock.mockReset();
   templatePartPublishMock.mockReset();

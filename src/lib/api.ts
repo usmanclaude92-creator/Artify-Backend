@@ -605,12 +605,23 @@ export const notificationsApi = {
 // being a parallel, CRM-disconnected record — see docs/FORMS_ARCHITECTURE.md.
 // ---------------------------------------------------------------------------
 export type FormStatusValue = "ACTIVE" | "ARCHIVED";
-export type FormFieldTypeValue = "text" | "email" | "tel" | "textarea";
+// "file" deliberately omitted — see server/schemas/formSchemas.ts's header
+// comment: no safe anonymous-upload path exists in this codebase yet.
+export type FormFieldTypeValue = "text" | "email" | "tel" | "number" | "select" | "multiselect" | "checkbox" | "radio" | "date" | "textarea" | "hidden";
+export interface FormFieldOption {
+  value: string;
+  label: string;
+}
 export interface FormFieldDef {
   key: string;
   label: string;
   type: FormFieldTypeValue;
   required: boolean;
+  placeholder?: string;
+  options?: FormFieldOption[];
+  min?: number;
+  max?: number;
+  visibleWhen?: { fieldKey: string; equals: string };
 }
 export interface MarketingForm {
   id: string;
@@ -620,6 +631,7 @@ export interface MarketingForm {
   status: FormStatusValue;
   fields: FormFieldDef[];
   successMessage: string | null;
+  notifyUserIds: string[];
   createdById: string | null;
   createdAt: string;
   updatedAt: string;
@@ -628,12 +640,15 @@ export interface FormSubmission {
   id: string;
   formId: string;
   organizationId: string;
-  data: Record<string, string>;
+  data: Record<string, string | string[]>;
   utmSource: string | null;
   utmMedium: string | null;
   utmCampaign: string | null;
   utmTerm: string | null;
   utmContent: string | null;
+  landingPagePath: string | null;
+  referrer: string | null;
+  consentGiven: boolean | null;
   leadId: string | null;
   createdAt: string;
 }
@@ -642,13 +657,26 @@ export const formsApi = {
   list: (params: { page?: number; limit?: number; search?: string; status?: FormStatusValue; sort?: string; order?: "asc" | "desc" } = {}) =>
     paginatedGet<MarketingForm>("/forms", "forms", params),
   get: (id: string) => apiClient.get<{ form: MarketingForm }>(`/forms/${id}`),
-  create: (payload: { name: string; slug?: string; fields: FormFieldDef[]; successMessage?: string }) =>
+  create: (payload: { name: string; slug?: string; fields: FormFieldDef[]; successMessage?: string; notifyUserIds?: string[] }) =>
     apiClient.post<{ form: MarketingForm }>("/forms", payload),
-  update: (id: string, payload: Partial<{ name: string; slug: string; fields: FormFieldDef[]; successMessage: string | null; status: FormStatusValue }>) =>
-    apiClient.patch<{ form: MarketingForm }>(`/forms/${id}`, payload),
+  update: (
+    id: string,
+    payload: Partial<{ name: string; slug: string; fields: FormFieldDef[]; successMessage: string | null; status: FormStatusValue; notifyUserIds: string[] }>
+  ) => apiClient.patch<{ form: MarketingForm }>(`/forms/${id}`, payload),
   remove: (id: string) => apiClient.delete<{ message: string }>(`/forms/${id}`),
   listSubmissions: (id: string, params: { page?: number; limit?: number } = {}) =>
     paginatedGet<FormSubmission>(`/forms/${id}/submissions`, "submissions", params),
+  downloadSubmissionsExport: async (id: string, filename: string): Promise<void> => {
+    const blob = await apiClient.getBlob(`/forms/${id}/submissions/export`);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -787,9 +815,66 @@ export const invitationsApi = {
 // Phase 7 — Product & Service catalog
 // ---------------------------------------------------------------------------
 
-export type ProductTypeValue = "PRODUCT" | "SERVICE";
+export type ProductTypeValue = "PRODUCT" | "SERVICE" | "SOLUTION";
 export type ProductStatusValue = "DRAFT" | "ACTIVE" | "INACTIVE" | "ARCHIVED";
 export type ProductModuleStatusValue = "DRAFT" | "ACTIVE" | "INACTIVE";
+
+export interface ProductSeoValue {
+  metaTitle?: string;
+  metaDescription?: string;
+  focusKeywords?: string[];
+  canonicalUrl?: string;
+  ogTitle?: string;
+  ogDescription?: string;
+  ogImage?: string;
+  twitterImage?: string;
+  ogType?: string;
+  twitterCard?: string;
+  robotsDirective?: string;
+  schemaType?: string;
+}
+
+export interface ProductContentValue {
+  benefits?: string[];
+  features?: string[];
+  businessProblem?: string;
+  ctaFormId?: string;
+  seo?: ProductSeoValue;
+}
+
+export interface ProductCategory {
+  id: string;
+  slug: string;
+  name: string;
+  description: string | null;
+  displayOrder: number;
+}
+
+export interface Industry {
+  id: string;
+  slug: string;
+  name: string;
+  description: string | null;
+  displayOrder: number;
+}
+
+export interface ProductRevision {
+  id: string;
+  productId: string;
+  version: number;
+  name: string;
+  content: ProductContentValue;
+  createdById: string | null;
+  createdAt: string;
+}
+
+export interface RelatedProductRef {
+  id: string;
+  fromProductId: string;
+  toProductId: string;
+  fromProduct?: { id: string; slug: string; name: string; type: ProductTypeValue; status: ProductStatusValue };
+  toProduct?: { id: string; slug: string; name: string; type: ProductTypeValue; status: ProductStatusValue };
+}
 
 export interface CatalogProduct {
   id: string;
@@ -803,10 +888,19 @@ export interface CatalogProduct {
   isFeatured: boolean;
   displayOrder: number;
   version: string;
+  featuredMediaId: string | null;
+  categoryId: string | null;
+  currentRevisionId: string | null;
   createdById: string | null;
   updatedById: string | null;
   createdAt: string;
   updatedAt: string;
+  // Only present on the single-product GET (ProductWithDetail) — list rows stay flat.
+  category?: ProductCategory | null;
+  currentRevision?: ProductRevision | null;
+  industries?: { productId: string; industryId: string; industry: Industry }[];
+  relatedFrom?: RelatedProductRef[];
+  relatedTo?: RelatedProductRef[];
 }
 
 export interface ProductModule {
@@ -823,6 +917,23 @@ export interface ProductModule {
   updatedAt: string;
 }
 
+export interface ProductWritePayload {
+  code: string;
+  name: string;
+  slug?: string;
+  type: ProductTypeValue;
+  shortDescription?: string;
+  description?: string;
+  status?: ProductStatusValue;
+  isFeatured?: boolean;
+  displayOrder?: number;
+  featuredMediaId?: string;
+  categoryId?: string;
+  content?: ProductContentValue;
+  relatedProductIds?: string[];
+  industryIds?: string[];
+}
+
 export const productsApi = {
   list: (
     params: {
@@ -832,36 +943,23 @@ export const productsApi = {
       type?: ProductTypeValue;
       status?: ProductStatusValue;
       isFeatured?: boolean;
+      categoryId?: string;
+      industryId?: string;
       sort?: string;
       order?: "asc" | "desc";
     } = {}
   ) => paginatedGet<CatalogProduct>("/products", "products", params),
   get: (id: string) => apiClient.get<{ product: CatalogProduct }>(`/products/${id}`),
-  create: (payload: {
-    code: string;
-    name: string;
-    slug?: string;
-    type: ProductTypeValue;
-    shortDescription?: string;
-    description?: string;
-    status?: ProductStatusValue;
-    isFeatured?: boolean;
-    displayOrder?: number;
-  }) => apiClient.post<{ product: CatalogProduct }>("/products", payload),
+  create: (payload: ProductWritePayload) => apiClient.post<{ product: CatalogProduct }>("/products", payload),
   update: (
     id: string,
-    payload: Partial<{
-      name: string;
-      slug: string;
-      type: ProductTypeValue;
-      shortDescription: string | null;
-      description: string | null;
-      status: ProductStatusValue;
-      isFeatured: boolean;
-      displayOrder: number;
-    }>
+    payload: Partial<ProductWritePayload & { featuredMediaId: string | null; categoryId: string | null }>
   ) => apiClient.patch<{ product: CatalogProduct }>(`/products/${id}`, payload),
   archive: (id: string) => apiClient.post<{ product: CatalogProduct }>(`/products/${id}/archive`),
+  bulkArchive: (ids: string[]) => apiClient.post<{ archived: number; skipped: string[] }>("/products/bulk/archive", { ids }),
+  duplicate: (id: string, name?: string) => apiClient.post<{ product: CatalogProduct }>(`/products/${id}/duplicate`, { name }),
+  listRevisions: (id: string) => apiClient.get<{ revisions: ProductRevision[] }>(`/products/${id}/revisions`),
+  revert: (id: string, revisionId: string) => apiClient.post<{ product: CatalogProduct }>(`/products/${id}/revert`, { revisionId }),
   modules: (id: string, params: { page?: number; limit?: number; status?: ProductModuleStatusValue } = {}) =>
     paginatedGet<ProductModule>(`/products/${id}/modules`, "modules", params),
   addModule: (
@@ -869,6 +967,24 @@ export const productsApi = {
     payload: { code: string; name: string; slug?: string; description?: string; status?: ProductModuleStatusValue; isCore?: boolean; displayOrder?: number }
   ) => apiClient.post<{ module: ProductModule }>(`/products/${id}/modules`, payload),
   reorderModules: (id: string, moduleIds: string[]) => apiClient.post<{ message: string }>(`/products/${id}/modules/reorder`, { moduleIds }),
+};
+
+export const productCategoriesApi = {
+  list: (search?: string) => apiClient.get<{ categories: ProductCategory[] }>(`/product-categories${search ? `?search=${encodeURIComponent(search)}` : ""}`),
+  create: (payload: { name: string; slug?: string; description?: string; displayOrder?: number }) =>
+    apiClient.post<{ category: ProductCategory }>("/product-categories", payload),
+  update: (id: string, payload: Partial<{ name: string; slug: string; description: string | null; displayOrder: number }>) =>
+    apiClient.patch<{ category: ProductCategory }>(`/product-categories/${id}`, payload),
+  delete: (id: string) => apiClient.delete<{ message: string }>(`/product-categories/${id}`),
+};
+
+export const industriesApi = {
+  list: (search?: string) => apiClient.get<{ industries: Industry[] }>(`/industries${search ? `?search=${encodeURIComponent(search)}` : ""}`),
+  create: (payload: { name: string; slug?: string; description?: string; displayOrder?: number }) =>
+    apiClient.post<{ industry: Industry }>("/industries", payload),
+  update: (id: string, payload: Partial<{ name: string; slug: string; description: string | null; displayOrder: number }>) =>
+    apiClient.patch<{ industry: Industry }>(`/industries/${id}`, payload),
+  delete: (id: string) => apiClient.delete<{ message: string }>(`/industries/${id}`),
 };
 
 export const productModulesApi = {
@@ -897,7 +1013,10 @@ export type BlockType =
   | "card"
   | "spacer"
   | "divider"
-  | "templatePart";
+  | "templatePart"
+  | "navigationMenu"
+  | "form"
+  | "testimonial";
 
 export interface EditorBlock {
   id: string;
@@ -949,6 +1068,8 @@ export interface ContentRevision {
   version: number;
   status: ContentStatusValue;
   title: string;
+  // Phase 7 — short author-written summary, distinct from metadata.metaDescription.
+  excerpt: string | null;
   body: string;
   metadata: PostSeoMetadata;
   editorBlocks: EditorDocument | null;
@@ -979,6 +1100,8 @@ export interface CmsPage {
   templateId: string | null;
   pageType: PageTypeValue;
   isHomepage: boolean;
+  // Phase 5 — additive; every page created before this phase reads parentId: null.
+  parentId: string | null;
 }
 
 export interface CmsCategory {
@@ -989,6 +1112,10 @@ export interface CmsCategory {
   description: string | null;
   createdAt: string;
   updatedAt: string;
+  // Phase 7 — hierarchy + usage count; null/0 on every category created before this phase.
+  parentId: string | null;
+  parent: { id: string; name: string; slug: string } | null;
+  postCount: number;
 }
 
 export interface CmsTag {
@@ -997,6 +1124,9 @@ export interface CmsTag {
   slug: string;
   name: string;
   createdAt: string;
+  // Phase 7 — description + usage count; null/0 on every tag created before this phase.
+  description: string | null;
+  postCount: number;
 }
 
 export interface CmsPost {
@@ -1029,22 +1159,46 @@ export interface CmsAuthor {
   createdAt: string;
   updatedAt: string;
   user: { id: string; email: string; firstName: string; lastName: string; displayName: string | null; status: string };
+  // Phase 7 — usage count; 0 is a genuine "no posts yet", not a loading placeholder.
+  postCount: number;
 }
 
 const contentUpdateBody = (payload: {
   title?: string;
   slug?: string;
   body?: string;
+  excerpt?: string | null;
   metadata?: PostSeoMetadata;
   editorBlocks?: EditorDocument | null;
   status?: PatchableContentStatus;
   featuredMediaId?: string | null;
+  templateId?: string | null;
+  pageType?: PageTypeValue;
+  isHomepage?: boolean;
+  parentId?: string | null;
   expectedUpdatedAt?: string;
 }) => payload;
 
+// Phase 7 — bulk workflow action result: ids that succeeded, and per-id
+// failures with the real error message (not a fabricated generic one),
+// shared shape for both pagesApi and postsApi's bulk methods.
+export interface BulkActionResult {
+  succeeded: string[];
+  failed: { id: string; error: string }[];
+}
+
 export const pagesApi = {
   list: (
-    params: { page?: number; limit?: number; search?: string; status?: ContentStatusValue; sort?: string; order?: "asc" | "desc" } = {}
+    params: {
+      page?: number;
+      limit?: number;
+      search?: string;
+      status?: ContentStatusValue;
+      fromDate?: string;
+      toDate?: string;
+      sort?: string;
+      order?: "asc" | "desc";
+    } = {}
   ) => paginatedGet<CmsPage>("/pages", "pages", params),
   get: (id: string) => apiClient.get<{ page: CmsPage }>(`/pages/${id}`),
   revisions: (id: string) => apiClient.get<{ revisions: ContentRevision[] }>(`/pages/${id}/revisions`),
@@ -1052,20 +1206,29 @@ export const pagesApi = {
     title: string;
     slug?: string;
     body?: string;
+    excerpt?: string;
     metadata?: PostSeoMetadata;
     editorBlocks?: EditorDocument;
     featuredMediaId?: string;
     templateId?: string;
     pageType?: PageTypeValue;
     isHomepage?: boolean;
+    parentId?: string;
   }) => apiClient.post<{ page: CmsPage }>("/pages", payload),
   update: (id: string, payload: Parameters<typeof contentUpdateBody>[0]) => apiClient.patch<{ page: CmsPage }>(`/pages/${id}`, contentUpdateBody(payload)),
+  children: (id: string) => apiClient.get<{ children: { id: string; title: string; slug: string; status: string }[] }>(`/pages/${id}/children`),
   submitForReview: (id: string) => apiClient.post<{ page: CmsPage }>(`/pages/${id}/submit-review`),
   publish: (id: string) => apiClient.post<{ page: CmsPage }>(`/pages/${id}/publish`),
   schedule: (id: string, scheduledAt: string) => apiClient.post<{ page: CmsPage }>(`/pages/${id}/schedule`, { scheduledAt }),
   archive: (id: string) => apiClient.post<{ page: CmsPage }>(`/pages/${id}/archive`),
   revert: (id: string, revisionId: string) => apiClient.post<{ page: CmsPage }>(`/pages/${id}/revert`, { revisionId }),
   remove: (id: string) => apiClient.delete<{ message: string }>(`/pages/${id}`),
+  // Phase 7 — Trash view + bulk actions.
+  trash: (params: { page?: number; limit?: number } = {}) => paginatedGet<CmsPage>("/pages/trash", "pages", params),
+  restore: (id: string) => apiClient.post<{ message: string }>(`/pages/${id}/restore`),
+  bulkArchive: (ids: string[]) => apiClient.post<BulkActionResult>("/pages/bulk/archive", { ids }),
+  bulkTrash: (ids: string[]) => apiClient.post<BulkActionResult>("/pages/bulk/trash", { ids }),
+  bulkRestore: (ids: string[]) => apiClient.post<BulkActionResult>("/pages/bulk/restore", { ids }),
 };
 
 // ---------------------------------------------------------------------------
@@ -1246,6 +1409,82 @@ export const templatePartsApi = {
     }>(`/template-parts/${id}/usage`),
 };
 
+// ---------------------------------------------------------------------------
+// Phase 5 (Navigation + Pages + Homepage) — Navigation Menus. Mirrors
+// Templates/Template Parts' own draft/publish/revision/usage shape above.
+// ---------------------------------------------------------------------------
+
+export type NavigationMenuTypeValue = "PRIMARY" | "HEADER" | "FOOTER" | "MOBILE" | "CUSTOM";
+export type MenuLinkType = "page" | "post" | "category" | "tag" | "product" | "custom";
+
+export interface MenuItem {
+  id: string;
+  label: string;
+  linkType: MenuLinkType;
+  targetId?: string;
+  url?: string;
+  openInNewTab: boolean;
+  children: MenuItem[];
+}
+
+export interface NavigationMenuRevision {
+  id: string;
+  navigationMenuId: string;
+  version: number;
+  status: TemplateWorkflowStatus;
+  name: string;
+  items: MenuItem[];
+  createdById: string | null;
+  createdAt: string;
+  publishedAt: string | null;
+}
+
+export interface NavigationMenu {
+  id: string;
+  organizationId: string;
+  type: NavigationMenuTypeValue;
+  name: string;
+  slug: string;
+  status: TemplateWorkflowStatus;
+  isSystem: boolean;
+  currentRevisionId: string | null;
+  currentRevision: NavigationMenuRevision | null;
+  createdById: string | null;
+  createdAt: string;
+  updatedAt: string;
+  deletedAt: string | null;
+}
+
+export const navigationMenusApi = {
+  list: (
+    params: {
+      page?: number;
+      limit?: number;
+      search?: string;
+      status?: TemplateWorkflowStatus;
+      type?: NavigationMenuTypeValue;
+      sort?: string;
+      order?: "asc" | "desc";
+    } = {}
+  ) => paginatedGet<NavigationMenu>("/navigation-menus", "navigationMenus", params),
+  get: (id: string) => apiClient.get<{ navigationMenu: NavigationMenu }>(`/navigation-menus/${id}`),
+  revisions: (id: string) => apiClient.get<{ revisions: NavigationMenuRevision[] }>(`/navigation-menus/${id}/revisions`),
+  create: (payload: { type: NavigationMenuTypeValue; name: string; slug?: string; items?: MenuItem[] }) =>
+    apiClient.post<{ navigationMenu: NavigationMenu }>("/navigation-menus", payload),
+  update: (id: string, payload: Partial<{ name: string; slug: string; items: MenuItem[]; expectedUpdatedAt: string }>) =>
+    apiClient.patch<{ navigationMenu: NavigationMenu }>(`/navigation-menus/${id}`, payload),
+  publish: (id: string) => apiClient.post<{ navigationMenu: NavigationMenu }>(`/navigation-menus/${id}/publish`),
+  archive: (id: string) => apiClient.post<{ navigationMenu: NavigationMenu }>(`/navigation-menus/${id}/archive`),
+  revert: (id: string, revisionId: string) => apiClient.post<{ navigationMenu: NavigationMenu }>(`/navigation-menus/${id}/revert`, { revisionId }),
+  duplicate: (id: string, name?: string) => apiClient.post<{ navigationMenu: NavigationMenu }>(`/navigation-menus/${id}/duplicate`, name ? { name } : {}),
+  remove: (id: string) => apiClient.delete<{ message: string }>(`/navigation-menus/${id}`),
+  usage: (id: string) =>
+    apiClient.get<{
+      templateParts: { id: string; name: string; slug: string; status: string }[];
+      pages: { id: string; title: string; slug: string; status: string }[];
+    }>(`/navigation-menus/${id}/usage`),
+};
+
 export const postsApi = {
   list: (
     params: {
@@ -1255,6 +1494,8 @@ export const postsApi = {
       status?: ContentStatusValue;
       categoryId?: string;
       tagId?: string;
+      fromDate?: string;
+      toDate?: string;
       sort?: string;
       order?: "asc" | "desc";
     } = {}
@@ -1265,6 +1506,7 @@ export const postsApi = {
     title: string;
     slug?: string;
     body?: string;
+    excerpt?: string;
     metadata?: PostSeoMetadata;
     categoryId?: string;
     authorId?: string;
@@ -1277,6 +1519,7 @@ export const postsApi = {
       title?: string;
       slug?: string;
       body?: string;
+      excerpt?: string | null;
       metadata?: PostSeoMetadata;
       status?: PatchableContentStatus;
       categoryId?: string | null;
@@ -1292,13 +1535,20 @@ export const postsApi = {
   archive: (id: string) => apiClient.post<{ post: CmsPost }>(`/posts/${id}/archive`),
   revert: (id: string, revisionId: string) => apiClient.post<{ post: CmsPost }>(`/posts/${id}/revert`, { revisionId }),
   remove: (id: string) => apiClient.delete<{ message: string }>(`/posts/${id}`),
+  // Phase 7 — Trash view + bulk actions.
+  trash: (params: { page?: number; limit?: number } = {}) => paginatedGet<CmsPost>("/posts/trash", "posts", params),
+  restore: (id: string) => apiClient.post<{ message: string }>(`/posts/${id}/restore`),
+  bulkArchive: (ids: string[]) => apiClient.post<BulkActionResult>("/posts/bulk/archive", { ids }),
+  bulkTrash: (ids: string[]) => apiClient.post<BulkActionResult>("/posts/bulk/trash", { ids }),
+  bulkRestore: (ids: string[]) => apiClient.post<BulkActionResult>("/posts/bulk/restore", { ids }),
 };
 
 export const categoriesApi = {
   list: () => apiClient.get<{ categories: CmsCategory[] }>("/categories"),
   get: (id: string) => apiClient.get<{ category: CmsCategory }>(`/categories/${id}`),
-  create: (payload: { name: string; slug?: string; description?: string }) => apiClient.post<{ category: CmsCategory }>("/categories", payload),
-  update: (id: string, payload: Partial<{ name: string; slug: string; description: string | null }>) =>
+  create: (payload: { name: string; slug?: string; description?: string; parentId?: string }) =>
+    apiClient.post<{ category: CmsCategory }>("/categories", payload),
+  update: (id: string, payload: Partial<{ name: string; slug: string; description: string | null; parentId: string | null }>) =>
     apiClient.patch<{ category: CmsCategory }>(`/categories/${id}`, payload),
   remove: (id: string) => apiClient.delete<{ message: string }>(`/categories/${id}`),
 };
@@ -1306,8 +1556,9 @@ export const categoriesApi = {
 export const tagsApi = {
   list: () => apiClient.get<{ tags: CmsTag[] }>("/tags"),
   get: (id: string) => apiClient.get<{ tag: CmsTag }>(`/tags/${id}`),
-  create: (payload: { name: string; slug?: string }) => apiClient.post<{ tag: CmsTag }>("/tags", payload),
-  update: (id: string, payload: Partial<{ name: string; slug: string }>) => apiClient.patch<{ tag: CmsTag }>(`/tags/${id}`, payload),
+  create: (payload: { name: string; slug?: string; description?: string }) => apiClient.post<{ tag: CmsTag }>("/tags", payload),
+  update: (id: string, payload: Partial<{ name: string; slug: string; description: string | null }>) =>
+    apiClient.patch<{ tag: CmsTag }>(`/tags/${id}`, payload),
   remove: (id: string) => apiClient.delete<{ message: string }>(`/tags/${id}`),
 };
 
@@ -1413,18 +1664,20 @@ export interface CmsRedirect {
   statusCode: number;
   resourceType: string | null;
   resourceId: string | null;
+  isActive: boolean;
+  notes: string | null;
   createdById: string | null;
   createdAt: string;
   updatedAt: string;
 }
 
 export const redirectsApi = {
-  list: (params: { page?: number; limit?: number; search?: string; sort?: string; order?: "asc" | "desc" } = {}) =>
+  list: (params: { page?: number; limit?: number; search?: string; isActive?: boolean; sort?: string; order?: "asc" | "desc" } = {}) =>
     paginatedGet<CmsRedirect>("/redirects", "redirects", params),
   get: (id: string) => apiClient.get<{ redirect: CmsRedirect }>(`/redirects/${id}`),
-  create: (payload: { fromPath: string; toPath: string; statusCode?: 301 | 302 | 307 | 308 }) =>
+  create: (payload: { fromPath: string; toPath: string; statusCode?: 301 | 302 | 307 | 308; isActive?: boolean; notes?: string }) =>
     apiClient.post<{ redirect: CmsRedirect }>("/redirects", payload),
-  update: (id: string, payload: Partial<{ toPath: string; statusCode: 301 | 302 | 307 | 308 }>) =>
+  update: (id: string, payload: Partial<{ toPath: string; statusCode: 301 | 302 | 307 | 308; isActive: boolean; notes: string | null }>) =>
     apiClient.patch<{ redirect: CmsRedirect }>(`/redirects/${id}`, payload),
   remove: (id: string) => apiClient.delete<{ message: string }>(`/redirects/${id}`),
 };

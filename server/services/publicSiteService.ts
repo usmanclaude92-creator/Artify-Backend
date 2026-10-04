@@ -12,10 +12,13 @@ import { pageRepository, type PageWithPublicRelations } from "../repositories/pa
 import { postRepository, type PostWithPublicRelations } from "../repositories/postRepository";
 import { categoryRepository } from "../repositories/categoryRepository";
 import { tagRepository } from "../repositories/tagRepository";
+import { productRepository } from "../repositories/productRepository";
+import { navigationMenuRepository } from "../repositories/navigationMenuRepository";
 import { redirectRepository } from "../repositories/redirectRepository";
 import { mediaRepository } from "../repositories/mediaRepository";
 import { templatePartRepository } from "../repositories/templatePartRepository";
 import { normalizeRegions } from "../utils/templateStructure";
+import type { MenuItemInput } from "../schemas/navigationMenuSchemas";
 import { siteSettingsService } from "./siteSettingsService";
 import { SITE_IDENTITY_MEDIA_FIELDS } from "../schemas/siteSettingsSchemas";
 import { getStorageProvider } from "../storage";
@@ -38,7 +41,11 @@ export interface PublicMedia {
  * surfaced as an error or a broken link. Storage key/bucket/provider,
  * organizationId, and uploader are never included.
  */
-async function projectPublicMedia(media: MediaAsset | null): Promise<PublicMedia | null> {
+// Exported for publicProductService.ts (Phase 10) — a Product's
+// featuredMediaId borrows this same single public org's Media Library, so
+// it deserves the exact same ACTIVE+PUBLIC-only projection, not a
+// second copy of this logic.
+export async function projectPublicMedia(media: MediaAsset | null): Promise<PublicMedia | null> {
   if (!media || media.status !== "ACTIVE" || media.visibility !== "PUBLIC") return null;
   const provider = getStorageProvider();
   // Prefer a stable, non-expiring URL. This matters specifically here (as
@@ -102,6 +109,36 @@ async function projectPageTemplate(page: PageWithPublicRelations) {
   return { type: template.type, slug: template.slug, structure: revision.structure, regions: Object.fromEntries(regions) };
 }
 
+/**
+ * Phase 9 (Forms + Landing Pages + Conversion) — the public block
+ * renderer has no authenticated media-read path (unlike the Control
+ * Center's own Site Editor, which fetches signed read URLs per image via
+ * mediaApi), and there is no public-by-id media endpoint to add one
+ * without risking leaking arbitrary internal media. So every `mediaId`/
+ * `avatarMediaId` an editorBlocks tree references is resolved here,
+ * server-side, to the same public-safe projection (ACTIVE + PUBLIC only)
+ * every other public media reference already uses — the public response
+ * carries a real `resolvedUrl` next to the id, never the id alone.
+ */
+async function resolveBlockMedia(block: Record<string, unknown>, organizationId: string): Promise<Record<string, unknown>> {
+  const props = { ...(block.props as Record<string, unknown>) };
+  if (block.type === "image" && typeof props.mediaId === "string" && props.mediaId) {
+    const media = await mediaRepository.findByIdInOrg(props.mediaId, organizationId);
+    const projected = await projectPublicMedia(media);
+    props.resolvedUrl = projected?.url ?? null;
+  }
+  if (block.type === "testimonial" && typeof props.avatarMediaId === "string" && props.avatarMediaId) {
+    const media = await mediaRepository.findByIdInOrg(props.avatarMediaId, organizationId);
+    const projected = await projectPublicMedia(media);
+    props.resolvedAvatarUrl = projected?.url ?? null;
+  }
+  const next: Record<string, unknown> = { ...block, props };
+  if (Array.isArray(block.children)) {
+    next.children = await Promise.all((block.children as Record<string, unknown>[]).map((c) => resolveBlockMedia(c, organizationId)));
+  }
+  return next;
+}
+
 // Phase 2 (Site Editor) — additive, same backward-compatible pattern as
 // `template` above: a page with no editor composition (the overwhelming
 // majority of existing pages) gets `editorBlocks: null` exactly as
@@ -109,27 +146,112 @@ async function projectPageTemplate(page: PageWithPublicRelations) {
 // unaffected. Only a page whose current revision has a genuinely saved
 // block document gets a non-null value here — never partial/unsaved
 // editor state, since this reads the same persisted revision `body` does.
-function projectPageEditorBlocks(revision: PageWithPublicRelations["currentRevision"]): Record<string, unknown> | null {
+async function projectPageEditorBlocks(revision: PageWithPublicRelations["currentRevision"], organizationId: string): Promise<Record<string, unknown> | null> {
   const blocks = revision?.editorBlocks as Record<string, unknown> | null | undefined;
   if (!blocks || !Array.isArray(blocks.blocks) || blocks.blocks.length === 0) return null;
-  return blocks;
+  const resolvedBlocks = await Promise.all((blocks.blocks as Record<string, unknown>[]).map((b) => resolveBlockMedia(b, organizationId)));
+  return { ...blocks, blocks: resolvedBlocks };
+}
+
+/**
+ * Phase 8 (Advanced SEO Control Center) — global -> content SEO
+ * precedence: a post/page's own metaTitle/metaDescription/ogImage always
+ * wins; only a field left genuinely unset falls back to the
+ * organization-wide defaults configured on Site Identity (Phase 3's
+ * defaultMetaTitle/defaultMetaDescription/socialImageMediaId). Without
+ * this, those Site Identity fields were dead config for every post/page —
+ * set in the Control Center but never actually read by anything serving
+ * individual content. The featured image (if any) still outranks the
+ * site-wide social image, exactly like the explicit-ogImage case.
+ */
+async function applySeoDefaults(seo: Record<string, unknown>, organizationId: string, hasFeaturedMedia: boolean): Promise<Record<string, unknown>> {
+  if (seo.metaTitle && seo.metaDescription && (seo.ogImage || hasFeaturedMedia)) return seo;
+  const identity = await siteSettingsService.getPublishedSiteIdentity(organizationId);
+  const result = { ...seo };
+  if (!result.metaTitle && identity.defaultMetaTitle) result.metaTitle = identity.defaultMetaTitle;
+  if (!result.metaDescription && identity.defaultMetaDescription) result.metaDescription = identity.defaultMetaDescription;
+  if (!result.ogImage && !hasFeaturedMedia && identity.socialImageMediaId) {
+    const media = await mediaRepository.findByIdInOrg(identity.socialImageMediaId, organizationId);
+    const projected = await projectPublicMedia(media);
+    if (projected) result.ogImage = projected.url;
+  }
+  return result;
 }
 
 async function projectPage(page: PageWithPublicRelations) {
   const revision = page.currentRevision;
+  const featuredMedia = await projectPublicMedia(page.featuredMedia);
   return {
     slug: page.slug,
     title: page.title,
     body: revision?.body ?? "",
-    editorBlocks: projectPageEditorBlocks(revision),
-    seo: (revision?.metadata as Record<string, unknown> | undefined) ?? {},
-    featuredMedia: await projectPublicMedia(page.featuredMedia),
+    excerpt: revision?.excerpt ?? null,
+    editorBlocks: await projectPageEditorBlocks(revision, page.organizationId),
+    seo: await applySeoDefaults((revision?.metadata as Record<string, unknown> | undefined) ?? {}, page.organizationId, !!featuredMedia),
+    featuredMedia,
     pageType: page.pageType,
     isHomepage: page.isHomepage,
     template: await projectPageTemplate(page),
     publishedAt: page.publishedAt,
     updatedAt: page.updatedAt,
   };
+}
+
+export interface PublicMenuItem {
+  label: string;
+  url: string;
+  openInNewTab: boolean;
+  children: PublicMenuItem[];
+}
+
+/**
+ * Phase 5 — resolves a navigation menu item's link target to a real URL,
+ * same "safe handling of broken links" requirement as the Template region
+ * resolution above: an item whose target no longer resolves (unpublished/
+ * deleted/cross-org) is silently dropped, never surfaced as a broken
+ * link or a thrown error. `custom` links pass their URL through verbatim
+ * (already required present by navigationMenuSchemas.ts).
+ */
+async function resolveMenuItem(item: MenuItemInput, organizationId: string): Promise<PublicMenuItem | null> {
+  let url: string | null = null;
+  switch (item.linkType) {
+    case "custom":
+      url = item.url ?? null;
+      break;
+    case "page": {
+      const page = item.targetId ? await pageRepository.findPublishedByIdInOrg(item.targetId, organizationId) : null;
+      url = page ? `/${page.slug}` : null;
+      break;
+    }
+    case "post": {
+      const post = item.targetId ? await postRepository.findPublishedByIdInOrg(item.targetId, organizationId) : null;
+      url = post ? `/blog/${post.slug}` : null;
+      break;
+    }
+    case "category": {
+      const category = item.targetId ? await categoryRepository.findByIdInOrg(item.targetId, organizationId) : null;
+      url = category ? `/blog?category=${category.slug}` : null;
+      break;
+    }
+    case "tag": {
+      const tag = item.targetId ? await tagRepository.findByIdInOrg(item.targetId, organizationId) : null;
+      url = tag ? `/blog?tag=${tag.slug}` : null;
+      break;
+    }
+    case "product": {
+      const product = item.targetId ? await productRepository.findById(item.targetId) : null;
+      url = product && product.status === "ACTIVE" ? `/ai-solutions/${product.slug}` : null;
+      break;
+    }
+  }
+
+  if (!url) return null;
+
+  const children = (
+    await Promise.all((item.children ?? []).map((child) => resolveMenuItem(child, organizationId)))
+  ).filter((c): c is PublicMenuItem => c !== null);
+
+  return { label: item.label, url, openInNewTab: item.openInNewTab, children };
 }
 
 function projectAuthor(author: PostWithPublicRelations["author"]) {
@@ -139,15 +261,17 @@ function projectAuthor(author: PostWithPublicRelations["author"]) {
 
 async function projectPost(post: PostWithPublicRelations) {
   const revision = post.currentRevision;
+  const featuredMedia = await projectPublicMedia(post.featuredMedia);
   return {
     slug: post.slug,
     title: post.title,
     body: revision?.body ?? "",
-    seo: (revision?.metadata as Record<string, unknown> | undefined) ?? {},
+    excerpt: revision?.excerpt ?? null,
+    seo: await applySeoDefaults((revision?.metadata as Record<string, unknown> | undefined) ?? {}, post.organizationId, !!featuredMedia),
     category: post.category ? { slug: post.category.slug, name: post.category.name } : null,
     tags: post.tags.map((t) => ({ slug: t.tag.slug, name: t.tag.name })),
     author: projectAuthor(post.author),
-    featuredMedia: await projectPublicMedia(post.featuredMedia),
+    featuredMedia,
     publishedAt: post.publishedAt,
     updatedAt: post.updatedAt,
   };
@@ -223,6 +347,43 @@ export const publicSiteService = {
     return projectPage(page);
   },
 
+  /**
+   * Phase 5 — "Homepage resolves dynamically." Returns `null` (never an
+   * error) when no public org is configured OR no page is currently
+   * designated as the homepage OR that page isn't PUBLISHED — a caller
+   * (artifysolscom) is expected to fall back to its own existing static
+   * homepage in every one of those cases, exactly the same safe-fallback
+   * contract `template`/`editorBlocks` already use elsewhere in this file.
+   * This is what "prevent accidental blank/broken homepage" means on the
+   * public side: resolution can never produce a broken page, only "not
+   * configured yet."
+   */
+  async getHomepage() {
+    if (!hasPublicWebsiteOrganization()) return null;
+    const page = await pageRepository.findPublishedHomepageWithMedia(config.publicWebsiteOrganizationId);
+    if (!page) return null;
+    return projectPage(page);
+  },
+
+  /**
+   * Phase 5 — the org's active (most recently published) menu for a given
+   * location (PRIMARY/HEADER/FOOTER/MOBILE/CUSTOM), with every item's link
+   * target resolved to a real URL and broken ones silently dropped. Returns
+   * `null` when none is configured/published — same safe-fallback contract
+   * as getHomepage above.
+   */
+  async getNavigationMenu(type: string) {
+    if (!hasPublicWebsiteOrganization()) return null;
+    const organizationId = config.publicWebsiteOrganizationId;
+    const menu = await navigationMenuRepository.findPublishedByTypeInOrg(organizationId, type);
+    if (!menu || !menu.currentRevision || menu.currentRevision.status !== "PUBLISHED") return null;
+
+    const rawItems = Array.isArray(menu.currentRevision.items) ? (menu.currentRevision.items as unknown as MenuItemInput[]) : [];
+    const items = (await Promise.all(rawItems.map((item) => resolveMenuItem(item, organizationId)))).filter((i): i is PublicMenuItem => i !== null);
+
+    return { type: menu.type, slug: menu.slug, name: menu.name, items };
+  },
+
   async listPosts(filters: { search?: string; categorySlug?: string; tagSlug?: string }, page: number, limit: number, sort: string, order: "asc" | "desc") {
     if (!hasPublicWebsiteOrganization()) return { rows: [], total: 0 };
     const organizationId = config.publicWebsiteOrganizationId;
@@ -272,7 +433,7 @@ export const publicSiteService = {
   async getRedirectForPath(path: string): Promise<{ toPath: string; statusCode: number } | null> {
     if (!hasPublicWebsiteOrganization()) return null;
     const redirect = await redirectRepository.findByFromPathInOrg(config.publicWebsiteOrganizationId, path);
-    if (!redirect) return null;
+    if (!redirect || !redirect.isActive) return null;
     return { toPath: redirect.toPath, statusCode: redirect.statusCode };
   },
 };

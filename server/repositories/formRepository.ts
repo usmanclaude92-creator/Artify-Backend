@@ -62,6 +62,7 @@ export const formRepository = {
     slug: string;
     fields: Prisma.InputJsonValue;
     successMessage?: string;
+    notifyUserIds?: Prisma.InputJsonValue;
     createdById?: string;
   }): Promise<Form> {
     return prisma.form.create({ data });
@@ -100,6 +101,9 @@ export const formRepository = {
     leadId?: string;
     ipAddress?: string;
     userAgent?: string;
+    consentGiven?: boolean;
+    landingPagePath?: string;
+    referrer?: string;
   }): Promise<FormSubmission> {
     return prisma.formSubmission.create({ data });
   },

@@ -19,6 +19,8 @@ export const createPageSchema = z.object({
   title: z.string().trim().min(1).max(200),
   slug: slugSchema.optional(),
   body: z.string().trim().max(500000).default(""),
+  // Phase 7 — short author-written summary, distinct from SEO metaDescription.
+  excerpt: z.string().trim().max(500).optional(),
   metadata: seoMetadataSchema.optional(),
   // Phase 2 (Site Editor) — additive, optional. A page created without it
   // behaves exactly as before: body/metadata alone drive rendering
@@ -28,6 +30,9 @@ export const createPageSchema = z.object({
   templateId: z.string().trim().uuid().optional(),
   pageType: pageTypeSchema.optional(),
   isHomepage: z.boolean().optional(),
+  // Phase 5 — additive, optional. A page created without it behaves
+  // exactly as before: parentId null, no hierarchy.
+  parentId: z.string().trim().uuid().optional(),
 });
 export type CreatePageInput = z.infer<typeof createPageSchema>;
 
@@ -36,6 +41,7 @@ export const updatePageSchema = z
     title: z.string().trim().min(1).max(200).optional(),
     slug: slugSchema.optional(),
     body: z.string().trim().max(500000).optional(),
+    excerpt: z.string().trim().max(500).nullable().optional(),
     metadata: seoMetadataSchema.optional(),
     // null clears the editor composition (falls back to body-only
     // rendering); omitted leaves it unchanged.
@@ -47,6 +53,9 @@ export const updatePageSchema = z
     templateId: z.string().trim().uuid().nullable().optional(),
     pageType: pageTypeSchema.optional(),
     isHomepage: z.boolean().optional(),
+    // null explicitly clears the parent (promotes to top-level); omitted
+    // leaves it unchanged.
+    parentId: z.string().trim().uuid().nullable().optional(),
     expectedUpdatedAt: expectedUpdatedAtSchema,
   })
   .refine((v) => Object.keys(v).filter((k) => k !== "expectedUpdatedAt").length > 0, { message: "At least one field must be provided." });

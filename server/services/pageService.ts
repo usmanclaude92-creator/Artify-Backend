@@ -96,6 +96,28 @@ async function assertTemplateUsable(templateId: string | null | undefined, organ
   if (!template) throw new ValidationError("templateId must refer to a PUBLISHED template in this organization.");
 }
 
+// Phase 5 — page hierarchy: a parent must be a real page in this same
+// organization, cannot be the page itself, and cannot be one of the
+// page's own descendants (which would create a cycle) — checked by
+// walking up from the candidate parent's own ancestor chain looking for
+// `selfId`. `selfId` is omitted on create, where no cycle is possible yet.
+async function assertParentUsable(parentId: string | null | undefined, organizationId: string, selfId?: string): Promise<void> {
+  if (!parentId) return;
+  if (parentId === selfId) throw new ValidationError("A page cannot be its own parent.");
+  const parent = await pageRepository.findByIdInOrg(parentId, organizationId);
+  if (!parent) throw new ValidationError("parentId must refer to another page in this organization.");
+
+  if (selfId) {
+    let cursor = parent.parentId;
+    let guard = 0;
+    while (cursor && guard < 100) {
+      if (cursor === selfId) throw new ValidationError("Assigning this parent would create a circular page hierarchy.");
+      cursor = await pageRepository.findParentId(cursor, organizationId);
+      guard += 1;
+    }
+  }
+}
+
 function assertHasPublishableContent(revision: { title: string; body: string } | null): void {
   if (!revision || !revision.title.trim() || !revision.body.trim()) {
     throw new ValidationError("This page needs a title and body before it can be published or scheduled.");
@@ -111,7 +133,7 @@ async function loadPageOrThrow(id: string, organizationId: string): Promise<Page
 export const pageService = {
   async listPages(
     organizationId: string,
-    filters: { search?: string; status?: string },
+    filters: { search?: string; status?: string; fromDate?: Date; toDate?: Date },
     page: number,
     limit: number,
     sort: string,
@@ -129,6 +151,12 @@ export const pageService = {
     return pageRepository.listRevisions(id);
   },
 
+  /** Phase 5 — "clear page hierarchy": this page's direct children. */
+  async getChildren(organizationId: string, id: string) {
+    await loadPageOrThrow(id, organizationId);
+    return pageRepository.listChildren(id, organizationId);
+  },
+
   async createPage(caller: SanitizedUser, input: CreatePageInput, meta: RequestMeta = {}): Promise<PageWithRevision> {
     const organizationId = caller.organizationId;
     const body = sanitizeContentHtml(input.body);
@@ -140,6 +168,7 @@ export const pageService = {
     }
     if (input.featuredMediaId) await assertFeaturedMediaUsable(input.featuredMediaId, organizationId);
     await assertTemplateUsable(input.templateId, organizationId);
+    await assertParentUsable(input.parentId, organizationId);
     const slug = input.slug ?? (await pageRepository.findUniqueSlugInOrg(organizationId, input.title));
 
     let createdId: string;
@@ -156,6 +185,7 @@ export const pageService = {
             templateId: input.templateId,
             pageType: input.pageType,
             isHomepage: input.isHomepage ?? false,
+            parentId: input.parentId,
           },
         });
         const revision = await tx.contentRevision.create({
@@ -164,6 +194,7 @@ export const pageService = {
             version: 1,
             status: "DRAFT",
             title: input.title,
+            excerpt: input.excerpt,
             body,
             metadata: (input.metadata ?? {}) as Prisma.InputJsonValue,
             // undefined (not DbNull) here: omitting the field lets Prisma
@@ -211,7 +242,12 @@ export const pageService = {
     // archivePage). Moving to DRAFT is always a legal "reopen" from any
     // other status.
     const hasContentEdit =
-      input.title !== undefined || input.body !== undefined || input.metadata !== undefined || input.slug !== undefined || input.editorBlocks !== undefined;
+      input.title !== undefined ||
+      input.body !== undefined ||
+      input.excerpt !== undefined ||
+      input.metadata !== undefined ||
+      input.slug !== undefined ||
+      input.editorBlocks !== undefined;
     // Blocked only when the page STAYS archived — target status is always
     // existing.status unless input.status ("DRAFT" only, restoring it) is
     // supplied, so this never blocks a combined restore+edit.
@@ -225,6 +261,7 @@ export const pageService = {
     }
 
     if (input.templateId !== undefined) await assertTemplateUsable(input.templateId, organizationId);
+    if (input.parentId !== undefined) await assertParentUsable(input.parentId, organizationId, id);
 
     // The featured image lives on the Page row, not the revision — it can
     // be changed independently of content edits (e.g. while PUBLISHED),
@@ -254,6 +291,7 @@ export const pageService = {
         if (input.templateId !== undefined) pagePatch.templateId = input.templateId;
         if (input.pageType !== undefined) pagePatch.pageType = input.pageType;
         if (input.isHomepage !== undefined) pagePatch.isHomepage = input.isHomepage;
+        if (input.parentId !== undefined) pagePatch.parentId = input.parentId;
         if (unpublishing) pagePatch.publishedAt = null;
 
         if (currentRevision && (unpublishing || liveEditOfPublished || (hasContentEdit && currentRevision.status === "PUBLISHED"))) {
@@ -267,6 +305,7 @@ export const pageService = {
               version: currentRevision.version + 1,
               status: liveEditOfPublished ? "PUBLISHED" : "DRAFT",
               title: input.title ?? currentRevision.title,
+              excerpt: input.excerpt !== undefined ? input.excerpt : currentRevision.excerpt,
               body: sanitizedBody ?? currentRevision.body,
               metadata: (input.metadata ?? currentRevision.metadata) as Prisma.InputJsonValue,
               editorBlocks: resolveEditorBlocksInput(sanitizedEditorBlocks !== undefined ? sanitizedEditorBlocks : currentRevision.editorBlocks),
@@ -278,6 +317,7 @@ export const pageService = {
         } else if (hasContentEdit && currentRevision) {
           const revisionPatch: Record<string, unknown> = {};
           if (input.title !== undefined) revisionPatch.title = input.title;
+          if (input.excerpt !== undefined) revisionPatch.excerpt = input.excerpt;
           if (sanitizedBody !== undefined) revisionPatch.body = sanitizedBody;
           if (input.metadata !== undefined) revisionPatch.metadata = input.metadata as Prisma.InputJsonValue;
           if (sanitizedEditorBlocks !== undefined) revisionPatch.editorBlocks = resolveEditorBlocksInput(sanitizedEditorBlocks);
@@ -507,6 +547,7 @@ export const pageService = {
           version: nextVersion,
           status: wasPublished ? "PUBLISHED" : "DRAFT",
           title: target.title,
+          excerpt: target.excerpt,
           body: target.body,
           metadata: target.metadata as Prisma.InputJsonValue,
           editorBlocks: resolveEditorBlocksInput(target.editorBlocks),
@@ -553,5 +594,54 @@ export const pageService = {
       ipAddress: meta.ip,
       userAgent: meta.userAgent,
     });
+  },
+
+  /** Phase 7 — Trash view (Content Dashboard): soft-deleted pages, paginated. */
+  async listTrash(organizationId: string, page: number, limit: number) {
+    return pageRepository.listTrash(organizationId, page, limit);
+  },
+
+  async restorePage(caller: SanitizedUser, id: string, meta: RequestMeta = {}): Promise<void> {
+    const organizationId = caller.organizationId;
+    const existing = await pageRepository.findTrashedByIdInOrg(id, organizationId);
+    if (!existing) throw new NotFoundError("Page not found in trash.");
+
+    await pageRepository.restore(id);
+
+    await auditLogRepository.record({
+      organizationId,
+      actorUserId: caller.id,
+      actorType: "USER",
+      action: "PAGE_RESTORED",
+      resourceType: "page",
+      resourceId: id,
+      beforeData: { status: existing.status, title: existing.title },
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent,
+    });
+  },
+
+  /** Phase 7 — bulk workflow actions, same per-item isolation as postService.bulkAction. */
+  async bulkAction(
+    caller: SanitizedUser,
+    action: "archive" | "trash" | "restore",
+    ids: string[],
+    meta: RequestMeta = {}
+  ): Promise<{ succeeded: string[]; failed: { id: string; error: string }[] }> {
+    const succeeded: string[] = [];
+    const failed: { id: string; error: string }[] = [];
+
+    for (const id of ids) {
+      try {
+        if (action === "archive") await this.archivePage(caller, id, meta);
+        else if (action === "trash") await this.deletePage(caller, id, meta);
+        else await this.restorePage(caller, id, meta);
+        succeeded.push(id);
+      } catch (err) {
+        failed.push({ id, error: err instanceof Error ? err.message : "Action failed." });
+      }
+    }
+
+    return { succeeded, failed };
   },
 };

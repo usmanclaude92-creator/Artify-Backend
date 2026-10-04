@@ -10,9 +10,18 @@ function slugify(input: string): string {
     .slice(0, 150);
 }
 
+// Phase 7 — usage counts for the Content Organization UI, same shape as
+// CategoryWithCounts.
+export type TagWithCounts = Tag & { postCount: number };
+
 export const tagRepository = {
-  async list(organizationId: string): Promise<Tag[]> {
-    return prisma.tag.findMany({ where: { organizationId }, orderBy: { name: "asc" } });
+  async list(organizationId: string): Promise<TagWithCounts[]> {
+    const rows = await prisma.tag.findMany({
+      where: { organizationId },
+      orderBy: { name: "asc" },
+      include: { _count: { select: { posts: true } } },
+    });
+    return rows.map(({ _count, ...t }) => ({ ...t, postCount: _count.posts }));
   },
 
   async findByIdInOrg(id: string, organizationId: string): Promise<Tag | null> {
@@ -40,7 +49,12 @@ export const tagRepository = {
     return prisma.tag.findMany({ where: { id: { in: ids }, organizationId } });
   },
 
-  async create(data: { organizationId: string; name: string; slug: string }): Promise<Tag> {
+  /** Phase 7 — how many posts currently carry this tag, for the delete-in-use guard. */
+  async countPostsUsing(id: string): Promise<number> {
+    return prisma.postTag.count({ where: { tagId: id, post: { deletedAt: null } } });
+  },
+
+  async create(data: { organizationId: string; name: string; slug: string; description?: string }): Promise<Tag> {
     return prisma.tag.create({ data });
   },
 

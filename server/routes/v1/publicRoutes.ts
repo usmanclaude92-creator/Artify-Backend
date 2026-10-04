@@ -21,13 +21,19 @@ import {
   listPublicPostsQuerySchema,
   listPublicProductsQuerySchema,
   publicRedirectLookupQuerySchema,
+  publicNavigationMenuTypeSchema,
 } from "../../schemas/publicSchemas";
 import { publicFormSubmitSchema } from "../../schemas/formSchemas";
 
 const router = Router();
 
 function requestMeta(req: { ip?: string; headers: Record<string, unknown> }) {
-  return { ip: req.ip, userAgent: req.headers["user-agent"] as string | undefined };
+  const referrerHeader = req.headers["referer"];
+  return {
+    ip: req.ip,
+    userAgent: req.headers["user-agent"] as string | undefined,
+    referrer: typeof referrerHeader === "string" ? referrerHeader.slice(0, 2000) : undefined,
+  };
 }
 
 router.get(
@@ -50,6 +56,23 @@ router.get(
   asyncHandler(async (req, res) => {
     const page = await publicSiteService.getPageBySlug(req.params.slug!);
     sendSuccess(res, { page });
+  })
+);
+
+router.get(
+  "/homepage",
+  asyncHandler(async (_req, res) => {
+    const page = await publicSiteService.getHomepage();
+    sendSuccess(res, { page });
+  })
+);
+
+router.get(
+  "/navigation-menus/:type",
+  asyncHandler(async (req, res) => {
+    const type = publicNavigationMenuTypeSchema.parse(req.params.type);
+    const menu = await publicSiteService.getNavigationMenu(type);
+    sendSuccess(res, { menu });
   })
 );
 
@@ -96,8 +119,28 @@ router.get(
   "/products",
   asyncHandler(async (req, res) => {
     const query = listPublicProductsQuerySchema.parse(req.query);
-    const { rows, total } = await publicProductService.listProducts({ search: query.search, type: query.type }, query.page, query.limit);
+    const { rows, total } = await publicProductService.listProducts(
+      { search: query.search, type: query.type, categorySlug: query.categorySlug, industrySlug: query.industrySlug },
+      query.page,
+      query.limit
+    );
     sendSuccess(res, { products: rows }, 200, { page: query.page, limit: query.limit, total });
+  })
+);
+
+router.get(
+  "/product-categories",
+  asyncHandler(async (_req, res) => {
+    const categories = await publicProductService.listProductCategories();
+    sendSuccess(res, { categories });
+  })
+);
+
+router.get(
+  "/industries",
+  asyncHandler(async (_req, res) => {
+    const industries = await publicProductService.listIndustries();
+    sendSuccess(res, { industries });
   })
 );
 
@@ -136,6 +179,27 @@ router.post(
     // silently discarded as a honeypot hit (§8) — a bot must not be able
     // to distinguish the two from the response alone.
     sendSuccess(res, { message: "Thank you — your message has been received. We'll be in touch shortly." }, 201);
+  })
+);
+
+// Phase 9 (full — Forms + Landing Pages + Conversion) — the public site's
+// actual form renderer needs the field definitions to draw real inputs;
+// the MVP slice only ever shipped the submit endpoint. Read-only, no rate
+// limit (same class as every other public GET in this file), ACTIVE-only
+// (an archived form 404s, same contract /submit already has).
+router.get(
+  "/forms/by-id/:id",
+  asyncHandler(async (req, res) => {
+    const form = await publicFormService.getFormForRender({ id: req.params.id! });
+    sendSuccess(res, { form });
+  })
+);
+
+router.get(
+  "/forms/:slug",
+  asyncHandler(async (req, res) => {
+    const form = await publicFormService.getFormForRender({ slug: req.params.slug! });
+    sendSuccess(res, { form });
   })
 );
 

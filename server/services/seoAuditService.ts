@@ -28,6 +28,11 @@ const LIVE_STATUSES = new Set(["PUBLISHED", "SCHEDULED"]);
 const META_TITLE_IDEAL_MAX = 60;
 const META_DESCRIPTION_IDEAL_MIN = 50;
 const META_DESCRIPTION_IDEAL_MAX = 160;
+// Mirrors postRepository/pageRepository's own slugify() output exactly — a
+// slug that doesn't match this was never produced by this system (e.g.
+// imported from elsewhere, or edited directly in the DB) and can break on
+// case-sensitive hosting or contain characters that need URL-encoding.
+const VALID_SLUG_PATTERN = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 
 interface AuditableRecord {
   id: string;
@@ -66,19 +71,36 @@ function checkRecord(resourceType: "post" | "page", record: AuditableRecord): Se
     push("warning", "missing_featured_image_alt_text", "Featured image has no alt text — hurts accessibility and image search visibility.");
   }
 
+  if (isLive && !meta.ogImage && !record.featuredMedia) {
+    push("warning", "missing_social_image", "No social share image (Open Graph image or featured image) set — links shared on social platforms will show no preview image.");
+  }
+
+  if (!VALID_SLUG_PATTERN.test(record.slug)) {
+    push("warning", "invalid_slug_format", `Slug "${record.slug}" contains characters outside lowercase letters, numbers, and hyphens — may behave inconsistently across hosting/CDN layers.`);
+  }
+
   return issues;
 }
 
-function findDuplicateTitles(records: { resourceType: "post" | "page"; id: string; slug: string; title: string; status: string; metaTitle: string }[]): SeoIssue[] {
-  const byTitle = new Map<string, typeof records>();
+interface DedupableRecord {
+  resourceType: "post" | "page";
+  id: string;
+  slug: string;
+  title: string;
+  status: string;
+  value: string;
+}
+
+function findDuplicateField(records: DedupableRecord[], code: string, label: string): SeoIssue[] {
+  const byValue = new Map<string, DedupableRecord[]>();
   for (const r of records) {
-    const key = r.metaTitle.trim().toLowerCase();
+    const key = r.value.trim().toLowerCase();
     if (!key) continue;
-    if (!byTitle.has(key)) byTitle.set(key, []);
-    byTitle.get(key)!.push(r);
+    if (!byValue.has(key)) byValue.set(key, []);
+    byValue.get(key)!.push(r);
   }
   const issues: SeoIssue[] = [];
-  for (const group of byTitle.values()) {
+  for (const group of byValue.values()) {
     if (group.length < 2) continue;
     for (const r of group) {
       issues.push({
@@ -88,8 +110,8 @@ function findDuplicateTitles(records: { resourceType: "post" | "page"; id: strin
         slug: r.slug,
         status: r.status,
         severity: "warning",
-        code: "duplicate_meta_title",
-        message: `SEO title is identical to ${group.length - 1} other post/page in this organization — duplicate titles compete with each other in search results.`,
+        code,
+        message: `SEO ${label} is identical to ${group.length - 1} other post/page in this organization — duplicate ${label}s compete with each other in search results.`,
       });
     }
   }
@@ -101,20 +123,28 @@ export const seoAuditService = {
     const [posts, pages] = await Promise.all([postRepository.listForSeoAudit(organizationId), pageRepository.listForSeoAudit(organizationId)]);
 
     const issues: SeoIssue[] = [];
-    const titleIndex: { resourceType: "post" | "page"; id: string; slug: string; title: string; status: string; metaTitle: string }[] = [];
+    const titleIndex: DedupableRecord[] = [];
+    const descriptionIndex: DedupableRecord[] = [];
+
+    function indexRecord(resourceType: "post" | "page", record: AuditableRecord) {
+      const meta = (record.currentRevision?.metadata ?? {}) as Partial<SeoMetadataInput>;
+      const title = record.currentRevision?.title || record.title;
+      const base = { resourceType, id: record.id, slug: record.slug, title, status: record.status };
+      if (meta.metaTitle) titleIndex.push({ ...base, value: meta.metaTitle });
+      if (meta.metaDescription) descriptionIndex.push({ ...base, value: meta.metaDescription });
+    }
 
     for (const post of posts) {
       issues.push(...checkRecord("post", post));
-      const meta = (post.currentRevision?.metadata ?? {}) as Partial<SeoMetadataInput>;
-      if (meta.metaTitle) titleIndex.push({ resourceType: "post", id: post.id, slug: post.slug, title: post.currentRevision?.title || post.title, status: post.status, metaTitle: meta.metaTitle });
+      indexRecord("post", post);
     }
     for (const page of pages) {
       issues.push(...checkRecord("page", page));
-      const meta = (page.currentRevision?.metadata ?? {}) as Partial<SeoMetadataInput>;
-      if (meta.metaTitle) titleIndex.push({ resourceType: "page", id: page.id, slug: page.slug, title: page.currentRevision?.title || page.title, status: page.status, metaTitle: meta.metaTitle });
+      indexRecord("page", page);
     }
 
-    issues.push(...findDuplicateTitles(titleIndex));
+    issues.push(...findDuplicateField(titleIndex, "duplicate_meta_title", "title"));
+    issues.push(...findDuplicateField(descriptionIndex, "duplicate_meta_description", "description"));
 
     return issues.sort((a, b) => (a.severity === b.severity ? 0 : a.severity === "critical" ? -1 : 1));
   },
