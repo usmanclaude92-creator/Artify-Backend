@@ -138,6 +138,15 @@ export const clientRepository = {
     return prisma.client.count({ where: { organizationId, deletedAt: null, campaignId: { not: null } } });
   },
 
+  /** Phase 15 — client acquisition reporting: real clients created within a date range (never fabricated). */
+  async countCreatedInRange(organizationId: string, range: { from: Date; to: Date }): Promise<number> {
+    return prisma.client.count({ where: { organizationId, deletedAt: null, createdAt: { gte: range.from, lte: range.to } } });
+  },
+
+  async countAttributedConversionsInRange(organizationId: string, range: { from: Date; to: Date }): Promise<number> {
+    return prisma.client.count({ where: { organizationId, deletedAt: null, campaignId: { not: null }, createdAt: { gte: range.from, lte: range.to } } });
+  },
+
   async recentForOrg(organizationId: string, limit: number): Promise<Client[]> {
     return prisma.client.findMany({
       where: { organizationId, deletedAt: null },

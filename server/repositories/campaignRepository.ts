@@ -141,6 +141,37 @@ export const campaignRepository = {
     return rows.map((r) => ({ campaignId: r.id, leads: r._count.leads, conversions: r._count.clients }));
   },
 
+  /** Phase 15 — campaign reporting: real leads/opportunities/clients attributed to each campaign within a date range (never fabricated); campaigns with no activity in range are omitted rather than shown as zero rows. */
+  async performanceInRange(
+    organizationId: string,
+    range: { from: Date; to: Date }
+  ): Promise<Array<{ campaignId: string; name: string; status: string; leads: number; opportunities: number; clients: number }>> {
+    const [campaigns, leadsByCampaign, oppsByCampaign, clientsByCampaign] = await Promise.all([
+      prisma.campaign.findMany({ where: { organizationId, deletedAt: null }, select: { id: true, name: true, status: true } }),
+      prisma.lead.groupBy({
+        by: ["campaignId"],
+        where: { organizationId, deletedAt: null, campaignId: { not: null }, createdAt: { gte: range.from, lte: range.to } },
+        _count: { _all: true },
+      }),
+      prisma.opportunity.groupBy({
+        by: ["campaignId"],
+        where: { organizationId, deletedAt: null, campaignId: { not: null }, createdAt: { gte: range.from, lte: range.to } },
+        _count: { _all: true },
+      }),
+      prisma.client.groupBy({
+        by: ["campaignId"],
+        where: { organizationId, deletedAt: null, campaignId: { not: null }, createdAt: { gte: range.from, lte: range.to } },
+        _count: { _all: true },
+      }),
+    ]);
+    const leadMap = new Map(leadsByCampaign.map((r) => [r.campaignId as string, r._count._all]));
+    const oppMap = new Map(oppsByCampaign.map((r) => [r.campaignId as string, r._count._all]));
+    const clientMap = new Map(clientsByCampaign.map((r) => [r.campaignId as string, r._count._all]));
+    return campaigns
+      .map((c) => ({ campaignId: c.id, name: c.name, status: c.status, leads: leadMap.get(c.id) ?? 0, opportunities: oppMap.get(c.id) ?? 0, clients: clientMap.get(c.id) ?? 0 }))
+      .filter((c) => c.leads > 0 || c.opportunities > 0 || c.clients > 0);
+  },
+
   async distinctUtmCampaigns(organizationId: string): Promise<Array<{ utmCampaign: string; count: number }>> {
     const rows = await prisma.lead.groupBy({
       by: ["utmCampaign"],

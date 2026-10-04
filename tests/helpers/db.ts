@@ -189,6 +189,12 @@ export async function resetDb(): Promise<void> {
   await prisma.copilotConversation.deleteMany();
   await prisma.copilotWorkspace.deleteMany();
 
+  // Phase 15 — analytics_events.organization_id RESTRICTs (same convention
+  // as campaigns below); campaign_id is SetNull, so order relative to
+  // Campaign doesn't matter, but it must go before organization.deleteMany()
+  // below.
+  await prisma.analyticsEvent.deleteMany();
+
   // Phase 14 — Campaign.organizationId is Restrict (same convention as
   // every other CRM table); its own join tables Cascade from Campaign, so
   // deleting Campaign alone is enough, but it must happen after every

@@ -168,4 +168,13 @@ export const pageRepository = {
     ]);
     return { total, published };
   },
+
+  /** Phase 15 — content analytics inventory: real page counts, never fabricated. */
+  async countForContentInventory(organizationId: string): Promise<{ total: number; published: number }> {
+    const [total, published] = await Promise.all([
+      prisma.page.count({ where: { organizationId, deletedAt: null } }),
+      prisma.page.count({ where: { organizationId, deletedAt: null, status: "PUBLISHED" } }),
+    ]);
+    return { total, published };
+  },
 };

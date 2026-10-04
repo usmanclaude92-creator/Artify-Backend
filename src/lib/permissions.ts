@@ -58,6 +58,8 @@ import {
   Home,
   Megaphone,
   Rocket,
+  BarChart3,
+  FileBarChart,
 } from "lucide-react";
 import { DashboardPage } from "../components/modules/DashboardPage";
 
@@ -122,6 +124,8 @@ const AiCopilotPage = lazyPage(() => import("../components/modules/ai/AiCopilotP
 const MarketingDashboardPage = lazyPage(() => import("../components/modules/MarketingDashboardPage"), "MarketingDashboardPage");
 const CampaignsPage = lazyPage(() => import("../components/modules/CampaignsPage"), "CampaignsPage");
 const AutomationPage = lazyPage(() => import("../components/modules/AutomationPage"), "AutomationPage");
+const AnalyticsDashboardPage = lazyPage(() => import("../components/modules/AnalyticsDashboardPage"), "AnalyticsDashboardPage");
+const ReportsPage = lazyPage(() => import("../components/modules/ReportsPage"), "ReportsPage");
 
 export function hasPermission(permissions: readonly string[] | undefined, key: string): boolean {
   return !!permissions?.includes(key);
@@ -136,7 +140,7 @@ export interface NavItem {
   requiresAnyPermission?: string[];
   component: ComponentType | LazyExoticComponent<ComponentType>;
   /** Groups items under a heading in the sidebar (§22/§31) — purely presentational. */
-  section: "Platform" | "CRM" | "Onboarding" | "Workspaces" | "Products" | "Website" | "CMS" | "SEO" | "Marketing" | "Automation" | "Commercial" | "AI" | "Client Portal";
+  section: "Platform" | "CRM" | "Onboarding" | "Workspaces" | "Products" | "Website" | "CMS" | "SEO" | "Marketing" | "Automation" | "Analytics" | "Commercial" | "AI" | "Client Portal";
 }
 
 /**
@@ -500,6 +504,24 @@ export const NAV_ITEMS: NavItem[] = [
     requiresAnyPermission: ["automation.read"],
     component: AutomationPage,
     section: "Automation",
+  },
+  {
+    id: "analytics-dashboard",
+    label: "Analytics",
+    path: "/analytics",
+    icon: BarChart3,
+    requiresAnyPermission: ["analytics.read"],
+    component: AnalyticsDashboardPage,
+    section: "Analytics",
+  },
+  {
+    id: "analytics-reports",
+    label: "Reports",
+    path: "/reports",
+    icon: FileBarChart,
+    requiresAnyPermission: ["reports.read"],
+    component: ReportsPage,
+    section: "Analytics",
   },
   {
     id: "commercial-contracts",

@@ -174,4 +174,13 @@ export const postRepository = {
   async restore(id: string): Promise<void> {
     await prisma.post.update({ where: { id }, data: { deletedAt: null } });
   },
+
+  /** Phase 15 — content analytics inventory: real post counts, never fabricated. */
+  async countForContentInventory(organizationId: string): Promise<{ total: number; published: number }> {
+    const [total, published] = await Promise.all([
+      prisma.post.count({ where: { organizationId, deletedAt: null } }),
+      prisma.post.count({ where: { organizationId, deletedAt: null, status: "PUBLISHED" } }),
+    ]);
+    return { total, published };
+  },
 };

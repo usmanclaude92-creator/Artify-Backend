@@ -100,6 +100,8 @@ model Organization {
   formSubmissions            FormSubmission[]
   // Phase 14 — Marketing + Campaigns + Automation (docs/MARKETING_ARCHITECTURE.md).
   campaigns                  Campaign[]
+  // Phase 15 — Analytics + Reporting (docs/ANALYTICS_ARCHITECTURE.md).
+  analyticsEvents            AnalyticsEvent[]
   mediaUploadSessions        MediaUploadSession[]
   notifications              Notification[]
   systemSettings             SystemSetting[]
@@ -862,6 +864,7 @@ model Campaign {
   formSubmissions    FormSubmission[]           @relation("FormSubmissionCampaign")
   opportunities      Opportunity[]              @relation("OpportunityCampaign")
   clients            Client[]                   @relation("ClientCampaign")
+  analyticsEvents    AnalyticsEvent[]
 
   @@index([organizationId, status])
   @@index([organizationId, utmCampaign])
@@ -935,6 +938,55 @@ model CampaignMedia {
   @@id([campaignId, mediaId])
   @@index([mediaId])
   @@map("campaign_media")
+}
+
+// Phase 15 (Analytics + Reporting, docs/ANALYTICS_ARCHITECTURE.md). The
+// platform's own first-party event store — not a parallel system, since
+// nothing resembling it existed before this phase (no analytics
+// provider/SDK was integrated anywhere). `eventType` is a free string
+// (same convention as AuditLog.action) rather than a rigid enum, so new
+// event kinds never require a migration — "avoid excessive tracking" per
+// the brief, so only a small, deliberate set of event types is actually
+// emitted (see analyticsEventService.ts). `organizationId` is always a
+// real tenant — for anonymous public-website traffic this is
+// config.publicWebsiteOrganizationId, exactly like Lead/FormSubmission's
+// own public-intake convention; never a caller-supplied value.
+// `sessionId` is a random, client-generated, non-identifying token (no
+// cookie, no fingerprinting, no IP/user-agent stored raw) — rotated per
+// browser tab session, so this never becomes a persistent cross-session
+// visitor identity. `campaignId` mirrors Lead/FormSubmission's own
+// UTM->Campaign attribution resolution (campaignAttributionService).
+// `entityType`/`entityId` optionally link an event to the real CRM/CMS
+// record it concerns (e.g. a form_submission event -> that FormSubmission
+// row) without a dedicated FK per entity type. Never user-deletable
+// individually; aggregated and never surfaced as a flat feed of raw rows
+// to any UI beyond the organization's own admins (RBAC: analytics.read).
+model AnalyticsEvent {
+  id             String   @id @default(uuid())
+  organizationId String   @map("organization_id")
+  eventType      String   @map("event_type")
+  path           String?
+  referrer       String?
+  sessionId      String?  @map("session_id")
+  utmSource      String?  @map("utm_source")
+  utmMedium      String?  @map("utm_medium")
+  utmCampaign    String?  @map("utm_campaign")
+  utmTerm        String?  @map("utm_term")
+  utmContent     String?  @map("utm_content")
+  campaignId     String?  @map("campaign_id")
+  entityType     String?  @map("entity_type")
+  entityId       String?  @map("entity_id")
+  metadata       Json     @default("{}")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  campaign     Campaign?    @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, eventType, createdAt])
+  @@index([organizationId, path])
+  @@index([campaignId])
+  @@index([sessionId])
+  @@map("analytics_events")
 }
 
 enum ContactStatus {

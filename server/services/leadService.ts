@@ -11,6 +11,7 @@ import { auditLogRepository } from "../repositories/auditLogRepository";
 import { auditLogQueryRepository } from "../repositories/auditLogQueryRepository";
 import { notificationService } from "./notificationService";
 import { eventEngine } from "./automation/EventEngine";
+import { analyticsEventService } from "./analyticsEventService";
 import { ConflictError, NotFoundError, ValidationError } from "../core/errors";
 import type { SanitizedUser } from "../types/domain";
 import type { CreateLeadInput, UpdateLeadInput, ConvertLeadInput } from "../schemas/leadSchemas";
@@ -313,6 +314,18 @@ export const leadService = {
       afterData: { clientId: result.client.id, clientCode: result.client.clientCode },
       ipAddress: meta.ip,
       userAgent: meta.userAgent,
+    });
+
+    // Phase 15 — real analytics event (never fabricated): a genuine
+    // lead->client handoff, carrying the lead's real campaign attribution
+    // forward (same convention as the Client row itself, above).
+    await analyticsEventService.recordBusinessEvent({
+      organizationId: caller.organizationId,
+      eventType: "client_converted",
+      entityType: "client",
+      entityId: result.client.id,
+      campaignId: lead.campaignId ?? undefined,
+      metadata: { convertedFromLeadId: id },
     });
 
     return result;

@@ -96,6 +96,7 @@ const ROLE_PERMISSION_SETS: Record<RoleKey, readonly string[] | "*"> = {
     "media.delete",
     "reports.read",
     "reports.export",
+    "analytics.read",
     "settings.read",
     "settings.manage",
     "audit.read",
@@ -256,6 +257,7 @@ const ROLE_PERMISSION_SETS: Record<RoleKey, readonly string[] | "*"> = {
     "media.upload",
     "media.update",
     "reports.read",
+    "analytics.read",
     // Phase 12 — MANAGER can use/author AI within its own org (execute
     // workflows, author prompts/workflows, see executions/usage/approvals)
     // but cannot touch the provider/model catalog, tool enablement, or
@@ -368,6 +370,7 @@ const ROLE_PERMISSION_SETS: Record<RoleKey, readonly string[] | "*"> = {
     "media.read",
     "media.upload",
     "reports.read",
+    "analytics.read",
     // Phase 12 — USER can execute existing workflows/prompts and see their
     // own executions/usage, but cannot author prompts/workflows or touch
     // the catalog/approvals (mirrors the read/execute-only Phase 10 split).
@@ -431,6 +434,7 @@ const ROLE_PERMISSION_SETS: Record<RoleKey, readonly string[] | "*"> = {
     "authors.read",
     "media.read",
     "reports.read",
+    "analytics.read",
     "settings.read",
     "audit.read",
     // Phase 12 — VIEWER is read-only across the AI surface, same as every

@@ -9,6 +9,7 @@
 import { leadRepository } from "../repositories/leadRepository";
 import { auditLogRepository } from "../repositories/auditLogRepository";
 import { campaignAttributionService } from "./campaignAttributionService";
+import { analyticsEventService } from "./analyticsEventService";
 import { eventEngine } from "./automation/EventEngine";
 import { config } from "../config/env";
 import { InfrastructureError } from "../core/errors";
@@ -90,6 +91,24 @@ export const publicLeadService = {
     } catch {
       // best-effort — see comment above.
     }
+
+    // Phase 15 — real analytics event (never fabricated): a genuine lead
+    // just landed, carrying the same real UTM/campaign attribution the
+    // lead row itself carries.
+    await analyticsEventService.recordBusinessEvent({
+      organizationId,
+      eventType: "lead_created",
+      entityType: "lead",
+      entityId: lead.id,
+      utmSource: input.utmSource,
+      utmMedium: input.utmMedium,
+      utmCampaign: input.utmCampaign,
+      utmTerm: input.utmTerm,
+      utmContent: input.utmContent,
+      campaignId,
+      path: input.landingPagePath,
+      referrer: meta.referrer,
+    });
 
     return lead;
   },

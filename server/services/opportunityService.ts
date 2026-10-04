@@ -11,6 +11,7 @@ import { auditLogRepository } from "../repositories/auditLogRepository";
 import { auditLogQueryRepository } from "../repositories/auditLogQueryRepository";
 import { notificationService } from "./notificationService";
 import { eventEngine } from "./automation/EventEngine";
+import { analyticsEventService } from "./analyticsEventService";
 import { toMoney, DEFAULT_CURRENCY } from "../utils/money";
 import { ConflictError, NotFoundError, ValidationError } from "../core/errors";
 import type { SanitizedUser } from "../types/domain";
@@ -65,6 +66,15 @@ async function emitStageChangedEvent(organizationId: string, opportunityId: stri
   } catch {
     // best-effort — see comment above.
   }
+  // Phase 15 — real analytics event (never fabricated): a genuine stage
+  // transition on a real opportunity.
+  await analyticsEventService.recordBusinessEvent({
+    organizationId,
+    eventType: "opportunity_stage_changed",
+    entityType: "opportunity",
+    entityId: opportunityId,
+    metadata: { fromStage, toStage },
+  });
 }
 
 /** Notifies the assignee and creator (deduped, excluding whoever just performed the close) that a deal closed. */
@@ -143,6 +153,17 @@ export const opportunityService = {
       afterData: { name: opportunity.name, stage: opportunity.stage, clientId: opportunity.clientId, leadId: opportunity.leadId, value: opportunity.value.toString() },
       ipAddress: meta.ip,
       userAgent: meta.userAgent,
+    });
+
+    // Phase 15 — real analytics event (never fabricated): a genuine
+    // opportunity just opened, carrying its real campaign attribution and value.
+    await analyticsEventService.recordBusinessEvent({
+      organizationId,
+      eventType: "opportunity_created",
+      entityType: "opportunity",
+      entityId: opportunity.id,
+      campaignId: opportunity.campaignId ?? undefined,
+      metadata: { stage: opportunity.stage, value: opportunity.value.toString(), currency: opportunity.currency },
     });
 
     if (opportunity.assignedTo && opportunity.assignedTo !== caller.id) {

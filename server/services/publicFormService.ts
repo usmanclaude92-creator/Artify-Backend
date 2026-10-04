@@ -13,6 +13,7 @@ import { leadRepository } from "../repositories/leadRepository";
 import { auditLogRepository } from "../repositories/auditLogRepository";
 import { notificationService } from "./notificationService";
 import { campaignAttributionService } from "./campaignAttributionService";
+import { analyticsEventService } from "./analyticsEventService";
 import { eventEngine } from "./automation/EventEngine";
 import { config } from "../config/env";
 import { InfrastructureError, NotFoundError, ValidationError } from "../core/errors";
@@ -247,6 +248,24 @@ export const publicFormService = {
     } catch {
       // best-effort — see comment above.
     }
+
+    // Phase 15 — real analytics event for this genuine submission (never
+    // fabricated), carrying the same real UTM/campaign attribution the
+    // FormSubmission row itself carries.
+    await analyticsEventService.recordBusinessEvent({
+      organizationId,
+      eventType: "form_submission",
+      entityType: "form_submission",
+      entityId: submission.id,
+      utmSource: input.utmSource,
+      utmMedium: input.utmMedium,
+      utmCampaign: input.utmCampaign,
+      utmTerm: input.utmTerm,
+      utmContent: input.utmContent,
+      campaignId,
+      path: input.landingPagePath,
+      referrer: meta.referrer,
+    });
 
     // Best-effort in-app notification to whoever this Form is configured
     // to notify — never fails the submission itself (notificationService.

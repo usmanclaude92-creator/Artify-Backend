@@ -73,6 +73,8 @@ import aiApprovalRoutes from "./aiApprovalRoutes";
 import automationRoutes from "./automationRoutes";
 import knowledgeRoutes from "./knowledgeRoutes";
 import copilotRoutes from "./copilotRoutes";
+import analyticsRoutes from "./analyticsRoutes";
+import reportsRoutes from "./reportsRoutes";
 
 const v1Router = Router();
 
@@ -130,5 +132,7 @@ v1Router.use("/ai/approvals", aiApprovalRoutes);
 v1Router.use("/automation", automationRoutes);
 v1Router.use("/knowledge", knowledgeRoutes);
 v1Router.use("/copilot", copilotRoutes);
+v1Router.use("/analytics", analyticsRoutes);
+v1Router.use("/reports", reportsRoutes);
 
 export default v1Router;

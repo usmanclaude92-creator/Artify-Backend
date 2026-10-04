@@ -135,6 +135,11 @@ export const PERMISSION_KEYS = [
   "navigation_menus.delete",
   "reports.read",
   "reports.export",
+  // Phase 15 — Analytics Dashboard read access (docs/ANALYTICS_ARCHITECTURE.md).
+  // Separate from reports.read: the dashboard is a live, real-time-ish
+  // overview, while reports.read/reports.export gate the Reports area's
+  // generated/exportable report documents.
+  "analytics.read",
   "settings.read",
   "settings.manage",
   "audit.read",

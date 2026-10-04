@@ -117,4 +117,9 @@ export const formRepository = {
     ]);
     return { total, active };
   },
+
+  /** Phase 15 — form performance reporting: real submission counts within a date range (never fabricated). */
+  async countSubmissionsInRange(organizationId: string, range: { from: Date; to: Date }): Promise<number> {
+    return prisma.formSubmission.count({ where: { organizationId, createdAt: { gte: range.from, lte: range.to } } });
+  },
 };

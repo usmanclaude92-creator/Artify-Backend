@@ -13,7 +13,8 @@ import { publicSiteService } from "../../services/publicSiteService";
 import { publicProductService } from "../../services/publicProductService";
 import { publicLeadService } from "../../services/publicLeadService";
 import { publicFormService } from "../../services/publicFormService";
-import { publicLeadLimiter } from "../../middleware/rateLimiter";
+import { analyticsEventService } from "../../services/analyticsEventService";
+import { publicLeadLimiter, publicAnalyticsLimiter } from "../../middleware/rateLimiter";
 import { asyncHandler } from "../../utils/asyncHandler";
 import { sendSuccess } from "../../core/apiResponse";
 import {
@@ -25,6 +26,7 @@ import {
   publicNavigationMenuTypeSchema,
 } from "../../schemas/publicSchemas";
 import { publicFormSubmitSchema } from "../../schemas/formSchemas";
+import { publicAnalyticsEventSchema } from "../../schemas/analyticsSchemas";
 
 const router = Router();
 
@@ -239,6 +241,21 @@ router.post(
     const input = publicFormSubmitSchema.parse(req.body);
     const { successMessage } = await publicFormService.submit(req.params.slug!, input, requestMeta(req));
     sendSuccess(res, { message: successMessage }, 201);
+  })
+);
+
+// Phase 15 (Analytics + Reporting, docs/ANALYTICS_ARCHITECTURE.md §3) — the
+// public site's page-view/CTA beacon. Fire-and-forget from the caller's
+// point of view: always 201/accepted, even when the platform has no
+// configured public-website organization (recordPublicEvent no-ops rather
+// than erroring a visitor's page load over an analytics beacon).
+router.post(
+  "/analytics/events",
+  publicAnalyticsLimiter,
+  asyncHandler(async (req, res) => {
+    const input = publicAnalyticsEventSchema.parse(req.body);
+    await analyticsEventService.recordPublicEvent({ ...input, referrer: input.referrer ?? requestMeta(req).referrer });
+    sendSuccess(res, { recorded: true }, 201);
   })
 );
 

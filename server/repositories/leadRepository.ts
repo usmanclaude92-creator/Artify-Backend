@@ -156,6 +156,33 @@ export const leadRepository = {
     return rows.filter((r) => r.source).map((r) => ({ source: r.source as string, count: r._count._all }));
   },
 
+  /** Phase 15 — analytics/reporting: real lead counts within a date range (never fabricated). */
+  async countInRange(organizationId: string, range: { from: Date; to: Date }): Promise<number> {
+    return prisma.lead.count({ where: { organizationId, deletedAt: null, createdAt: { gte: range.from, lte: range.to } } });
+  },
+
+  async countBySourceInRange(organizationId: string, range: { from: Date; to: Date }): Promise<Array<{ source: string; count: number }>> {
+    const rows = await prisma.lead.groupBy({
+      by: ["source"],
+      where: { organizationId, deletedAt: null, source: { not: null }, createdAt: { gte: range.from, lte: range.to } },
+      _count: { _all: true },
+      orderBy: { _count: { source: "desc" } },
+      take: 20,
+    });
+    return rows.filter((r) => r.source).map((r) => ({ source: r.source as string, count: r._count._all }));
+  },
+
+  async countByCampaignInRange(organizationId: string, range: { from: Date; to: Date }): Promise<Array<{ campaignId: string; count: number }>> {
+    const rows = await prisma.lead.groupBy({
+      by: ["campaignId"],
+      where: { organizationId, deletedAt: null, campaignId: { not: null }, createdAt: { gte: range.from, lte: range.to } },
+      _count: { _all: true },
+      orderBy: { _count: { campaignId: "desc" } },
+      take: 20,
+    });
+    return rows.filter((r) => r.campaignId).map((r) => ({ campaignId: r.campaignId as string, count: r._count._all }));
+  },
+
   async recentForOrg(organizationId: string, limit: number): Promise<Lead[]> {
     return prisma.lead.findMany({
       where: { organizationId, deletedAt: null },

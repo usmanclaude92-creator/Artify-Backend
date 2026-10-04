@@ -106,4 +106,50 @@ export const opportunityRepository = {
   async countAttributedConversions(organizationId: string): Promise<number> {
     return prisma.opportunity.count({ where: { organizationId, deletedAt: null, campaignId: { not: null }, stage: "CLOSED_WON" } });
   },
+
+  /** Phase 15 — CRM/Sales reporting: real pipeline + won/lost (closed within range) figures, Decimal-safe (never native float arithmetic). */
+  async pipelineInRange(
+    organizationId: string,
+    range: { from: Date; to: Date }
+  ): Promise<{ byStage: Record<string, { count: number; value: string }>; wonCount: number; wonValue: string; lostCount: number; lostValue: string }> {
+    const [byStageRows, won, lost] = await Promise.all([
+      prisma.opportunity.groupBy({
+        by: ["stage"],
+        where: { organizationId, deletedAt: null, createdAt: { gte: range.from, lte: range.to } },
+        _count: { _all: true },
+        _sum: { value: true },
+      }),
+      prisma.opportunity.aggregate({
+        where: { organizationId, deletedAt: null, stage: "CLOSED_WON", actualCloseDate: { gte: range.from, lte: range.to } },
+        _count: { _all: true },
+        _sum: { value: true },
+      }),
+      prisma.opportunity.aggregate({
+        where: { organizationId, deletedAt: null, stage: "CLOSED_LOST", actualCloseDate: { gte: range.from, lte: range.to } },
+        _count: { _all: true },
+        _sum: { value: true },
+      }),
+    ]);
+    const byStage: Record<string, { count: number; value: string }> = {};
+    for (const row of byStageRows) byStage[row.stage] = { count: row._count._all, value: (row._sum.value ?? 0).toString() };
+    return {
+      byStage,
+      wonCount: won._count._all,
+      wonValue: (won._sum.value ?? 0).toString(),
+      lostCount: lost._count._all,
+      lostValue: (lost._sum.value ?? 0).toString(),
+    };
+  },
+
+  async countByCampaignInRange(organizationId: string, range: { from: Date; to: Date }): Promise<Array<{ campaignId: string; count: number; value: string }>> {
+    const rows = await prisma.opportunity.groupBy({
+      by: ["campaignId"],
+      where: { organizationId, deletedAt: null, campaignId: { not: null }, createdAt: { gte: range.from, lte: range.to } },
+      _count: { _all: true },
+      _sum: { value: true },
+      orderBy: { _count: { campaignId: "desc" } },
+      take: 20,
+    });
+    return rows.filter((r) => r.campaignId).map((r) => ({ campaignId: r.campaignId as string, count: r._count._all, value: (r._sum.value ?? 0).toString() }));
+  },
 };

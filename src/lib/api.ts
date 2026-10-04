@@ -2513,3 +2513,106 @@ export const portalApi = {
   documents: (params: { page?: number; limit?: number } = {}) => paginatedGet<CmsMedia>("/portal/documents", "documents", params),
   onboarding: () => apiClient.get<{ onboarding: PortalOnboarding | null }>("/portal/onboarding"),
 };
+
+// ---------------------------------------------------------------------------
+// Phase 15 — Analytics + Reporting (docs/ANALYTICS_ARCHITECTURE.md). Every
+// numeric field below is `null` (never a fabricated 0) when the caller
+// lacks the underlying domain permission or there is no real data/provider
+// configured — same degrade-gracefully convention as MarketingSummary.
+// ---------------------------------------------------------------------------
+export interface AnalyticsSeoIssue {
+  resourceType: "post" | "page" | "case_study";
+  resourceId: string;
+  resourceTitle: string;
+  slug: string;
+  status: string;
+  severity: "critical" | "warning";
+  code: string;
+  message: string;
+}
+
+export interface AnalyticsOverview {
+  range: { from: string; to: string; comparing: boolean };
+  website: {
+    configured: boolean;
+    hasAnyTraffic: boolean;
+    pageViews: number | null;
+    pageViewsChangePct: number | null;
+    sessions: number | null;
+    sessionsChangePct: number | null;
+    topPages: Array<{ path: string; count: number }> | null;
+    utmSources: Array<{ utmSource: string; count: number }> | null;
+  } | null;
+  leads: { total: number | null; changePct: number | null; bySource: Array<{ source: string; count: number }> | null } | null;
+  pipeline:
+    | ({ byStage: Record<string, { count: number; value: string }>; wonCount: number; wonValue: string; lostCount: number; lostValue: string; wonChangePct: number | null })
+    | null;
+  clients: { created: number | null; changePct: number | null; attributedConversions: number | null } | null;
+  campaigns: Array<{ campaignId: string; name: string; status: string; leads: number; opportunities: number; clients: number }> | null;
+  forms: { submissions: number | null } | null;
+  conversionRate: number | null;
+  seo: { issueCount: number; topIssues: AnalyticsSeoIssue[] } | null;
+  recentActivity: AuditLogEntry[] | null;
+}
+
+export interface AnalyticsDateRangeParams {
+  from?: string;
+  to?: string;
+  compare?: boolean;
+}
+
+function dateRangeQuery<T extends object>(params: T): string {
+  const query = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v !== undefined && v !== "") query.set(k, String(v));
+  }
+  const qs = query.toString();
+  return qs ? `?${qs}` : "";
+}
+
+export const analyticsApi = {
+  overview: (params: AnalyticsDateRangeParams = {}) => apiClient.get<AnalyticsOverview>(`/analytics/overview${dateRangeQuery(params)}`),
+  topPages: (params: AnalyticsDateRangeParams & { limit?: number } = {}) =>
+    apiClient.get<{ topPages: Array<{ path: string; count: number }> }>(`/analytics/content/top-pages${dateRangeQuery(params)}`),
+};
+
+export const REPORT_TYPES = [
+  "executive_summary",
+  "website_performance",
+  "content_performance",
+  "seo_report",
+  "lead_generation",
+  "crm_pipeline",
+  "campaign_performance",
+  "conversion_report",
+  "client_acquisition",
+] as const;
+export type ReportTypeValue = (typeof REPORT_TYPES)[number];
+
+export const REPORT_LABELS: Record<ReportTypeValue, string> = {
+  executive_summary: "Executive Summary",
+  website_performance: "Website Performance",
+  content_performance: "Content Performance",
+  seo_report: "SEO Report",
+  lead_generation: "Lead Generation",
+  crm_pipeline: "CRM Pipeline",
+  campaign_performance: "Campaign Performance",
+  conversion_report: "Conversion Report",
+  client_acquisition: "Client Acquisition",
+};
+
+export const reportsApi = {
+  get: (type: ReportTypeValue, params: AnalyticsDateRangeParams = {}) =>
+    apiClient.get<{ type: string; range: { from: string | null; to: string | null }; report: unknown }>(`/reports/${type}${dateRangeQuery(params)}`),
+  downloadExport: async (type: ReportTypeValue, params: AnalyticsDateRangeParams = {}): Promise<void> => {
+    const blob = await apiClient.getBlob(`/reports/${type}/export${dateRangeQuery(params)}`);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${type}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  },
+};
