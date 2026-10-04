@@ -56,6 +56,8 @@ import {
   Palette,
   Menu,
   Home,
+  Megaphone,
+  Rocket,
 } from "lucide-react";
 import { DashboardPage } from "../components/modules/DashboardPage";
 
@@ -117,6 +119,9 @@ const AiExecutionsPage = lazyPage(() => import("../components/modules/ai/AiExecu
 const AiUsagePage = lazyPage(() => import("../components/modules/ai/AiUsagePage"), "AiUsagePage");
 const AiApprovalsPage = lazyPage(() => import("../components/modules/ai/AiApprovalsPage"), "AiApprovalsPage");
 const AiCopilotPage = lazyPage(() => import("../components/modules/ai/AiCopilotPage"), "AiCopilotPage");
+const MarketingDashboardPage = lazyPage(() => import("../components/modules/MarketingDashboardPage"), "MarketingDashboardPage");
+const CampaignsPage = lazyPage(() => import("../components/modules/CampaignsPage"), "CampaignsPage");
+const AutomationPage = lazyPage(() => import("../components/modules/AutomationPage"), "AutomationPage");
 
 export function hasPermission(permissions: readonly string[] | undefined, key: string): boolean {
   return !!permissions?.includes(key);
@@ -131,7 +136,7 @@ export interface NavItem {
   requiresAnyPermission?: string[];
   component: ComponentType | LazyExoticComponent<ComponentType>;
   /** Groups items under a heading in the sidebar (§22/§31) — purely presentational. */
-  section: "Platform" | "CRM" | "Onboarding" | "Workspaces" | "Products" | "Website" | "CMS" | "SEO" | "Marketing" | "Commercial" | "AI" | "Client Portal";
+  section: "Platform" | "CRM" | "Onboarding" | "Workspaces" | "Products" | "Website" | "CMS" | "SEO" | "Marketing" | "Automation" | "Commercial" | "AI" | "Client Portal";
 }
 
 /**
@@ -462,6 +467,23 @@ export const NAV_ITEMS: NavItem[] = [
     section: "SEO",
   },
   {
+    id: "marketing-dashboard",
+    label: "Marketing Dashboard",
+    path: "/marketing",
+    icon: Rocket,
+    section: "Marketing",
+    component: MarketingDashboardPage,
+  },
+  {
+    id: "marketing-campaigns",
+    label: "Campaigns",
+    path: "/marketing/campaigns",
+    icon: Megaphone,
+    requiresAnyPermission: ["campaigns.read"],
+    component: CampaignsPage,
+    section: "Marketing",
+  },
+  {
     id: "marketing-forms",
     label: "Forms",
     path: "/marketing/forms",
@@ -469,6 +491,15 @@ export const NAV_ITEMS: NavItem[] = [
     requiresAnyPermission: ["forms.read"],
     component: FormsPage,
     section: "Marketing",
+  },
+  {
+    id: "automation",
+    label: "Automation",
+    path: "/automation",
+    icon: Workflow,
+    requiresAnyPermission: ["automation.read"],
+    component: AutomationPage,
+    section: "Automation",
   },
   {
     id: "commercial-contracts",

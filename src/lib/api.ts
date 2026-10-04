@@ -144,6 +144,16 @@ export async function paginatedGet<T>(path: string, key: string, params: Record<
   } satisfies Paginated<T>;
 }
 
+/** Query-string builder for endpoints that don't follow the paginatedGet items/totalPages envelope (Phase 13/14/15 automation module — see automationApi below). */
+function toQuery(params: Record<string, string | number | boolean | undefined>): string {
+  const query = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v !== undefined && v !== "") query.set(k, String(v));
+  }
+  const qs = query.toString();
+  return qs ? `?${qs}` : "";
+}
+
 export const authApi = {
   // suppressUnauthorizedHandling: a 401 here means "wrong credentials" or
   // "bad/expired reset token," never "your existing session expired" —
@@ -376,6 +386,8 @@ export interface Lead {
   referrer: string | null;
   consentGiven: boolean | null;
   formId: string | null;
+  // Phase 14 — resolved automatically from utmCampaign at intake time.
+  campaignId: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -396,6 +408,7 @@ export interface CrmClient {
   source: string | null;
   industryId: string | null;
   industry: { id: string; slug: string; name: string } | null;
+  campaignId: string | null;
   workspaceOrganizationId: string | null;
   /** Backend-computed (Phase 6 §32) — never inferred client-side. */
   provisioningStatus: "NOT_PROVISIONED" | "PROVISIONING" | "PROVISIONED" | "SUSPENDED";
@@ -429,6 +442,7 @@ export interface Opportunity {
   leadId: string | null;
   productId: string | null;
   source: string | null;
+  campaignId: string | null;
   probability: number | null;
   name: string;
   stage: OpportunityStageValue;
@@ -585,6 +599,7 @@ export const opportunitiesApi = {
     clientId?: string;
     leadId?: string;
     productId?: string;
+    campaignId?: string;
     source?: string;
     probability?: number;
     name: string;
@@ -615,6 +630,302 @@ export const opportunitiesApi = {
   win: (id: string) => apiClient.post<{ opportunity: Opportunity }>(`/opportunities/${id}/win`),
   lose: (id: string, lostReason?: string) => apiClient.post<{ opportunity: Opportunity }>(`/opportunities/${id}/lose`, { lostReason }),
   activity: (id: string) => apiClient.get<{ activity: AuditLogEntry[] }>(`/opportunities/${id}/activity`),
+};
+
+// ---------------------------------------------------------------------------
+// Phase 14 — Marketing + Campaigns + Automation (docs/MARKETING_ARCHITECTURE.md).
+// ---------------------------------------------------------------------------
+export type CampaignStatusValue = "DRAFT" | "ACTIVE" | "PAUSED" | "ARCHIVED";
+export type CampaignChannelValue = "EMAIL" | "SOCIAL" | "PAID_SEARCH" | "PAID_SOCIAL" | "CONTENT" | "EVENT" | "REFERRAL" | "DIRECT" | "OTHER";
+
+export interface Campaign {
+  id: string;
+  organizationId: string;
+  name: string;
+  description: string | null;
+  status: CampaignStatusValue;
+  channel: CampaignChannelValue;
+  startDate: string | null;
+  endDate: string | null;
+  ownerId: string | null;
+  owner: { id: string; firstName: string; lastName: string; email: string } | null;
+  budget: string | null;
+  currency: string | null;
+  landingPageId: string | null;
+  landingPage: { id: string; slug: string; title: string; status: string } | null;
+  formId: string | null;
+  form: { id: string; name: string; slug: string; status: string } | null;
+  utmSource: string | null;
+  utmMedium: string | null;
+  utmCampaign: string | null;
+  utmTerm: string | null;
+  utmContent: string | null;
+  targetAudience: string | null;
+  notes: string | null;
+  createdById: string | null;
+  createdAt: string;
+  updatedAt: string;
+  products?: Array<{ product: { id: string; slug: string; name: string; type: string; status: string } }>;
+  relatedPages?: Array<{ page: { id: string; slug: string; title: string; status: string } }>;
+  relatedPosts?: Array<{ post: { id: string; slug: string; title: string; status: string } }>;
+  relatedCaseStudies?: Array<{ caseStudy: { id: string; slug: string; title: string; status: string } }>;
+  media?: Array<{ media: { id: string; displayName: string | null; originalFilename: string; storageKey: string; mimeType: string } }>;
+  _count?: { leads: number; formSubmissions: number; opportunities: number; clients: number };
+}
+
+export interface CampaignInput {
+  name: string;
+  description?: string;
+  channel?: CampaignChannelValue;
+  startDate?: string;
+  endDate?: string;
+  ownerId?: string;
+  budget?: number;
+  currency?: string;
+  landingPageId?: string;
+  formId?: string;
+  utmSource?: string;
+  utmMedium?: string;
+  utmCampaign?: string;
+  utmTerm?: string;
+  utmContent?: string;
+  targetAudience?: string;
+  notes?: string;
+  productIds?: string[];
+  relatedPageIds?: string[];
+  relatedPostIds?: string[];
+  relatedCaseStudyIds?: string[];
+  mediaIds?: string[];
+}
+
+export interface MarketingSummary {
+  campaigns: {
+    total: number;
+    draft: number;
+    active: number;
+    paused: number;
+    archived: number;
+    performance: Array<{ campaignId: string; leads: number; conversions: number }> | null;
+  } | null;
+  leads: { total: number; attributed: number; unattributed: number } | null;
+  conversions: { opportunitiesWon: number | null; clientsCreated: number | null } | null;
+  landingPages: { total: number; published: number } | null;
+  forms: { total: number; active: number } | null;
+  sources: Array<{ source: string; count: number }> | null;
+  utmCampaigns: Array<{ utmCampaign: string; count: number }> | null;
+  recentCampaignActivity: AuditLogEntry[] | null;
+}
+
+export const campaignsApi = {
+  list: (
+    params: {
+      page?: number;
+      limit?: number;
+      search?: string;
+      status?: CampaignStatusValue;
+      channel?: CampaignChannelValue;
+      ownerId?: string;
+      sort?: string;
+      order?: "asc" | "desc";
+    } = {}
+  ) => paginatedGet<Campaign>("/campaigns", "campaigns", params),
+  get: (id: string) => apiClient.get<{ campaign: Campaign }>(`/campaigns/${id}`),
+  create: (payload: CampaignInput) => apiClient.post<{ campaign: Campaign }>("/campaigns", payload),
+  update: (id: string, payload: Partial<CampaignInput>) => apiClient.patch<{ campaign: Campaign }>(`/campaigns/${id}`, payload),
+  duplicate: (id: string, name?: string) => apiClient.post<{ campaign: Campaign }>(`/campaigns/${id}/duplicate`, { name }),
+  activate: (id: string) => apiClient.post<{ campaign: Campaign }>(`/campaigns/${id}/activate`),
+  pause: (id: string) => apiClient.post<{ campaign: Campaign }>(`/campaigns/${id}/pause`),
+  publish: (id: string) => apiClient.post<{ campaign: Campaign }>(`/campaigns/${id}/publish`),
+  archive: (id: string) => apiClient.post<{ campaign: Campaign }>(`/campaigns/${id}/archive`),
+  preview: (id: string) => apiClient.get<{ preview: { landingPageUrl: string | null; landingPageStatus: string | null; configured: boolean } }>(`/campaigns/${id}/preview`),
+  activity: (id: string) => apiClient.get<{ activity: AuditLogEntry[] }>(`/campaigns/${id}/activity`),
+};
+
+export const marketingApi = {
+  summary: () => apiClient.get<MarketingSummary>("/marketing/summary"),
+};
+
+// ---------------------------------------------------------------------------
+// Phase 13/14/15 (imported — docs/AUTOMATION_ARCHITECTURE.md) — Automation.
+// This module's own list endpoints return {rows, total, page, limit}
+// directly as the response body (not the paginatedGet items/totalPages
+// convention every other module uses), inherited as-is from the source
+// repo's own response shape — see automationRoutes.ts.
+// ---------------------------------------------------------------------------
+export type AutomationWorkflowStatusValue = "DRAFT" | "ACTIVE" | "PAUSED" | "ARCHIVED";
+export type AutomationTriggerTypeValue = "EVENT" | "SCHEDULE" | "MANUAL" | "API" | "CONDITIONAL";
+export type AutomationExecutionStatusValue = "QUEUED" | "RUNNING" | "WAITING_APPROVAL" | "COMPLETED" | "FAILED" | "CANCELLED";
+export type AutomationApprovalStatusValue = "PENDING" | "APPROVED" | "REJECTED" | "EXPIRED";
+export type AutomationTaskStatusValue = "PENDING" | "IN_PROGRESS" | "COMPLETED" | "CANCELLED";
+export type AutomationTaskPriorityValue = "LOW" | "MEDIUM" | "HIGH" | "URGENT";
+
+export interface AutomationWorkflow {
+  id: string;
+  organizationId: string;
+  name: string;
+  description: string | null;
+  category: string;
+  status: AutomationWorkflowStatusValue;
+  currentVersion: number;
+  publishedVersion: number | null;
+  triggerType: AutomationTriggerTypeValue;
+  triggerConfig: Record<string, unknown>;
+  conditions: unknown[];
+  steps: Record<string, unknown>[];
+  retryPolicy: Record<string, unknown>;
+  limits: Record<string, unknown>;
+  createdById: string | null;
+  createdBy?: { id: string; firstName: string; lastName: string; email?: string } | null;
+  createdAt: string;
+  updatedAt: string;
+  _count?: { executions: number; schedules: number };
+}
+
+export interface AutomationExecution {
+  id: string;
+  organizationId: string;
+  workflowId: string;
+  workflowVersion: number;
+  status: AutomationExecutionStatusValue;
+  triggerType: AutomationTriggerTypeValue;
+  entityType: string | null;
+  entityId: string | null;
+  correlationId: string;
+  input: Record<string, unknown>;
+  output: Record<string, unknown>;
+  context: Record<string, unknown>;
+  currentStepIndex: number;
+  totalSteps: number;
+  retryCount: number;
+  errorMessage: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  durationMs: number | null;
+  createdAt: string;
+  updatedAt: string;
+  workflow?: { id: string; name: string; category: string } | null;
+  stepExecutions?: Array<{
+    id: string;
+    stepIndex: number;
+    stepId: string;
+    stepName: string;
+    stepType: string;
+    status: string;
+    errorMessage: string | null;
+    durationMs: number | null;
+  }>;
+  _count?: { stepExecutions: number; approvals: number; tasks: number };
+}
+
+export interface AutomationApproval {
+  id: string;
+  organizationId: string;
+  executionId: string;
+  workflowId: string;
+  stepId: string;
+  action: string;
+  description: string | null;
+  status: AutomationApprovalStatusValue;
+  requesterId: string | null;
+  approverId: string | null;
+  decisionReason: string | null;
+  requestedAt: string;
+  decidedAt: string | null;
+  workflow?: { id: string; name: string; category: string } | null;
+  approver?: { id: string; firstName: string; lastName: string } | null;
+}
+
+export interface AutomationTask {
+  id: string;
+  organizationId: string;
+  title: string;
+  description: string | null;
+  assignedUserId: string | null;
+  assignedRole: string | null;
+  priority: AutomationTaskPriorityValue;
+  status: AutomationTaskStatusValue;
+  dueDate: string | null;
+  sourceWorkflowId: string | null;
+  sourceEntityType: string | null;
+  sourceEntityId: string | null;
+  isAiGenerated: boolean;
+  completedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AutomationDashboard {
+  metrics: {
+    totalWorkflows: number;
+    activeWorkflows: number;
+    totalExecutions: number;
+    completedExecutions: number;
+    failedExecutions: number;
+    runningExecutions: number;
+    pendingApprovals: number;
+    activeTasks: number;
+    successRate: number;
+  };
+  recentExecutions: AutomationExecution[];
+}
+
+export interface AutomationActionDefinition {
+  id: string;
+  name: string;
+  description: string;
+  requiredPermission: string;
+  riskLevel: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
+  requiresApproval: boolean;
+  requiresAudit: boolean;
+}
+
+export const automationApi = {
+  dashboard: () => apiClient.get<AutomationDashboard>("/automation/dashboard"),
+  listWorkflows: (
+    params: { page?: number; limit?: number; search?: string; status?: AutomationWorkflowStatusValue; category?: string; triggerType?: AutomationTriggerTypeValue } = {}
+  ) => apiClient.get<{ rows: AutomationWorkflow[]; total: number; page: number; limit: number }>(`/automation/workflows${toQuery(params)}`),
+  getWorkflow: (id: string) => apiClient.get<AutomationWorkflow & { versions: Array<{ id: string; version: number; publishedAt: string }> }>(`/automation/workflows/${id}`),
+  createWorkflow: (payload: {
+    name: string;
+    description?: string;
+    category?: string;
+    triggerType: AutomationTriggerTypeValue;
+    triggerConfig?: Record<string, unknown>;
+    conditions?: unknown[];
+    steps?: Record<string, unknown>[];
+  }) => apiClient.post<{ workflow: AutomationWorkflow }>("/automation/workflows", payload),
+  updateWorkflow: (
+    id: string,
+    payload: Partial<{
+      name: string;
+      description: string;
+      category: string;
+      triggerType: AutomationTriggerTypeValue;
+      triggerConfig: Record<string, unknown>;
+      conditions: unknown[];
+      steps: Record<string, unknown>[];
+      status: AutomationWorkflowStatusValue;
+    }>
+  ) => apiClient.put<{ workflow: AutomationWorkflow }>(`/automation/workflows/${id}`, payload),
+  publishWorkflow: (id: string, changeSummary?: string) => apiClient.post<{ workflow: AutomationWorkflow }>(`/automation/workflows/${id}/publish`, { changeSummary }),
+  triggerWorkflow: (id: string, input: Record<string, unknown> = {}) => apiClient.post<{ executionId: string; status: string }>(`/automation/workflows/${id}/trigger`, { input }),
+  listExecutions: (params: { page?: number; limit?: number; workflowId?: string; status?: AutomationExecutionStatusValue } = {}) =>
+    apiClient.get<{ rows: AutomationExecution[]; total: number; page: number; limit: number }>(`/automation/executions${toQuery(params)}`),
+  getExecution: (id: string) => apiClient.get<{ execution: AutomationExecution }>(`/automation/executions/${id}`),
+  retryExecution: (id: string) => apiClient.post<{ execution: AutomationExecution }>(`/automation/executions/${id}/retry`),
+  cancelExecution: (id: string, reason?: string) => apiClient.post<{ execution: AutomationExecution }>(`/automation/executions/${id}/cancel`, { reason }),
+  listApprovals: (params: { page?: number; limit?: number; status?: AutomationApprovalStatusValue; workflowId?: string } = {}) =>
+    apiClient.get<{ rows: AutomationApproval[]; total: number; page: number; limit: number }>(`/automation/approvals${toQuery(params)}`),
+  decideApproval: (id: string, decision: "APPROVED" | "REJECTED", reason?: string) =>
+    apiClient.post<{ approval: AutomationApproval }>(`/automation/approvals/${id}/decide`, { decision, reason }),
+  listTasks: (params: { page?: number; limit?: number; status?: AutomationTaskStatusValue; assignedUserId?: string } = {}) =>
+    apiClient.get<{ rows: AutomationTask[]; total: number; page: number; limit: number }>(`/automation/tasks${toQuery(params)}`),
+  createTask: (payload: { title: string; description?: string; assignedUserId?: string; priority?: AutomationTaskPriorityValue; dueDate?: string }) =>
+    apiClient.post<{ task: AutomationTask }>("/automation/tasks", payload),
+  updateTask: (id: string, payload: Partial<{ status: AutomationTaskStatusValue; assignedUserId: string; priority: AutomationTaskPriorityValue; dueDate: string }>) =>
+    apiClient.patch<{ task: AutomationTask }>(`/automation/tasks/${id}`, payload),
+  listActions: () => apiClient.get<{ actions: AutomationActionDefinition[] }>("/automation/actions"),
+  listEventTypes: () => apiClient.get<{ types: Array<{ eventType: string; entityType: string; sourceModule: string; description: string }> }>("/automation/events/types"),
 };
 
 // ---------------------------------------------------------------------------

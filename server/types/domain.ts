@@ -261,6 +261,16 @@ export const PERMISSION_KEYS = [
   "forms.create",
   "forms.update",
   "forms.delete",
+  // Phase 14 (Marketing + Campaigns + Automation, docs/MARKETING_ARCHITECTURE.md).
+  // "publish" mirrors content.*/templates.*'s own publish-is-separate-
+  // from-update convention (activating live traffic attribution is a
+  // bigger blast radius than editing draft fields); "archive" is the
+  // terminal action, same shape as products.archive.
+  "campaigns.read",
+  "campaigns.create",
+  "campaigns.update",
+  "campaigns.publish",
+  "campaigns.archive",
 ] as const;
 
 export type PermissionKey = (typeof PERMISSION_KEYS)[number];

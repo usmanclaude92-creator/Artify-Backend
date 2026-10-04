@@ -133,6 +133,11 @@ export const clientRepository = {
     return result;
   },
 
+  /** Phase 14 — marketing dashboard "conversions": real clients created from a campaign-attributed lead (never fabricated). */
+  async countAttributedConversions(organizationId: string): Promise<number> {
+    return prisma.client.count({ where: { organizationId, deletedAt: null, campaignId: { not: null } } });
+  },
+
   async recentForOrg(organizationId: string, limit: number): Promise<Client[]> {
     return prisma.client.findMany({
       where: { organizationId, deletedAt: null },

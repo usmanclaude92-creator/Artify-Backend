@@ -10,6 +10,7 @@ import { industryRepository } from "../repositories/industryRepository";
 import { auditLogRepository } from "../repositories/auditLogRepository";
 import { auditLogQueryRepository } from "../repositories/auditLogQueryRepository";
 import { notificationService } from "./notificationService";
+import { eventEngine } from "./automation/EventEngine";
 import { ConflictError, NotFoundError, ValidationError } from "../core/errors";
 import type { SanitizedUser } from "../types/domain";
 import type { CreateLeadInput, UpdateLeadInput, ConvertLeadInput } from "../schemas/leadSchemas";
@@ -96,6 +97,24 @@ export const leadService = {
       });
     }
 
+    // Phase 14 — real automation trigger: an ACTIVE workflow with
+    // triggerType EVENT / triggerConfig.eventType "lead.created" fires
+    // from this. Best-effort: never blocks or fails lead creation.
+    try {
+      await eventEngine.emit({
+        eventType: "lead.created",
+        entityType: "lead",
+        entityId: lead.id,
+        organizationId: caller.organizationId,
+        actorId: caller.id,
+        actorType: "USER",
+        sourceModule: "CRM",
+        payload: { companyName: lead.companyName, status: lead.status, source: lead.source ?? null },
+      });
+    } catch {
+      // best-effort — see comment above.
+    }
+
     return lead;
   },
 
@@ -132,6 +151,27 @@ export const leadService = {
       ipAddress: meta.ip,
       userAgent: meta.userAgent,
     });
+
+    // Phase 14 — real automation trigger: an ACTIVE workflow with
+    // triggerType EVENT / triggerConfig.eventType "lead.status_changed"
+    // fires from this, only when the status genuinely changed.
+    // Best-effort: never blocks or fails the update.
+    if (input.status !== undefined && input.status !== existing.status) {
+      try {
+        await eventEngine.emit({
+          eventType: "lead.status_changed",
+          entityType: "lead",
+          entityId: id,
+          organizationId: caller.organizationId,
+          actorId: caller.id,
+          actorType: "USER",
+          sourceModule: "CRM",
+          payload: { fromStatus: existing.status, toStatus: input.status },
+        });
+      } catch {
+        // best-effort — see comment above.
+      }
+    }
 
     if (input.assignedTo !== undefined && input.assignedTo !== existing.assignedTo && input.assignedTo !== caller.id) {
       await notificationService.notify({
@@ -212,6 +252,10 @@ export const leadService = {
           accountManager: input.accountManager ?? lead.assignedTo ?? undefined,
           industryId: input.industryId,
           source: lead.source ?? undefined,
+          // Phase 14 — carries the lead's resolved campaign attribution
+          // forward to the Client, preserving the complete
+          // source/attribution history through the whole handoff (§6).
+          campaignId: lead.campaignId ?? undefined,
         },
       });
 

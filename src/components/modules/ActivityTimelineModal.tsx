@@ -18,6 +18,12 @@ const ACTION_LABEL: Record<string, string> = {
   OPPORTUNITY_LOST: "Opportunity lost",
   OPPORTUNITY_CLIENT_LINKED: "Client linked to opportunity",
   FORM_SUBMITTED: "Form submitted",
+  CAMPAIGN_CREATED: "Campaign created",
+  CAMPAIGN_UPDATED: "Campaign updated",
+  CAMPAIGN_DUPLICATED: "Campaign duplicated",
+  CAMPAIGN_ACTIVATED: "Campaign activated",
+  CAMPAIGN_PAUSED: "Campaign paused",
+  CAMPAIGN_ARCHIVED: "Campaign archived",
 };
 
 function describe(entry: AuditLogEntry): string {

@@ -61,6 +61,7 @@ export const opportunityRepository = {
     clientId?: string;
     leadId?: string;
     productId?: string;
+    campaignId?: string;
     source?: string;
     probability?: number;
     name: string;
@@ -99,5 +100,10 @@ export const opportunityRepository = {
 
   async recentForOrg(organizationId: string, limit: number): Promise<OpportunityWithRelations[]> {
     return prisma.opportunity.findMany({ where: { organizationId, deletedAt: null }, orderBy: { createdAt: "desc" }, take: limit, ...withRelations });
+  },
+
+  /** Phase 14 — marketing dashboard "conversions": real closed-won deals attributed to a campaign (never fabricated). */
+  async countAttributedConversions(organizationId: string): Promise<number> {
+    return prisma.opportunity.count({ where: { organizationId, deletedAt: null, campaignId: { not: null }, stage: "CLOSED_WON" } });
   },
 };

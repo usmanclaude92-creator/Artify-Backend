@@ -8,6 +8,8 @@
  */
 import { leadRepository } from "../repositories/leadRepository";
 import { auditLogRepository } from "../repositories/auditLogRepository";
+import { campaignAttributionService } from "./campaignAttributionService";
+import { eventEngine } from "./automation/EventEngine";
 import { config } from "../config/env";
 import { InfrastructureError } from "../core/errors";
 import type { CreatePublicLeadInput } from "../schemas/publicSchemas";
@@ -40,6 +42,7 @@ export const publicLeadService = {
       throw new InfrastructureError("Public lead intake is not configured.");
     }
 
+    const campaignId = await campaignAttributionService.resolveCampaignId(organizationId, input.utmCampaign);
     const lead = await leadRepository.create({
       organizationId,
       companyName: input.company || input.name,
@@ -56,6 +59,7 @@ export const publicLeadService = {
       landingPagePath: input.landingPagePath,
       referrer: meta.referrer,
       consentGiven: true,
+      campaignId,
     });
 
     await auditLogRepository.record({
@@ -69,6 +73,23 @@ export const publicLeadService = {
       ipAddress: meta.ip,
       userAgent: meta.userAgent,
     });
+
+    // Phase 14 — real automation trigger: an ACTIVE workflow with
+    // triggerType EVENT / triggerConfig.eventType "lead.created" fires
+    // from this. Best-effort, same reasoning as publicFormService.submit.
+    try {
+      await eventEngine.emit({
+        eventType: "lead.created",
+        entityType: "lead",
+        entityId: lead.id,
+        organizationId,
+        actorType: "SYSTEM",
+        sourceModule: "CRM",
+        payload: { companyName: lead.companyName, source: lead.source, campaignId: campaignId ?? null },
+      });
+    } catch {
+      // best-effort — see comment above.
+    }
 
     return lead;
   },

@@ -39,6 +39,21 @@ export class EventEngine {
       { eventType: "client.updated", entityType: "client", sourceModule: "CRM", description: "Triggered when client details are updated" },
       { eventType: "client.onboarded", entityType: "client", sourceModule: "ONBOARDING", description: "Triggered when client onboarding is completed" },
 
+      // Phase 14 — Marketing + Campaigns + Automation. Lead/opportunity/
+      // form events were previously registered here as documentation only
+      // — nothing in the platform ever actually emitted them until this
+      // phase wired real eventEngine.emit() calls into leadService,
+      // opportunityService, publicLeadService, and publicFormService.
+      { eventType: "lead.created", entityType: "lead", sourceModule: "CRM", description: "Triggered when a new lead is captured (public intake or internal creation)" },
+      { eventType: "lead.status_changed", entityType: "lead", sourceModule: "CRM", description: "Triggered when a lead's status changes" },
+      { eventType: "opportunity.stage_changed", entityType: "opportunity", sourceModule: "CRM", description: "Triggered when a deal moves to a new pipeline stage, including won/lost" },
+      { eventType: "form.submitted", entityType: "form_submission", sourceModule: "MARKETING", description: "Triggered when a visitor submits a public Form" },
+      { eventType: "campaign.created", entityType: "campaign", sourceModule: "MARKETING", description: "Triggered when a new marketing campaign is created" },
+      { eventType: "campaign.updated", entityType: "campaign", sourceModule: "MARKETING", description: "Triggered when a campaign's details are updated" },
+      { eventType: "campaign.activated", entityType: "campaign", sourceModule: "MARKETING", description: "Triggered when a campaign goes live" },
+      { eventType: "campaign.paused", entityType: "campaign", sourceModule: "MARKETING", description: "Triggered when an active campaign is paused" },
+      { eventType: "campaign.archived", entityType: "campaign", sourceModule: "MARKETING", description: "Triggered when a campaign is archived" },
+
       // Projects
       { eventType: "project.created", entityType: "project", sourceModule: "PROJECTS", description: "Triggered when a new client project is initiated" },
       { eventType: "project.status_changed", entityType: "project", sourceModule: "PROJECTS", description: "Triggered when project workflow status changes" },

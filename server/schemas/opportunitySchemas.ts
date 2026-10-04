@@ -39,6 +39,10 @@ export const createOpportunitySchema = z
     leadId: z.string().trim().uuid().optional(),
     productId: z.string().trim().uuid().optional(),
     source: z.string().trim().max(100).optional(),
+    // Phase 14 — only settable directly for a deal with no originating
+    // Lead (leadId unset); when leadId is set, the deal automatically
+    // inherits that Lead's own campaignId instead (opportunityService.ts).
+    campaignId: z.string().trim().uuid().optional(),
     probability: probabilitySchema.optional(),
     name: z.string().trim().min(1).max(200),
     stage: nonTerminalOpportunityStageSchema.optional(),

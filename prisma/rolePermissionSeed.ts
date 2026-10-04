@@ -200,6 +200,12 @@ const ROLE_PERMISSION_SETS: Record<RoleKey, readonly string[] | "*"> = {
     "forms.create",
     "forms.update",
     "forms.delete",
+    // Phase 14 — ADMIN gets full campaign management including archive.
+    "campaigns.read",
+    "campaigns.create",
+    "campaigns.update",
+    "campaigns.publish",
+    "campaigns.archive",
   ],
   MANAGER: [
     "users.read",
@@ -326,6 +332,12 @@ const ROLE_PERMISSION_SETS: Record<RoleKey, readonly string[] | "*"> = {
     "forms.read",
     "forms.create",
     "forms.update",
+    // Phase 14 — MANAGER can run campaigns day-to-day (including publish)
+    // but not archive them (ADMIN-only, same pattern).
+    "campaigns.read",
+    "campaigns.create",
+    "campaigns.update",
+    "campaigns.publish",
   ],
   USER: [
     "clients.read",
@@ -394,6 +406,9 @@ const ROLE_PERMISSION_SETS: Record<RoleKey, readonly string[] | "*"> = {
     "seo.audit.read",
     // Phase 9 — USER is read-only for forms, same convention.
     "forms.read",
+    // Phase 14 — USER can draft campaigns but not publish/archive them.
+    "campaigns.read",
+    "campaigns.create",
   ],
   VIEWER: [
     "users.read",
@@ -455,6 +470,8 @@ const ROLE_PERMISSION_SETS: Record<RoleKey, readonly string[] | "*"> = {
     "seo.audit.read",
     // Phase 9 — VIEWER is read-only for forms, same convention.
     "forms.read",
+    // Phase 14 — VIEWER is read-only for campaigns, same convention.
+    "campaigns.read",
   ],
 };
 

@@ -19,6 +19,7 @@ import { systemSettingRepository } from "../repositories/systemSettingRepository
 import { auditLogRepository } from "../repositories/auditLogRepository";
 import { auditLogQueryRepository } from "../repositories/auditLogQueryRepository";
 import { notificationService } from "./notificationService";
+import { eventEngine } from "./automation/EventEngine";
 import { ConflictError, NotFoundError, ValidationError } from "../core/errors";
 import type { SanitizedUser } from "../types/domain";
 import type {
@@ -372,6 +373,26 @@ export const onboardingService = {
         title: "Onboarding completed",
         message: "A client onboarding you own has been completed.",
       });
+    }
+
+    // Phase 14 — real automation trigger: an ACTIVE workflow with
+    // triggerType EVENT / triggerConfig.eventType "client.onboarded"
+    // fires from this (already a registered standard event type that,
+    // before this, nothing in the platform ever actually emitted).
+    // Best-effort: never blocks or fails onboarding completion.
+    try {
+      await eventEngine.emit({
+        eventType: "client.onboarded",
+        entityType: "client",
+        entityId: existing.clientId,
+        organizationId: caller.organizationId,
+        actorId: caller.id,
+        actorType: "USER",
+        sourceModule: "ONBOARDING",
+        payload: { onboardingId: id },
+      });
+    } catch {
+      // best-effort — see comment above.
     }
 
     return updated;

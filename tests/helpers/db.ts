@@ -189,6 +189,14 @@ export async function resetDb(): Promise<void> {
   await prisma.copilotConversation.deleteMany();
   await prisma.copilotWorkspace.deleteMany();
 
+  // Phase 14 — Campaign.organizationId is Restrict (same convention as
+  // every other CRM table); its own join tables Cascade from Campaign, so
+  // deleting Campaign alone is enough, but it must happen after every
+  // table it references (Lead/Opportunity/Client/Form/FormSubmission/
+  // Page/Post/Product/CaseStudy/MediaAsset, all already gone above) and
+  // before organization.deleteMany() below.
+  await prisma.campaign.deleteMany();
+
   await prisma.webhookEvent.deleteMany();
   await prisma.auditLog.deleteMany();
   await prisma.session.deleteMany();

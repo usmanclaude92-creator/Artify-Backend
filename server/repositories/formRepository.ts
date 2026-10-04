@@ -104,7 +104,17 @@ export const formRepository = {
     consentGiven?: boolean;
     landingPagePath?: string;
     referrer?: string;
+    campaignId?: string;
   }): Promise<FormSubmission> {
     return prisma.formSubmission.create({ data });
+  },
+
+  /** Phase 14 — marketing dashboard: real form counts, never fabricated. */
+  async countForDashboard(organizationId: string): Promise<{ total: number; active: number }> {
+    const [total, active] = await Promise.all([
+      prisma.form.count({ where: { organizationId, deletedAt: null } }),
+      prisma.form.count({ where: { organizationId, deletedAt: null, status: "ACTIVE" } }),
+    ]);
+    return { total, active };
   },
 };

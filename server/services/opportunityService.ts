@@ -10,6 +10,7 @@ import { productRepository } from "../repositories/productRepository";
 import { auditLogRepository } from "../repositories/auditLogRepository";
 import { auditLogQueryRepository } from "../repositories/auditLogQueryRepository";
 import { notificationService } from "./notificationService";
+import { eventEngine } from "./automation/EventEngine";
 import { toMoney, DEFAULT_CURRENCY } from "../utils/money";
 import { ConflictError, NotFoundError, ValidationError } from "../core/errors";
 import type { SanitizedUser } from "../types/domain";
@@ -41,6 +42,29 @@ async function loadOpportunityOrThrow(id: string, organizationId: string): Promi
   const opportunity = await opportunityRepository.findByIdInOrg(id, organizationId);
   if (!opportunity) throw new NotFoundError("Opportunity not found.");
   return opportunity;
+}
+
+/**
+ * Phase 14 — real automation trigger: an ACTIVE workflow with triggerType
+ * EVENT / triggerConfig.eventType "opportunity.stage_changed" fires from
+ * this. Best-effort: a dispatch failure never breaks the stage change
+ * that triggered it.
+ */
+async function emitStageChangedEvent(organizationId: string, opportunityId: string, actorId: string, fromStage: string, toStage: string): Promise<void> {
+  try {
+    await eventEngine.emit({
+      eventType: "opportunity.stage_changed",
+      entityType: "opportunity",
+      entityId: opportunityId,
+      organizationId,
+      actorId,
+      actorType: "USER",
+      sourceModule: "CRM",
+      payload: { fromStage, toStage },
+    });
+  } catch {
+    // best-effort — see comment above.
+  }
 }
 
 /** Notifies the assignee and creator (deduped, excluding whoever just performed the close) that a deal closed. */
@@ -76,9 +100,14 @@ export const opportunityService = {
       if (!client) throw new ValidationError("clientId does not belong to this organization.");
     }
 
+    // Phase 14 — a deal opened against a Lead automatically inherits that
+    // Lead's own campaignId (its real attribution history), rather than
+    // trusting a caller-supplied campaignId to possibly disagree with it.
+    let campaignId = input.campaignId;
     if (input.leadId) {
       const lead = await leadRepository.findByIdInOrg(input.leadId, organizationId);
       if (!lead) throw new ValidationError("leadId does not belong to this organization.");
+      campaignId = lead.campaignId ?? undefined;
     }
 
     if (input.productId) {
@@ -91,6 +120,7 @@ export const opportunityService = {
       clientId: input.clientId,
       leadId: input.leadId,
       productId: input.productId,
+      campaignId,
       source: input.source,
       probability: input.probability,
       name: input.name,
@@ -170,6 +200,10 @@ export const opportunityService = {
       userAgent: meta.userAgent,
     });
 
+    if (input.stage !== undefined && input.stage !== existing.stage) {
+      await emitStageChangedEvent(organizationId, id, caller.id, existing.stage, input.stage);
+    }
+
     return updated;
   },
 
@@ -230,6 +264,8 @@ export const opportunityService = {
       message: `${existing.name} was marked as won.`,
     });
 
+    await emitStageChangedEvent(organizationId, id, caller.id, existing.stage, "CLOSED_WON");
+
     return updated;
   },
 
@@ -268,6 +304,8 @@ export const opportunityService = {
       title: "Opportunity lost",
       message: `${existing.name} was marked as lost.`,
     });
+
+    await emitStageChangedEvent(organizationId, id, caller.id, existing.stage, "CLOSED_LOST");
 
     return updated;
   },

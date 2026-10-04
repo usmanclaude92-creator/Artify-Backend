@@ -79,6 +79,12 @@ export const caseStudyRepository = {
     return prisma.caseStudy.findFirst({ where: { organizationId, slug, deletedAt: null } });
   },
 
+  /** Phase 14 — bulk existence check for Campaign "related case studies" selection, org-scoped (same shape as pageRepository/postRepository.findByIdsInOrg). */
+  async findByIdsInOrg(ids: string[], organizationId: string): Promise<CaseStudy[]> {
+    if (ids.length === 0) return [];
+    return prisma.caseStudy.findMany({ where: { id: { in: ids }, organizationId, deletedAt: null } });
+  },
+
   /** Public projection — PUBLISHED only, with every relation the public renderer needs. Never returns DRAFT/IN_REVIEW/SCHEDULED/ARCHIVED. */
   async findPublishedBySlugWithMedia(organizationId: string, slug: string): Promise<CaseStudyWithPublicRelations | null> {
     return prisma.caseStudy.findFirst({ where: { organizationId, slug, status: "PUBLISHED", deletedAt: null }, ...withPublicRelations });

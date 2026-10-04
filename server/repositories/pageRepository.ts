@@ -159,4 +159,13 @@ export const pageRepository = {
   async restore(id: string): Promise<void> {
     await prisma.page.update({ where: { id }, data: { deletedAt: null } });
   },
+
+  /** Phase 14 — marketing dashboard: real landing-page counts (pageType=LANDING), never fabricated. */
+  async countLandingPages(organizationId: string): Promise<{ total: number; published: number }> {
+    const [total, published] = await Promise.all([
+      prisma.page.count({ where: { organizationId, deletedAt: null, pageType: "LANDING" } }),
+      prisma.page.count({ where: { organizationId, deletedAt: null, pageType: "LANDING", status: "PUBLISHED" } }),
+    ]);
+    return { total, published };
+  },
 };
