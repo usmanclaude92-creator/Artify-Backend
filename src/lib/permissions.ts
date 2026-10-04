@@ -85,6 +85,7 @@ const ContactsPage = lazyPage(() => import("../components/modules/ContactsPage")
 const OnboardingPage = lazyPage(() => import("../components/modules/OnboardingPage"), "OnboardingPage");
 const WorkspacesPage = lazyPage(() => import("../components/modules/WorkspacesPage"), "WorkspacesPage");
 const ProductsPage = lazyPage(() => import("../components/modules/ProductsPage"), "ProductsPage");
+const ProductTaxonomyPage = lazyPage(() => import("../components/modules/ProductTaxonomyPage"), "ProductTaxonomyPage");
 const TemplatesPage = lazyPage(() => import("../components/modules/TemplatesPage"), "TemplatesPage");
 const TemplatePartsPage = lazyPage(() => import("../components/modules/TemplatePartsPage"), "TemplatePartsPage");
 const NavigationMenusPage = lazyPage(() => import("../components/modules/NavigationMenusPage"), "NavigationMenusPage");
@@ -292,6 +293,36 @@ export const NAV_ITEMS: NavItem[] = [
     icon: Boxes,
     requiresAnyPermission: ["product_modules.read"],
     component: ProductsPage,
+    section: "Products",
+  },
+  // Phase 10 (Products + Services + Solutions) — same ProductsPage
+  // component, route-locked to a single catalog `type` (see its own
+  // `lockedType` derivation from `path`) — never a second catalog system.
+  {
+    id: "services-all",
+    label: "Services",
+    path: "/services",
+    icon: Briefcase,
+    requiresAnyPermission: ["products.read"],
+    component: ProductsPage,
+    section: "Products",
+  },
+  {
+    id: "solutions-all",
+    label: "Solutions",
+    path: "/solutions",
+    icon: Target,
+    requiresAnyPermission: ["products.read"],
+    component: ProductsPage,
+    section: "Products",
+  },
+  {
+    id: "products-taxonomy",
+    label: "Categories & Industries",
+    path: "/products/taxonomy",
+    icon: FolderTree,
+    requiresAnyPermission: ["product_categories.read", "industries.read"],
+    component: ProductTaxonomyPage,
     section: "Products",
   },
   {

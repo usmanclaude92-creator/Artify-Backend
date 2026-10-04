@@ -203,6 +203,8 @@ model User {
   acceptedInvitations            WorkspaceInvitation[]       @relation("InvitationAcceptedUser")
   createdProducts                Product[]                   @relation("ProductCreatedBy")
   updatedProducts                Product[]                   @relation("ProductUpdatedBy")
+  createdProductRevisions        ProductRevision[]           @relation("ProductRevisionCreatedBy")
+  createdProductRelations        ProductRelation[]           @relation("ProductRelationCreatedBy")
   createdContracts               Contract[]                  @relation("ContractCreatedBy")
   createdContractVariations      ContractVariation[]         @relation("ContractVariationCreatedBy")
   createdSubscriptions           Subscription[]              @relation("SubscriptionCreatedBy")
@@ -833,9 +835,14 @@ model WorkspaceInvitation {
 // logic; they are rows created through this registry (§26/§27).
 // =============================================================================
 
+// Phase 10 — SOLUTION added (docs/PRODUCT_CATALOG_ARCHITECTURE.md). A
+// Solution is the same platform-global catalog row as a Product/Service —
+// never a separate table — differentiated only by this value, exactly the
+// precedent SERVICE already set in Phase 7.
 enum ProductType {
   PRODUCT
   SERVICE
+  SOLUTION
 }
 
 enum ProductStatus {
@@ -857,6 +864,19 @@ enum ProductStatus {
 // (terminal), validated server-side (server/services/productService.ts) —
 // never a physical delete, so a future Subscription/Contract reference
 // always resolves.
+//
+// Phase 10 (docs/PRODUCT_CATALOG_ARCHITECTURE.md) adds: `featuredMediaId`
+// (resolved against the single `PUBLIC_WEBSITE_ORGANIZATION_ID` org's
+// Media Library — the only org a global catalog row can safely borrow a
+// tenant-scoped MediaAsset from, same bounding assumption
+// publicSiteService.ts already relies on for every other public media
+// reference); `categoryId` (a new, equally platform-global
+// `ProductCategory` — Category itself is organization-scoped and doesn't
+// fit a global entity); `currentRevisionId`/`ProductRevision` (mirrors
+// Template/TemplatePart's own stable-identity-plus-revisions pattern —
+// see ProductRevision's own doc comment for why it's lighter than
+// Template's); `ProductRelation`/`ProductIndustry` (genuinely new
+// relationships the brief asked for, not duplicating any existing join).
 model Product {
   id               String        @id @default(uuid())
   code             String        @unique
@@ -875,13 +895,26 @@ model Product {
   createdAt        DateTime      @default(now()) @map("created_at")
   updatedAt        DateTime      @updatedAt @map("updated_at")
 
-  createdBy     User?           @relation("ProductCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
-  updatedBy     User?           @relation("ProductUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
-  modules       ProductModule[]
-  subscriptions Subscription[]
+  // Phase 10 — additive, nullable: every existing row gets null/no-op
+  // defaults, unaffected until an editor sets them.
+  featuredMediaId   String? @map("featured_media_id")
+  categoryId        String? @map("category_id")
+  currentRevisionId String? @unique @map("current_revision_id")
+
+  createdBy       User?             @relation("ProductCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy       User?             @relation("ProductUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  category        ProductCategory?  @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  currentRevision ProductRevision?  @relation("ProductCurrentRevision", fields: [currentRevisionId], references: [id], onDelete: SetNull)
+  revisions       ProductRevision[] @relation("ProductRevisions")
+  modules         ProductModule[]
+  subscriptions   Subscription[]
+  industries      ProductIndustry[]
+  relatedFrom     ProductRelation[] @relation("ProductRelationFrom")
+  relatedTo       ProductRelation[] @relation("ProductRelationTo")
 
   @@index([status])
   @@index([type])
+  @@index([categoryId])
   @@index([displayOrder])
   @@index([name])
   @@map("products")
@@ -926,6 +959,110 @@ model ProductModule {
   @@index([status])
   @@index([displayOrder])
   @@map("product_modules")
+}
+
+// Phase 10 (Products + Services + Solutions) — platform-global, mirroring
+// Product's own no-organizationId choice exactly: a catalog category is
+// the same shared taxonomy regardless of which org eventually manages the
+// public site. The existing `Category` model is organization-scoped
+// (built for Posts) and reusing it here would force a global Product to
+// pick an arbitrary owning org for its category — a new, equally-global
+// model is the genuinely required relationship here, not a duplicate
+// taxonomy system.
+model ProductCategory {
+  id           String   @id @default(uuid())
+  slug         String   @unique
+  name         String
+  description  String?
+  displayOrder Int      @default(0) @map("display_order")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  products Product[]
+
+  @@map("product_categories")
+}
+
+// Phase 10 — same global shape as ProductCategory, for Solution <-> Industry
+// tagging (the brief's explicit ask). No existing "Industry" concept exists
+// anywhere in this schema to reuse.
+model Industry {
+  id           String   @id @default(uuid())
+  slug         String   @unique
+  name         String
+  description  String?
+  displayOrder Int      @default(0) @map("display_order")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  products ProductIndustry[]
+
+  @@map("industries")
+}
+
+model ProductIndustry {
+  productId  String @map("product_id")
+  industryId String @map("industry_id")
+
+  product  Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  industry Industry @relation(fields: [industryId], references: [id], onDelete: Cascade)
+
+  @@id([productId, industryId])
+  @@index([industryId])
+  @@map("product_industries")
+}
+
+// Phase 10 — a single, symmetric "related to" edge between two catalog
+// rows (Product<->Service, Product<->Solution, Solution<->Service, ...,
+// all just `Product` rows differentiated by `type`). Stored once per pair
+// (`@@unique([fromProductId, toProductId])`); the repository queries both
+// directions so an edge is visible from either row without inserting it
+// twice — the "related content" relationship the brief asks for, kept to
+// exactly one join table rather than a type-specific one per pairing.
+model ProductRelation {
+  id            String   @id @default(uuid())
+  fromProductId String   @map("from_product_id")
+  toProductId   String   @map("to_product_id")
+  createdById   String?  @map("created_by")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  fromProduct Product @relation("ProductRelationFrom", fields: [fromProductId], references: [id], onDelete: Cascade)
+  toProduct   Product @relation("ProductRelationTo", fields: [toProductId], references: [id], onDelete: Cascade)
+  createdBy   User?   @relation("ProductRelationCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@unique([fromProductId, toProductId])
+  @@index([toProductId])
+  @@map("product_relations")
+}
+
+// Phase 10 — mirrors Template/TemplatePart's stable-identity-plus-revisions
+// pattern (see TemplateRevision's doc comment), but deliberately lighter:
+// there is no separate per-revision publish status here, because Product
+// already has its own real lifecycle (`ProductStatus`: DRAFT/ACTIVE/
+// INACTIVE/ARCHIVED) that already answers "is this published" — adding a
+// second, parallel published/draft flag on the revision would just be two
+// sources of truth for the same question. A ProductRevision is purely an
+// immutable snapshot of the editorial content (benefits/features/business
+// problem/CTA/SEO) taken on every save, letting an editor view history and
+// roll back (`revertProduct`) without that second status. `name` is kept
+// at this level too (same as TemplateRevision) only as a history label for
+// the revisions list — Product.name itself is the live, non-revisioned
+// value every list/search/public read already uses.
+model ProductRevision {
+  id          String   @id @default(uuid())
+  productId   String   @map("product_id")
+  version     Int
+  name        String
+  content     Json     @default("{}")
+  createdById String?  @map("created_by")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  product           Product  @relation("ProductRevisions", fields: [productId], references: [id], onDelete: Cascade)
+  createdBy         User?    @relation("ProductRevisionCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  productCurrentFor Product? @relation("ProductCurrentRevision")
+
+  @@index([productId])
+  @@map("product_revisions")
 }
 
 // =============================================================================

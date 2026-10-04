@@ -41,7 +41,11 @@ export interface PublicMedia {
  * surfaced as an error or a broken link. Storage key/bucket/provider,
  * organizationId, and uploader are never included.
  */
-async function projectPublicMedia(media: MediaAsset | null): Promise<PublicMedia | null> {
+// Exported for publicProductService.ts (Phase 10) — a Product's
+// featuredMediaId borrows this same single public org's Media Library, so
+// it deserves the exact same ACTIVE+PUBLIC-only projection, not a
+// second copy of this logic.
+export async function projectPublicMedia(media: MediaAsset | null): Promise<PublicMedia | null> {
   if (!media || media.status !== "ACTIVE" || media.visibility !== "PUBLIC") return null;
   const provider = getStorageProvider();
   // Prefer a stable, non-expiring URL. This matters specifically here (as

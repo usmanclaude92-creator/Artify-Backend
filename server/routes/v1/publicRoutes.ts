@@ -119,8 +119,28 @@ router.get(
   "/products",
   asyncHandler(async (req, res) => {
     const query = listPublicProductsQuerySchema.parse(req.query);
-    const { rows, total } = await publicProductService.listProducts({ search: query.search, type: query.type }, query.page, query.limit);
+    const { rows, total } = await publicProductService.listProducts(
+      { search: query.search, type: query.type, categorySlug: query.categorySlug, industrySlug: query.industrySlug },
+      query.page,
+      query.limit
+    );
     sendSuccess(res, { products: rows }, 200, { page: query.page, limit: query.limit, total });
+  })
+);
+
+router.get(
+  "/product-categories",
+  asyncHandler(async (_req, res) => {
+    const categories = await publicProductService.listProductCategories();
+    sendSuccess(res, { categories });
+  })
+);
+
+router.get(
+  "/industries",
+  asyncHandler(async (_req, res) => {
+    const industries = await publicProductService.listIndustries();
+    sendSuccess(res, { industries });
   })
 );
 

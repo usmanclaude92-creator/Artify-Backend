@@ -69,8 +69,18 @@ export async function resetDb(): Promise<void> {
   // covered by the organization cascade below, so wiped explicitly. Must
   // come after subscription/subscriptionItem (RESTRICT/SetNull on
   // productId/productModuleId respectively).
+  // Phase 10 — product_relations/product_industries/product_revisions all
+  // Cascade off Product itself, but are deleted explicitly first (same
+  // "clarity over relying on cascade order" rationale as elsewhere in this
+  // file) since product_categories/industries below must outlive Product's
+  // own delete (categoryId is SetNull, not Cascade) to be wiped cleanly.
+  await prisma.productRelation.deleteMany();
+  await prisma.productIndustry.deleteMany();
+  await prisma.productRevision.deleteMany();
   await prisma.productModule.deleteMany();
   await prisma.product.deleteMany();
+  await prisma.productCategory.deleteMany();
+  await prisma.industry.deleteMany();
   // ai_providers is platform-global (no organizationId), same as products
   // above — wiped explicitly. Cascades to ai_models (onDelete: Cascade) and
   // nulls out any ai_executions/ai_usage_records provider/model references

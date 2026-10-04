@@ -23,7 +23,11 @@ export const listPublicProductsQuerySchema = z.object({
   page: z.coerce.number().int().positive().default(1),
   limit: z.coerce.number().int().positive().max(50).default(20),
   search: z.string().trim().max(200).optional(),
-  type: z.enum(["PRODUCT", "SERVICE"]).optional(),
+  type: z.enum(["PRODUCT", "SERVICE", "SOLUTION"]).optional(),
+  // Phase 10 — filter by the real category/industry taxonomy, by slug
+  // (never an internal id crossing the public boundary).
+  categorySlug: z.string().trim().max(100).optional(),
+  industrySlug: z.string().trim().max(100).optional(),
 });
 export type ListPublicProductsQuery = z.infer<typeof listPublicProductsQuerySchema>;
 

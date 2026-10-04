@@ -89,6 +89,15 @@ export const PERMISSION_KEYS = [
   "product_modules.update",
   "product_modules.archive",
   "product_modules.reorder",
+  // Phase 10 (Products + Services + Solutions) — small, global reference
+  // tables (ProductCategory/Industry). One "manage" key per table rather
+  // than products.*'s full read/create/update/archive granularity — these
+  // have no archive lifecycle of their own and no use case yet for
+  // separating create from update.
+  "product_categories.read",
+  "product_categories.manage",
+  "industries.read",
+  "industries.manage",
   "content.read",
   "content.create",
   "content.update",

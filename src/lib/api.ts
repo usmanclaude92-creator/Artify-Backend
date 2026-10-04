@@ -815,9 +815,66 @@ export const invitationsApi = {
 // Phase 7 — Product & Service catalog
 // ---------------------------------------------------------------------------
 
-export type ProductTypeValue = "PRODUCT" | "SERVICE";
+export type ProductTypeValue = "PRODUCT" | "SERVICE" | "SOLUTION";
 export type ProductStatusValue = "DRAFT" | "ACTIVE" | "INACTIVE" | "ARCHIVED";
 export type ProductModuleStatusValue = "DRAFT" | "ACTIVE" | "INACTIVE";
+
+export interface ProductSeoValue {
+  metaTitle?: string;
+  metaDescription?: string;
+  focusKeywords?: string[];
+  canonicalUrl?: string;
+  ogTitle?: string;
+  ogDescription?: string;
+  ogImage?: string;
+  twitterImage?: string;
+  ogType?: string;
+  twitterCard?: string;
+  robotsDirective?: string;
+  schemaType?: string;
+}
+
+export interface ProductContentValue {
+  benefits?: string[];
+  features?: string[];
+  businessProblem?: string;
+  ctaFormId?: string;
+  seo?: ProductSeoValue;
+}
+
+export interface ProductCategory {
+  id: string;
+  slug: string;
+  name: string;
+  description: string | null;
+  displayOrder: number;
+}
+
+export interface Industry {
+  id: string;
+  slug: string;
+  name: string;
+  description: string | null;
+  displayOrder: number;
+}
+
+export interface ProductRevision {
+  id: string;
+  productId: string;
+  version: number;
+  name: string;
+  content: ProductContentValue;
+  createdById: string | null;
+  createdAt: string;
+}
+
+export interface RelatedProductRef {
+  id: string;
+  fromProductId: string;
+  toProductId: string;
+  fromProduct?: { id: string; slug: string; name: string; type: ProductTypeValue; status: ProductStatusValue };
+  toProduct?: { id: string; slug: string; name: string; type: ProductTypeValue; status: ProductStatusValue };
+}
 
 export interface CatalogProduct {
   id: string;
@@ -831,10 +888,19 @@ export interface CatalogProduct {
   isFeatured: boolean;
   displayOrder: number;
   version: string;
+  featuredMediaId: string | null;
+  categoryId: string | null;
+  currentRevisionId: string | null;
   createdById: string | null;
   updatedById: string | null;
   createdAt: string;
   updatedAt: string;
+  // Only present on the single-product GET (ProductWithDetail) — list rows stay flat.
+  category?: ProductCategory | null;
+  currentRevision?: ProductRevision | null;
+  industries?: { productId: string; industryId: string; industry: Industry }[];
+  relatedFrom?: RelatedProductRef[];
+  relatedTo?: RelatedProductRef[];
 }
 
 export interface ProductModule {
@@ -851,6 +917,23 @@ export interface ProductModule {
   updatedAt: string;
 }
 
+export interface ProductWritePayload {
+  code: string;
+  name: string;
+  slug?: string;
+  type: ProductTypeValue;
+  shortDescription?: string;
+  description?: string;
+  status?: ProductStatusValue;
+  isFeatured?: boolean;
+  displayOrder?: number;
+  featuredMediaId?: string;
+  categoryId?: string;
+  content?: ProductContentValue;
+  relatedProductIds?: string[];
+  industryIds?: string[];
+}
+
 export const productsApi = {
   list: (
     params: {
@@ -860,36 +943,23 @@ export const productsApi = {
       type?: ProductTypeValue;
       status?: ProductStatusValue;
       isFeatured?: boolean;
+      categoryId?: string;
+      industryId?: string;
       sort?: string;
       order?: "asc" | "desc";
     } = {}
   ) => paginatedGet<CatalogProduct>("/products", "products", params),
   get: (id: string) => apiClient.get<{ product: CatalogProduct }>(`/products/${id}`),
-  create: (payload: {
-    code: string;
-    name: string;
-    slug?: string;
-    type: ProductTypeValue;
-    shortDescription?: string;
-    description?: string;
-    status?: ProductStatusValue;
-    isFeatured?: boolean;
-    displayOrder?: number;
-  }) => apiClient.post<{ product: CatalogProduct }>("/products", payload),
+  create: (payload: ProductWritePayload) => apiClient.post<{ product: CatalogProduct }>("/products", payload),
   update: (
     id: string,
-    payload: Partial<{
-      name: string;
-      slug: string;
-      type: ProductTypeValue;
-      shortDescription: string | null;
-      description: string | null;
-      status: ProductStatusValue;
-      isFeatured: boolean;
-      displayOrder: number;
-    }>
+    payload: Partial<ProductWritePayload & { featuredMediaId: string | null; categoryId: string | null }>
   ) => apiClient.patch<{ product: CatalogProduct }>(`/products/${id}`, payload),
   archive: (id: string) => apiClient.post<{ product: CatalogProduct }>(`/products/${id}/archive`),
+  bulkArchive: (ids: string[]) => apiClient.post<{ archived: number; skipped: string[] }>("/products/bulk/archive", { ids }),
+  duplicate: (id: string, name?: string) => apiClient.post<{ product: CatalogProduct }>(`/products/${id}/duplicate`, { name }),
+  listRevisions: (id: string) => apiClient.get<{ revisions: ProductRevision[] }>(`/products/${id}/revisions`),
+  revert: (id: string, revisionId: string) => apiClient.post<{ product: CatalogProduct }>(`/products/${id}/revert`, { revisionId }),
   modules: (id: string, params: { page?: number; limit?: number; status?: ProductModuleStatusValue } = {}) =>
     paginatedGet<ProductModule>(`/products/${id}/modules`, "modules", params),
   addModule: (
@@ -897,6 +967,24 @@ export const productsApi = {
     payload: { code: string; name: string; slug?: string; description?: string; status?: ProductModuleStatusValue; isCore?: boolean; displayOrder?: number }
   ) => apiClient.post<{ module: ProductModule }>(`/products/${id}/modules`, payload),
   reorderModules: (id: string, moduleIds: string[]) => apiClient.post<{ message: string }>(`/products/${id}/modules/reorder`, { moduleIds }),
+};
+
+export const productCategoriesApi = {
+  list: (search?: string) => apiClient.get<{ categories: ProductCategory[] }>(`/product-categories${search ? `?search=${encodeURIComponent(search)}` : ""}`),
+  create: (payload: { name: string; slug?: string; description?: string; displayOrder?: number }) =>
+    apiClient.post<{ category: ProductCategory }>("/product-categories", payload),
+  update: (id: string, payload: Partial<{ name: string; slug: string; description: string | null; displayOrder: number }>) =>
+    apiClient.patch<{ category: ProductCategory }>(`/product-categories/${id}`, payload),
+  delete: (id: string) => apiClient.delete<{ message: string }>(`/product-categories/${id}`),
+};
+
+export const industriesApi = {
+  list: (search?: string) => apiClient.get<{ industries: Industry[] }>(`/industries${search ? `?search=${encodeURIComponent(search)}` : ""}`),
+  create: (payload: { name: string; slug?: string; description?: string; displayOrder?: number }) =>
+    apiClient.post<{ industry: Industry }>("/industries", payload),
+  update: (id: string, payload: Partial<{ name: string; slug: string; description: string | null; displayOrder: number }>) =>
+    apiClient.patch<{ industry: Industry }>(`/industries/${id}`, payload),
+  delete: (id: string) => apiClient.delete<{ message: string }>(`/industries/${id}`),
 };
 
 export const productModulesApi = {
