@@ -7,6 +7,7 @@ import { prisma } from "../db/prisma";
 import { leadRepository, type LeadFilters } from "../repositories/leadRepository";
 import { clientRepository } from "../repositories/clientRepository";
 import { auditLogRepository } from "../repositories/auditLogRepository";
+import { auditLogQueryRepository } from "../repositories/auditLogQueryRepository";
 import { notificationService } from "./notificationService";
 import { ConflictError, NotFoundError, ValidationError } from "../core/errors";
 import type { SanitizedUser } from "../types/domain";
@@ -259,5 +260,11 @@ export const leadService = {
 
   async recent(organizationId: string, limit: number) {
     return leadRepository.recentForOrg(organizationId, limit);
+  },
+
+  async getActivity(organizationId: string, id: string) {
+    await loadLeadInOrgOrThrow(id, organizationId);
+    const { rows } = await auditLogQueryRepository.list({ organizationId, resourceType: "lead", resourceId: id }, 1, 100);
+    return rows;
   },
 };

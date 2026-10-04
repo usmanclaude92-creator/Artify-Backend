@@ -190,6 +190,30 @@ export const CrmDashboardPage: React.FC = () => {
         )}
       </div>
 
+      {summary?.recentActivity && (
+        <Card>
+          <div className="px-4 py-3 border-b" style={{ borderColor: "var(--border)" }}>
+            <h2 className="text-sm font-bold" style={{ color: "var(--text-primary)" }}>
+              Recent activity
+            </h2>
+          </div>
+          {summary.recentActivity.length === 0 ? (
+            <p className="p-4 text-xs" style={{ color: "var(--text-muted)" }}>
+              No activity yet.
+            </p>
+          ) : (
+            <ul className="divide-y" style={{ borderColor: "var(--border)" }}>
+              {summary.recentActivity.map((entry) => (
+                <li key={entry.id} className="px-4 py-2.5 text-xs flex items-center justify-between gap-3">
+                  <span style={{ color: "var(--text-primary)" }}>{entry.action.replace(/_/g, " ").toLowerCase()}</span>
+                  <span style={{ color: "var(--text-muted)" }}>{new Date(entry.createdAt).toLocaleString()}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Card>
+      )}
+
       {!leads && !clients && !opportunities && (
         <Card className="p-8 text-center">
           <p className="text-sm" style={{ color: "var(--text-muted)" }}>

@@ -82,5 +82,15 @@ export const createPublicLeadSchema = z.object({
   source: z.enum(["contact_form", "product_inquiry", "project_brief", "other"]).default("contact_form"),
   consent: z.literal(true, { errorMap: () => ({ message: "Consent is required to submit this form." }) }),
   website: z.string().trim().max(200).optional(),
+  // Phase 12 (CRM Integration) — same real attribution capture
+  // publicFormSubmitSchema already has for Control-Center-authored
+  // Forms, extended to this site's own hardcoded contact/brief form so
+  // every lead-capture surface records real source data, not just free text.
+  utmSource: z.string().trim().max(200).optional(),
+  utmMedium: z.string().trim().max(200).optional(),
+  utmCampaign: z.string().trim().max(200).optional(),
+  utmTerm: z.string().trim().max(200).optional(),
+  utmContent: z.string().trim().max(200).optional(),
+  landingPagePath: z.string().trim().max(500).optional(),
 });
 export type CreatePublicLeadInput = z.infer<typeof createPublicLeadSchema>;

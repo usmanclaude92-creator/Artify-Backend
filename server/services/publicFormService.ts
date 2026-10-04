@@ -145,6 +145,18 @@ export const publicFormService = {
     // same email in this org gets this submission folded into it rather
     // than spawning a second, disconnected row for the same person
     // resubmitting (e.g. a "request a demo" form filled twice).
+    const attribution = {
+      utmSource: input.utmSource,
+      utmMedium: input.utmMedium,
+      utmCampaign: input.utmCampaign,
+      utmTerm: input.utmTerm,
+      utmContent: input.utmContent,
+      landingPagePath: input.landingPagePath,
+      referrer: meta.referrer,
+      consentGiven: consentGiven ?? undefined,
+      formId: form.id,
+    };
+
     let leadId: string;
     if (emailValue) {
       const existingLeads = await leadRepository.findByEmailInOrg(organizationId, emailValue);
@@ -155,6 +167,7 @@ export const publicFormService = {
           phone: phoneValue ?? existing.phone,
           source: sourceTag,
           notes: existing.notes ? `${existing.notes}\n\n---\n\n${notes}` : notes,
+          ...attribution,
         });
         leadId = updated.id;
       } else {
@@ -166,6 +179,7 @@ export const publicFormService = {
           phone: phoneValue,
           source: sourceTag,
           notes,
+          ...attribution,
         });
         leadId = lead.id;
       }
@@ -177,6 +191,7 @@ export const publicFormService = {
         phone: phoneValue,
         source: sourceTag,
         notes,
+        ...attribution,
       });
       leadId = lead.id;
     }

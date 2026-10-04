@@ -44,6 +44,15 @@ router.get(
   })
 );
 
+router.get(
+  "/:id/activity",
+  requirePermission("clients.read"),
+  asyncHandler(async (req, res) => {
+    const activity = await clientService.getActivity(req.user!.organizationId, req.params.id!);
+    sendSuccess(res, { activity });
+  })
+);
+
 router.post(
   "/",
   requirePermission("clients.create"),

@@ -39,6 +39,15 @@ router.get(
   })
 );
 
+router.get(
+  "/:id/activity",
+  requirePermission("leads.read"),
+  asyncHandler(async (req, res) => {
+    const activity = await leadService.getActivity(req.user!.organizationId, req.params.id!);
+    sendSuccess(res, { activity });
+  })
+);
+
 router.post(
   "/",
   requirePermission("leads.create"),

@@ -493,9 +493,25 @@ model Lead {
   updatedAt         DateTime   @updatedAt @map("updated_at")
   deletedAt         DateTime?  @map("deleted_at")
 
+  // Phase 12 (CRM Integration + Business Relationship Management) —
+  // real, structured attribution instead of free-text buried in `notes`
+  // (the only place UTM/landing-page/consent data lived before this
+  // phase — see publicFormService.ts's buildNotes). Additive/nullable:
+  // every existing lead reads null/no-op on all of these.
+  utmSource       String?  @map("utm_source")
+  utmMedium       String?  @map("utm_medium")
+  utmCampaign     String?  @map("utm_campaign")
+  utmTerm         String?  @map("utm_term")
+  utmContent      String?  @map("utm_content")
+  landingPagePath String?  @map("landing_page_path")
+  referrer        String?
+  consentGiven    Boolean? @map("consent_given")
+  formId          String?  @map("form_id")
+
   organization    Organization     @relation(fields: [organizationId], references: [id], onDelete: Restrict)
   assignee        User?            @relation("LeadAssignee", fields: [assignedTo], references: [id], onDelete: SetNull)
   convertedClient Client?          @relation("LeadConvertedClient", fields: [convertedClientId], references: [id], onDelete: SetNull)
+  form            Form?            @relation("LeadOriginatingForm", fields: [formId], references: [id], onDelete: SetNull)
   opportunities   Opportunity[]    @relation("LeadOpportunities")
   formSubmissions FormSubmission[] @relation("FormSubmissionLead")
 
@@ -504,6 +520,7 @@ model Lead {
   @@index([assignedTo])
   @@index([createdAt])
   @@index([email])
+  @@index([formId])
   @@map("leads")
 }
 
@@ -534,11 +551,29 @@ enum OpportunityStage {
 // their own service methods (never the generic update), matching the
 // Lead.CONVERTED precedent; a lost deal is reopened by creating a new
 // Opportunity, not by un-terminating this one.
+// Phase 12 — `clientId` is now nullable so a deal can exist in the
+// pipeline directly against a Lead, before that Lead has converted to a
+// Client ("Lead -> Qualified Lead -> Opportunity -> Client" — the brief's
+// own handoff diagram). Exactly one of clientId/leadId must be set, never
+// both null, enforced by the hand-written CHECK below (same convention as
+// ContentRevision's exactly-one-parent constraint). `winOpportunity`
+// (opportunityService.ts) additionally requires clientId at the
+// application layer before a deal can be marked CLOSED_WON — a deal
+// cannot be "won" without a real client to bill, but it can live in
+// PROSPECTING/QUALIFICATION/PROPOSAL/NEGOTIATION against just a Lead.
 model Opportunity {
   id                String           @id @default(uuid())
   organizationId    String           @map("organization_id")
-  clientId          String           @map("client_id")
+  clientId          String?          @map("client_id")
   leadId            String?          @map("lead_id")
+  // Phase 12 — the Product/Service/Solution (Phase 10's global catalog)
+  // this deal is for, and a free-text provenance tag mirroring Lead.source
+  // for a deal with no originating Lead. `probability` is an optional
+  // 0-100 sales-stage confidence a rep may set — null means "not
+  // estimated," never a fabricated default.
+  productId         String?          @map("product_id")
+  source            String?
+  probability       Int?
   name              String
   stage             OpportunityStage @default(PROSPECTING)
   value             Decimal          @db.Decimal(18, 3)
@@ -554,14 +589,17 @@ model Opportunity {
   deletedAt         DateTime?        @map("deleted_at")
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  client       Client       @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  client       Client?      @relation(fields: [clientId], references: [id], onDelete: Restrict)
   lead         Lead?        @relation("LeadOpportunities", fields: [leadId], references: [id], onDelete: SetNull)
+  product      Product?     @relation(fields: [productId], references: [id], onDelete: SetNull)
   assignee     User?        @relation("OpportunityAssignee", fields: [assignedTo], references: [id], onDelete: SetNull)
   createdBy    User?        @relation("OpportunityCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
 
   @@index([organizationId])
   @@index([stage])
   @@index([clientId])
+  @@index([leadId])
+  @@index([productId])
   @@index([assignedTo])
   @@index([createdAt])
   @@map("opportunities")
@@ -600,9 +638,10 @@ model Form {
   updatedAt      DateTime   @updatedAt @map("updated_at")
   deletedAt      DateTime?  @map("deleted_at")
 
-  organization Organization     @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  createdBy    User?            @relation("FormCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
-  submissions  FormSubmission[]
+  organization    Organization     @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  createdBy       User?            @relation("FormCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  submissions     FormSubmission[]
+  originatedLeads Lead[]           @relation("LeadOriginatingForm")
 
   @@unique([organizationId, slug])
   @@index([organizationId])
@@ -914,6 +953,7 @@ model Product {
   relatedFrom     ProductRelation[]  @relation("ProductRelationFrom")
   relatedTo       ProductRelation[]  @relation("ProductRelationTo")
   caseStudies     CaseStudyProduct[]
+  opportunities   Opportunity[]
 
   @@index([status])
   @@index([type])

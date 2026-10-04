@@ -279,6 +279,13 @@ describe("Forms (Phase 9 MVP slice)", () => {
       expect(lead?.source).toBe("form:public-contact:google");
       expect(lead?.notes).toContain("Interested in a demo.");
       expect(lead?.notes).toContain("UTM: source=google, medium=cpc, campaign=spring-launch");
+
+      // Phase 12 — the same attribution is also captured as structured,
+      // queryable columns on the Lead itself (not just folded into notes).
+      expect(lead?.utmSource).toBe("google");
+      expect(lead?.utmMedium).toBe("cpc");
+      expect(lead?.utmCampaign).toBe("spring-launch");
+      expect(lead?.formId).toBe(form.id);
     });
 
     it("rejects a submission missing a required field", async () => {

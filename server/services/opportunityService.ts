@@ -6,12 +6,14 @@
 import { opportunityRepository, type OpportunityFilters, type OpportunityWithRelations } from "../repositories/opportunityRepository";
 import { clientRepository } from "../repositories/clientRepository";
 import { leadRepository } from "../repositories/leadRepository";
+import { productRepository } from "../repositories/productRepository";
 import { auditLogRepository } from "../repositories/auditLogRepository";
+import { auditLogQueryRepository } from "../repositories/auditLogQueryRepository";
 import { notificationService } from "./notificationService";
 import { toMoney, DEFAULT_CURRENCY } from "../utils/money";
 import { ConflictError, NotFoundError, ValidationError } from "../core/errors";
 import type { SanitizedUser } from "../types/domain";
-import type { CreateOpportunityInput, UpdateOpportunityInput, LoseOpportunityInput } from "../schemas/opportunitySchemas";
+import type { CreateOpportunityInput, UpdateOpportunityInput, LoseOpportunityInput, LinkClientInput } from "../schemas/opportunitySchemas";
 import type { RequestMeta } from "./authService";
 
 /**
@@ -69,18 +71,28 @@ export const opportunityService = {
   async createOpportunity(caller: SanitizedUser, input: CreateOpportunityInput, meta: RequestMeta = {}): Promise<OpportunityWithRelations> {
     const organizationId = caller.organizationId;
 
-    const client = await clientRepository.findByIdInOrg(input.clientId, organizationId);
-    if (!client) throw new ValidationError("clientId does not belong to this organization.");
+    if (input.clientId) {
+      const client = await clientRepository.findByIdInOrg(input.clientId, organizationId);
+      if (!client) throw new ValidationError("clientId does not belong to this organization.");
+    }
 
     if (input.leadId) {
       const lead = await leadRepository.findByIdInOrg(input.leadId, organizationId);
       if (!lead) throw new ValidationError("leadId does not belong to this organization.");
     }
 
+    if (input.productId) {
+      const product = await productRepository.findById(input.productId);
+      if (!product) throw new ValidationError("productId does not refer to a real product/service/solution.");
+    }
+
     const opportunity = await opportunityRepository.create({
       organizationId,
       clientId: input.clientId,
       leadId: input.leadId,
+      productId: input.productId,
+      source: input.source,
+      probability: input.probability,
       name: input.name,
       stage: input.stage,
       value: toMoney(input.value),
@@ -98,7 +110,7 @@ export const opportunityService = {
       action: "OPPORTUNITY_CREATED",
       resourceType: "opportunity",
       resourceId: opportunity.id,
-      afterData: { name: opportunity.name, stage: opportunity.stage, clientId: opportunity.clientId, value: opportunity.value.toString() },
+      afterData: { name: opportunity.name, stage: opportunity.stage, clientId: opportunity.clientId, leadId: opportunity.leadId, value: opportunity.value.toString() },
       ipAddress: meta.ip,
       userAgent: meta.userAgent,
     });
@@ -126,6 +138,11 @@ export const opportunityService = {
       throw new ConflictError("This opportunity is closed and can no longer be edited.");
     }
 
+    if (input.productId) {
+      const product = await productRepository.findById(input.productId);
+      if (!product) throw new ValidationError("productId does not refer to a real product/service/solution.");
+    }
+
     const patch: Record<string, unknown> = {};
     if (input.name !== undefined) patch.name = input.name;
     if (input.stage !== undefined) patch.stage = input.stage;
@@ -134,6 +151,9 @@ export const opportunityService = {
     if (input.expectedCloseDate !== undefined) patch.expectedCloseDate = input.expectedCloseDate;
     if (input.notes !== undefined) patch.notes = input.notes;
     if (input.assignedTo !== undefined) patch.assignedTo = input.assignedTo;
+    if (input.productId !== undefined) patch.productId = input.productId;
+    if (input.source !== undefined) patch.source = input.source;
+    if (input.probability !== undefined) patch.probability = input.probability;
 
     const updated = await opportunityRepository.update(id, organizationId, patch);
 
@@ -175,6 +195,14 @@ export const opportunityService = {
     const existing = await loadOpportunityOrThrow(id, organizationId);
     if (TERMINAL_STAGES.has(existing.stage)) {
       throw new ConflictError("This opportunity is already closed.");
+    }
+    // Phase 12 — a deal opened directly against a Lead (no client yet)
+    // must be linked to a real Client (see linkClient()) before it can be
+    // marked won: a won deal with nothing to bill is a contradiction, and
+    // this is exactly the "Opportunity -> Client" step of the brief's
+    // Lead -> Qualified Lead -> Opportunity -> Client handoff.
+    if (!existing.clientId) {
+      throw new ValidationError("This opportunity must be linked to a client (see POST /opportunities/:id/link-client) before it can be marked as won.");
     }
 
     const updated = await opportunityRepository.update(id, organizationId, { stage: "CLOSED_WON", actualCloseDate: new Date() });
@@ -250,5 +278,50 @@ export const opportunityService = {
       opportunityRepository.recentForOrg(organizationId, 5),
     ]);
     return { byStage, recent };
+  },
+
+  /**
+   * Phase 12 — the "Opportunity -> Client" step of the Lead -> Qualified
+   * Lead -> Opportunity -> Client handoff: attaches an existing Client to
+   * a deal that was opened directly against a Lead. Never creates or
+   * converts anything itself (reuse leadService.convertLead for that) —
+   * this only links two already-real records together.
+   */
+  async linkClient(caller: SanitizedUser, id: string, input: LinkClientInput, meta: RequestMeta = {}): Promise<OpportunityWithRelations> {
+    const organizationId = caller.organizationId;
+    const existing = await loadOpportunityOrThrow(id, organizationId);
+    if (TERMINAL_STAGES.has(existing.stage)) {
+      throw new ConflictError("This opportunity is closed and can no longer be changed.");
+    }
+    if (existing.clientId) {
+      throw new ConflictError("This opportunity is already linked to a client.");
+    }
+
+    const client = await clientRepository.findByIdInOrg(input.clientId, organizationId);
+    if (!client) throw new ValidationError("clientId does not belong to this organization.");
+
+    const updated = await opportunityRepository.update(id, organizationId, { clientId: input.clientId });
+
+    await auditLogRepository.record({
+      organizationId,
+      actorUserId: caller.id,
+      actorType: "USER",
+      action: "OPPORTUNITY_CLIENT_LINKED",
+      resourceType: "opportunity",
+      resourceId: id,
+      beforeData: { clientId: null },
+      afterData: { clientId: input.clientId },
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent,
+    });
+
+    return updated;
+  },
+
+  /** Phase 12 — unified activity timeline for one opportunity, drawn entirely from the existing audit trail (never a parallel "activity" table). */
+  async getActivity(organizationId: string, id: string) {
+    await loadOpportunityOrThrow(id, organizationId);
+    const { rows } = await auditLogQueryRepository.list({ organizationId, resourceType: "opportunity", resourceId: id }, 1, 100);
+    return rows;
   },
 };

@@ -80,6 +80,15 @@ export const leadRepository = {
     status?: string;
     notes?: string;
     assignedTo?: string;
+    utmSource?: string;
+    utmMedium?: string;
+    utmCampaign?: string;
+    utmTerm?: string;
+    utmContent?: string;
+    landingPagePath?: string;
+    referrer?: string;
+    consentGiven?: boolean;
+    formId?: string;
   }): Promise<Lead> {
     return prisma.lead.create({
       data: {
@@ -92,6 +101,15 @@ export const leadRepository = {
         status: (data.status as Lead["status"]) ?? "NEW",
         notes: data.notes,
         assignedTo: data.assignedTo,
+        utmSource: data.utmSource,
+        utmMedium: data.utmMedium,
+        utmCampaign: data.utmCampaign,
+        utmTerm: data.utmTerm,
+        utmContent: data.utmContent,
+        landingPagePath: data.landingPagePath,
+        referrer: data.referrer,
+        consentGiven: data.consentGiven,
+        formId: data.formId,
       },
     });
   },

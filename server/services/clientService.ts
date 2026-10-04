@@ -1,6 +1,7 @@
 /** Client management (Phase 5 — docs/CRM_ARCHITECTURE.md). Every method is scoped to the caller's own session organization. */
 import { clientRepository, type ClientFilters, type ClientWithWorkspace } from "../repositories/clientRepository";
 import { auditLogRepository } from "../repositories/auditLogRepository";
+import { auditLogQueryRepository } from "../repositories/auditLogQueryRepository";
 import { ConflictError, NotFoundError } from "../core/errors";
 import type { SanitizedUser } from "../types/domain";
 import type { CreateClientInput, UpdateClientInput } from "../schemas/clientSchemas";
@@ -147,5 +148,11 @@ export const clientService = {
 
   async recent(organizationId: string, limit: number) {
     return clientRepository.recentForOrg(organizationId, limit);
+  },
+
+  async getActivity(organizationId: string, id: string) {
+    await loadClientInOrgOrThrow(id, organizationId);
+    const { rows } = await auditLogQueryRepository.list({ organizationId, resourceType: "client", resourceId: id }, 1, 100);
+    return rows;
   },
 };

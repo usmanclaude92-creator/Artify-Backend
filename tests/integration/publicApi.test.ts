@@ -430,7 +430,7 @@ describe("public website API", () => {
   // (X-Forwarded-For, honored via `trust proxy` — server/middleware/security.ts)
   // so they don't share a rate-limit bucket with each other or with the
   // dedicated rate-limiting test, which deliberately exhausts its own.
-  it("creates a real CRM lead from a valid public submission, under the configured organization only", async () => {
+  it("creates a real CRM lead from a valid public submission, under the configured organization only, capturing UTM/consent attribution", async () => {
     const res = await request(app)
       .post("/api/v1/public/leads")
       .set("X-Forwarded-For", "203.0.113.10")
@@ -441,6 +441,10 @@ describe("public website API", () => {
         message: "We'd like a quote for an AI automation project.",
         source: "contact_form",
         consent: true,
+        utmSource: "linkedin",
+        utmMedium: "social",
+        utmCampaign: "q4-outreach",
+        landingPagePath: "/solutions/ai-automation",
       });
     expect(res.status).toBe(201);
 
@@ -450,6 +454,13 @@ describe("public website API", () => {
     expect(lead!.companyName).toBe("Prospect Co");
     expect(lead!.status).toBe("NEW");
     expect(lead!.assignedTo).toBeNull();
+    // Phase 12 — real, structured attribution columns (never fabricated —
+    // only what the submitter actually sent).
+    expect(lead!.utmSource).toBe("linkedin");
+    expect(lead!.utmMedium).toBe("social");
+    expect(lead!.utmCampaign).toBe("q4-outreach");
+    expect(lead!.landingPagePath).toBe("/solutions/ai-automation");
+    expect(lead!.consentGiven).toBe(true);
   });
 
   it("rejects an invalid lead submission (missing required fields, bad email, missing consent)", async () => {

@@ -48,6 +48,14 @@ export const publicLeadService = {
       phone: input.phone,
       source: `website:${input.source}`,
       notes: buildNotes(input),
+      utmSource: input.utmSource,
+      utmMedium: input.utmMedium,
+      utmCampaign: input.utmCampaign,
+      utmTerm: input.utmTerm,
+      utmContent: input.utmContent,
+      landingPagePath: input.landingPagePath,
+      referrer: meta.referrer,
+      consentGiven: true,
     });
 
     await auditLogRepository.record({

@@ -3,6 +3,7 @@ import { Router } from "express";
 import { leadService } from "../../services/leadService";
 import { clientService } from "../../services/clientService";
 import { opportunityService } from "../../services/opportunityService";
+import { auditLogQueryRepository } from "../../repositories/auditLogQueryRepository";
 import { authenticateToken } from "../../middleware/auth";
 import { asyncHandler } from "../../utils/asyncHandler";
 import { sendSuccess } from "../../core/apiResponse";
@@ -24,6 +25,19 @@ router.get(
       permissions.includes("clients.read") ? clientService.recent(organizationId, 5) : Promise.resolve([]),
       permissions.includes("opportunities.read") ? opportunityService.dashboardStats(organizationId) : Promise.resolve(null),
     ]);
+
+    // Unified activity feed (§21) — only the resource types the caller can
+    // read are included, same degrade-gracefully pattern as the counts
+    // above; a caller with none of these permissions gets null, not an
+    // empty array (distinguishing "no access" from "no activity yet").
+    const activityResourceTypes: string[] = [];
+    if (permissions.includes("leads.read")) activityResourceTypes.push("lead");
+    if (permissions.includes("opportunities.read")) activityResourceTypes.push("opportunity");
+    if (permissions.includes("clients.read")) activityResourceTypes.push("client");
+    if (permissions.includes("forms.read")) activityResourceTypes.push("form_submission");
+    const recentActivity = activityResourceTypes.length
+      ? (await auditLogQueryRepository.list({ organizationId, resourceTypes: activityResourceTypes }, 1, 20)).rows
+      : null;
 
     const OPEN_STAGES = ["PROSPECTING", "QUALIFICATION", "PROPOSAL", "NEGOTIATION"] as const;
     const byStage = opportunityStats?.byStage ?? {};
@@ -55,6 +69,7 @@ router.get(
         byStage,
         recent: opportunityStats.recent,
       },
+      recentActivity,
     });
   })
 );

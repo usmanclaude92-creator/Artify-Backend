@@ -365,6 +365,17 @@ export interface Lead {
   assignedTo: string | null;
   convertedClientId: string | null;
   convertedAt: string | null;
+  // Phase 12 — website/form attribution, system-populated only (never
+  // editable via the authenticated create/update endpoints).
+  utmSource: string | null;
+  utmMedium: string | null;
+  utmCampaign: string | null;
+  utmTerm: string | null;
+  utmContent: string | null;
+  landingPagePath: string | null;
+  referrer: string | null;
+  consentGiven: boolean | null;
+  formId: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -411,8 +422,11 @@ export type NonTerminalOpportunityStage = "PROSPECTING" | "QUALIFICATION" | "PRO
 export interface Opportunity {
   id: string;
   organizationId: string;
-  clientId: string;
+  clientId: string | null;
   leadId: string | null;
+  productId: string | null;
+  source: string | null;
+  probability: number | null;
   name: string;
   stage: OpportunityStageValue;
   value: string;
@@ -425,8 +439,9 @@ export interface Opportunity {
   createdById: string | null;
   createdAt: string;
   updatedAt: string;
-  client: { id: string; name: string; clientCode: string };
+  client: { id: string; name: string; clientCode: string } | null;
   lead: { id: string; companyName: string } | null;
+  product: { id: string; name: string; slug: string; type: string } | null;
 }
 
 export interface CrmSummary {
@@ -454,6 +469,7 @@ export interface CrmSummary {
     byStage: Record<string, { count: number; value: string }>;
     recent: Opportunity[];
   } | null;
+  recentActivity: AuditLogEntry[] | null;
 }
 
 export const leadsApi = {
@@ -487,6 +503,7 @@ export const leadsApi = {
     id: string,
     payload: { clientCode: string; name?: string; email?: string; phone?: string; website?: string; address?: string; createContact?: boolean }
   ) => apiClient.post<{ client: CrmClient; contactId: string | null }>(`/leads/${id}/convert`, payload),
+  activity: (id: string) => apiClient.get<{ activity: AuditLogEntry[] }>(`/leads/${id}/activity`),
 };
 
 export const clientsApi = {
@@ -517,6 +534,7 @@ export const clientsApi = {
   getOnboarding: (clientId: string) => apiClient.get<{ onboarding: Onboarding | null }>(`/clients/${clientId}/onboarding`),
   provisionWorkspace: (clientId: string, payload: { name?: string; timezone?: string; currency?: string; locale?: string } = {}) =>
     apiClient.post<{ workspace: Workspace }>(`/clients/${clientId}/workspace/provision`, payload),
+  activity: (id: string) => apiClient.get<{ activity: AuditLogEntry[] }>(`/clients/${id}/activity`),
 };
 
 export const contactsApi = {
@@ -540,6 +558,8 @@ export const opportunitiesApi = {
       search?: string;
       stage?: OpportunityStageValue;
       clientId?: string;
+      leadId?: string;
+      productId?: string;
       assignedTo?: string;
       sort?: string;
       order?: "asc" | "desc";
@@ -547,8 +567,11 @@ export const opportunitiesApi = {
   ) => paginatedGet<Opportunity>("/opportunities", "opportunities", params),
   get: (id: string) => apiClient.get<{ opportunity: Opportunity }>(`/opportunities/${id}`),
   create: (payload: {
-    clientId: string;
+    clientId?: string;
     leadId?: string;
+    productId?: string;
+    source?: string;
+    probability?: number;
     name: string;
     stage?: NonTerminalOpportunityStage;
     value: number;
@@ -564,14 +587,19 @@ export const opportunitiesApi = {
       stage: NonTerminalOpportunityStage;
       value: number;
       currency: string;
+      productId: string | null;
+      source: string | null;
+      probability: number | null;
       expectedCloseDate: string | null;
       notes: string | null;
       assignedTo: string | null;
     }>
   ) => apiClient.patch<{ opportunity: Opportunity }>(`/opportunities/${id}`, payload),
   remove: (id: string) => apiClient.delete<{ message: string }>(`/opportunities/${id}`),
+  linkClient: (id: string, clientId: string) => apiClient.post<{ opportunity: Opportunity }>(`/opportunities/${id}/link-client`, { clientId }),
   win: (id: string) => apiClient.post<{ opportunity: Opportunity }>(`/opportunities/${id}/win`),
   lose: (id: string, lostReason?: string) => apiClient.post<{ opportunity: Opportunity }>(`/opportunities/${id}/lose`, { lostReason }),
+  activity: (id: string) => apiClient.get<{ activity: AuditLogEntry[] }>(`/opportunities/${id}/activity`),
 };
 
 // ---------------------------------------------------------------------------

@@ -11,6 +11,8 @@ export const listOpportunitiesQuerySchema = z.object({
   search: z.string().trim().max(200).optional(),
   stage: opportunityStageSchema.optional(),
   clientId: z.string().trim().uuid().optional(),
+  leadId: z.string().trim().uuid().optional(),
+  productId: z.string().trim().uuid().optional(),
   assignedTo: z.string().trim().uuid().optional(),
   sort: z.enum(["createdAt", "updatedAt", "name", "value", "expectedCloseDate", "stage"]).default("createdAt"),
   order: z.enum(["asc", "desc"]).default("desc"),
@@ -24,18 +26,29 @@ const currencySchema = z
   .length(3)
   .regex(/^[A-Z]{3}$/, "currency must be a 3-letter ISO 4217 code")
   .optional();
+const probabilitySchema = z.coerce.number().int().min(0).max(100);
 
-export const createOpportunitySchema = z.object({
-  clientId: z.string().trim().uuid(),
-  leadId: z.string().trim().uuid().optional(),
-  name: z.string().trim().min(1).max(200),
-  stage: nonTerminalOpportunityStageSchema.optional(),
-  value: moneyValueSchema,
-  currency: currencySchema,
-  expectedCloseDate: z.coerce.date().optional(),
-  notes: z.string().trim().max(5000).optional(),
-  assignedTo: z.string().trim().uuid().optional(),
-});
+export const createOpportunitySchema = z
+  .object({
+    // Phase 12 — a deal may now be opened directly against a Lead, before
+    // it has converted to a Client ("Lead -> Qualified Lead ->
+    // Opportunity -> Client"). At least one of clientId/leadId is
+    // required — enforced by the refine below and, defense-in-depth, by
+    // the DB's own CHECK constraint.
+    clientId: z.string().trim().uuid().optional(),
+    leadId: z.string().trim().uuid().optional(),
+    productId: z.string().trim().uuid().optional(),
+    source: z.string().trim().max(100).optional(),
+    probability: probabilitySchema.optional(),
+    name: z.string().trim().min(1).max(200),
+    stage: nonTerminalOpportunityStageSchema.optional(),
+    value: moneyValueSchema,
+    currency: currencySchema,
+    expectedCloseDate: z.coerce.date().optional(),
+    notes: z.string().trim().max(5000).optional(),
+    assignedTo: z.string().trim().uuid().optional(),
+  })
+  .refine((v) => !!v.clientId || !!v.leadId, { message: "Either clientId or leadId must be provided." });
 export type CreateOpportunityInput = z.infer<typeof createOpportunitySchema>;
 
 export const updateOpportunitySchema = z
@@ -47,6 +60,9 @@ export const updateOpportunitySchema = z
     expectedCloseDate: z.coerce.date().nullable().optional(),
     notes: z.string().trim().max(5000).nullable().optional(),
     assignedTo: z.string().trim().uuid().nullable().optional(),
+    productId: z.string().trim().uuid().nullable().optional(),
+    source: z.string().trim().max(100).nullable().optional(),
+    probability: probabilitySchema.nullable().optional(),
   })
   .refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
 export type UpdateOpportunityInput = z.infer<typeof updateOpportunitySchema>;
@@ -55,3 +71,9 @@ export const loseOpportunitySchema = z.object({
   lostReason: z.string().trim().max(1000).optional(),
 });
 export type LoseOpportunityInput = z.infer<typeof loseOpportunitySchema>;
+
+/** Phase 12 — links an existing Client to an Opportunity that was opened directly against a Lead (no client yet). Required before winOpportunity will accept it. */
+export const linkClientSchema = z.object({
+  clientId: z.string().trim().uuid(),
+});
+export type LinkClientInput = z.infer<typeof linkClientSchema>;

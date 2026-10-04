@@ -10,6 +10,8 @@ export interface OpportunityFilters {
   search?: string;
   stage?: string;
   clientId?: string;
+  leadId?: string;
+  productId?: string;
   assignedTo?: string;
 }
 
@@ -17,6 +19,7 @@ const withRelations = {
   include: {
     client: { select: { id: true, name: true, clientCode: true } },
     lead: { select: { id: true, companyName: true } },
+    product: { select: { id: true, name: true, slug: true, type: true } },
   },
 } as const;
 export type OpportunityWithRelations = Prisma.OpportunityGetPayload<typeof withRelations>;
@@ -25,6 +28,8 @@ function buildWhere(organizationId: string, filters: OpportunityFilters): Prisma
   const where: Prisma.OpportunityWhereInput = { organizationId, deletedAt: null };
   if (filters.stage) where.stage = filters.stage as Prisma.EnumOpportunityStageFilter["equals"];
   if (filters.clientId) where.clientId = filters.clientId;
+  if (filters.leadId) where.leadId = filters.leadId;
+  if (filters.productId) where.productId = filters.productId;
   if (filters.assignedTo) where.assignedTo = filters.assignedTo;
   if (filters.search) where.name = { contains: filters.search, mode: "insensitive" };
   return where;
@@ -53,8 +58,11 @@ export const opportunityRepository = {
 
   async create(data: {
     organizationId: string;
-    clientId: string;
+    clientId?: string;
     leadId?: string;
+    productId?: string;
+    source?: string;
+    probability?: number;
     name: string;
     stage?: Opportunity["stage"];
     value: Prisma.Decimal;
@@ -68,7 +76,7 @@ export const opportunityRepository = {
     return (await this.findByIdInOrg(created.id, data.organizationId))!;
   },
 
-  async update(id: string, organizationId: string, data: Prisma.OpportunityUpdateInput): Promise<OpportunityWithRelations> {
+  async update(id: string, organizationId: string, data: Prisma.OpportunityUncheckedUpdateInput): Promise<OpportunityWithRelations> {
     await prisma.opportunity.update({ where: { id }, data });
     return (await this.findByIdInOrg(id, organizationId))!;
   },
