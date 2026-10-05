@@ -132,3 +132,11 @@ ALTER TABLE "api_keys" ADD CONSTRAINT "api_keys_organization_id_fkey" FOREIGN KE
 -- AddForeignKey
 ALTER TABLE "api_keys" ADD CONSTRAINT "api_keys_created_by_fkey" FOREIGN KEY ("created_by") REFERENCES "users"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
+
+-- Row Level Security: the app connects as the table owner (bypasses RLS); with RLS on and
+-- no policies the public anon/authenticated roles get no access to these tables, matching
+-- every other table in the schema.
+ALTER TABLE "integrations" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "webhook_endpoints" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "webhook_deliveries" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "api_keys" ENABLE ROW LEVEL SECURITY;
