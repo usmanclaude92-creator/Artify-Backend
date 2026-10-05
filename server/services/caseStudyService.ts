@@ -100,7 +100,7 @@ async function assertGalleryMediaUsable(galleryMediaIds: string[] | undefined, o
 }
 
 async function assertRelationshipsUsable(
-  input: { content?: { ctaFormId?: string }; productIds?: string[]; relatedPageIds?: string[]; relatedPostIds?: string[]; industryId?: string | null },
+  input: { content?: { ctaFormId?: string; galleryMediaIds?: string[] }; productIds?: string[]; relatedPageIds?: string[]; relatedPostIds?: string[]; industryId?: string | null },
   organizationId: string
 ): Promise<void> {
   await Promise.all([

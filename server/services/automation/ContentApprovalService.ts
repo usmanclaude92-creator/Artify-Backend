@@ -20,6 +20,7 @@
  * duplicated — `getOrCreateWorkflow` finds-or-creates exactly one row per org).
  */
 import crypto from "node:crypto";
+import type { AutomationApprovalStatus } from "@prisma/client";
 import { prisma } from "../../db/prisma";
 import { pageService } from "../pageService";
 import { postService } from "../postService";
@@ -217,11 +218,11 @@ export const contentApprovalService = {
   },
 
   async listForOrg(organizationId: string, status: string | undefined, page: number, limit: number) {
-    const where: { organizationId: string; entityType: { in: ContentType[] }; status?: string } = {
+    const where: { organizationId: string; entityType: { in: ContentType[] }; status?: AutomationApprovalStatus } = {
       organizationId,
       entityType: { in: ["page", "post"] },
     };
-    if (status) where.status = status;
+    if (status) where.status = status as AutomationApprovalStatus;
     const [rows, total] = await Promise.all([
       prisma.automationApproval.findMany({
         where,

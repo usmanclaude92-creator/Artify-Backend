@@ -113,7 +113,14 @@ var envSchema = z.object({
   // caller-supplied value. Left unset, the public CMS/lead endpoints
   // report "not configured" (empty content, lead intake disabled) rather
   // than fabricating or guessing an organization.
-  PUBLIC_WEBSITE_ORGANIZATION_ID: z.string().optional().default("")
+  PUBLIC_WEBSITE_ORGANIZATION_ID: z.string().optional().default(""),
+  // Phase 14 — Marketing Campaigns (docs/MARKETING_ARCHITECTURE.md). The
+  // public website's own base URL (e.g. "https://artifysolscom.com"),
+  // needed only to compose an absolute, previewable campaign landing-
+  // page URL with its UTM parameters appended. Left unset, campaign
+  // preview reports the landing page's real slug/status but no
+  // absolute URL, rather than guessing a domain.
+  PUBLIC_SITE_BASE_URL: z.string().optional().default("")
 }).superRefine((val, ctx) => {
   const isProdLike = val.NODE_ENV === "production" || val.NODE_ENV === "staging";
   if (val.CRON_SECRET && val.CRON_SECRET.length < 16) {
@@ -236,6 +243,7 @@ function validateEnv(raw) {
       passwordMinLength: env.PASSWORD_MIN_LENGTH,
       invitationTokenTtlHours: env.INVITATION_TOKEN_TTL_HOURS,
       publicWebsiteOrganizationId: env.PUBLIC_WEBSITE_ORGANIZATION_ID,
+      publicSiteBaseUrl: env.PUBLIC_SITE_BASE_URL,
       cronSecret: env.CRON_SECRET,
       redisUrl: env.REDIS_URL
     })
@@ -485,6 +493,16 @@ var publicLeadLimiter = rateLimit({
   passOnStoreError: true,
   keyGenerator: (req) => req.ip ?? "unknown-ip"
 });
+var publicAnalyticsLimiter = rateLimit({
+  windowMs: 60 * 1e3,
+  limit: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: rateLimitHandler,
+  store: makeStore("public-analytics"),
+  passOnStoreError: true,
+  keyGenerator: (req) => req.ip ?? "unknown-ip"
+});
 var sensitiveActionLimiter = rateLimit({
   windowMs: 15 * 60 * 1e3,
   limit: 20,
@@ -610,7 +628,7 @@ function errorHandlerMiddleware(err, req, res, _next) {
 }
 
 // server/routes/v1/index.ts
-import { Router as Router51 } from "express";
+import { Router as Router57 } from "express";
 
 // server/routes/v1/authRoutes.ts
 import { Router } from "express";
@@ -688,6 +706,11 @@ var userRepository = {
   },
   async updateStatus(userId, status) {
     return prisma.user.update({ where: { id: userId }, data: { status } });
+  },
+  /** Phase 16 — who to notify for an approval request (e.g. every ADMIN in the org), never a caller-supplied recipient list. */
+  async listActiveByRoleKeysInOrg(organizationId, roleKeys) {
+    if (roleKeys.length === 0) return [];
+    return prisma.user.findMany({ where: { organizationId, status: "ACTIVE", deletedAt: null, role: { key: { in: roleKeys } } } });
   }
 };
 
@@ -1096,6 +1119,11 @@ var PERMISSION_KEYS = [
   "navigation_menus.delete",
   "reports.read",
   "reports.export",
+  // Phase 15 — Analytics Dashboard read access (docs/ANALYTICS_ARCHITECTURE.md).
+  // Separate from reports.read: the dashboard is a live, real-time-ish
+  // overview, while reports.read/reports.export gate the Reports area's
+  // generated/exportable report documents.
+  "analytics.read",
   "settings.read",
   "settings.manage",
   "audit.read",
@@ -1200,6 +1228,10 @@ var PERMISSION_KEYS = [
   "portal.subscriptions.read",
   "portal.invoices.read",
   "portal.payments.read",
+  // Phase 13 — same reasoning as the portal keys above, extended to
+  // onboarding progress and client-visible documents.
+  "portal.onboarding.read",
+  "portal.documents.read",
   // Phase 5 (SEO Control Center, docs/SEO_ARCHITECTURE.md) — redirects
   // and the rule-based SEO audit are their own permission domain rather
   // than folded into content.*, since a redirect isn't itself content
@@ -1217,7 +1249,17 @@ var PERMISSION_KEYS = [
   "forms.read",
   "forms.create",
   "forms.update",
-  "forms.delete"
+  "forms.delete",
+  // Phase 14 (Marketing + Campaigns + Automation, docs/MARKETING_ARCHITECTURE.md).
+  // "publish" mirrors content.*/templates.*'s own publish-is-separate-
+  // from-update convention (activating live traffic attribution is a
+  // bigger blast radius than editing draft fields); "archive" is the
+  // terminal action, same shape as products.archive.
+  "campaigns.read",
+  "campaigns.create",
+  "campaigns.update",
+  "campaigns.publish",
+  "campaigns.archive"
 ];
 function sanitizeUser(user, role) {
   const { passwordHash: _passwordHash, ...rest } = user;
@@ -2013,6 +2055,7 @@ var ROLE_PERMISSION_SETS = {
     "media.delete",
     "reports.read",
     "reports.export",
+    "analytics.read",
     "settings.read",
     "settings.manage",
     "audit.read",
@@ -2104,6 +2147,8 @@ var ROLE_PERMISSION_SETS = {
     "portal.subscriptions.read",
     "portal.invoices.read",
     "portal.payments.read",
+    "portal.onboarding.read",
+    "portal.documents.read",
     // Phase 5 — ADMIN gets full redirect management and the SEO audit.
     "seo.redirects.read",
     "seo.redirects.create",
@@ -2114,7 +2159,13 @@ var ROLE_PERMISSION_SETS = {
     "forms.read",
     "forms.create",
     "forms.update",
-    "forms.delete"
+    "forms.delete",
+    // Phase 14 — ADMIN gets full campaign management including archive.
+    "campaigns.read",
+    "campaigns.create",
+    "campaigns.update",
+    "campaigns.publish",
+    "campaigns.archive"
   ],
   MANAGER: [
     "users.read",
@@ -2165,6 +2216,7 @@ var ROLE_PERMISSION_SETS = {
     "media.upload",
     "media.update",
     "reports.read",
+    "analytics.read",
     // Phase 12 — MANAGER can use/author AI within its own org (execute
     // workflows, author prompts/workflows, see executions/usage/approvals)
     // but cannot touch the provider/model catalog, tool enablement, or
@@ -2230,6 +2282,8 @@ var ROLE_PERMISSION_SETS = {
     "portal.subscriptions.read",
     "portal.invoices.read",
     "portal.payments.read",
+    "portal.onboarding.read",
+    "portal.documents.read",
     // Phase 5 — MANAGER can manage redirects day-to-day but not delete them (ADMIN-only, §34 pattern).
     "seo.redirects.read",
     "seo.redirects.create",
@@ -2238,7 +2292,13 @@ var ROLE_PERMISSION_SETS = {
     // Phase 9 — MANAGER can manage forms day-to-day but not delete them (ADMIN-only, same pattern).
     "forms.read",
     "forms.create",
-    "forms.update"
+    "forms.update",
+    // Phase 14 — MANAGER can run campaigns day-to-day (including publish)
+    // but not archive them (ADMIN-only, same pattern).
+    "campaigns.read",
+    "campaigns.create",
+    "campaigns.update",
+    "campaigns.publish"
   ],
   USER: [
     "clients.read",
@@ -2269,6 +2329,7 @@ var ROLE_PERMISSION_SETS = {
     "media.read",
     "media.upload",
     "reports.read",
+    "analytics.read",
     // Phase 12 — USER can execute existing workflows/prompts and see their
     // own executions/usage, but cannot author prompts/workflows or touch
     // the catalog/approvals (mirrors the read/execute-only Phase 10 split).
@@ -2300,11 +2361,16 @@ var ROLE_PERMISSION_SETS = {
     "portal.subscriptions.read",
     "portal.invoices.read",
     "portal.payments.read",
+    "portal.onboarding.read",
+    "portal.documents.read",
     // Phase 5 — USER is read-only for SEO, same as most other modules.
     "seo.redirects.read",
     "seo.audit.read",
     // Phase 9 — USER is read-only for forms, same convention.
-    "forms.read"
+    "forms.read",
+    // Phase 14 — USER can draft campaigns but not publish/archive them.
+    "campaigns.read",
+    "campaigns.create"
   ],
   VIEWER: [
     "users.read",
@@ -2327,6 +2393,7 @@ var ROLE_PERMISSION_SETS = {
     "authors.read",
     "media.read",
     "reports.read",
+    "analytics.read",
     "settings.read",
     "audit.read",
     // Phase 12 — VIEWER is read-only across the AI surface, same as every
@@ -2359,11 +2426,15 @@ var ROLE_PERMISSION_SETS = {
     "portal.subscriptions.read",
     "portal.invoices.read",
     "portal.payments.read",
+    "portal.onboarding.read",
+    "portal.documents.read",
     // Phase 5 — VIEWER is read-only for SEO, same convention as everywhere else.
     "seo.redirects.read",
     "seo.audit.read",
     // Phase 9 — VIEWER is read-only for forms, same convention.
-    "forms.read"
+    "forms.read",
+    // Phase 14 — VIEWER is read-only for campaigns, same convention.
+    "campaigns.read"
   ]
 };
 async function mapWithConcurrency(items, limit, fn) {
@@ -3375,7 +3446,8 @@ var auditLogQueryRepository = {
       organizationId: filters.organizationId,
       actorUserId: filters.actorUserId,
       action: filters.action,
-      resourceType: filters.resourceType,
+      resourceType: filters.resourceTypes ? { in: filters.resourceTypes } : filters.resourceType,
+      resourceId: filters.resourceId,
       result: filters.result,
       actorType: filters.actorType
     };
@@ -3534,6 +3606,9 @@ function buildWhere(organizationId, filters) {
   if (filters.status) where.status = filters.status;
   if (filters.mimeType) where.mimeType = filters.mimeType;
   if (filters.uploadedById) where.uploadedById = filters.uploadedById;
+  if (filters.clientId) where.clientId = filters.clientId;
+  if (filters.onboardingId) where.onboardingId = filters.onboardingId;
+  if (filters.isClientVisible !== void 0) where.isClientVisible = filters.isClientVisible;
   if (filters.dateFrom || filters.dateTo) {
     where.createdAt = {
       ...filters.dateFrom ? { gte: filters.dateFrom } : {},
@@ -3624,6 +3699,276 @@ var mediaUploadSessionRepository = {
   async markCompleted(id) {
     const result = await prisma.mediaUploadSession.updateMany({ where: { id, completedAt: null }, data: { completedAt: /* @__PURE__ */ new Date() } });
     return result.count;
+  }
+};
+
+// server/repositories/clientRepository.ts
+var clientWithWorkspace = { include: { workspaceOrganization: true, industry: true } };
+function buildWhere2(organizationId, filters) {
+  const where = { organizationId, deletedAt: null };
+  if (filters.status) where.status = filters.status;
+  if (filters.search) {
+    const term = filters.search;
+    where.OR = [
+      { name: { contains: term, mode: "insensitive" } },
+      { legalName: { contains: term, mode: "insensitive" } },
+      { clientCode: { contains: term, mode: "insensitive" } },
+      { email: { contains: term, mode: "insensitive" } }
+    ];
+  }
+  return where;
+}
+var clientRepository = {
+  async list(organizationId, filters, page, limit, sort, order) {
+    const where = buildWhere2(organizationId, filters);
+    const [rows, total] = await Promise.all([
+      prisma.client.findMany({
+        where,
+        ...clientWithWorkspace,
+        orderBy: { [sort]: order },
+        skip: (page - 1) * limit,
+        take: limit
+      }),
+      prisma.client.count({ where })
+    ]);
+    return { rows, total };
+  },
+  async findByIdInOrg(id, organizationId) {
+    return prisma.client.findFirst({ where: { id, organizationId, deletedAt: null }, ...clientWithWorkspace });
+  },
+  /**
+   * The Client Portal boundary (Phase 10 §25/§26 —
+   * docs/CLIENT_PORTAL_ARCHITECTURE.md): Contract/Subscription/Invoice/
+   * Payment.organizationId is always the AGENCY's own org (the same org
+   * that owns this Client row), never the client's own provisioned
+   * workspace org — so portal access resolves the caller's *session*
+   * organizationId (after they've switched into a client's workspace via
+   * the Phase 3 switchOrganization mechanism) to the one Client row whose
+   * `workspaceOrganizationId` matches, then scopes every portal query by
+   * that Client's id. An agency staffer viewing their own internal org
+   * naturally finds no matching row here and is blocked from a portal
+   * view of it.
+   */
+  async findByWorkspaceOrganizationId(workspaceOrganizationId) {
+    return prisma.client.findFirst({ where: { workspaceOrganizationId, deletedAt: null } });
+  },
+  /** Case-insensitive duplicate-name check within a tenant (§19) — soft, service-level, not a DB unique constraint (see schema.prisma's Client doc comment for why). */
+  async findByNameInOrg(organizationId, name) {
+    return prisma.client.findFirst({
+      where: { organizationId, deletedAt: null, name: { equals: name, mode: "insensitive" } }
+    });
+  },
+  async findByCodeInOrg(organizationId, clientCode) {
+    return prisma.client.findFirst({ where: { organizationId, clientCode, deletedAt: null } });
+  },
+  async create(data) {
+    return prisma.client.create({
+      data: {
+        organizationId: data.organizationId,
+        clientCode: data.clientCode,
+        name: data.name,
+        legalName: data.legalName,
+        status: data.status ?? "PROSPECT",
+        email: data.email,
+        phone: data.phone,
+        website: data.website,
+        address: data.address,
+        accountManager: data.accountManager,
+        notes: data.notes,
+        source: data.source,
+        industryId: data.industryId
+      }
+    });
+  },
+  async update(id, data) {
+    return prisma.client.update({ where: { id }, data });
+  },
+  async softDelete(id) {
+    await prisma.client.update({ where: { id }, data: { deletedAt: /* @__PURE__ */ new Date() } });
+  },
+  async countByStatus(organizationId) {
+    const rows = await prisma.client.groupBy({
+      by: ["status"],
+      where: { organizationId, deletedAt: null },
+      _count: { _all: true }
+    });
+    const result = {};
+    for (const row of rows) result[row.status] = row._count._all;
+    return result;
+  },
+  /** Phase 14 — marketing dashboard "conversions": real clients created from a campaign-attributed lead (never fabricated). */
+  async countAttributedConversions(organizationId) {
+    return prisma.client.count({ where: { organizationId, deletedAt: null, campaignId: { not: null } } });
+  },
+  /** Phase 15 — client acquisition reporting: real clients created within a date range (never fabricated). */
+  async countCreatedInRange(organizationId, range) {
+    return prisma.client.count({ where: { organizationId, deletedAt: null, createdAt: { gte: range.from, lte: range.to } } });
+  },
+  async countAttributedConversionsInRange(organizationId, range) {
+    return prisma.client.count({ where: { organizationId, deletedAt: null, campaignId: { not: null }, createdAt: { gte: range.from, lte: range.to } } });
+  },
+  async recentForOrg(organizationId, limit) {
+    return prisma.client.findMany({
+      where: { organizationId, deletedAt: null },
+      orderBy: { createdAt: "desc" },
+      take: limit
+    });
+  }
+};
+
+// server/schemas/onboardingSchemas.ts
+import { z as z7 } from "zod";
+var ONBOARDING_CHECKLIST_KEYS = [
+  "CLIENT_VERIFIED",
+  "WORKSPACE_CREATED",
+  "PRIMARY_CONTACT_CONFIRMED",
+  "ADMINISTRATOR_INVITED",
+  "ADMINISTRATOR_ACCEPTED",
+  "WORKSPACE_CONFIGURED",
+  "ONBOARDING_COMPLETED"
+];
+var startOnboardingSchema = z7.object({
+  ownerId: z7.string().trim().uuid().optional(),
+  dueDate: z7.coerce.date().optional()
+});
+var listOnboardingQuerySchema = z7.object({
+  page: z7.coerce.number().int().positive().default(1),
+  limit: z7.coerce.number().int().positive().max(100).default(20),
+  status: z7.enum(["NOT_STARTED", "IN_PROGRESS", "READY", "COMPLETED", "CANCELLED"]).optional(),
+  search: z7.string().trim().max(200).optional(),
+  ownerId: z7.string().trim().uuid().optional(),
+  overdue: z7.coerce.boolean().optional()
+});
+var stepKeySchema = z7.string().trim().min(1).max(64).regex(/^[A-Za-z0-9_]+$/, "step key may only contain letters, numbers, and underscores");
+var updateOnboardingSchema = z7.object({
+  completeStep: stepKeySchema.optional(),
+  status: z7.enum(["CANCELLED"]).optional(),
+  ownerId: z7.string().trim().uuid().nullable().optional(),
+  dueDate: z7.coerce.date().nullable().optional()
+}).refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
+var updateOnboardingStepSchema = z7.object({
+  dueDate: z7.coerce.date().nullable().optional(),
+  assignedTo: z7.string().trim().uuid().nullable().optional(),
+  notes: z7.string().trim().max(2e3).nullable().optional(),
+  documentMediaId: z7.string().trim().uuid().nullable().optional()
+}).refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
+var onboardingTemplateStepSchema = z7.object({
+  key: stepKeySchema,
+  label: z7.string().trim().min(1).max(200),
+  requiresDocument: z7.boolean().default(false)
+});
+var onboardingTemplateSchema = z7.array(onboardingTemplateStepSchema).min(1, "A template must have at least one step.").max(50).refine((steps) => new Set(steps.map((s) => s.key)).size === steps.length, { message: "Step keys must be unique." });
+
+// server/repositories/clientOnboardingRepository.ts
+var STEP_LABELS = {
+  CLIENT_VERIFIED: "Client verified",
+  WORKSPACE_CREATED: "Workspace created",
+  PRIMARY_CONTACT_CONFIRMED: "Primary contact confirmed",
+  ADMINISTRATOR_INVITED: "Administrator invited",
+  ADMINISTRATOR_ACCEPTED: "Administrator accepted",
+  WORKSPACE_CONFIGURED: "Workspace configured",
+  ONBOARDING_COMPLETED: "Onboarding completed"
+};
+function defaultOnboardingTemplateSteps() {
+  return ONBOARDING_CHECKLIST_KEYS.map((key) => ({ key, label: STEP_LABELS[key], requiresDocument: false }));
+}
+function freshChecklist(steps) {
+  return (steps && steps.length > 0 ? steps : defaultOnboardingTemplateSteps()).map((step) => ({
+    key: step.key,
+    label: step.label,
+    completed: false,
+    completedAt: null,
+    completedById: null,
+    dueDate: null,
+    assignedTo: null,
+    notes: null,
+    requiresDocument: step.requiresDocument ?? false,
+    documentMediaId: null
+  }));
+}
+function nextIncompleteStep(checklist) {
+  return checklist.find((item) => !item.completed)?.key ?? null;
+}
+function buildWhere3(organizationId, filters) {
+  const where = { organizationId };
+  if (filters.status) where.status = filters.status;
+  if (filters.ownerId) where.ownerId = filters.ownerId;
+  if (filters.overdue) {
+    where.dueDate = { lt: /* @__PURE__ */ new Date() };
+    where.status = { notIn: ["COMPLETED", "CANCELLED"] };
+  }
+  if (filters.search) {
+    where.client = { name: { contains: filters.search, mode: "insensitive" } };
+  }
+  return where;
+}
+var clientOnboardingRepository = {
+  async list(organizationId, filters, page, limit) {
+    const where = buildWhere3(organizationId, filters);
+    const [rows, total] = await Promise.all([
+      prisma.clientOnboarding.findMany({
+        where,
+        include: { client: { include: { workspaceOrganization: true } } },
+        orderBy: { updatedAt: "desc" },
+        skip: (page - 1) * limit,
+        take: limit
+      }),
+      prisma.clientOnboarding.count({ where })
+    ]);
+    return { rows, total };
+  },
+  async findByIdInOrg(id, organizationId) {
+    return prisma.clientOnboarding.findFirst({
+      where: { id, organizationId },
+      include: { client: { include: { workspaceOrganization: true } } }
+    });
+  },
+  async findByClientId(clientId) {
+    return prisma.clientOnboarding.findUnique({ where: { clientId } });
+  },
+  async create(data) {
+    const checklist = freshChecklist(data.steps);
+    return prisma.clientOnboarding.create({
+      data: {
+        organizationId: data.organizationId,
+        clientId: data.clientId,
+        createdById: data.createdById,
+        status: "IN_PROGRESS",
+        startedAt: /* @__PURE__ */ new Date(),
+        checklist,
+        currentStep: checklist[0].key,
+        ownerId: data.ownerId,
+        dueDate: data.dueDate
+      }
+    });
+  },
+  async update(id, data) {
+    return prisma.clientOnboarding.update({ where: { id }, data });
+  },
+  /** Phase 13 dashboard — real counts only, computed server-side (never fabricated). */
+  async dashboardStats(organizationId, callerId) {
+    const [active, inProgress, overdue, allOpen] = await Promise.all([
+      prisma.clientOnboarding.count({ where: { organizationId, status: { in: ["IN_PROGRESS", "READY"] } } }),
+      prisma.clientOnboarding.count({ where: { organizationId, status: "IN_PROGRESS" } }),
+      prisma.clientOnboarding.count({
+        where: { organizationId, status: { notIn: ["COMPLETED", "CANCELLED"] }, dueDate: { lt: /* @__PURE__ */ new Date() } }
+      }),
+      prisma.clientOnboarding.findMany({
+        where: { organizationId, status: { notIn: ["COMPLETED", "CANCELLED"] } },
+        select: { checklist: true }
+      })
+    ]);
+    let pendingForCaller = 0;
+    let documentsAwaiting = 0;
+    for (const row of allOpen) {
+      const checklist = row.checklist;
+      for (const item of checklist) {
+        if (item.completed) continue;
+        if (item.assignedTo === callerId) pendingForCaller++;
+        if (item.requiresDocument && !item.documentMediaId) documentsAwaiting++;
+      }
+    }
+    return { active, inProgress, overdue, pendingForCaller, documentsAwaiting };
   }
 };
 
@@ -4006,6 +4351,16 @@ var mediaService = {
     if (input.sizeBytes > maxSize) {
       throw new ValidationError(`File exceeds the maximum allowed size for ${mediaCategoryFor(input.mimeType)}s (${maxSize} bytes).`);
     }
+    if (input.clientId && !await clientRepository.findByIdInOrg(input.clientId, organizationId)) {
+      throw new ValidationError("clientId does not refer to a client in this organization.");
+    }
+    if (input.onboardingId) {
+      const onboarding = await clientOnboardingRepository.findByIdInOrg(input.onboardingId, organizationId);
+      if (!onboarding) throw new ValidationError("onboardingId does not refer to an onboarding record in this organization.");
+      if (input.clientId && onboarding.clientId !== input.clientId) {
+        throw new ValidationError("onboardingId does not belong to the given clientId.");
+      }
+    }
     const mediaId = randomUUID2();
     const storageKey = buildStorageKey(organizationId, mediaId, input.filename);
     const provider = getStorageProvider();
@@ -4021,7 +4376,10 @@ var mediaService = {
       sizeBytes: input.sizeBytes,
       altText: input.altText,
       caption: input.caption,
-      uploadedById: caller.id
+      uploadedById: caller.id,
+      clientId: input.clientId,
+      onboardingId: input.onboardingId,
+      documentCategory: input.documentCategory
     });
     const upload = await provider.createSignedUploadUrl({ key: storageKey, contentType: input.mimeType, maxSizeBytes: maxSize });
     const rawToken = generateUploadToken();
@@ -4159,6 +4517,13 @@ var mediaService = {
     if (input.altText !== void 0) patch.altText = input.altText;
     if (input.caption !== void 0) patch.caption = input.caption;
     if (input.visibility !== void 0) patch.visibility = input.visibility;
+    if (input.documentCategory !== void 0) patch.documentCategory = input.documentCategory;
+    if (input.isClientVisible !== void 0) {
+      if (input.isClientVisible && !existing.clientId) {
+        throw new ValidationError("This media is not associated with a client \u2014 it cannot be made client-visible.");
+      }
+      patch.isClientVisible = input.isClientVisible;
+    }
     const updated = await mediaRepository.update(id, patch);
     await auditLogRepository.record({
       organizationId,
@@ -4219,17 +4584,17 @@ var mediaService = {
 };
 
 // server/schemas/siteSettingsSchemas.ts
-import { z as z7 } from "zod";
-var mediaIdSchema = z7.string().trim().uuid();
-var colorSchema = z7.string().trim().min(1).max(60).regex(/^(#[0-9a-fA-F]{3,8}|rgba?\([0-9.,%\s]+\)|hsla?\([0-9.,%\s]+\)|[a-zA-Z][a-zA-Z0-9]*)$/, "must be a valid CSS color (#hex, rgb(), rgba(), hsl(), or a named color)");
-var lengthSchema = z7.string().trim().min(1).max(30).regex(/^-?[0-9]*\.?[0-9]+(px|rem|em|%|vw|vh)$/, "must be a CSS length (e.g. 1rem, 16px)");
-var fontFamilySchema = z7.string().trim().min(1).max(300);
-var fontWeightSchema = z7.union([z7.number().int().min(100).max(900), z7.enum(["normal", "bold"])]);
-var unitlessNumberSchema = z7.coerce.number().min(0.5).max(3);
-var siteIdentitySchema = z7.object({
-  siteName: z7.string().trim().min(1).max(150).default("Artify Solutions"),
-  tagline: z7.string().trim().max(200).default("AI-Native Software & Intelligent Automation"),
-  description: z7.string().trim().max(500).default(
+import { z as z8 } from "zod";
+var mediaIdSchema = z8.string().trim().uuid();
+var colorSchema = z8.string().trim().min(1).max(60).regex(/^(#[0-9a-fA-F]{3,8}|rgba?\([0-9.,%\s]+\)|hsla?\([0-9.,%\s]+\)|[a-zA-Z][a-zA-Z0-9]*)$/, "must be a valid CSS color (#hex, rgb(), rgba(), hsl(), or a named color)");
+var lengthSchema = z8.string().trim().min(1).max(30).regex(/^-?[0-9]*\.?[0-9]+(px|rem|em|%|vw|vh)$/, "must be a CSS length (e.g. 1rem, 16px)");
+var fontFamilySchema = z8.string().trim().min(1).max(300);
+var fontWeightSchema = z8.union([z8.number().int().min(100).max(900), z8.enum(["normal", "bold"])]);
+var unitlessNumberSchema = z8.coerce.number().min(0.5).max(3);
+var siteIdentitySchema = z8.object({
+  siteName: z8.string().trim().min(1).max(150).default("Artify Solutions"),
+  tagline: z8.string().trim().max(200).default("AI-Native Software & Intelligent Automation"),
+  description: z8.string().trim().max(500).default(
     "Artify Solutions builds AI-native software, autonomous agent swarms, business automation and fully customized digital solutions designed around your organization's unique workflows."
   ),
   logoMediaId: mediaIdSchema.nullable().default(null),
@@ -4237,15 +4602,15 @@ var siteIdentitySchema = z7.object({
   logoMobileMediaId: mediaIdSchema.nullable().default(null),
   faviconMediaId: mediaIdSchema.nullable().default(null),
   socialImageMediaId: mediaIdSchema.nullable().default(null),
-  defaultMetaTitle: z7.string().trim().max(70).default("Artify Solutions | AI-Native Software & Intelligent Automation"),
-  defaultMetaDescription: z7.string().trim().max(200).default("Your Business. Reimagined by AI. We engineer intelligent software systems that understand your business, automate processes, and connect your data."),
-  contactEmail: z7.string().trim().toLowerCase().email().optional(),
-  contactPhone: z7.string().trim().max(40).optional(),
-  address: z7.string().trim().max(300).optional(),
-  organizationLegalName: z7.string().trim().max(200).optional()
+  defaultMetaTitle: z8.string().trim().max(70).default("Artify Solutions | AI-Native Software & Intelligent Automation"),
+  defaultMetaDescription: z8.string().trim().max(200).default("Your Business. Reimagined by AI. We engineer intelligent software systems that understand your business, automate processes, and connect your data."),
+  contactEmail: z8.string().trim().toLowerCase().email().optional(),
+  contactPhone: z8.string().trim().max(40).optional(),
+  address: z8.string().trim().max(300).optional(),
+  organizationLegalName: z8.string().trim().max(200).optional()
 }).strict();
 var SITE_IDENTITY_MEDIA_FIELDS = ["logoMediaId", "logoDarkMediaId", "logoMobileMediaId", "faviconMediaId", "socialImageMediaId"];
-var colorsSchema = z7.object({
+var colorsSchema = z8.object({
   primary: colorSchema.default("#7C3AED"),
   primaryHover: colorSchema.default("#6D28D9"),
   primaryForeground: colorSchema.default("#FFFFFF"),
@@ -4259,7 +4624,7 @@ var colorsSchema = z7.object({
   linkHover: colorSchema.default("#6D28D9"),
   border: colorSchema.default("#CBD5E1")
 }).strict().default({});
-var headingScaleSchema = z7.object({
+var headingScaleSchema = z8.object({
   h1: lengthSchema.default("2.5rem"),
   h2: lengthSchema.default("2rem"),
   h3: lengthSchema.default("1.5rem"),
@@ -4267,7 +4632,7 @@ var headingScaleSchema = z7.object({
   h5: lengthSchema.default("1.125rem"),
   h6: lengthSchema.default("1rem")
 }).strict().default({});
-var typographySchema = z7.object({
+var typographySchema = z8.object({
   fontFamilyBase: fontFamilySchema.default("'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"),
   fontFamilyHeading: fontFamilySchema.default("'Plus Jakarta Sans', sans-serif"),
   fontSizeBase: lengthSchema.default("16px"),
@@ -4278,32 +4643,32 @@ var typographySchema = z7.object({
   fontWeightHeading: fontWeightSchema.default(700),
   fontWeightBold: fontWeightSchema.default(600)
 }).strict().default({});
-var spacingScaleSchema = z7.object({
+var spacingScaleSchema = z8.object({
   xs: lengthSchema.default("0.5rem"),
   sm: lengthSchema.default("1rem"),
   md: lengthSchema.default("1.5rem"),
   lg: lengthSchema.default("2rem"),
   xl: lengthSchema.default("3rem")
 }).strict().default({});
-var borderRadiusSchema = z7.object({
+var borderRadiusSchema = z8.object({
   sm: lengthSchema.default("0.25rem"),
   md: lengthSchema.default("0.5rem"),
   lg: lengthSchema.default("1rem"),
-  full: z7.literal("9999px").default("9999px")
+  full: z8.literal("9999px").default("9999px")
 }).strict().default({});
-var layoutSchema = z7.object({
+var layoutSchema = z8.object({
   containerMaxWidth: lengthSchema.default("1280px"),
   spacingScale: spacingScaleSchema,
   borderRadius: borderRadiusSchema
 }).strict().default({});
-var effectsSchema = z7.object({
+var effectsSchema = z8.object({
   borderColor: colorSchema.default("#CBD5E1"),
   borderWidth: lengthSchema.default("1px"),
-  shadowSm: z7.string().trim().max(200).default("0 1px 2px 0 rgba(15, 23, 42, 0.05)"),
-  shadowMd: z7.string().trim().max(200).default("0 4px 6px -1px rgba(15, 23, 42, 0.08)"),
-  shadowLg: z7.string().trim().max(200).default("0 12px 25px -5px rgba(15, 23, 42, 0.12)")
+  shadowSm: z8.string().trim().max(200).default("0 1px 2px 0 rgba(15, 23, 42, 0.05)"),
+  shadowMd: z8.string().trim().max(200).default("0 4px 6px -1px rgba(15, 23, 42, 0.08)"),
+  shadowLg: z8.string().trim().max(200).default("0 12px 25px -5px rgba(15, 23, 42, 0.12)")
 }).strict().default({});
-var buttonsSchema = z7.object({
+var buttonsSchema = z8.object({
   radius: lengthSchema.default("0.5rem"),
   paddingX: lengthSchema.default("1.25rem"),
   paddingY: lengthSchema.default("0.625rem"),
@@ -4315,22 +4680,22 @@ var buttonsSchema = z7.object({
   secondaryText: colorSchema.default("#0F172A"),
   secondaryBorder: colorSchema.default("#CBD5E1")
 }).strict().default({});
-var formsSchema = z7.object({
+var formsSchema = z8.object({
   radius: lengthSchema.default("0.5rem"),
   borderColor: colorSchema.default("#CBD5E1"),
   focusColor: colorSchema.default("#7C3AED"),
   background: colorSchema.default("#FFFFFF"),
   text: colorSchema.default("#020617")
 }).strict().default({});
-var responsiveOverrideSchema = z7.object({
+var responsiveOverrideSchema = z8.object({
   containerMaxWidth: lengthSchema.optional(),
   fontSizeBase: lengthSchema.optional()
 }).strict();
-var responsiveSchema = z7.object({
+var responsiveSchema = z8.object({
   tablet: responsiveOverrideSchema.default({}),
   mobile: responsiveOverrideSchema.default({})
 }).strict().default({});
-var globalStylesSchema = z7.object({
+var globalStylesSchema = z8.object({
   colors: colorsSchema,
   typography: typographySchema,
   layout: layoutSchema,
@@ -4554,7 +4919,7 @@ var siteSettingsRoutes_default = router9;
 import { Router as Router10 } from "express";
 
 // server/repositories/leadRepository.ts
-function buildWhere2(organizationId, filters) {
+function buildWhere4(organizationId, filters) {
   const where = { organizationId, deletedAt: null };
   if (filters.status) where.status = filters.status;
   if (filters.source) where.source = filters.source;
@@ -4577,7 +4942,7 @@ function buildWhere2(organizationId, filters) {
 }
 var leadRepository = {
   async list(organizationId, filters, page, limit, sort, order) {
-    const where = buildWhere2(organizationId, filters);
+    const where = buildWhere4(organizationId, filters);
     const [rows, total] = await Promise.all([
       prisma.lead.findMany({
         where,
@@ -4609,7 +4974,17 @@ var leadRepository = {
         source: data.source,
         status: data.status ?? "NEW",
         notes: data.notes,
-        assignedTo: data.assignedTo
+        assignedTo: data.assignedTo,
+        utmSource: data.utmSource,
+        utmMedium: data.utmMedium,
+        utmCampaign: data.utmCampaign,
+        utmTerm: data.utmTerm,
+        utmContent: data.utmContent,
+        landingPagePath: data.landingPagePath,
+        referrer: data.referrer,
+        consentGiven: data.consentGiven,
+        formId: data.formId,
+        campaignId: data.campaignId
       }
     });
   },
@@ -4629,6 +5004,49 @@ var leadRepository = {
     for (const row of rows) result[row.status] = row._count._all;
     return result;
   },
+  /** Phase 14 — marketing dashboard: how many of this org's (non-deleted) leads carry a real campaign attribution vs none at all. */
+  async countAttribution(organizationId) {
+    const [total, attributed] = await Promise.all([
+      prisma.lead.count({ where: { organizationId, deletedAt: null } }),
+      prisma.lead.count({ where: { organizationId, deletedAt: null, campaignId: { not: null } } })
+    ]);
+    return { total, attributed };
+  },
+  /** Phase 14 — marketing dashboard: real source breakdown (never fabricated), only sources actually present on a lead. */
+  async countBySource(organizationId) {
+    const rows = await prisma.lead.groupBy({
+      by: ["source"],
+      where: { organizationId, deletedAt: null, source: { not: null } },
+      _count: { _all: true },
+      orderBy: { _count: { source: "desc" } },
+      take: 20
+    });
+    return rows.filter((r) => r.source).map((r) => ({ source: r.source, count: r._count._all }));
+  },
+  /** Phase 15 — analytics/reporting: real lead counts within a date range (never fabricated). */
+  async countInRange(organizationId, range) {
+    return prisma.lead.count({ where: { organizationId, deletedAt: null, createdAt: { gte: range.from, lte: range.to } } });
+  },
+  async countBySourceInRange(organizationId, range) {
+    const rows = await prisma.lead.groupBy({
+      by: ["source"],
+      where: { organizationId, deletedAt: null, source: { not: null }, createdAt: { gte: range.from, lte: range.to } },
+      _count: { _all: true },
+      orderBy: { _count: { source: "desc" } },
+      take: 20
+    });
+    return rows.filter((r) => r.source).map((r) => ({ source: r.source, count: r._count._all }));
+  },
+  async countByCampaignInRange(organizationId, range) {
+    const rows = await prisma.lead.groupBy({
+      by: ["campaignId"],
+      where: { organizationId, deletedAt: null, campaignId: { not: null }, createdAt: { gte: range.from, lte: range.to } },
+      _count: { _all: true },
+      orderBy: { _count: { campaignId: "desc" } },
+      take: 20
+    });
+    return rows.filter((r) => r.campaignId).map((r) => ({ campaignId: r.campaignId, count: r._count._all }));
+  },
   async recentForOrg(organizationId, limit) {
     return prisma.lead.findMany({
       where: { organizationId, deletedAt: null },
@@ -4638,104 +5056,49 @@ var leadRepository = {
   }
 };
 
-// server/repositories/clientRepository.ts
-var clientWithWorkspace = { include: { workspaceOrganization: true } };
-function buildWhere3(organizationId, filters) {
-  const where = { organizationId, deletedAt: null };
-  if (filters.status) where.status = filters.status;
-  if (filters.search) {
-    const term = filters.search;
-    where.OR = [
-      { name: { contains: term, mode: "insensitive" } },
-      { legalName: { contains: term, mode: "insensitive" } },
-      { clientCode: { contains: term, mode: "insensitive" } },
-      { email: { contains: term, mode: "insensitive" } }
-    ];
-  }
-  return where;
+// server/repositories/industryRepository.ts
+function slugify2(input) {
+  return input.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 100);
 }
-var clientRepository = {
-  async list(organizationId, filters, page, limit, sort, order) {
-    const where = buildWhere3(organizationId, filters);
-    const [rows, total] = await Promise.all([
-      prisma.client.findMany({
-        where,
-        ...clientWithWorkspace,
-        orderBy: { [sort]: order },
-        skip: (page - 1) * limit,
-        take: limit
-      }),
-      prisma.client.count({ where })
-    ]);
-    return { rows, total };
-  },
-  async findByIdInOrg(id, organizationId) {
-    return prisma.client.findFirst({ where: { id, organizationId, deletedAt: null }, ...clientWithWorkspace });
-  },
-  /**
-   * The Client Portal boundary (Phase 10 §25/§26 —
-   * docs/CLIENT_PORTAL_ARCHITECTURE.md): Contract/Subscription/Invoice/
-   * Payment.organizationId is always the AGENCY's own org (the same org
-   * that owns this Client row), never the client's own provisioned
-   * workspace org — so portal access resolves the caller's *session*
-   * organizationId (after they've switched into a client's workspace via
-   * the Phase 3 switchOrganization mechanism) to the one Client row whose
-   * `workspaceOrganizationId` matches, then scopes every portal query by
-   * that Client's id. An agency staffer viewing their own internal org
-   * naturally finds no matching row here and is blocked from a portal
-   * view of it.
-   */
-  async findByWorkspaceOrganizationId(workspaceOrganizationId) {
-    return prisma.client.findFirst({ where: { workspaceOrganizationId, deletedAt: null } });
-  },
-  /** Case-insensitive duplicate-name check within a tenant (§19) — soft, service-level, not a DB unique constraint (see schema.prisma's Client doc comment for why). */
-  async findByNameInOrg(organizationId, name) {
-    return prisma.client.findFirst({
-      where: { organizationId, deletedAt: null, name: { equals: name, mode: "insensitive" } }
+var industryRepository = {
+  async list(search) {
+    return prisma.industry.findMany({
+      where: search ? { name: { contains: search, mode: "insensitive" } } : void 0,
+      orderBy: [{ displayOrder: "asc" }, { name: "asc" }]
     });
   },
-  async findByCodeInOrg(organizationId, clientCode) {
-    return prisma.client.findFirst({ where: { organizationId, clientCode, deletedAt: null } });
+  async findById(id) {
+    return prisma.industry.findUnique({ where: { id } });
+  },
+  async findBySlug(slug) {
+    return prisma.industry.findUnique({ where: { slug } });
+  },
+  async findManyByIds(ids) {
+    if (ids.length === 0) return [];
+    return prisma.industry.findMany({ where: { id: { in: ids } } });
+  },
+  async findUniqueSlug(base) {
+    const baseSlug = slugify2(base) || "industry";
+    let slug = baseSlug;
+    let attempt = 1;
+    while (await this.findBySlug(slug)) {
+      attempt += 1;
+      slug = `${baseSlug}-${attempt}`;
+      if (attempt > 50) break;
+    }
+    return slug;
   },
   async create(data) {
-    return prisma.client.create({
-      data: {
-        organizationId: data.organizationId,
-        clientCode: data.clientCode,
-        name: data.name,
-        legalName: data.legalName,
-        status: data.status ?? "PROSPECT",
-        email: data.email,
-        phone: data.phone,
-        website: data.website,
-        address: data.address,
-        accountManager: data.accountManager,
-        notes: data.notes
-      }
-    });
+    return prisma.industry.create({ data });
   },
   async update(id, data) {
-    return prisma.client.update({ where: { id }, data });
+    return prisma.industry.update({ where: { id }, data });
   },
-  async softDelete(id) {
-    await prisma.client.update({ where: { id }, data: { deletedAt: /* @__PURE__ */ new Date() } });
+  async countProducts(id) {
+    return prisma.productIndustry.count({ where: { industryId: id } });
   },
-  async countByStatus(organizationId) {
-    const rows = await prisma.client.groupBy({
-      by: ["status"],
-      where: { organizationId, deletedAt: null },
-      _count: { _all: true }
-    });
-    const result = {};
-    for (const row of rows) result[row.status] = row._count._all;
-    return result;
-  },
-  async recentForOrg(organizationId, limit) {
-    return prisma.client.findMany({
-      where: { organizationId, deletedAt: null },
-      orderBy: { createdAt: "desc" },
-      take: limit
-    });
+  async delete(id) {
+    await prisma.industry.delete({ where: { id } });
   }
 };
 
@@ -4803,9 +5166,487 @@ var notificationService = {
         userId: params.userId,
         type: params.type,
         title: params.title,
-        message: params.message
+        message: params.message,
+        entityType: params.entityType,
+        entityId: params.entityId
       });
     } catch {
+    }
+  }
+};
+
+// server/services/automation/EventEngine.ts
+import crypto from "node:crypto";
+var EventEngine = class _EventEngine {
+  constructor() {
+    this.eventRegistry = /* @__PURE__ */ new Map();
+    this.listeners = [];
+    this.registerStandardEvents();
+  }
+  static getInstance() {
+    if (!_EventEngine.instance) {
+      _EventEngine.instance = new _EventEngine();
+    }
+    return _EventEngine.instance;
+  }
+  /**
+   * Registers default Artify business event types.
+   */
+  registerStandardEvents() {
+    const standardEvents = [
+      // CRM & Clients
+      { eventType: "client.created", entityType: "client", sourceModule: "CRM", description: "Triggered when a new client record is created" },
+      { eventType: "client.updated", entityType: "client", sourceModule: "CRM", description: "Triggered when client details are updated" },
+      { eventType: "client.onboarded", entityType: "client", sourceModule: "ONBOARDING", description: "Triggered when client onboarding is completed" },
+      // Phase 14 — Marketing + Campaigns + Automation. Lead/opportunity/
+      // form events were previously registered here as documentation only
+      // — nothing in the platform ever actually emitted them until this
+      // phase wired real eventEngine.emit() calls into leadService,
+      // opportunityService, publicLeadService, and publicFormService.
+      { eventType: "lead.created", entityType: "lead", sourceModule: "CRM", description: "Triggered when a new lead is captured (public intake or internal creation)" },
+      { eventType: "lead.status_changed", entityType: "lead", sourceModule: "CRM", description: "Triggered when a lead's status changes" },
+      { eventType: "opportunity.stage_changed", entityType: "opportunity", sourceModule: "CRM", description: "Triggered when a deal moves to a new pipeline stage, including won/lost" },
+      { eventType: "form.submitted", entityType: "form_submission", sourceModule: "MARKETING", description: "Triggered when a visitor submits a public Form" },
+      { eventType: "campaign.created", entityType: "campaign", sourceModule: "MARKETING", description: "Triggered when a new marketing campaign is created" },
+      { eventType: "campaign.updated", entityType: "campaign", sourceModule: "MARKETING", description: "Triggered when a campaign's details are updated" },
+      { eventType: "campaign.activated", entityType: "campaign", sourceModule: "MARKETING", description: "Triggered when a campaign goes live" },
+      { eventType: "campaign.paused", entityType: "campaign", sourceModule: "MARKETING", description: "Triggered when an active campaign is paused" },
+      { eventType: "campaign.archived", entityType: "campaign", sourceModule: "MARKETING", description: "Triggered when a campaign is archived" },
+      // Projects
+      { eventType: "project.created", entityType: "project", sourceModule: "PROJECTS", description: "Triggered when a new client project is initiated" },
+      { eventType: "project.status_changed", entityType: "project", sourceModule: "PROJECTS", description: "Triggered when project workflow status changes" },
+      // Products & Catalog
+      { eventType: "product.created", entityType: "product", sourceModule: "CATALOG", description: "Triggered when a new service/product is added" },
+      { eventType: "product.updated", entityType: "product", sourceModule: "CATALOG", description: "Triggered when a product/service is updated" },
+      // Commercial & Billing
+      { eventType: "invoice.created", entityType: "invoice", sourceModule: "BILLING", description: "Triggered when a new invoice is created" },
+      { eventType: "invoice.overdue", entityType: "invoice", sourceModule: "BILLING", description: "Triggered when an invoice passes its due date without payment" },
+      { eventType: "invoice.paid", entityType: "invoice", sourceModule: "BILLING", description: "Triggered when an invoice is fully marked paid" },
+      { eventType: "payment.created", entityType: "payment", sourceModule: "BILLING", description: "Triggered when a payment is recorded" },
+      { eventType: "payment.failed", entityType: "payment", sourceModule: "BILLING", description: "Triggered when a payment attempt fails" },
+      // CMS & Content
+      { eventType: "cms.content_created", entityType: "content", sourceModule: "CMS", description: "Triggered when CMS page or post is drafted" },
+      { eventType: "cms.content_updated", entityType: "content", sourceModule: "CMS", description: "Triggered when CMS content revision is updated" },
+      { eventType: "cms.content_published", entityType: "content", sourceModule: "CMS", description: "Triggered when CMS content is published" },
+      // Identity & RBAC
+      { eventType: "user.created", entityType: "user", sourceModule: "AUTH", description: "Triggered when a new team member is registered" },
+      { eventType: "user.role_changed", entityType: "user", sourceModule: "RBAC", description: "Triggered when a user's role/permissions change" },
+      // Automation Lifecycle
+      { eventType: "workflow.created", entityType: "workflow", sourceModule: "AUTOMATION", description: "Triggered when a new workflow is configured" },
+      { eventType: "workflow.failed", entityType: "workflow", sourceModule: "AUTOMATION", description: "Triggered when an execution fails" },
+      { eventType: "workflow.completed", entityType: "workflow", sourceModule: "AUTOMATION", description: "Triggered when an execution completes" },
+      // Phase 16 (Workflow + Approvals + Tasks + Notifications,
+      // docs/AUTOMATION_ARCHITECTURE.md) — same "registered here, wired to
+      // a real eventEngine.emit() call site" convention Phase 14 applied
+      // to lead/opportunity/form events.
+      { eventType: "opportunity.created", entityType: "opportunity", sourceModule: "CRM", description: "Triggered when a new sales opportunity is opened" },
+      { eventType: "client.onboarding_started", entityType: "client", sourceModule: "ONBOARDING", description: "Triggered when client onboarding begins" },
+      { eventType: "content.submitted_for_review", entityType: "content", sourceModule: "CMS", description: "Triggered when a CMS page or post is submitted for approval" },
+      { eventType: "content.approved", entityType: "content", sourceModule: "CMS", description: "Triggered when submitted CMS content is approved and published" },
+      { eventType: "content.rejected", entityType: "content", sourceModule: "CMS", description: "Triggered when submitted CMS content is rejected or sent back for changes" },
+      { eventType: "task.completed", entityType: "automation_task", sourceModule: "AUTOMATION", description: "Triggered when an automation task is marked complete" }
+    ];
+    for (const evt of standardEvents) {
+      this.eventRegistry.set(evt.eventType, evt);
+    }
+  }
+  /**
+   * Register a custom event dynamically.
+   */
+  registerEvent(registration) {
+    this.eventRegistry.set(registration.eventType, registration);
+  }
+  /**
+   * List all registered event descriptors.
+   */
+  listRegisteredEvents() {
+    return Array.from(this.eventRegistry.values());
+  }
+  /**
+   * Subscribe to business events.
+   */
+  subscribe(listener) {
+    this.listeners.push(listener);
+    return () => {
+      this.listeners = this.listeners.filter((l) => l !== listener);
+    };
+  }
+  /**
+   * Emits a business event into the system.
+   * Sanitizes payload, persists to automation_events, and dispatches to subscribers.
+   */
+  async emit(params) {
+    const eventId = crypto.randomUUID();
+    const correlationId = params.correlationId || crypto.randomUUID();
+    const timestamp = (/* @__PURE__ */ new Date()).toISOString();
+    const registered = this.eventRegistry.get(params.eventType);
+    const sourceModule = params.sourceModule || registered?.sourceModule || "SYSTEM";
+    const sanitizedPayload = this.sanitizePayload(params.payload);
+    const event = {
+      eventId,
+      eventType: params.eventType,
+      entityType: params.entityType,
+      entityId: params.entityId,
+      organizationId: params.organizationId,
+      actorId: params.actorId,
+      actorType: params.actorType || "USER",
+      timestamp,
+      payload: sanitizedPayload,
+      correlationId,
+      sourceModule
+    };
+    try {
+      await prisma.automationEvent.create({
+        data: {
+          id: eventId,
+          organizationId: params.organizationId,
+          eventType: params.eventType,
+          entityType: params.entityType,
+          entityId: params.entityId,
+          actorId: params.actorId || null,
+          actorType: event.actorType,
+          sourceModule,
+          correlationId,
+          payload: sanitizedPayload,
+          processed: false
+        }
+      });
+    } catch (err) {
+      logger.error({ err, eventId }, "[EventEngine] Failed to persist automation event");
+    }
+    for (const listener of this.listeners) {
+      try {
+        await listener(event);
+      } catch (err) {
+        logger.error({ err, eventId, eventType: params.eventType }, "[EventEngine] Listener error");
+      }
+    }
+    return event;
+  }
+  /**
+   * Sanitizes payload by stripping sensitive keys.
+   */
+  sanitizePayload(data) {
+    if (!data || typeof data !== "object") return data;
+    if (Array.isArray(data)) {
+      return data.map((item) => this.sanitizePayload(item));
+    }
+    const sanitized = {};
+    const sensitiveKeys = /* @__PURE__ */ new Set([
+      "password",
+      "passwordhash",
+      "token",
+      "accesstoken",
+      "refreshtoken",
+      "secret",
+      "apikey",
+      "sessionsecret"
+    ]);
+    for (const [key, value] of Object.entries(data)) {
+      if (sensitiveKeys.has(key.toLowerCase())) {
+        sanitized[key] = "[REDACTED]";
+      } else if (typeof value === "object" && value !== null) {
+        sanitized[key] = this.sanitizePayload(value);
+      } else {
+        sanitized[key] = value;
+      }
+    }
+    return sanitized;
+  }
+};
+var eventEngine = EventEngine.getInstance();
+
+// server/repositories/analyticsEventRepository.ts
+var analyticsEventRepository = {
+  async create(data) {
+    await prisma.analyticsEvent.create({
+      data: {
+        organizationId: data.organizationId,
+        eventType: data.eventType,
+        path: data.path,
+        referrer: data.referrer,
+        sessionId: data.sessionId,
+        utmSource: data.utmSource,
+        utmMedium: data.utmMedium,
+        utmCampaign: data.utmCampaign,
+        utmTerm: data.utmTerm,
+        utmContent: data.utmContent,
+        campaignId: data.campaignId,
+        entityType: data.entityType,
+        entityId: data.entityId,
+        metadata: data.metadata ?? {}
+      }
+    });
+  },
+  async countByEventType(organizationId, eventType, range) {
+    return prisma.analyticsEvent.count({
+      where: { organizationId, eventType, createdAt: { gte: range.from, lte: range.to } }
+    });
+  },
+  /** Real counts per event type actually emitted in range — never a fabricated zero for an event type nothing recorded (that type is simply absent from the returned record). */
+  async countByEventTypes(organizationId, range) {
+    const rows = await prisma.analyticsEvent.groupBy({
+      by: ["eventType"],
+      where: { organizationId, createdAt: { gte: range.from, lte: range.to } },
+      _count: { _all: true }
+    });
+    const result = {};
+    for (const row of rows) result[row.eventType] = row._count._all;
+    return result;
+  },
+  async distinctSessionCount(organizationId, range, eventType) {
+    const rows = await prisma.analyticsEvent.findMany({
+      where: { organizationId, createdAt: { gte: range.from, lte: range.to }, sessionId: { not: null }, ...eventType ? { eventType } : {} },
+      distinct: ["sessionId"],
+      select: { sessionId: true }
+    });
+    return rows.length;
+  },
+  async topPaths(organizationId, range, eventType, limit) {
+    const rows = await prisma.analyticsEvent.groupBy({
+      by: ["path"],
+      where: { organizationId, eventType, createdAt: { gte: range.from, lte: range.to }, path: { not: null } },
+      _count: { _all: true },
+      orderBy: { _count: { path: "desc" } },
+      take: limit
+    });
+    return rows.filter((r) => r.path).map((r) => ({ path: r.path, count: r._count._all }));
+  },
+  /** Daily time series for a single event type — the dashboard's traffic chart. Raw SQL only for the date_trunc grouping Prisma's query builder can't express; organizationId/eventType/range are bound parameters, never interpolated. */
+  async countByDay(organizationId, eventType, range) {
+    const rows = await prisma.$queryRaw`
+      SELECT date_trunc('day', created_at) AS day, COUNT(*)::bigint AS count
+      FROM analytics_events
+      WHERE organization_id = ${organizationId} AND event_type = ${eventType}
+        AND created_at >= ${range.from} AND created_at <= ${range.to}
+      GROUP BY day
+      ORDER BY day ASC
+    `;
+    return rows.map((r) => ({ day: r.day.toISOString().slice(0, 10), count: Number(r.count) }));
+  },
+  async utmSourceBreakdown(organizationId, range, eventType) {
+    const rows = await prisma.analyticsEvent.groupBy({
+      by: ["utmSource"],
+      where: { organizationId, eventType, createdAt: { gte: range.from, lte: range.to }, utmSource: { not: null } },
+      _count: { _all: true },
+      orderBy: { _count: { utmSource: "desc" } },
+      take: 20
+    });
+    return rows.filter((r) => r.utmSource).map((r) => ({ utmSource: r.utmSource, count: r._count._all }));
+  },
+  async utmCampaignBreakdown(organizationId, range, eventType) {
+    const rows = await prisma.analyticsEvent.groupBy({
+      by: ["utmCampaign"],
+      where: { organizationId, eventType, createdAt: { gte: range.from, lte: range.to }, utmCampaign: { not: null } },
+      _count: { _all: true },
+      orderBy: { _count: { utmCampaign: "desc" } },
+      take: 20
+    });
+    return rows.filter((r) => r.utmCampaign).map((r) => ({ utmCampaign: r.utmCampaign, count: r._count._all }));
+  },
+  /** Whether this organization has ever ingested any event at all — distinguishes "no traffic yet" (real zero) from "analytics never configured/wired" at the service layer. */
+  async hasAnyEvent(organizationId) {
+    const row = await prisma.analyticsEvent.findFirst({ where: { organizationId }, select: { id: true } });
+    return row !== null;
+  }
+};
+
+// server/repositories/campaignRepository.ts
+var withRelations = {
+  include: {
+    owner: { select: { id: true, firstName: true, lastName: true, email: true } },
+    createdBy: { select: { id: true, firstName: true, lastName: true, email: true } },
+    landingPage: { select: { id: true, slug: true, title: true, status: true } },
+    form: { select: { id: true, name: true, slug: true, status: true } },
+    products: { include: { product: { select: { id: true, slug: true, name: true, type: true, status: true } } } },
+    relatedPages: { include: { page: { select: { id: true, slug: true, title: true, status: true } } } },
+    relatedPosts: { include: { post: { select: { id: true, slug: true, title: true, status: true } } } },
+    relatedCaseStudies: { include: { caseStudy: { select: { id: true, slug: true, title: true, status: true } } } },
+    media: { include: { media: { select: { id: true, displayName: true, originalFilename: true, storageKey: true, mimeType: true } } } },
+    _count: { select: { leads: true, formSubmissions: true, opportunities: true, clients: true } }
+  }
+};
+function buildWhere5(organizationId, filters) {
+  const where = { organizationId, deletedAt: null };
+  if (filters.status) where.status = filters.status;
+  if (filters.channel) where.channel = filters.channel;
+  if (filters.ownerId) where.ownerId = filters.ownerId;
+  if (filters.search) {
+    where.OR = [
+      { name: { contains: filters.search, mode: "insensitive" } },
+      { utmCampaign: { contains: filters.search, mode: "insensitive" } },
+      { description: { contains: filters.search, mode: "insensitive" } }
+    ];
+  }
+  return where;
+}
+var campaignRepository = {
+  async list(organizationId, filters, page, limit, sort, order) {
+    const where = buildWhere5(organizationId, filters);
+    const [rows, total] = await Promise.all([
+      prisma.campaign.findMany({
+        where,
+        orderBy: { [sort]: order },
+        skip: (page - 1) * limit,
+        take: limit,
+        include: { owner: { select: { id: true, firstName: true, lastName: true, email: true } }, _count: { select: { leads: true, opportunities: true, clients: true } } }
+      }),
+      prisma.campaign.count({ where })
+    ]);
+    return { rows, total };
+  },
+  async findByIdInOrg(id, organizationId) {
+    return prisma.campaign.findFirst({ where: { id, organizationId, deletedAt: null }, ...withRelations });
+  },
+  /** Case-insensitive match against this org's own Campaign.utmCampaign — the attribution-resolution lookup (campaignAttributionService). Never ARCHIVED/soft-deleted: an archived campaign no longer attributes new activity. */
+  async findActiveByUtmCampaignInOrg(organizationId, utmCampaign) {
+    return prisma.campaign.findFirst({
+      where: { organizationId, deletedAt: null, status: { not: "ARCHIVED" }, utmCampaign: { equals: utmCampaign, mode: "insensitive" } },
+      orderBy: { createdAt: "desc" }
+    });
+  },
+  async create(data) {
+    return prisma.campaign.create({ data });
+  },
+  async update(id, data) {
+    return prisma.campaign.update({ where: { id }, data });
+  },
+  async softDelete(id) {
+    await prisma.campaign.update({ where: { id }, data: { deletedAt: /* @__PURE__ */ new Date() } });
+  },
+  async setProducts(campaignId, productIds) {
+    await prisma.$transaction([
+      prisma.campaignProduct.deleteMany({ where: { campaignId } }),
+      ...productIds.length > 0 ? [prisma.campaignProduct.createMany({ data: productIds.map((productId) => ({ campaignId, productId })) })] : []
+    ]);
+  },
+  async setRelatedPages(campaignId, pageIds) {
+    await prisma.$transaction([
+      prisma.campaignRelatedPage.deleteMany({ where: { campaignId } }),
+      ...pageIds.length > 0 ? [prisma.campaignRelatedPage.createMany({ data: pageIds.map((pageId) => ({ campaignId, pageId })) })] : []
+    ]);
+  },
+  async setRelatedPosts(campaignId, postIds) {
+    await prisma.$transaction([
+      prisma.campaignRelatedPost.deleteMany({ where: { campaignId } }),
+      ...postIds.length > 0 ? [prisma.campaignRelatedPost.createMany({ data: postIds.map((postId) => ({ campaignId, postId })) })] : []
+    ]);
+  },
+  async setRelatedCaseStudies(campaignId, caseStudyIds) {
+    await prisma.$transaction([
+      prisma.campaignRelatedCaseStudy.deleteMany({ where: { campaignId } }),
+      ...caseStudyIds.length > 0 ? [prisma.campaignRelatedCaseStudy.createMany({ data: caseStudyIds.map((caseStudyId) => ({ campaignId, caseStudyId })) })] : []
+    ]);
+  },
+  async setMedia(campaignId, mediaIds) {
+    await prisma.$transaction([
+      prisma.campaignMedia.deleteMany({ where: { campaignId } }),
+      ...mediaIds.length > 0 ? [prisma.campaignMedia.createMany({ data: mediaIds.map((mediaId) => ({ campaignId, mediaId })) })] : []
+    ]);
+  },
+  /** Marketing dashboard — real counts only, never fabricated (marketingService.ts). */
+  async countByStatus(organizationId) {
+    const rows = await prisma.campaign.groupBy({ by: ["status"], where: { organizationId, deletedAt: null }, _count: { _all: true } });
+    const result = {};
+    for (const row of rows) result[row.status] = row._count._all;
+    return result;
+  },
+  /** Attributed-leads count per campaign, newest campaigns first — used by the dashboard's "recent campaign activity"/performance view. */
+  async leadCounts(organizationId) {
+    const rows = await prisma.campaign.findMany({
+      where: { organizationId, deletedAt: null },
+      select: {
+        id: true,
+        _count: { select: { leads: true, clients: true } }
+      },
+      orderBy: { createdAt: "desc" },
+      take: 20
+    });
+    return rows.map((r) => ({ campaignId: r.id, leads: r._count.leads, conversions: r._count.clients }));
+  },
+  /** Phase 15 — campaign reporting: real leads/opportunities/clients attributed to each campaign within a date range (never fabricated); campaigns with no activity in range are omitted rather than shown as zero rows. */
+  async performanceInRange(organizationId, range) {
+    const [campaigns, leadsByCampaign, oppsByCampaign, clientsByCampaign] = await Promise.all([
+      prisma.campaign.findMany({ where: { organizationId, deletedAt: null }, select: { id: true, name: true, status: true } }),
+      prisma.lead.groupBy({
+        by: ["campaignId"],
+        where: { organizationId, deletedAt: null, campaignId: { not: null }, createdAt: { gte: range.from, lte: range.to } },
+        _count: { _all: true }
+      }),
+      prisma.opportunity.groupBy({
+        by: ["campaignId"],
+        where: { organizationId, deletedAt: null, campaignId: { not: null }, createdAt: { gte: range.from, lte: range.to } },
+        _count: { _all: true }
+      }),
+      prisma.client.groupBy({
+        by: ["campaignId"],
+        where: { organizationId, deletedAt: null, campaignId: { not: null }, createdAt: { gte: range.from, lte: range.to } },
+        _count: { _all: true }
+      })
+    ]);
+    const leadMap = new Map(leadsByCampaign.map((r) => [r.campaignId, r._count._all]));
+    const oppMap = new Map(oppsByCampaign.map((r) => [r.campaignId, r._count._all]));
+    const clientMap = new Map(clientsByCampaign.map((r) => [r.campaignId, r._count._all]));
+    return campaigns.map((c) => ({ campaignId: c.id, name: c.name, status: c.status, leads: leadMap.get(c.id) ?? 0, opportunities: oppMap.get(c.id) ?? 0, clients: clientMap.get(c.id) ?? 0 })).filter((c) => c.leads > 0 || c.opportunities > 0 || c.clients > 0);
+  },
+  async distinctUtmCampaigns(organizationId) {
+    const rows = await prisma.lead.groupBy({
+      by: ["utmCampaign"],
+      where: { organizationId, deletedAt: null, utmCampaign: { not: null } },
+      _count: { _all: true },
+      orderBy: { _count: { utmCampaign: "desc" } },
+      take: 20
+    });
+    return rows.filter((r) => r.utmCampaign).map((r) => ({ utmCampaign: r.utmCampaign, count: r._count._all }));
+  }
+};
+
+// server/services/campaignAttributionService.ts
+var campaignAttributionService = {
+  async resolveCampaignId(organizationId, utmCampaign) {
+    if (!utmCampaign || !utmCampaign.trim()) return void 0;
+    const campaign = await campaignRepository.findActiveByUtmCampaignInOrg(organizationId, utmCampaign.trim());
+    return campaign?.id;
+  }
+};
+
+// server/services/analyticsEventService.ts
+var PUBLIC_EVENT_TYPES = ["page_view", "cta_click", "content_interaction"];
+var analyticsEventService = {
+  /**
+   * Public, anonymous ingestion. Silently no-ops (never throws, never
+   * blocks the visitor's page) when the platform has no configured public
+   * website organization — the "analytics source not configured" state,
+   * never a fabricated event.
+   */
+  async recordPublicEvent(input) {
+    const organizationId = config.publicWebsiteOrganizationId;
+    if (!organizationId) return;
+    try {
+      const campaignId = await campaignAttributionService.resolveCampaignId(organizationId, input.utmCampaign);
+      await analyticsEventRepository.create({
+        organizationId,
+        eventType: input.eventType,
+        path: input.path,
+        referrer: input.referrer,
+        sessionId: input.sessionId,
+        utmSource: input.utmSource,
+        utmMedium: input.utmMedium,
+        utmCampaign: input.utmCampaign,
+        utmTerm: input.utmTerm,
+        utmContent: input.utmContent,
+        campaignId
+      });
+    } catch (err) {
+      logger.error({ err }, "[analyticsEventService] public event ingestion failed");
+    }
+  },
+  /** Server-side business-event emission — best-effort, never throws (same call-site convention as eventEngine.emit). */
+  async recordBusinessEvent(input) {
+    try {
+      await analyticsEventRepository.create(input);
+    } catch (err) {
+      logger.error({ err }, "[analyticsEventService] business event record failed");
     }
   }
 };
@@ -4880,6 +5721,19 @@ var leadService = {
         message: `${lead.companyName} was assigned to you.`
       });
     }
+    try {
+      await eventEngine.emit({
+        eventType: "lead.created",
+        entityType: "lead",
+        entityId: lead.id,
+        organizationId: caller.organizationId,
+        actorId: caller.id,
+        actorType: "USER",
+        sourceModule: "CRM",
+        payload: { companyName: lead.companyName, status: lead.status, source: lead.source ?? null }
+      });
+    } catch {
+    }
     return lead;
   },
   async updateLead(caller, id, input, meta = {}) {
@@ -4911,6 +5765,21 @@ var leadService = {
       ipAddress: meta.ip,
       userAgent: meta.userAgent
     });
+    if (input.status !== void 0 && input.status !== existing.status) {
+      try {
+        await eventEngine.emit({
+          eventType: "lead.status_changed",
+          entityType: "lead",
+          entityId: id,
+          organizationId: caller.organizationId,
+          actorId: caller.id,
+          actorType: "USER",
+          sourceModule: "CRM",
+          payload: { fromStatus: existing.status, toStatus: input.status }
+        });
+      } catch {
+      }
+    }
     if (input.assignedTo !== void 0 && input.assignedTo !== existing.assignedTo && input.assignedTo !== caller.id) {
       await notificationService.notify({
         organizationId: caller.organizationId,
@@ -4953,17 +5822,35 @@ var leadService = {
     if (existingCode) {
       throw new ConflictError(`A client with code "${input.clientCode}" already exists in this organization.`);
     }
+    const newClientName = input.name ?? lead.companyName;
+    const existingName = await clientRepository.findByNameInOrg(caller.organizationId, newClientName);
+    if (existingName) {
+      throw new ConflictError(`A client named "${newClientName}" already exists in this organization.`, { existingClientId: existingName.id });
+    }
+    if (input.industryId && !await industryRepository.findById(input.industryId)) {
+      throw new ValidationError("industryId does not refer to a known industry.");
+    }
     const result = await prisma.$transaction(async (tx) => {
       const client3 = await tx.client.create({
         data: {
           organizationId: caller.organizationId,
           clientCode: input.clientCode,
-          name: input.name ?? lead.companyName,
+          name: newClientName,
           status: "ACTIVE",
           email: input.email ?? lead.email ?? void 0,
           phone: input.phone ?? lead.phone ?? void 0,
           website: input.website,
-          address: input.address
+          address: input.address,
+          // Assign owner/industry at conversion — defaults to the lead's
+          // own assignedTo/source so CRM ownership and attribution carry
+          // forward rather than resetting on handoff (§2 "assign owner/team").
+          accountManager: input.accountManager ?? lead.assignedTo ?? void 0,
+          industryId: input.industryId,
+          source: lead.source ?? void 0,
+          // Phase 14 — carries the lead's resolved campaign attribution
+          // forward to the Client, preserving the complete
+          // source/attribution history through the whole handoff (§6).
+          campaignId: lead.campaignId ?? void 0
         }
       });
       let contactId = null;
@@ -5013,6 +5900,14 @@ var leadService = {
       ipAddress: meta.ip,
       userAgent: meta.userAgent
     });
+    await analyticsEventService.recordBusinessEvent({
+      organizationId: caller.organizationId,
+      eventType: "client_converted",
+      entityType: "client",
+      entityId: result.client.id,
+      campaignId: lead.campaignId ?? void 0,
+      metadata: { convertedFromLeadId: id }
+    });
     return result;
   },
   async dashboardCounts(organizationId) {
@@ -5020,52 +5915,62 @@ var leadService = {
   },
   async recent(organizationId, limit) {
     return leadRepository.recentForOrg(organizationId, limit);
+  },
+  async getActivity(organizationId, id) {
+    await loadLeadInOrgOrThrow(id, organizationId);
+    const { rows } = await auditLogQueryRepository.list({ organizationId, resourceType: "lead", resourceId: id }, 1, 100);
+    return rows;
   }
 };
 
 // server/schemas/leadSchemas.ts
-import { z as z8 } from "zod";
-var leadStatusSchema = z8.enum(["NEW", "CONTACTED", "QUALIFIED", "LOST"]);
-var listLeadsQuerySchema = z8.object({
-  page: z8.coerce.number().int().positive().default(1),
-  limit: z8.coerce.number().int().positive().max(100).default(20),
-  search: z8.string().trim().max(200).optional(),
-  status: z8.enum(["NEW", "CONTACTED", "QUALIFIED", "CONVERTED", "LOST"]).optional(),
-  source: z8.string().trim().max(100).optional(),
-  assignedTo: z8.string().trim().uuid().optional(),
-  dateFrom: z8.coerce.date().optional(),
-  dateTo: z8.coerce.date().optional(),
-  sort: z8.enum(["createdAt", "updatedAt", "companyName", "status"]).default("createdAt"),
-  order: z8.enum(["asc", "desc"]).default("desc")
+import { z as z9 } from "zod";
+var leadStatusSchema = z9.enum(["NEW", "CONTACTED", "QUALIFIED", "LOST"]);
+var listLeadsQuerySchema = z9.object({
+  page: z9.coerce.number().int().positive().default(1),
+  limit: z9.coerce.number().int().positive().max(100).default(20),
+  search: z9.string().trim().max(200).optional(),
+  status: z9.enum(["NEW", "CONTACTED", "QUALIFIED", "CONVERTED", "LOST"]).optional(),
+  source: z9.string().trim().max(100).optional(),
+  assignedTo: z9.string().trim().uuid().optional(),
+  dateFrom: z9.coerce.date().optional(),
+  dateTo: z9.coerce.date().optional(),
+  sort: z9.enum(["createdAt", "updatedAt", "companyName", "status"]).default("createdAt"),
+  order: z9.enum(["asc", "desc"]).default("desc")
 });
-var createLeadSchema = z8.object({
-  companyName: z8.string().trim().min(1).max(200),
-  contactName: z8.string().trim().max(200).optional(),
-  email: z8.string().trim().email().max(255).optional().or(z8.literal("")),
-  phone: z8.string().trim().max(50).optional(),
-  source: z8.string().trim().max(100).optional(),
+var createLeadSchema = z9.object({
+  companyName: z9.string().trim().min(1).max(200),
+  contactName: z9.string().trim().max(200).optional(),
+  email: z9.string().trim().email().max(255).optional().or(z9.literal("")),
+  phone: z9.string().trim().max(50).optional(),
+  source: z9.string().trim().max(100).optional(),
   status: leadStatusSchema.optional(),
-  notes: z8.string().trim().max(5e3).optional(),
-  assignedTo: z8.string().trim().uuid().optional()
+  notes: z9.string().trim().max(5e3).optional(),
+  assignedTo: z9.string().trim().uuid().optional()
 });
-var updateLeadSchema = z8.object({
-  companyName: z8.string().trim().min(1).max(200).optional(),
-  contactName: z8.string().trim().max(200).nullable().optional(),
-  email: z8.string().trim().email().max(255).nullable().optional().or(z8.literal("")),
-  phone: z8.string().trim().max(50).nullable().optional(),
-  source: z8.string().trim().max(100).nullable().optional(),
+var updateLeadSchema = z9.object({
+  companyName: z9.string().trim().min(1).max(200).optional(),
+  contactName: z9.string().trim().max(200).nullable().optional(),
+  email: z9.string().trim().email().max(255).nullable().optional().or(z9.literal("")),
+  phone: z9.string().trim().max(50).nullable().optional(),
+  source: z9.string().trim().max(100).nullable().optional(),
   status: leadStatusSchema.optional(),
-  notes: z8.string().trim().max(5e3).nullable().optional(),
-  assignedTo: z8.string().trim().uuid().nullable().optional()
+  notes: z9.string().trim().max(5e3).nullable().optional(),
+  assignedTo: z9.string().trim().uuid().nullable().optional()
 }).refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
-var convertLeadSchema = z8.object({
-  clientCode: z8.string().trim().min(1).max(50).regex(/^[A-Za-z0-9._-]+$/, "clientCode may only contain letters, numbers, dots, hyphens, and underscores"),
-  name: z8.string().trim().min(1).max(200).optional(),
-  email: z8.string().trim().email().max(255).optional(),
-  phone: z8.string().trim().max(50).optional(),
-  website: z8.string().trim().max(255).optional(),
-  address: z8.string().trim().max(500).optional(),
-  createContact: z8.boolean().default(true)
+var convertLeadSchema = z9.object({
+  clientCode: z9.string().trim().min(1).max(50).regex(/^[A-Za-z0-9._-]+$/, "clientCode may only contain letters, numbers, dots, hyphens, and underscores"),
+  name: z9.string().trim().min(1).max(200).optional(),
+  email: z9.string().trim().email().max(255).optional(),
+  phone: z9.string().trim().max(50).optional(),
+  website: z9.string().trim().max(255).optional(),
+  address: z9.string().trim().max(500).optional(),
+  createContact: z9.boolean().default(true),
+  // Phase 13 — CRM -> Client handoff: assign the new client's owner/
+  // industry at the moment of conversion, defaulting to the lead's own
+  // assignedTo/source when omitted (see leadService.convertLead).
+  accountManager: z9.string().trim().uuid().optional(),
+  industryId: z9.string().trim().uuid().optional()
 });
 
 // server/routes/v1/leadRoutes.ts
@@ -5096,6 +6001,14 @@ router10.get(
   asyncHandler(async (req, res) => {
     const lead = await leadService.getLead(req.user.organizationId, req.params.id);
     sendSuccess(res, { lead });
+  })
+);
+router10.get(
+  "/:id/activity",
+  requirePermission("leads.read"),
+  asyncHandler(async (req, res) => {
+    const activity = await leadService.getActivity(req.user.organizationId, req.params.id);
+    sendSuccess(res, { activity });
   })
 );
 router10.post(
@@ -5171,6 +6084,9 @@ var clientService = {
     if (byName) {
       throw new ConflictError(`A client named "${input.name}" already exists in this organization.`, { existingClientId: byName.id });
     }
+    if (input.industryId && !await industryRepository.findById(input.industryId)) {
+      throw new ValidationError("industryId does not refer to a known industry.");
+    }
     const client3 = await clientRepository.create({
       organizationId: caller.organizationId,
       clientCode: input.clientCode,
@@ -5182,7 +6098,9 @@ var clientService = {
       website: input.website,
       address: input.address,
       accountManager: input.accountManager,
-      notes: input.notes
+      notes: input.notes,
+      source: input.source,
+      industryId: input.industryId
     });
     await auditLogRepository.record({
       organizationId: caller.organizationId,
@@ -5195,6 +6113,19 @@ var clientService = {
       ipAddress: meta.ip,
       userAgent: meta.userAgent
     });
+    try {
+      await eventEngine.emit({
+        eventType: "client.created",
+        entityType: "client",
+        entityId: client3.id,
+        organizationId: caller.organizationId,
+        actorId: caller.id,
+        actorType: "USER",
+        sourceModule: "CRM",
+        payload: { clientCode: client3.clientCode, name: client3.name, status: client3.status }
+      });
+    } catch {
+    }
     return client3;
   },
   async updateClient(caller, id, input, meta = {}) {
@@ -5204,6 +6135,9 @@ var clientService = {
       if (dup && dup.id !== id) {
         throw new ConflictError(`A client named "${input.name}" already exists in this organization.`);
       }
+    }
+    if (input.industryId && !await industryRepository.findById(input.industryId)) {
+      throw new ValidationError("industryId does not refer to a known industry.");
     }
     const patch = {};
     if (input.name !== void 0) patch.name = input.name;
@@ -5215,6 +6149,8 @@ var clientService = {
     if (input.address !== void 0) patch.address = input.address;
     if (input.accountManager !== void 0) patch.accountManager = input.accountManager;
     if (input.notes !== void 0) patch.notes = input.notes;
+    if (input.source !== void 0) patch.source = input.source;
+    if (input.industryId !== void 0) patch.industryId = input.industryId;
     const updated = await clientRepository.update(id, patch);
     await auditLogRepository.record({
       organizationId: caller.organizationId,
@@ -5249,6 +6185,11 @@ var clientService = {
   },
   async recent(organizationId, limit) {
     return clientRepository.recentForOrg(organizationId, limit);
+  },
+  async getActivity(organizationId, id) {
+    await loadClientInOrgOrThrow(id, organizationId);
+    const { rows } = await auditLogQueryRepository.list({ organizationId, resourceType: "client", resourceId: id }, 1, 100);
+    return rows;
   }
 };
 
@@ -5441,102 +6382,9 @@ var contactService = {
   }
 };
 
-// server/schemas/onboardingSchemas.ts
-import { z as z9 } from "zod";
-var ONBOARDING_CHECKLIST_KEYS = [
-  "CLIENT_VERIFIED",
-  "WORKSPACE_CREATED",
-  "PRIMARY_CONTACT_CONFIRMED",
-  "ADMINISTRATOR_INVITED",
-  "ADMINISTRATOR_ACCEPTED",
-  "WORKSPACE_CONFIGURED",
-  "ONBOARDING_COMPLETED"
-];
-var listOnboardingQuerySchema = z9.object({
-  page: z9.coerce.number().int().positive().default(1),
-  limit: z9.coerce.number().int().positive().max(100).default(20),
-  status: z9.enum(["NOT_STARTED", "IN_PROGRESS", "READY", "COMPLETED", "CANCELLED"]).optional(),
-  search: z9.string().trim().max(200).optional()
-});
-var updateOnboardingSchema = z9.object({
-  completeStep: z9.enum(ONBOARDING_CHECKLIST_KEYS).optional(),
-  status: z9.enum(["CANCELLED"]).optional()
-}).refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
-
-// server/repositories/clientOnboardingRepository.ts
-var STEP_LABELS = {
-  CLIENT_VERIFIED: "Client verified",
-  WORKSPACE_CREATED: "Workspace created",
-  PRIMARY_CONTACT_CONFIRMED: "Primary contact confirmed",
-  ADMINISTRATOR_INVITED: "Administrator invited",
-  ADMINISTRATOR_ACCEPTED: "Administrator accepted",
-  WORKSPACE_CONFIGURED: "Workspace configured",
-  ONBOARDING_COMPLETED: "Onboarding completed"
-};
-function freshChecklist() {
-  return ONBOARDING_CHECKLIST_KEYS.map((key) => ({
-    key,
-    label: STEP_LABELS[key],
-    completed: false,
-    completedAt: null,
-    completedById: null
-  }));
-}
-function nextIncompleteStep(checklist) {
-  return checklist.find((item) => !item.completed)?.key ?? null;
-}
-function buildWhere4(organizationId, filters) {
-  const where = { organizationId };
-  if (filters.status) where.status = filters.status;
-  if (filters.search) {
-    where.client = { name: { contains: filters.search, mode: "insensitive" } };
-  }
-  return where;
-}
-var clientOnboardingRepository = {
-  async list(organizationId, filters, page, limit) {
-    const where = buildWhere4(organizationId, filters);
-    const [rows, total] = await Promise.all([
-      prisma.clientOnboarding.findMany({
-        where,
-        include: { client: { include: { workspaceOrganization: true } } },
-        orderBy: { updatedAt: "desc" },
-        skip: (page - 1) * limit,
-        take: limit
-      }),
-      prisma.clientOnboarding.count({ where })
-    ]);
-    return { rows, total };
-  },
-  async findByIdInOrg(id, organizationId) {
-    return prisma.clientOnboarding.findFirst({
-      where: { id, organizationId },
-      include: { client: { include: { workspaceOrganization: true } } }
-    });
-  },
-  async findByClientId(clientId) {
-    return prisma.clientOnboarding.findUnique({ where: { clientId } });
-  },
-  async create(data) {
-    return prisma.clientOnboarding.create({
-      data: {
-        organizationId: data.organizationId,
-        clientId: data.clientId,
-        createdById: data.createdById,
-        status: "IN_PROGRESS",
-        startedAt: /* @__PURE__ */ new Date(),
-        checklist: freshChecklist(),
-        currentStep: freshChecklist()[0].key
-      }
-    });
-  },
-  async update(id, data) {
-    return prisma.clientOnboarding.update({ where: { id }, data });
-  }
-};
-
 // server/services/onboardingService.ts
 var TERMINAL_STATUSES2 = /* @__PURE__ */ new Set(["COMPLETED", "CANCELLED"]);
+var TEMPLATE_SETTING_KEY = "onboarding.checklist_template";
 async function loadClientInOrgOrThrow2(clientId, organizationId) {
   const client3 = await clientRepository.findByIdInOrg(clientId, organizationId);
   if (!client3) throw new NotFoundError("Client not found.");
@@ -5546,6 +6394,12 @@ async function loadOnboardingInOrgOrThrow(id, organizationId) {
   const record = await clientOnboardingRepository.findByIdInOrg(id, organizationId);
   if (!record) throw new NotFoundError("Onboarding record not found.");
   return record;
+}
+async function getCustomTemplateSteps(organizationId) {
+  const row = await systemSettingRepository.findByKey(organizationId, TEMPLATE_SETTING_KEY);
+  if (!row) return void 0;
+  const parsed = onboardingTemplateSchema.safeParse(row.value);
+  return parsed.success ? parsed.data : void 0;
 }
 var onboardingService = {
   async listOnboarding(organizationId, filters, page, limit) {
@@ -5558,16 +6412,47 @@ var onboardingService = {
     await loadClientInOrgOrThrow2(clientId, organizationId);
     return clientOnboardingRepository.findByClientId(clientId);
   },
-  async startOnboarding(caller, clientId, meta = {}) {
+  /** Phase 13 — the org's resolved checklist template (custom if configured, else the Phase 6 system default) and whether it has been customized. */
+  async getTemplate(organizationId) {
+    const steps = await getCustomTemplateSteps(organizationId);
+    return { steps: steps ?? defaultOnboardingTemplateSteps(), isCustom: !!steps };
+  },
+  async updateTemplate(caller, steps, meta = {}) {
+    await systemSettingRepository.upsert({
+      organizationId: caller.organizationId,
+      key: TEMPLATE_SETTING_KEY,
+      value: steps,
+      type: "JSON",
+      description: "Default onboarding checklist template",
+      updatedById: caller.id
+    });
+    await auditLogRepository.record({
+      organizationId: caller.organizationId,
+      actorUserId: caller.id,
+      actorType: "USER",
+      action: "ONBOARDING_TEMPLATE_UPDATED",
+      resourceType: "system_setting",
+      resourceId: TEMPLATE_SETTING_KEY,
+      afterData: { stepCount: steps.length },
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent
+    });
+    return { steps, isCustom: true };
+  },
+  async startOnboarding(caller, clientId, input = {}, meta = {}) {
     await loadClientInOrgOrThrow2(clientId, caller.organizationId);
     const existing = await clientOnboardingRepository.findByClientId(clientId);
     if (existing) {
       throw new ConflictError("Onboarding has already been started for this client.", { onboardingId: existing.id });
     }
+    const steps = await getCustomTemplateSteps(caller.organizationId);
     const record = await clientOnboardingRepository.create({
       organizationId: caller.organizationId,
       clientId,
-      createdById: caller.id
+      createdById: caller.id,
+      steps,
+      ownerId: input.ownerId,
+      dueDate: input.dueDate
     });
     await auditLogRepository.record({
       organizationId: caller.organizationId,
@@ -5580,6 +6465,28 @@ var onboardingService = {
       ipAddress: meta.ip,
       userAgent: meta.userAgent
     });
+    if (record.ownerId && record.ownerId !== caller.id) {
+      await notificationService.notify({
+        organizationId: caller.organizationId,
+        userId: record.ownerId,
+        type: "onboarding_started",
+        title: "Onboarding started",
+        message: "A client onboarding you own has started."
+      });
+    }
+    try {
+      await eventEngine.emit({
+        eventType: "client.onboarding_started",
+        entityType: "client",
+        entityId: clientId,
+        organizationId: caller.organizationId,
+        actorId: caller.id,
+        actorType: "USER",
+        sourceModule: "ONBOARDING",
+        payload: { onboardingId: record.id }
+      });
+    } catch {
+    }
     return record;
   },
   async updateOnboarding(caller, id, input, meta = {}) {
@@ -5606,7 +6513,80 @@ var onboardingService = {
     if (input.completeStep) {
       return this.completeStep(caller, id, input.completeStep, meta);
     }
+    if (input.ownerId !== void 0 || input.dueDate !== void 0) {
+      const patch = {};
+      if (input.ownerId !== void 0) patch.ownerId = input.ownerId;
+      if (input.dueDate !== void 0) patch.dueDate = input.dueDate;
+      const updated = await clientOnboardingRepository.update(id, patch);
+      await auditLogRepository.record({
+        organizationId: caller.organizationId,
+        actorUserId: caller.id,
+        actorType: "USER",
+        action: "CLIENT_ONBOARDING_UPDATED",
+        resourceType: "client_onboarding",
+        resourceId: id,
+        afterData: patch,
+        ipAddress: meta.ip,
+        userAgent: meta.userAgent
+      });
+      if (input.ownerId && input.ownerId !== existing.ownerId && input.ownerId !== caller.id) {
+        await notificationService.notify({
+          organizationId: caller.organizationId,
+          userId: input.ownerId,
+          type: "onboarding_assigned",
+          title: "Onboarding assigned to you",
+          message: "You were assigned as the owner of a client onboarding."
+        });
+      }
+      return updated;
+    }
     return existing;
+  },
+  /**
+   * Phase 13 — per-step detail edits (due date/assignee/notes/attached
+   * document), distinct from completing the step. Idempotent target
+   * lookup mirrors completeStep: an unknown key is a 400, never silently
+   * ignored, since this is an explicit staff action (unlike
+   * completeStepForClient's system-triggered no-op).
+   */
+  async updateStep(caller, onboardingId, step, input, meta = {}) {
+    const record = await loadOnboardingInOrgOrThrow(onboardingId, caller.organizationId);
+    if (TERMINAL_STATUSES2.has(record.status)) {
+      throw new ConflictError(`This onboarding is already ${record.status.toLowerCase()} and can no longer be changed.`);
+    }
+    const checklist = record.checklist ?? freshChecklist();
+    const item = checklist.find((c) => c.key === step);
+    if (!item) throw new ValidationError(`Unknown onboarding step: ${step}`);
+    if (input.documentMediaId !== void 0 && input.documentMediaId !== null) {
+      const media = await mediaRepository.findByIdInOrg(input.documentMediaId, caller.organizationId);
+      if (!media) throw new ValidationError("documentMediaId does not refer to a media asset in this organization.");
+    }
+    if (input.dueDate !== void 0) item.dueDate = input.dueDate ? input.dueDate.toISOString() : null;
+    if (input.assignedTo !== void 0) item.assignedTo = input.assignedTo;
+    if (input.notes !== void 0) item.notes = input.notes;
+    if (input.documentMediaId !== void 0) item.documentMediaId = input.documentMediaId;
+    const updated = await clientOnboardingRepository.update(record.id, { checklist });
+    await auditLogRepository.record({
+      organizationId: caller.organizationId,
+      actorUserId: caller.id,
+      actorType: "USER",
+      action: "ONBOARDING_STEP_UPDATED",
+      resourceType: "client_onboarding",
+      resourceId: record.id,
+      afterData: { step, ...input, dueDate: input.dueDate ? input.dueDate.toISOString() : input.dueDate },
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent
+    });
+    if (input.assignedTo && input.assignedTo !== caller.id) {
+      await notificationService.notify({
+        organizationId: caller.organizationId,
+        userId: input.assignedTo,
+        type: "onboarding_step_assigned",
+        title: "Onboarding step assigned to you",
+        message: `"${item.label}" was assigned to you.`
+      });
+    }
+    return updated;
   },
   /**
    * Marks one checklist step complete (idempotent — re-completing an
@@ -5643,9 +6623,18 @@ var onboardingService = {
       ipAddress: meta.ip,
       userAgent: meta.userAgent
     });
+    if (record.ownerId && record.ownerId !== caller.id) {
+      await notificationService.notify({
+        organizationId: caller.organizationId,
+        userId: record.ownerId,
+        type: "onboarding_step_completed",
+        title: "Onboarding step completed",
+        message: `"${item.label}" was completed.`
+      });
+    }
     return updated;
   },
-  /** Marks a step complete by clientId — used by workspaceService/invitationService, which know the client, not the onboarding record id. Silently no-ops if onboarding was never started for this client (starting onboarding is optional before provisioning). */
+  /** Marks a step complete by clientId — used by workspaceService/invitationService, which know the client, not the onboarding record id. Silently no-ops if onboarding was never started for this client (starting onboarding is optional before provisioning), or if the organization's template doesn't include this system key. */
   async completeStepForClient(clientId, step, actorUserId) {
     const record = await clientOnboardingRepository.findByClientId(clientId);
     if (!record) return;
@@ -5695,15 +6684,47 @@ var onboardingService = {
       ipAddress: meta.ip,
       userAgent: meta.userAgent
     });
+    if (existing.ownerId && existing.ownerId !== caller.id) {
+      await notificationService.notify({
+        organizationId: caller.organizationId,
+        userId: existing.ownerId,
+        type: "onboarding_completed",
+        title: "Onboarding completed",
+        message: "A client onboarding you own has been completed."
+      });
+    }
+    try {
+      await eventEngine.emit({
+        eventType: "client.onboarded",
+        entityType: "client",
+        entityId: existing.clientId,
+        organizationId: caller.organizationId,
+        actorId: caller.id,
+        actorType: "USER",
+        sourceModule: "ONBOARDING",
+        payload: { onboardingId: id }
+      });
+    } catch {
+    }
     return updated;
+  },
+  /** Phase 13 CRM/Client dashboard — real counts only. */
+  async dashboardStats(organizationId, callerId) {
+    return clientOnboardingRepository.dashboardStats(organizationId, callerId);
+  },
+  /** Phase 13 — real activity timeline for one onboarding record, same audit-log-backed pattern as leadService/opportunityService/clientService.getActivity. */
+  async getActivity(organizationId, id) {
+    await loadOnboardingInOrgOrThrow(id, organizationId);
+    const { rows } = await auditLogQueryRepository.list({ organizationId, resourceType: "client_onboarding", resourceId: id }, 1, 100);
+    return rows;
   }
 };
 
 // server/repositories/workspaceRepository.ts
-function slugify2(name) {
+function slugify3(name) {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 80);
 }
-function buildWhere5(ownerOrganizationId, filters) {
+function buildWhere6(ownerOrganizationId, filters) {
   const where = {
     provisionedForClient: { organizationId: ownerOrganizationId }
   };
@@ -5713,7 +6734,7 @@ function buildWhere5(ownerOrganizationId, filters) {
 }
 var workspaceRepository = {
   async list(ownerOrganizationId, filters, page, limit) {
-    const where = buildWhere5(ownerOrganizationId, filters);
+    const where = buildWhere6(ownerOrganizationId, filters);
     const [rows, total] = await Promise.all([
       prisma.organization.findMany({
         where,
@@ -5734,7 +6755,7 @@ var workspaceRepository = {
     });
   },
   async findUniqueSlug(baseName) {
-    const baseSlug = slugify2(baseName) || "workspace";
+    const baseSlug = slugify3(baseName) || "workspace";
     let slug = baseSlug;
     let attempt = 1;
     while (await prisma.organization.findUnique({ where: { slug } })) {
@@ -5802,6 +6823,7 @@ var workspaceService = {
     }
     const name = input.name?.trim() || client3.name;
     const slug = await workspaceRepository.findUniqueSlug(name);
+    const { steps } = await onboardingService.getTemplate(caller.organizationId);
     let result;
     try {
       result = await prisma.$transaction(async (tx) => {
@@ -5827,6 +6849,7 @@ var workspaceService = {
         }
         let onboarding = await tx.clientOnboarding.findUnique({ where: { clientId } });
         if (!onboarding) {
+          const checklist = freshChecklist(steps);
           onboarding = await tx.clientOnboarding.create({
             data: {
               organizationId: caller.organizationId,
@@ -5834,8 +6857,8 @@ var workspaceService = {
               createdById: caller.id,
               status: "IN_PROGRESS",
               startedAt: /* @__PURE__ */ new Date(),
-              checklist: freshChecklist(),
-              currentStep: "CLIENT_VERIFIED"
+              checklist,
+              currentStep: checklist[0].key
             }
           });
         }
@@ -5925,7 +6948,9 @@ var createClientSchema = z10.object({
   website: z10.string().trim().max(255).optional(),
   address: z10.string().trim().max(500).optional(),
   accountManager: z10.string().trim().uuid().optional(),
-  notes: z10.string().trim().max(5e3).optional()
+  notes: z10.string().trim().max(5e3).optional(),
+  source: z10.string().trim().max(100).optional(),
+  industryId: z10.string().trim().uuid().optional()
 });
 var updateClientSchema = z10.object({
   name: z10.string().trim().min(1).max(200).optional(),
@@ -5936,7 +6961,9 @@ var updateClientSchema = z10.object({
   website: z10.string().trim().max(255).nullable().optional(),
   address: z10.string().trim().max(500).nullable().optional(),
   accountManager: z10.string().trim().uuid().nullable().optional(),
-  notes: z10.string().trim().max(5e3).nullable().optional()
+  notes: z10.string().trim().max(5e3).nullable().optional(),
+  source: z10.string().trim().max(100).nullable().optional(),
+  industryId: z10.string().trim().uuid().nullable().optional()
 }).refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
 
 // server/schemas/contactSchemas.ts
@@ -6026,6 +7053,14 @@ router11.get(
     sendSuccess(res, { client: client3 });
   })
 );
+router11.get(
+  "/:id/activity",
+  requirePermission("clients.read"),
+  asyncHandler(async (req, res) => {
+    const activity = await clientService.getActivity(req.user.organizationId, req.params.id);
+    sendSuccess(res, { activity });
+  })
+);
 router11.post(
   "/",
   requirePermission("clients.create"),
@@ -6074,7 +7109,8 @@ router11.post(
   "/:clientId/onboarding/start",
   requirePermission("onboarding.create"),
   asyncHandler(async (req, res) => {
-    const record = await onboardingService.startOnboarding(req.user, req.params.clientId, requestMeta4(req));
+    const input = startOnboardingSchema.parse(req.body ?? {});
+    const record = await onboardingService.startOnboarding(req.user, req.params.clientId, input, requestMeta4(req));
     sendSuccess(res, { onboarding: record }, 201);
   })
 );
@@ -6149,31 +7185,34 @@ var contactRoutes_default = router12;
 import { Router as Router13 } from "express";
 
 // server/repositories/opportunityRepository.ts
-var withRelations = {
+var withRelations2 = {
   include: {
     client: { select: { id: true, name: true, clientCode: true } },
-    lead: { select: { id: true, companyName: true } }
+    lead: { select: { id: true, companyName: true } },
+    product: { select: { id: true, name: true, slug: true, type: true } }
   }
 };
-function buildWhere6(organizationId, filters) {
+function buildWhere7(organizationId, filters) {
   const where = { organizationId, deletedAt: null };
   if (filters.stage) where.stage = filters.stage;
   if (filters.clientId) where.clientId = filters.clientId;
+  if (filters.leadId) where.leadId = filters.leadId;
+  if (filters.productId) where.productId = filters.productId;
   if (filters.assignedTo) where.assignedTo = filters.assignedTo;
   if (filters.search) where.name = { contains: filters.search, mode: "insensitive" };
   return where;
 }
 var opportunityRepository = {
   async list(organizationId, filters, page, limit, sort, order) {
-    const where = buildWhere6(organizationId, filters);
+    const where = buildWhere7(organizationId, filters);
     const [rows, total] = await Promise.all([
-      prisma.opportunity.findMany({ where, orderBy: { [sort]: order }, skip: (page - 1) * limit, take: limit, ...withRelations }),
+      prisma.opportunity.findMany({ where, orderBy: { [sort]: order }, skip: (page - 1) * limit, take: limit, ...withRelations2 }),
       prisma.opportunity.count({ where })
     ]);
     return { rows, total };
   },
   async findByIdInOrg(id, organizationId) {
-    return prisma.opportunity.findFirst({ where: { id, organizationId, deletedAt: null }, ...withRelations });
+    return prisma.opportunity.findFirst({ where: { id, organizationId, deletedAt: null }, ...withRelations2 });
   },
   async create(data) {
     const created = await prisma.opportunity.create({ data });
@@ -6198,7 +7237,185 @@ var opportunityRepository = {
     return result;
   },
   async recentForOrg(organizationId, limit) {
-    return prisma.opportunity.findMany({ where: { organizationId, deletedAt: null }, orderBy: { createdAt: "desc" }, take: limit, ...withRelations });
+    return prisma.opportunity.findMany({ where: { organizationId, deletedAt: null }, orderBy: { createdAt: "desc" }, take: limit, ...withRelations2 });
+  },
+  /** Phase 14 — marketing dashboard "conversions": real closed-won deals attributed to a campaign (never fabricated). */
+  async countAttributedConversions(organizationId) {
+    return prisma.opportunity.count({ where: { organizationId, deletedAt: null, campaignId: { not: null }, stage: "CLOSED_WON" } });
+  },
+  /** Phase 15 — CRM/Sales reporting: real pipeline + won/lost (closed within range) figures, Decimal-safe (never native float arithmetic). */
+  async pipelineInRange(organizationId, range) {
+    const [byStageRows, won, lost] = await Promise.all([
+      prisma.opportunity.groupBy({
+        by: ["stage"],
+        where: { organizationId, deletedAt: null, createdAt: { gte: range.from, lte: range.to } },
+        _count: { _all: true },
+        _sum: { value: true }
+      }),
+      prisma.opportunity.aggregate({
+        where: { organizationId, deletedAt: null, stage: "CLOSED_WON", actualCloseDate: { gte: range.from, lte: range.to } },
+        _count: { _all: true },
+        _sum: { value: true }
+      }),
+      prisma.opportunity.aggregate({
+        where: { organizationId, deletedAt: null, stage: "CLOSED_LOST", actualCloseDate: { gte: range.from, lte: range.to } },
+        _count: { _all: true },
+        _sum: { value: true }
+      })
+    ]);
+    const byStage = {};
+    for (const row of byStageRows) byStage[row.stage] = { count: row._count._all, value: (row._sum.value ?? 0).toString() };
+    return {
+      byStage,
+      wonCount: won._count._all,
+      wonValue: (won._sum.value ?? 0).toString(),
+      lostCount: lost._count._all,
+      lostValue: (lost._sum.value ?? 0).toString()
+    };
+  },
+  async countByCampaignInRange(organizationId, range) {
+    const rows = await prisma.opportunity.groupBy({
+      by: ["campaignId"],
+      where: { organizationId, deletedAt: null, campaignId: { not: null }, createdAt: { gte: range.from, lte: range.to } },
+      _count: { _all: true },
+      _sum: { value: true },
+      orderBy: { _count: { campaignId: "desc" } },
+      take: 20
+    });
+    return rows.filter((r) => r.campaignId).map((r) => ({ campaignId: r.campaignId, count: r._count._all, value: (r._sum.value ?? 0).toString() }));
+  }
+};
+
+// server/repositories/productRepository.ts
+var withDetail = {
+  include: {
+    category: true,
+    currentRevision: true,
+    industries: { include: { industry: true } },
+    relatedFrom: { include: { toProduct: { select: { id: true, slug: true, name: true, type: true, status: true } } } },
+    relatedTo: { include: { fromProduct: { select: { id: true, slug: true, name: true, type: true, status: true } } } }
+  }
+};
+function slugify4(input) {
+  return input.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 100);
+}
+function buildWhere8(filters) {
+  const where = {};
+  if (filters.type) where.type = filters.type;
+  if (filters.status) where.status = filters.status;
+  if (filters.isFeatured !== void 0) where.isFeatured = filters.isFeatured;
+  if (filters.categoryId) where.categoryId = filters.categoryId;
+  if (filters.industryId) where.industries = { some: { industryId: filters.industryId } };
+  if (filters.search) {
+    const term = filters.search;
+    where.OR = [
+      { name: { contains: term, mode: "insensitive" } },
+      { code: { contains: term, mode: "insensitive" } },
+      { slug: { contains: term, mode: "insensitive" } }
+    ];
+  }
+  return where;
+}
+var productRepository = {
+  async list(filters, page, limit, sort, order) {
+    const where = buildWhere8(filters);
+    const [rows, total] = await Promise.all([
+      prisma.product.findMany({
+        where,
+        orderBy: { [sort]: order },
+        skip: (page - 1) * limit,
+        take: limit
+      }),
+      prisma.product.count({ where })
+    ]);
+    return { rows, total };
+  },
+  async findById(id) {
+    return prisma.product.findUnique({ where: { id } });
+  },
+  async findByIdWithDetail(id) {
+    return prisma.product.findUnique({ where: { id }, ...withDetail });
+  },
+  /** Existence check for relatedProductIds/duplicate validation — never trusts a caller-supplied id list without checking which ones are real. */
+  async findManyByIds(ids) {
+    if (ids.length === 0) return [];
+    return prisma.product.findMany({ where: { id: { in: ids } } });
+  },
+  async findByCode(code) {
+    return prisma.product.findUnique({ where: { code } });
+  },
+  async findBySlug(slug) {
+    return prisma.product.findUnique({ where: { slug } });
+  },
+  /** Server-generated, collision-safe (§7) — never trusts a frontend-supplied slug for uniqueness beyond a caller-requested starting point. */
+  async findUniqueSlug(base) {
+    const baseSlug = slugify4(base) || "product";
+    let slug = baseSlug;
+    let attempt = 1;
+    while (await this.findBySlug(slug)) {
+      attempt += 1;
+      slug = `${baseSlug}-${attempt}`;
+      if (attempt > 50) break;
+    }
+    return slug;
+  },
+  async create(data) {
+    return prisma.product.create({
+      data: {
+        code: data.code,
+        name: data.name,
+        slug: data.slug,
+        type: data.type,
+        shortDescription: data.shortDescription,
+        description: data.description,
+        status: data.status ?? "DRAFT",
+        isFeatured: data.isFeatured ?? false,
+        displayOrder: data.displayOrder ?? 0,
+        featuredMediaId: data.featuredMediaId,
+        categoryId: data.categoryId,
+        createdById: data.createdById,
+        updatedById: data.createdById
+      }
+    });
+  },
+  async update(id, data) {
+    return prisma.product.update({ where: { id }, data });
+  },
+  // --- Revisions (Phase 10) — mirrors templateRepository's own revision helpers. ---
+  async listRevisions(productId) {
+    return prisma.productRevision.findMany({ where: { productId }, orderBy: { version: "desc" } });
+  },
+  async findRevision(productId, revisionId) {
+    return prisma.productRevision.findFirst({ where: { id: revisionId, productId } });
+  },
+  async createRevision(data) {
+    return prisma.productRevision.create({ data });
+  },
+  // --- Relations (Phase 10) — one row per pair; queried from both directions. ---
+  async getRelatedProducts(productId) {
+    const [from, to] = await Promise.all([
+      prisma.productRelation.findMany({ where: { fromProductId: productId }, include: { toProduct: { select: { id: true, slug: true, name: true, type: true, status: true } } } }),
+      prisma.productRelation.findMany({ where: { toProductId: productId }, include: { fromProduct: { select: { id: true, slug: true, name: true, type: true, status: true } } } })
+    ]);
+    return [...from.map((r) => r.toProduct), ...to.map((r) => r.fromProduct)];
+  },
+  /** Replaces the full related-product set for `productId` with exactly `relatedIds`, storing each pair once regardless of direction. */
+  async setRelatedProducts(productId, relatedIds, createdById) {
+    await prisma.$transaction([
+      prisma.productRelation.deleteMany({ where: { OR: [{ fromProductId: productId }, { toProductId: productId }] } }),
+      ...relatedIds.map((toProductId) => prisma.productRelation.create({ data: { fromProductId: productId, toProductId, createdById } }))
+    ]);
+  },
+  // --- Industries (Phase 10) ---
+  async getIndustries(productId) {
+    const rows = await prisma.productIndustry.findMany({ where: { productId }, include: { industry: true } });
+    return rows.map((r) => r.industry);
+  },
+  async setIndustries(productId, industryIds) {
+    await prisma.$transaction([
+      prisma.productIndustry.deleteMany({ where: { productId } }),
+      ...industryIds.map((industryId) => prisma.productIndustry.create({ data: { productId, industryId } }))
+    ]);
   }
 };
 
@@ -6254,6 +7471,28 @@ async function loadOpportunityOrThrow(id, organizationId) {
   if (!opportunity) throw new NotFoundError("Opportunity not found.");
   return opportunity;
 }
+async function emitStageChangedEvent(organizationId, opportunityId, actorId, fromStage, toStage) {
+  try {
+    await eventEngine.emit({
+      eventType: "opportunity.stage_changed",
+      entityType: "opportunity",
+      entityId: opportunityId,
+      organizationId,
+      actorId,
+      actorType: "USER",
+      sourceModule: "CRM",
+      payload: { fromStage, toStage }
+    });
+  } catch {
+  }
+  await analyticsEventService.recordBusinessEvent({
+    organizationId,
+    eventType: "opportunity_stage_changed",
+    entityType: "opportunity",
+    entityId: opportunityId,
+    metadata: { fromStage, toStage }
+  });
+}
 async function notifyClose(params) {
   const recipients = new Set([params.assignedTo, params.createdById].filter((id) => !!id && id !== params.actorId));
   await Promise.all(
@@ -6269,16 +7508,28 @@ var opportunityService = {
   },
   async createOpportunity(caller, input, meta = {}) {
     const organizationId = caller.organizationId;
-    const client3 = await clientRepository.findByIdInOrg(input.clientId, organizationId);
-    if (!client3) throw new ValidationError("clientId does not belong to this organization.");
+    if (input.clientId) {
+      const client3 = await clientRepository.findByIdInOrg(input.clientId, organizationId);
+      if (!client3) throw new ValidationError("clientId does not belong to this organization.");
+    }
+    let campaignId = input.campaignId;
     if (input.leadId) {
       const lead = await leadRepository.findByIdInOrg(input.leadId, organizationId);
       if (!lead) throw new ValidationError("leadId does not belong to this organization.");
+      campaignId = lead.campaignId ?? void 0;
+    }
+    if (input.productId) {
+      const product = await productRepository.findById(input.productId);
+      if (!product) throw new ValidationError("productId does not refer to a real product/service/solution.");
     }
     const opportunity = await opportunityRepository.create({
       organizationId,
       clientId: input.clientId,
       leadId: input.leadId,
+      productId: input.productId,
+      campaignId,
+      source: input.source,
+      probability: input.probability,
       name: input.name,
       stage: input.stage,
       value: toMoney(input.value),
@@ -6295,10 +7546,31 @@ var opportunityService = {
       action: "OPPORTUNITY_CREATED",
       resourceType: "opportunity",
       resourceId: opportunity.id,
-      afterData: { name: opportunity.name, stage: opportunity.stage, clientId: opportunity.clientId, value: opportunity.value.toString() },
+      afterData: { name: opportunity.name, stage: opportunity.stage, clientId: opportunity.clientId, leadId: opportunity.leadId, value: opportunity.value.toString() },
       ipAddress: meta.ip,
       userAgent: meta.userAgent
     });
+    await analyticsEventService.recordBusinessEvent({
+      organizationId,
+      eventType: "opportunity_created",
+      entityType: "opportunity",
+      entityId: opportunity.id,
+      campaignId: opportunity.campaignId ?? void 0,
+      metadata: { stage: opportunity.stage, value: opportunity.value.toString(), currency: opportunity.currency }
+    });
+    try {
+      await eventEngine.emit({
+        eventType: "opportunity.created",
+        entityType: "opportunity",
+        entityId: opportunity.id,
+        organizationId,
+        actorId: caller.id,
+        actorType: "USER",
+        sourceModule: "CRM",
+        payload: { name: opportunity.name, stage: opportunity.stage, clientId: opportunity.clientId, leadId: opportunity.leadId, value: opportunity.value.toString() }
+      });
+    } catch {
+    }
     if (opportunity.assignedTo && opportunity.assignedTo !== caller.id) {
       await notificationService.notify({
         organizationId,
@@ -6318,6 +7590,10 @@ var opportunityService = {
     } else if (TERMINAL_STAGES.has(existing.stage)) {
       throw new ConflictError("This opportunity is closed and can no longer be edited.");
     }
+    if (input.productId) {
+      const product = await productRepository.findById(input.productId);
+      if (!product) throw new ValidationError("productId does not refer to a real product/service/solution.");
+    }
     const patch = {};
     if (input.name !== void 0) patch.name = input.name;
     if (input.stage !== void 0) patch.stage = input.stage;
@@ -6326,6 +7602,9 @@ var opportunityService = {
     if (input.expectedCloseDate !== void 0) patch.expectedCloseDate = input.expectedCloseDate;
     if (input.notes !== void 0) patch.notes = input.notes;
     if (input.assignedTo !== void 0) patch.assignedTo = input.assignedTo;
+    if (input.productId !== void 0) patch.productId = input.productId;
+    if (input.source !== void 0) patch.source = input.source;
+    if (input.probability !== void 0) patch.probability = input.probability;
     const updated = await opportunityRepository.update(id, organizationId, patch);
     await auditLogRepository.record({
       organizationId,
@@ -6339,6 +7618,9 @@ var opportunityService = {
       ipAddress: meta.ip,
       userAgent: meta.userAgent
     });
+    if (input.stage !== void 0 && input.stage !== existing.stage) {
+      await emitStageChangedEvent(organizationId, id, caller.id, existing.stage, input.stage);
+    }
     return updated;
   },
   async deleteOpportunity(caller, id, meta = {}) {
@@ -6362,6 +7644,9 @@ var opportunityService = {
     if (TERMINAL_STAGES.has(existing.stage)) {
       throw new ConflictError("This opportunity is already closed.");
     }
+    if (!existing.clientId) {
+      throw new ValidationError("This opportunity must be linked to a client (see POST /opportunities/:id/link-client) before it can be marked as won.");
+    }
     const updated = await opportunityRepository.update(id, organizationId, { stage: "CLOSED_WON", actualCloseDate: /* @__PURE__ */ new Date() });
     await auditLogRepository.record({
       organizationId,
@@ -6384,6 +7669,7 @@ var opportunityService = {
       title: "Opportunity won",
       message: `${existing.name} was marked as won.`
     });
+    await emitStageChangedEvent(organizationId, id, caller.id, existing.stage, "CLOSED_WON");
     return updated;
   },
   async loseOpportunity(caller, id, input, meta = {}) {
@@ -6418,6 +7704,7 @@ var opportunityService = {
       title: "Opportunity lost",
       message: `${existing.name} was marked as lost.`
     });
+    await emitStageChangedEvent(organizationId, id, caller.id, existing.stage, "CLOSED_LOST");
     return updated;
   },
   async dashboardStats(organizationId) {
@@ -6426,6 +7713,45 @@ var opportunityService = {
       opportunityRepository.recentForOrg(organizationId, 5)
     ]);
     return { byStage, recent };
+  },
+  /**
+   * Phase 12 — the "Opportunity -> Client" step of the Lead -> Qualified
+   * Lead -> Opportunity -> Client handoff: attaches an existing Client to
+   * a deal that was opened directly against a Lead. Never creates or
+   * converts anything itself (reuse leadService.convertLead for that) —
+   * this only links two already-real records together.
+   */
+  async linkClient(caller, id, input, meta = {}) {
+    const organizationId = caller.organizationId;
+    const existing = await loadOpportunityOrThrow(id, organizationId);
+    if (TERMINAL_STAGES.has(existing.stage)) {
+      throw new ConflictError("This opportunity is closed and can no longer be changed.");
+    }
+    if (existing.clientId) {
+      throw new ConflictError("This opportunity is already linked to a client.");
+    }
+    const client3 = await clientRepository.findByIdInOrg(input.clientId, organizationId);
+    if (!client3) throw new ValidationError("clientId does not belong to this organization.");
+    const updated = await opportunityRepository.update(id, organizationId, { clientId: input.clientId });
+    await auditLogRepository.record({
+      organizationId,
+      actorUserId: caller.id,
+      actorType: "USER",
+      action: "OPPORTUNITY_CLIENT_LINKED",
+      resourceType: "opportunity",
+      resourceId: id,
+      beforeData: { clientId: null },
+      afterData: { clientId: input.clientId },
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent
+    });
+    return updated;
+  },
+  /** Phase 12 — unified activity timeline for one opportunity, drawn entirely from the existing audit trail (never a parallel "activity" table). */
+  async getActivity(organizationId, id) {
+    await loadOpportunityOrThrow(id, organizationId);
+    const { rows } = await auditLogQueryRepository.list({ organizationId, resourceType: "opportunity", resourceId: id }, 1, 100);
+    return rows;
   }
 };
 
@@ -6439,15 +7765,30 @@ var listOpportunitiesQuerySchema = z13.object({
   search: z13.string().trim().max(200).optional(),
   stage: opportunityStageSchema.optional(),
   clientId: z13.string().trim().uuid().optional(),
+  leadId: z13.string().trim().uuid().optional(),
+  productId: z13.string().trim().uuid().optional(),
   assignedTo: z13.string().trim().uuid().optional(),
   sort: z13.enum(["createdAt", "updatedAt", "name", "value", "expectedCloseDate", "stage"]).default("createdAt"),
   order: z13.enum(["asc", "desc"]).default("desc")
 });
 var moneyValueSchema = z13.coerce.number().nonnegative().finite();
 var currencySchema = z13.string().trim().length(3).regex(/^[A-Z]{3}$/, "currency must be a 3-letter ISO 4217 code").optional();
+var probabilitySchema = z13.coerce.number().int().min(0).max(100);
 var createOpportunitySchema = z13.object({
-  clientId: z13.string().trim().uuid(),
+  // Phase 12 — a deal may now be opened directly against a Lead, before
+  // it has converted to a Client ("Lead -> Qualified Lead ->
+  // Opportunity -> Client"). At least one of clientId/leadId is
+  // required — enforced by the refine below and, defense-in-depth, by
+  // the DB's own CHECK constraint.
+  clientId: z13.string().trim().uuid().optional(),
   leadId: z13.string().trim().uuid().optional(),
+  productId: z13.string().trim().uuid().optional(),
+  source: z13.string().trim().max(100).optional(),
+  // Phase 14 — only settable directly for a deal with no originating
+  // Lead (leadId unset); when leadId is set, the deal automatically
+  // inherits that Lead's own campaignId instead (opportunityService.ts).
+  campaignId: z13.string().trim().uuid().optional(),
+  probability: probabilitySchema.optional(),
   name: z13.string().trim().min(1).max(200),
   stage: nonTerminalOpportunityStageSchema.optional(),
   value: moneyValueSchema,
@@ -6455,7 +7796,7 @@ var createOpportunitySchema = z13.object({
   expectedCloseDate: z13.coerce.date().optional(),
   notes: z13.string().trim().max(5e3).optional(),
   assignedTo: z13.string().trim().uuid().optional()
-});
+}).refine((v) => !!v.clientId || !!v.leadId, { message: "Either clientId or leadId must be provided." });
 var updateOpportunitySchema = z13.object({
   name: z13.string().trim().min(1).max(200).optional(),
   stage: nonTerminalOpportunityStageSchema.optional(),
@@ -6463,10 +7804,16 @@ var updateOpportunitySchema = z13.object({
   currency: currencySchema,
   expectedCloseDate: z13.coerce.date().nullable().optional(),
   notes: z13.string().trim().max(5e3).nullable().optional(),
-  assignedTo: z13.string().trim().uuid().nullable().optional()
+  assignedTo: z13.string().trim().uuid().nullable().optional(),
+  productId: z13.string().trim().uuid().nullable().optional(),
+  source: z13.string().trim().max(100).nullable().optional(),
+  probability: probabilitySchema.nullable().optional()
 }).refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
 var loseOpportunitySchema = z13.object({
   lostReason: z13.string().trim().max(1e3).optional()
+});
+var linkClientSchema = z13.object({
+  clientId: z13.string().trim().uuid()
 });
 
 // server/routes/v1/opportunityRoutes.ts
@@ -6482,7 +7829,7 @@ router13.get(
     const query = listOpportunitiesQuerySchema.parse(req.query);
     const { rows, total } = await opportunityService.listOpportunities(
       req.user.organizationId,
-      { search: query.search, stage: query.stage, clientId: query.clientId, assignedTo: query.assignedTo },
+      { search: query.search, stage: query.stage, clientId: query.clientId, leadId: query.leadId, productId: query.productId, assignedTo: query.assignedTo },
       query.page,
       query.limit,
       query.sort,
@@ -6497,6 +7844,14 @@ router13.get(
   asyncHandler(async (req, res) => {
     const opportunity = await opportunityService.getOpportunity(req.user.organizationId, req.params.id);
     sendSuccess(res, { opportunity });
+  })
+);
+router13.get(
+  "/:id/activity",
+  requirePermission("opportunities.read"),
+  asyncHandler(async (req, res) => {
+    const activity = await opportunityService.getActivity(req.user.organizationId, req.params.id);
+    sendSuccess(res, { activity });
   })
 );
 router13.post(
@@ -6523,6 +7878,15 @@ router13.delete(
   asyncHandler(async (req, res) => {
     await opportunityService.deleteOpportunity(req.user, req.params.id, requestMeta6(req));
     sendSuccess(res, { message: "Opportunity deleted." });
+  })
+);
+router13.post(
+  "/:id/link-client",
+  requirePermission("opportunities.update"),
+  asyncHandler(async (req, res) => {
+    const input = linkClientSchema.parse(req.body);
+    const opportunity = await opportunityService.linkClient(req.user, req.params.id, input, requestMeta6(req));
+    sendSuccess(res, { opportunity });
   })
 );
 router13.post(
@@ -6593,10 +7957,10 @@ var notificationRoutes_default = router14;
 import { Router as Router15 } from "express";
 
 // server/repositories/formRepository.ts
-function slugify3(input) {
+function slugify5(input) {
   return input.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 150);
 }
-function buildWhere7(organizationId, filters) {
+function buildWhere9(organizationId, filters) {
   const where = { organizationId, deletedAt: null };
   if (filters.status) where.status = filters.status;
   if (filters.search) where.name = { contains: filters.search, mode: "insensitive" };
@@ -6604,7 +7968,7 @@ function buildWhere7(organizationId, filters) {
 }
 var formRepository = {
   async list(organizationId, filters, page, limit, sort, order) {
-    const where = buildWhere7(organizationId, filters);
+    const where = buildWhere9(organizationId, filters);
     const [rows, total] = await Promise.all([
       prisma.form.findMany({ where, orderBy: { [sort]: order }, skip: (page - 1) * limit, take: limit }),
       prisma.form.count({ where })
@@ -6618,7 +7982,7 @@ var formRepository = {
     return prisma.form.findFirst({ where: { organizationId, slug, deletedAt: null } });
   },
   async findUniqueSlugInOrg(organizationId, base) {
-    const baseSlug = slugify3(base) || "form";
+    const baseSlug = slugify5(base) || "form";
     let slug = baseSlug;
     let attempt = 1;
     while (await this.findBySlugInOrg(organizationId, slug)) {
@@ -6650,6 +8014,18 @@ var formRepository = {
   },
   async createSubmission(data) {
     return prisma.formSubmission.create({ data });
+  },
+  /** Phase 14 — marketing dashboard: real form counts, never fabricated. */
+  async countForDashboard(organizationId) {
+    const [total, active] = await Promise.all([
+      prisma.form.count({ where: { organizationId, deletedAt: null } }),
+      prisma.form.count({ where: { organizationId, deletedAt: null, status: "ACTIVE" } })
+    ]);
+    return { total, active };
+  },
+  /** Phase 15 — form performance reporting: real submission counts within a date range (never fabricated). */
+  async countSubmissionsInRange(organizationId, range) {
+    return prisma.formSubmission.count({ where: { organizationId, createdAt: { gte: range.from, lte: range.to } } });
   }
 };
 
@@ -6958,13 +8334,22 @@ router16.get(
   asyncHandler(async (req, res) => {
     const permissions = req.user.role.permissions;
     const organizationId = req.user.organizationId;
-    const [leadCounts, leadRecent, clientCounts, clientRecent, opportunityStats] = await Promise.all([
+    const [leadCounts, leadRecent, clientCounts, clientRecent, opportunityStats, onboardingStats] = await Promise.all([
       permissions.includes("leads.read") ? leadService.dashboardCounts(organizationId) : Promise.resolve(null),
       permissions.includes("leads.read") ? leadService.recent(organizationId, 5) : Promise.resolve([]),
       permissions.includes("clients.read") ? clientService.dashboardCounts(organizationId) : Promise.resolve(null),
       permissions.includes("clients.read") ? clientService.recent(organizationId, 5) : Promise.resolve([]),
-      permissions.includes("opportunities.read") ? opportunityService.dashboardStats(organizationId) : Promise.resolve(null)
+      permissions.includes("opportunities.read") ? opportunityService.dashboardStats(organizationId) : Promise.resolve(null),
+      permissions.includes("onboarding.read") ? onboardingService.dashboardStats(organizationId, req.user.id) : Promise.resolve(null)
     ]);
+    const activityResourceTypes = [];
+    if (permissions.includes("leads.read")) activityResourceTypes.push("lead");
+    if (permissions.includes("opportunities.read")) activityResourceTypes.push("opportunity");
+    if (permissions.includes("clients.read")) activityResourceTypes.push("client");
+    if (permissions.includes("forms.read")) activityResourceTypes.push("form_submission");
+    if (permissions.includes("onboarding.read")) activityResourceTypes.push("client_onboarding");
+    if (permissions.includes("media.read")) activityResourceTypes.push("media");
+    const recentActivity = activityResourceTypes.length ? (await auditLogQueryRepository.list({ organizationId, resourceTypes: activityResourceTypes }, 1, 20)).rows : null;
     const OPEN_STAGES = ["PROSPECTING", "QUALIFICATION", "PROPOSAL", "NEGOTIATION"];
     const byStage = opportunityStats?.byStage ?? {};
     const openValue = OPEN_STAGES.reduce((sum, stage) => sum + Number(byStage[stage]?.value ?? 0), 0);
@@ -6993,14 +8378,880 @@ router16.get(
         openValue: openValue.toString(),
         byStage,
         recent: opportunityStats.recent
-      }
+      },
+      onboarding: onboardingStats,
+      recentActivity
     });
   })
 );
 var crmRoutes_default = router16;
 
-// server/routes/v1/onboardingRoutes.ts
+// server/routes/v1/campaignRoutes.ts
 import { Router as Router17 } from "express";
+
+// server/repositories/pageRepository.ts
+function slugify6(input) {
+  return input.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 150);
+}
+var withCurrentRevision = { include: { currentRevision: true } };
+var withPublicRelations = { include: { currentRevision: true, featuredMedia: true, template: { include: { currentRevision: true } } } };
+function buildWhere10(organizationId, filters) {
+  const where = { organizationId, deletedAt: null };
+  if (filters.status) where.status = filters.status;
+  if (filters.fromDate || filters.toDate) {
+    where.createdAt = { ...filters.fromDate ? { gte: filters.fromDate } : {}, ...filters.toDate ? { lte: filters.toDate } : {} };
+  }
+  if (filters.search) {
+    where.OR = [{ title: { contains: filters.search, mode: "insensitive" } }, { slug: { contains: filters.search, mode: "insensitive" } }];
+  }
+  return where;
+}
+var pageRepository = {
+  async list(organizationId, filters, page, limit, sort, order) {
+    const where = buildWhere10(organizationId, filters);
+    const [rows, total] = await Promise.all([
+      prisma.page.findMany({ where, orderBy: { [sort]: order }, skip: (page - 1) * limit, take: limit }),
+      prisma.page.count({ where })
+    ]);
+    return { rows, total };
+  },
+  async findByIdInOrg(id, organizationId) {
+    return prisma.page.findFirst({ where: { id, organizationId, deletedAt: null }, ...withCurrentRevision });
+  },
+  async findBySlugInOrg(organizationId, slug) {
+    return prisma.page.findFirst({ where: { organizationId, slug, deletedAt: null } });
+  },
+  /** Phase 11 — bulk existence check for Case Study "related pages" selection, org-scoped. */
+  async findByIdsInOrg(ids, organizationId) {
+    if (ids.length === 0) return [];
+    return prisma.page.findMany({ where: { id: { in: ids }, organizationId, deletedAt: null } });
+  },
+  /** Phase 11 public projection — PUBLISHED only, with the revision content and featured media needed to render the page (docs/PUBLIC_API_ARCHITECTURE.md). Never returns DRAFT/IN_REVIEW/SCHEDULED/ARCHIVED. */
+  async findPublishedBySlugWithMedia(organizationId, slug) {
+    return prisma.page.findFirst({ where: { organizationId, slug, status: "PUBLISHED", deletedAt: null }, ...withPublicRelations });
+  },
+  /** Phase 5 — the org's designated homepage, PUBLISHED only (same safety as findPublishedBySlugWithMedia). */
+  async findPublishedHomepageWithMedia(organizationId) {
+    return prisma.page.findFirst({ where: { organizationId, isHomepage: true, status: "PUBLISHED", deletedAt: null }, ...withPublicRelations });
+  },
+  /** Phase 5 — resolves a navigation-menu "page" link target to its slug, PUBLISHED only (never leaks a draft page's existence/slug). */
+  async findPublishedByIdInOrg(id, organizationId) {
+    return prisma.page.findFirst({ where: { id, organizationId, status: "PUBLISHED", deletedAt: null }, select: { slug: true } });
+  },
+  /**
+   * Cross-organization by design (see postRepository.findDueScheduled) —
+   * backs the system cron job that promotes SCHEDULED pages to PUBLISHED.
+   */
+  async findDueScheduled(now, limit = 20) {
+    return prisma.page.findMany({
+      where: { status: "SCHEDULED", scheduledAt: { lte: now }, deletedAt: null },
+      take: limit,
+      orderBy: { scheduledAt: "asc" },
+      ...withCurrentRevision
+    });
+  },
+  /** Phase 5 SEO audit — every live-or-about-to-be-live page (not ARCHIVED, not soft-deleted), with exactly the fields the rule-based checks need. */
+  async listForSeoAudit(organizationId) {
+    return prisma.page.findMany({
+      where: { organizationId, deletedAt: null, status: { not: "ARCHIVED" } },
+      select: {
+        id: true,
+        slug: true,
+        title: true,
+        status: true,
+        currentRevision: { select: { title: true, metadata: true } },
+        featuredMedia: { select: { altText: true } }
+      }
+    });
+  },
+  async findUniqueSlugInOrg(organizationId, base) {
+    const baseSlug = slugify6(base) || "page";
+    let slug = baseSlug;
+    let attempt = 1;
+    while (await this.findBySlugInOrg(organizationId, slug)) {
+      attempt += 1;
+      slug = `${baseSlug}-${attempt}`;
+      if (attempt > 50) break;
+    }
+    return slug;
+  },
+  async listRevisions(pageId) {
+    return prisma.contentRevision.findMany({ where: { pageId }, orderBy: { version: "desc" } });
+  },
+  /** Phase 5 — page hierarchy: this page's own parentId (for cycle-checking a reparent), org-scoped. */
+  async findParentId(id, organizationId) {
+    const row = await prisma.page.findFirst({ where: { id, organizationId, deletedAt: null }, select: { parentId: true } });
+    return row?.parentId ?? null;
+  },
+  /** Phase 5 — direct children of a page, for the Pages hierarchy UI. */
+  async listChildren(parentId, organizationId) {
+    return prisma.page.findMany({
+      where: { parentId, organizationId, deletedAt: null },
+      select: { id: true, title: true, slug: true, status: true },
+      orderBy: { title: "asc" }
+    });
+  },
+  async softDelete(id) {
+    await prisma.page.update({ where: { id }, data: { deletedAt: /* @__PURE__ */ new Date() } });
+  },
+  /** Phase 7 — Trash view: pages soft-deleted but not yet permanently gone, newest-deleted first. */
+  async listTrash(organizationId, page, limit) {
+    const where = { organizationId, deletedAt: { not: null } };
+    const [rows, total] = await Promise.all([
+      prisma.page.findMany({ where, orderBy: { deletedAt: "desc" }, skip: (page - 1) * limit, take: limit }),
+      prisma.page.count({ where })
+    ]);
+    return { rows, total };
+  },
+  /** Phase 7 — Trash view: a single soft-deleted page, org-scoped (never a live one). */
+  async findTrashedByIdInOrg(id, organizationId) {
+    return prisma.page.findFirst({ where: { id, organizationId, deletedAt: { not: null } } });
+  },
+  async restore(id) {
+    await prisma.page.update({ where: { id }, data: { deletedAt: null } });
+  },
+  /** Phase 14 — marketing dashboard: real landing-page counts (pageType=LANDING), never fabricated. */
+  async countLandingPages(organizationId) {
+    const [total, published] = await Promise.all([
+      prisma.page.count({ where: { organizationId, deletedAt: null, pageType: "LANDING" } }),
+      prisma.page.count({ where: { organizationId, deletedAt: null, pageType: "LANDING", status: "PUBLISHED" } })
+    ]);
+    return { total, published };
+  },
+  /** Phase 15 — content analytics inventory: real page counts, never fabricated. */
+  async countForContentInventory(organizationId) {
+    const [total, published] = await Promise.all([
+      prisma.page.count({ where: { organizationId, deletedAt: null } }),
+      prisma.page.count({ where: { organizationId, deletedAt: null, status: "PUBLISHED" } })
+    ]);
+    return { total, published };
+  }
+};
+
+// server/repositories/postRepository.ts
+function slugify7(input) {
+  return input.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 150);
+}
+var withRelations3 = { include: { currentRevision: true, category: true, author: true, tags: { include: { tag: true } } } };
+var withPublicRelations2 = {
+  include: {
+    currentRevision: true,
+    category: true,
+    author: { include: { user: { select: { firstName: true, lastName: true } } } },
+    tags: { include: { tag: true } },
+    featuredMedia: true
+  }
+};
+function buildWhere11(organizationId, filters) {
+  const where = { organizationId, deletedAt: null };
+  if (filters.status) where.status = filters.status;
+  if (filters.categoryId) where.categoryId = filters.categoryId;
+  if (filters.tagId) where.tags = { some: { tagId: filters.tagId } };
+  if (filters.fromDate || filters.toDate) {
+    where.createdAt = { ...filters.fromDate ? { gte: filters.fromDate } : {}, ...filters.toDate ? { lte: filters.toDate } : {} };
+  }
+  if (filters.search) {
+    where.OR = [{ title: { contains: filters.search, mode: "insensitive" } }, { slug: { contains: filters.search, mode: "insensitive" } }];
+  }
+  return where;
+}
+var postRepository = {
+  async list(organizationId, filters, page, limit, sort, order) {
+    const where = buildWhere11(organizationId, filters);
+    const [rows, total] = await Promise.all([
+      prisma.post.findMany({ where, orderBy: { [sort]: order }, skip: (page - 1) * limit, take: limit }),
+      prisma.post.count({ where })
+    ]);
+    return { rows, total };
+  },
+  async findByIdInOrg(id, organizationId) {
+    return prisma.post.findFirst({ where: { id, organizationId, deletedAt: null }, ...withRelations3 });
+  },
+  async findBySlugInOrg(organizationId, slug) {
+    return prisma.post.findFirst({ where: { organizationId, slug, deletedAt: null } });
+  },
+  /** Phase 11 — bulk existence check for Case Study "related posts" selection, org-scoped. */
+  async findByIdsInOrg(ids, organizationId) {
+    if (ids.length === 0) return [];
+    return prisma.post.findMany({ where: { id: { in: ids }, organizationId, deletedAt: null } });
+  },
+  /** Phase 11 public projection — PUBLISHED only, with category/author/tags/featured media/revision content (docs/PUBLIC_API_ARCHITECTURE.md). Never returns DRAFT/IN_REVIEW/SCHEDULED/ARCHIVED. */
+  async findPublishedBySlugWithMedia(organizationId, slug) {
+    return prisma.post.findFirst({ where: { organizationId, slug, status: "PUBLISHED", deletedAt: null }, ...withPublicRelations2 });
+  },
+  /** Phase 5 — resolves a navigation-menu "post" link target to its slug, PUBLISHED only. */
+  async findPublishedByIdInOrg(id, organizationId) {
+    return prisma.post.findFirst({ where: { id, organizationId, status: "PUBLISHED", deletedAt: null }, select: { slug: true } });
+  },
+  /** Phase 11 public projection — PUBLISHED only, paginated, with the same relations as findPublishedBySlugWithMedia. */
+  async listPublished(organizationId, filters, page, limit, sort, order) {
+    const where = buildWhere11(organizationId, { ...filters, status: "PUBLISHED" });
+    const [rows, total] = await Promise.all([
+      prisma.post.findMany({ where, orderBy: { [sort]: order }, skip: (page - 1) * limit, take: limit, ...withPublicRelations2 }),
+      prisma.post.count({ where })
+    ]);
+    return { rows, total };
+  },
+  /**
+   * Cross-organization by design (docs/AUTOMATION_ARCHITECTURE.md's
+   * scheduler tick uses the same pattern) — this backs the system cron
+   * job that promotes SCHEDULED posts to PUBLISHED, which has no single
+   * caller organization to scope to. Never used by an organization-scoped
+   * request handler.
+   */
+  async findDueScheduled(now, limit = 20) {
+    return prisma.post.findMany({
+      where: { status: "SCHEDULED", scheduledAt: { lte: now }, deletedAt: null },
+      take: limit,
+      orderBy: { scheduledAt: "asc" },
+      ...withRelations3
+    });
+  },
+  /** Phase 5 SEO audit — every live-or-about-to-be-live post (not ARCHIVED, not soft-deleted), with exactly the fields the rule-based checks need. */
+  async listForSeoAudit(organizationId) {
+    return prisma.post.findMany({
+      where: { organizationId, deletedAt: null, status: { not: "ARCHIVED" } },
+      select: {
+        id: true,
+        slug: true,
+        title: true,
+        status: true,
+        currentRevision: { select: { title: true, metadata: true } },
+        featuredMedia: { select: { altText: true } }
+      }
+    });
+  },
+  async findUniqueSlugInOrg(organizationId, base) {
+    const baseSlug = slugify7(base) || "post";
+    let slug = baseSlug;
+    let attempt = 1;
+    while (await this.findBySlugInOrg(organizationId, slug)) {
+      attempt += 1;
+      slug = `${baseSlug}-${attempt}`;
+      if (attempt > 50) break;
+    }
+    return slug;
+  },
+  async listRevisions(postId) {
+    return prisma.contentRevision.findMany({ where: { postId }, orderBy: { version: "desc" } });
+  },
+  async setTags(postId, tagIds) {
+    await prisma.$transaction([
+      prisma.postTag.deleteMany({ where: { postId } }),
+      ...tagIds.length > 0 ? [prisma.postTag.createMany({ data: tagIds.map((tagId) => ({ postId, tagId })) })] : []
+    ]);
+  },
+  async softDelete(id) {
+    await prisma.post.update({ where: { id }, data: { deletedAt: /* @__PURE__ */ new Date() } });
+  },
+  /** Phase 7 — Trash view: posts soft-deleted but not yet permanently gone, newest-deleted first. */
+  async listTrash(organizationId, page, limit) {
+    const where = { organizationId, deletedAt: { not: null } };
+    const [rows, total] = await Promise.all([
+      prisma.post.findMany({ where, orderBy: { deletedAt: "desc" }, skip: (page - 1) * limit, take: limit }),
+      prisma.post.count({ where })
+    ]);
+    return { rows, total };
+  },
+  /** Phase 7 — Trash view: a single soft-deleted post, org-scoped (never a live one). */
+  async findTrashedByIdInOrg(id, organizationId) {
+    return prisma.post.findFirst({ where: { id, organizationId, deletedAt: { not: null } } });
+  },
+  async restore(id) {
+    await prisma.post.update({ where: { id }, data: { deletedAt: null } });
+  },
+  /** Phase 15 — content analytics inventory: real post counts, never fabricated. */
+  async countForContentInventory(organizationId) {
+    const [total, published] = await Promise.all([
+      prisma.post.count({ where: { organizationId, deletedAt: null } }),
+      prisma.post.count({ where: { organizationId, deletedAt: null, status: "PUBLISHED" } })
+    ]);
+    return { total, published };
+  }
+};
+
+// server/repositories/caseStudyRepository.ts
+function slugify8(input) {
+  return input.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 150);
+}
+var withRelations4 = {
+  include: {
+    currentRevision: true,
+    industry: true,
+    featuredMedia: true,
+    products: { include: { product: { select: { id: true, slug: true, name: true, type: true, status: true } } } },
+    relatedPages: { include: { page: { select: { id: true, slug: true, title: true, status: true } } } },
+    relatedPosts: { include: { post: { select: { id: true, slug: true, title: true, status: true } } } }
+  }
+};
+var withPublicRelations3 = {
+  include: {
+    currentRevision: true,
+    industry: true,
+    featuredMedia: true,
+    products: { include: { product: { select: { id: true, slug: true, name: true, type: true, status: true, shortDescription: true } } } },
+    relatedPages: { include: { page: { select: { slug: true, title: true, status: true } } } },
+    relatedPosts: { include: { post: { select: { slug: true, title: true, status: true } } } }
+  }
+};
+function buildWhere12(organizationId, filters) {
+  const where = { organizationId, deletedAt: null };
+  if (filters.status) where.status = filters.status;
+  if (filters.industryId) where.industryId = filters.industryId;
+  if (filters.productId) where.products = { some: { productId: filters.productId } };
+  if (filters.fromDate || filters.toDate) {
+    where.createdAt = { ...filters.fromDate ? { gte: filters.fromDate } : {}, ...filters.toDate ? { lte: filters.toDate } : {} };
+  }
+  if (filters.search) {
+    where.OR = [
+      { title: { contains: filters.search, mode: "insensitive" } },
+      { slug: { contains: filters.search, mode: "insensitive" } },
+      { clientName: { contains: filters.search, mode: "insensitive" } }
+    ];
+  }
+  return where;
+}
+var caseStudyRepository = {
+  async list(organizationId, filters, page, limit, sort, order) {
+    const where = buildWhere12(organizationId, filters);
+    const [rows, total] = await Promise.all([
+      prisma.caseStudy.findMany({ where, orderBy: { [sort]: order }, skip: (page - 1) * limit, take: limit }),
+      prisma.caseStudy.count({ where })
+    ]);
+    return { rows, total };
+  },
+  async findByIdInOrg(id, organizationId) {
+    return prisma.caseStudy.findFirst({ where: { id, organizationId, deletedAt: null }, ...withRelations4 });
+  },
+  async findBySlugInOrg(organizationId, slug) {
+    return prisma.caseStudy.findFirst({ where: { organizationId, slug, deletedAt: null } });
+  },
+  /** Phase 14 — bulk existence check for Campaign "related case studies" selection, org-scoped (same shape as pageRepository/postRepository.findByIdsInOrg). */
+  async findByIdsInOrg(ids, organizationId) {
+    if (ids.length === 0) return [];
+    return prisma.caseStudy.findMany({ where: { id: { in: ids }, organizationId, deletedAt: null } });
+  },
+  /** Public projection — PUBLISHED only, with every relation the public renderer needs. Never returns DRAFT/IN_REVIEW/SCHEDULED/ARCHIVED. */
+  async findPublishedBySlugWithMedia(organizationId, slug) {
+    return prisma.caseStudy.findFirst({ where: { organizationId, slug, status: "PUBLISHED", deletedAt: null }, ...withPublicRelations3 });
+  },
+  /** Public projection — PUBLISHED only, paginated. */
+  async listPublished(organizationId, filters, page, limit, sort, order) {
+    const where = buildWhere12(organizationId, { ...filters, status: "PUBLISHED" });
+    const [rows, total] = await Promise.all([
+      prisma.caseStudy.findMany({ where, orderBy: { [sort]: order }, skip: (page - 1) * limit, take: limit, ...withPublicRelations3 }),
+      prisma.caseStudy.count({ where })
+    ]);
+    return { rows, total };
+  },
+  /** Cross-organization by design — backs the system cron job that promotes SCHEDULED case studies to PUBLISHED, same as postRepository.findDueScheduled. */
+  async findDueScheduled(now, limit = 20) {
+    return prisma.caseStudy.findMany({
+      where: { status: "SCHEDULED", scheduledAt: { lte: now }, deletedAt: null },
+      take: limit,
+      orderBy: { scheduledAt: "asc" },
+      ...withRelations4
+    });
+  },
+  /** SEO audit — every live-or-about-to-be-live case study (not ARCHIVED, not soft-deleted). */
+  async listForSeoAudit(organizationId) {
+    return prisma.caseStudy.findMany({
+      where: { organizationId, deletedAt: null, status: { not: "ARCHIVED" } },
+      select: {
+        id: true,
+        slug: true,
+        title: true,
+        status: true,
+        currentRevision: { select: { title: true, metadata: true } },
+        featuredMedia: { select: { altText: true } }
+      }
+    });
+  },
+  async findUniqueSlugInOrg(organizationId, base) {
+    const baseSlug = slugify8(base) || "case-study";
+    let slug = baseSlug;
+    let attempt = 1;
+    while (await this.findBySlugInOrg(organizationId, slug)) {
+      attempt += 1;
+      slug = `${baseSlug}-${attempt}`;
+      if (attempt > 50) break;
+    }
+    return slug;
+  },
+  async listRevisions(caseStudyId) {
+    return prisma.contentRevision.findMany({ where: { caseStudyId }, orderBy: { version: "desc" } });
+  },
+  async setProducts(caseStudyId, productIds) {
+    await prisma.$transaction([
+      prisma.caseStudyProduct.deleteMany({ where: { caseStudyId } }),
+      ...productIds.length > 0 ? [prisma.caseStudyProduct.createMany({ data: productIds.map((productId) => ({ caseStudyId, productId })) })] : []
+    ]);
+  },
+  async setRelatedPages(caseStudyId, pageIds) {
+    await prisma.$transaction([
+      prisma.caseStudyRelatedPage.deleteMany({ where: { caseStudyId } }),
+      ...pageIds.length > 0 ? [prisma.caseStudyRelatedPage.createMany({ data: pageIds.map((pageId) => ({ caseStudyId, pageId })) })] : []
+    ]);
+  },
+  async setRelatedPosts(caseStudyId, postIds) {
+    await prisma.$transaction([
+      prisma.caseStudyRelatedPost.deleteMany({ where: { caseStudyId } }),
+      ...postIds.length > 0 ? [prisma.caseStudyRelatedPost.createMany({ data: postIds.map((postId) => ({ caseStudyId, postId })) })] : []
+    ]);
+  },
+  /** Control Center "dependency/usage" view — every other Case Study referencing this one's related content, used to warn before deleting a Page/Post/Product that's still in use. */
+  async countUsageOfProduct(productId) {
+    return prisma.caseStudyProduct.count({ where: { productId } });
+  },
+  async countUsageOfPage(pageId) {
+    return prisma.caseStudyRelatedPage.count({ where: { pageId } });
+  },
+  async countUsageOfPost(postId) {
+    return prisma.caseStudyRelatedPost.count({ where: { postId } });
+  },
+  async softDelete(id) {
+    await prisma.caseStudy.update({ where: { id }, data: { deletedAt: /* @__PURE__ */ new Date() } });
+  },
+  /** Trash view: case studies soft-deleted but not yet permanently gone, newest-deleted first. */
+  async listTrash(organizationId, page, limit) {
+    const where = { organizationId, deletedAt: { not: null } };
+    const [rows, total] = await Promise.all([
+      prisma.caseStudy.findMany({ where, orderBy: { deletedAt: "desc" }, skip: (page - 1) * limit, take: limit }),
+      prisma.caseStudy.count({ where })
+    ]);
+    return { rows, total };
+  },
+  /** Trash view: a single soft-deleted case study, org-scoped (never a live one). */
+  async findTrashedByIdInOrg(id, organizationId) {
+    return prisma.caseStudy.findFirst({ where: { id, organizationId, deletedAt: { not: null } } });
+  },
+  async restore(id) {
+    await prisma.caseStudy.update({ where: { id }, data: { deletedAt: null } });
+  }
+};
+
+// server/services/campaignService.ts
+var TERMINAL_STATUSES3 = /* @__PURE__ */ new Set(["ARCHIVED"]);
+function assertValidTransition2(current, next) {
+  if (current === next) return;
+  if (TERMINAL_STATUSES3.has(current)) {
+    throw new ConflictError("This campaign has been archived and can no longer change status.");
+  }
+}
+async function loadCampaignOrThrow(id, organizationId) {
+  const campaign = await campaignRepository.findByIdInOrg(id, organizationId);
+  if (!campaign) throw new NotFoundError("Campaign not found.");
+  return campaign;
+}
+async function assertProductsUsable(productIds) {
+  if (!productIds || productIds.length === 0) return;
+  const found = await productRepository.findManyByIds(productIds);
+  if (found.length !== new Set(productIds).size) {
+    throw new ValidationError("One or more productIds do not refer to a real product/service/solution.");
+  }
+}
+async function assertRelatedPagesUsable(pageIds, organizationId) {
+  if (!pageIds || pageIds.length === 0) return;
+  const found = await pageRepository.findByIdsInOrg(pageIds, organizationId);
+  if (found.length !== new Set(pageIds).size) {
+    throw new ValidationError("One or more relatedPageIds do not refer to a page in this organization.");
+  }
+}
+async function assertRelatedPostsUsable(postIds, organizationId) {
+  if (!postIds || postIds.length === 0) return;
+  const found = await postRepository.findByIdsInOrg(postIds, organizationId);
+  if (found.length !== new Set(postIds).size) {
+    throw new ValidationError("One or more relatedPostIds do not refer to a post in this organization.");
+  }
+}
+async function assertRelatedCaseStudiesUsable(caseStudyIds, organizationId) {
+  if (!caseStudyIds || caseStudyIds.length === 0) return;
+  const found = await caseStudyRepository.findByIdsInOrg(caseStudyIds, organizationId);
+  if (found.length !== new Set(caseStudyIds).size) {
+    throw new ValidationError("One or more relatedCaseStudyIds do not refer to a case study in this organization.");
+  }
+}
+async function assertMediaUsable(mediaIds, organizationId) {
+  if (!mediaIds || mediaIds.length === 0) return;
+  for (const mediaId of new Set(mediaIds)) {
+    const media = await mediaRepository.findByIdInOrg(mediaId, organizationId);
+    if (!media) throw new ValidationError(`mediaIds contains "${mediaId}", which does not refer to a media asset in this organization.`);
+  }
+}
+async function assertLandingPageUsable(landingPageId, organizationId) {
+  if (!landingPageId) return;
+  const page = await pageRepository.findByIdInOrg(landingPageId, organizationId);
+  if (!page) throw new ValidationError("landingPageId does not refer to a page in this organization.");
+}
+async function assertFormUsable(formId, organizationId) {
+  if (!formId) return;
+  const form = await formRepository.findByIdInOrg(formId, organizationId);
+  if (!form) throw new ValidationError("formId does not refer to a form in this organization.");
+}
+async function assertRelationshipsUsable(input, organizationId) {
+  await Promise.all([
+    assertProductsUsable(input.productIds),
+    assertRelatedPagesUsable(input.relatedPageIds, organizationId),
+    assertRelatedPostsUsable(input.relatedPostIds, organizationId),
+    assertRelatedCaseStudiesUsable(input.relatedCaseStudyIds, organizationId),
+    assertMediaUsable(input.mediaIds, organizationId),
+    assertLandingPageUsable(input.landingPageId, organizationId),
+    assertFormUsable(input.formId, organizationId)
+  ]);
+}
+async function setRelations(campaignId, input) {
+  await Promise.all([
+    input.productIds !== void 0 ? campaignRepository.setProducts(campaignId, input.productIds) : Promise.resolve(),
+    input.relatedPageIds !== void 0 ? campaignRepository.setRelatedPages(campaignId, input.relatedPageIds) : Promise.resolve(),
+    input.relatedPostIds !== void 0 ? campaignRepository.setRelatedPosts(campaignId, input.relatedPostIds) : Promise.resolve(),
+    input.relatedCaseStudyIds !== void 0 ? campaignRepository.setRelatedCaseStudies(campaignId, input.relatedCaseStudyIds) : Promise.resolve(),
+    input.mediaIds !== void 0 ? campaignRepository.setMedia(campaignId, input.mediaIds) : Promise.resolve()
+  ]);
+}
+async function emitCampaignEvent(eventType, campaign, actorId) {
+  try {
+    await eventEngine.emit({
+      eventType,
+      entityType: "campaign",
+      entityId: campaign.id,
+      organizationId: campaign.organizationId,
+      actorId,
+      actorType: actorId ? "USER" : "SYSTEM",
+      sourceModule: "MARKETING",
+      payload: { campaignId: campaign.id }
+    });
+  } catch {
+  }
+}
+var campaignService = {
+  async listCampaigns(organizationId, filters, page, limit, sort, order) {
+    return campaignRepository.list(organizationId, filters, page, limit, sort, order);
+  },
+  async getCampaign(organizationId, id) {
+    return loadCampaignOrThrow(id, organizationId);
+  },
+  async createCampaign(caller, input, meta = {}) {
+    const organizationId = caller.organizationId;
+    await assertRelationshipsUsable(input, organizationId);
+    const campaign = await campaignRepository.create({
+      organizationId,
+      name: input.name,
+      description: input.description,
+      status: "DRAFT",
+      channel: input.channel,
+      startDate: input.startDate,
+      endDate: input.endDate,
+      ownerId: input.ownerId,
+      budget: input.budget !== void 0 ? toMoney(input.budget) : void 0,
+      currency: input.budget !== void 0 ? input.currency ?? DEFAULT_CURRENCY : input.currency,
+      landingPageId: input.landingPageId,
+      formId: input.formId,
+      utmSource: input.utmSource,
+      utmMedium: input.utmMedium,
+      utmCampaign: input.utmCampaign,
+      utmTerm: input.utmTerm,
+      utmContent: input.utmContent,
+      targetAudience: input.targetAudience,
+      notes: input.notes,
+      createdById: caller.id
+    });
+    await setRelations(campaign.id, input);
+    await auditLogRepository.record({
+      organizationId,
+      actorUserId: caller.id,
+      actorType: "USER",
+      action: "CAMPAIGN_CREATED",
+      resourceType: "campaign",
+      resourceId: campaign.id,
+      afterData: { name: campaign.name, status: campaign.status, channel: campaign.channel, utmCampaign: campaign.utmCampaign },
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent
+    });
+    await emitCampaignEvent("campaign.created", campaign, caller.id);
+    return loadCampaignOrThrow(campaign.id, organizationId);
+  },
+  async updateCampaign(caller, id, input, meta = {}) {
+    const organizationId = caller.organizationId;
+    const existing = await loadCampaignOrThrow(id, organizationId);
+    if (TERMINAL_STATUSES3.has(existing.status)) {
+      throw new ConflictError("This campaign has been archived and can no longer be edited.");
+    }
+    await assertRelationshipsUsable(input, organizationId);
+    const patch = {};
+    if (input.name !== void 0) patch.name = input.name;
+    if (input.description !== void 0) patch.description = input.description;
+    if (input.channel !== void 0) patch.channel = input.channel;
+    if (input.startDate !== void 0) patch.startDate = input.startDate;
+    if (input.endDate !== void 0) patch.endDate = input.endDate;
+    if (input.ownerId !== void 0) patch.ownerId = input.ownerId;
+    if (input.budget !== void 0) patch.budget = input.budget === null ? null : toMoney(input.budget);
+    if (input.currency !== void 0) patch.currency = input.currency;
+    if (input.landingPageId !== void 0) patch.landingPageId = input.landingPageId;
+    if (input.formId !== void 0) patch.formId = input.formId;
+    if (input.utmSource !== void 0) patch.utmSource = input.utmSource;
+    if (input.utmMedium !== void 0) patch.utmMedium = input.utmMedium;
+    if (input.utmCampaign !== void 0) patch.utmCampaign = input.utmCampaign;
+    if (input.utmTerm !== void 0) patch.utmTerm = input.utmTerm;
+    if (input.utmContent !== void 0) patch.utmContent = input.utmContent;
+    if (input.targetAudience !== void 0) patch.targetAudience = input.targetAudience;
+    if (input.notes !== void 0) patch.notes = input.notes;
+    if (Object.keys(patch).length > 0) {
+      await campaignRepository.update(id, patch);
+    }
+    await setRelations(id, input);
+    await auditLogRepository.record({
+      organizationId,
+      actorUserId: caller.id,
+      actorType: "USER",
+      action: "CAMPAIGN_UPDATED",
+      resourceType: "campaign",
+      resourceId: id,
+      beforeData: { name: existing.name, channel: existing.channel },
+      afterData: patch,
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent
+    });
+    const updated = await loadCampaignOrThrow(id, organizationId);
+    await emitCampaignEvent("campaign.updated", updated, caller.id);
+    return updated;
+  },
+  /** Creates a new DRAFT campaign copying this one's fields and relations (never its leads/opportunities/clients — those are this campaign's own attributed activity, not the new copy's). */
+  async duplicateCampaign(caller, id, input, meta = {}) {
+    const organizationId = caller.organizationId;
+    const existing = await loadCampaignOrThrow(id, organizationId);
+    const copy = await campaignRepository.create({
+      organizationId,
+      name: input.name ?? `Copy of ${existing.name}`,
+      description: existing.description,
+      status: "DRAFT",
+      channel: existing.channel,
+      startDate: existing.startDate,
+      endDate: existing.endDate,
+      ownerId: existing.ownerId,
+      budget: existing.budget,
+      currency: existing.currency,
+      landingPageId: existing.landingPageId,
+      formId: existing.formId,
+      // utmCampaign is deliberately NOT copied — two campaigns sharing one
+      // utm_campaign value would make attribution resolution ambiguous
+      // (campaignRepository.findActiveByUtmCampaignInOrg picks one
+      // arbitrarily). The duplicate starts with no UTM tag; the author
+      // sets a new one before activating it.
+      utmSource: existing.utmSource,
+      utmMedium: existing.utmMedium,
+      utmTerm: existing.utmTerm,
+      utmContent: existing.utmContent,
+      targetAudience: existing.targetAudience,
+      notes: existing.notes,
+      createdById: caller.id
+    });
+    await setRelations(copy.id, {
+      productIds: existing.products.map((p) => p.productId),
+      relatedPageIds: existing.relatedPages.map((p) => p.pageId),
+      relatedPostIds: existing.relatedPosts.map((p) => p.postId),
+      relatedCaseStudyIds: existing.relatedCaseStudies.map((c) => c.caseStudyId),
+      mediaIds: existing.media.map((m) => m.mediaId)
+    });
+    await auditLogRepository.record({
+      organizationId,
+      actorUserId: caller.id,
+      actorType: "USER",
+      action: "CAMPAIGN_DUPLICATED",
+      resourceType: "campaign",
+      resourceId: copy.id,
+      beforeData: { duplicatedFromCampaignId: id },
+      afterData: { name: copy.name },
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent
+    });
+    return loadCampaignOrThrow(copy.id, organizationId);
+  },
+  async activateCampaign(caller, id, meta = {}) {
+    const organizationId = caller.organizationId;
+    const existing = await loadCampaignOrThrow(id, organizationId);
+    assertValidTransition2(existing.status, "ACTIVE");
+    if (existing.status === "ACTIVE") throw new ConflictError("This campaign is already active.");
+    await campaignRepository.update(id, { status: "ACTIVE" });
+    await auditLogRepository.record({
+      organizationId,
+      actorUserId: caller.id,
+      actorType: "USER",
+      action: "CAMPAIGN_ACTIVATED",
+      resourceType: "campaign",
+      resourceId: id,
+      beforeData: { status: existing.status },
+      afterData: { status: "ACTIVE" },
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent
+    });
+    const updated = await loadCampaignOrThrow(id, organizationId);
+    await emitCampaignEvent("campaign.activated", updated, caller.id);
+    return updated;
+  },
+  async pauseCampaign(caller, id, meta = {}) {
+    const organizationId = caller.organizationId;
+    const existing = await loadCampaignOrThrow(id, organizationId);
+    if (existing.status !== "ACTIVE") throw new ConflictError("Only an ACTIVE campaign can be paused.");
+    await campaignRepository.update(id, { status: "PAUSED" });
+    await auditLogRepository.record({
+      organizationId,
+      actorUserId: caller.id,
+      actorType: "USER",
+      action: "CAMPAIGN_PAUSED",
+      resourceType: "campaign",
+      resourceId: id,
+      beforeData: { status: existing.status },
+      afterData: { status: "PAUSED" },
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent
+    });
+    const updated = await loadCampaignOrThrow(id, organizationId);
+    await emitCampaignEvent("campaign.paused", updated, caller.id);
+    return updated;
+  },
+  async archiveCampaign(caller, id, meta = {}) {
+    const organizationId = caller.organizationId;
+    const existing = await loadCampaignOrThrow(id, organizationId);
+    if (existing.status === "ARCHIVED") throw new ConflictError("This campaign is already archived.");
+    await campaignRepository.update(id, { status: "ARCHIVED" });
+    await auditLogRepository.record({
+      organizationId,
+      actorUserId: caller.id,
+      actorType: "USER",
+      action: "CAMPAIGN_ARCHIVED",
+      resourceType: "campaign",
+      resourceId: id,
+      beforeData: { status: existing.status },
+      afterData: { status: "ARCHIVED" },
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent
+    });
+    const updated = await loadCampaignOrThrow(id, organizationId);
+    await emitCampaignEvent("campaign.archived", updated, caller.id);
+    return updated;
+  },
+  /**
+   * "Publish" a campaign — activates it, but only after verifying its
+   * attached landing page (if any) is actually PUBLISHED. A campaign
+   * driving traffic to a DRAFT page would be a dead/broken URL on day
+   * one (§5 "ensure campaign URLs resolve correctly") — this never
+   * auto-publishes the page itself (that is content.publish's own,
+   * separately permissioned action), it only refuses to go live until
+   * that's genuinely true.
+   */
+  async publishCampaign(caller, id, meta = {}) {
+    const organizationId = caller.organizationId;
+    const existing = await loadCampaignOrThrow(id, organizationId);
+    assertValidTransition2(existing.status, "ACTIVE");
+    if (existing.status === "ACTIVE") throw new ConflictError("This campaign is already active.");
+    if (existing.landingPageId && existing.landingPage?.status !== "PUBLISHED") {
+      throw new ValidationError("This campaign's landing page must be published before the campaign can go live.");
+    }
+    return this.activateCampaign(caller, id, meta);
+  },
+  /**
+   * Composes the real, resolvable preview URL for this campaign's landing
+   * page with its own UTM parameters appended — never a fabricated URL.
+   * Returns landingPageUrl: null (not a guessed string) when the campaign
+   * has no landing page attached, or publicSiteBaseUrl: null when the
+   * public site's base URL isn't configured for this environment.
+   */
+  async previewCampaign(organizationId, id) {
+    const campaign = await loadCampaignOrThrow(id, organizationId);
+    if (!campaign.landingPage) {
+      return { landingPageUrl: null, landingPageStatus: null, configured: !!config.publicSiteBaseUrl };
+    }
+    if (!config.publicSiteBaseUrl) {
+      return { landingPageUrl: null, landingPageStatus: campaign.landingPage.status, configured: false };
+    }
+    const params = new URLSearchParams();
+    if (campaign.utmSource) params.set("utm_source", campaign.utmSource);
+    if (campaign.utmMedium) params.set("utm_medium", campaign.utmMedium);
+    if (campaign.utmCampaign) params.set("utm_campaign", campaign.utmCampaign);
+    if (campaign.utmTerm) params.set("utm_term", campaign.utmTerm);
+    if (campaign.utmContent) params.set("utm_content", campaign.utmContent);
+    const query = params.toString();
+    const base = config.publicSiteBaseUrl.replace(/\/$/, "");
+    const landingPageUrl = `${base}/${campaign.landingPage.slug}${query ? `?${query}` : ""}`;
+    return { landingPageUrl, landingPageStatus: campaign.landingPage.status, configured: true };
+  },
+  /** Unified activity timeline for one campaign, drawn entirely from the existing audit trail (never a parallel "activity" table — same convention as opportunityService.getActivity). */
+  async getActivity(organizationId, id) {
+    await loadCampaignOrThrow(id, organizationId);
+    const { rows } = await auditLogQueryRepository.list({ organizationId, resourceType: "campaign", resourceId: id }, 1, 100);
+    return rows;
+  }
+};
+
+// server/schemas/campaignSchemas.ts
+import { z as z16 } from "zod";
+var uuidArray = (max) => z16.array(z16.string().trim().uuid()).max(max);
+var CAMPAIGN_STATUS_VALUES = ["DRAFT", "ACTIVE", "PAUSED", "ARCHIVED"];
+var CAMPAIGN_CHANNEL_VALUES = ["EMAIL", "SOCIAL", "PAID_SEARCH", "PAID_SOCIAL", "CONTENT", "EVENT", "REFERRAL", "DIRECT", "OTHER"];
+var utmFieldSchema = z16.string().trim().min(1).max(150);
+var createCampaignSchema = z16.object({
+  name: z16.string().trim().min(1).max(200),
+  description: z16.string().trim().max(5e3).optional(),
+  channel: z16.enum(CAMPAIGN_CHANNEL_VALUES).default("OTHER"),
+  startDate: z16.coerce.date().optional(),
+  endDate: z16.coerce.date().optional(),
+  ownerId: z16.string().trim().uuid().optional(),
+  budget: z16.coerce.number().nonnegative().optional(),
+  currency: z16.string().trim().length(3).toUpperCase().optional(),
+  landingPageId: z16.string().trim().uuid().optional(),
+  formId: z16.string().trim().uuid().optional(),
+  utmSource: utmFieldSchema.optional(),
+  utmMedium: utmFieldSchema.optional(),
+  utmCampaign: utmFieldSchema.optional(),
+  utmTerm: utmFieldSchema.optional(),
+  utmContent: utmFieldSchema.optional(),
+  targetAudience: z16.string().trim().max(2e3).optional(),
+  notes: z16.string().trim().max(5e3).optional(),
+  productIds: uuidArray(50).optional(),
+  relatedPageIds: uuidArray(50).optional(),
+  relatedPostIds: uuidArray(50).optional(),
+  relatedCaseStudyIds: uuidArray(50).optional(),
+  mediaIds: uuidArray(50).optional()
+}).refine((v) => !v.startDate || !v.endDate || v.startDate <= v.endDate, { message: "startDate must be before or equal to endDate.", path: ["endDate"] });
+var updateCampaignSchema = z16.object({
+  name: z16.string().trim().min(1).max(200).optional(),
+  description: z16.string().trim().max(5e3).nullable().optional(),
+  channel: z16.enum(CAMPAIGN_CHANNEL_VALUES).optional(),
+  startDate: z16.coerce.date().nullable().optional(),
+  endDate: z16.coerce.date().nullable().optional(),
+  ownerId: z16.string().trim().uuid().nullable().optional(),
+  budget: z16.coerce.number().nonnegative().nullable().optional(),
+  currency: z16.string().trim().length(3).toUpperCase().nullable().optional(),
+  landingPageId: z16.string().trim().uuid().nullable().optional(),
+  formId: z16.string().trim().uuid().nullable().optional(),
+  utmSource: utmFieldSchema.nullable().optional(),
+  utmMedium: utmFieldSchema.nullable().optional(),
+  utmCampaign: utmFieldSchema.nullable().optional(),
+  utmTerm: utmFieldSchema.nullable().optional(),
+  utmContent: utmFieldSchema.nullable().optional(),
+  targetAudience: z16.string().trim().max(2e3).nullable().optional(),
+  notes: z16.string().trim().max(5e3).nullable().optional(),
+  productIds: uuidArray(50).optional(),
+  relatedPageIds: uuidArray(50).optional(),
+  relatedPostIds: uuidArray(50).optional(),
+  relatedCaseStudyIds: uuidArray(50).optional(),
+  mediaIds: uuidArray(50).optional()
+}).refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
+var listCampaignsQuerySchema = z16.object({
+  page: z16.coerce.number().int().positive().default(1),
+  limit: z16.coerce.number().int().positive().max(100).default(20),
+  search: z16.string().trim().max(200).optional(),
+  status: z16.enum(CAMPAIGN_STATUS_VALUES).optional(),
+  channel: z16.enum(CAMPAIGN_CHANNEL_VALUES).optional(),
+  ownerId: z16.string().trim().uuid().optional(),
+  sort: z16.enum(["name", "status", "channel", "startDate", "endDate", "createdAt", "updatedAt"]).default("updatedAt"),
+  order: z16.enum(["asc", "desc"]).default("desc")
+});
+var duplicateCampaignSchema = z16.object({
+  name: z16.string().trim().min(1).max(200).optional()
+});
+
+// server/routes/v1/campaignRoutes.ts
 var router17 = Router17();
 router17.use(authenticateToken);
 function requestMeta8(req) {
@@ -7008,19 +9259,207 @@ function requestMeta8(req) {
 }
 router17.get(
   "/",
+  requirePermission("campaigns.read"),
+  asyncHandler(async (req, res) => {
+    const query = listCampaignsQuerySchema.parse(req.query);
+    const { rows, total } = await campaignService.listCampaigns(
+      req.user.organizationId,
+      { search: query.search, status: query.status, channel: query.channel, ownerId: query.ownerId },
+      query.page,
+      query.limit,
+      query.sort,
+      query.order
+    );
+    sendSuccess(res, { campaigns: rows }, 200, { page: query.page, limit: query.limit, total });
+  })
+);
+router17.get(
+  "/:id",
+  requirePermission("campaigns.read"),
+  asyncHandler(async (req, res) => {
+    const campaign = await campaignService.getCampaign(req.user.organizationId, req.params.id);
+    sendSuccess(res, { campaign });
+  })
+);
+router17.get(
+  "/:id/activity",
+  requirePermission("campaigns.read"),
+  asyncHandler(async (req, res) => {
+    const activity = await campaignService.getActivity(req.user.organizationId, req.params.id);
+    sendSuccess(res, { activity });
+  })
+);
+router17.get(
+  "/:id/preview",
+  requirePermission("campaigns.read"),
+  asyncHandler(async (req, res) => {
+    const preview = await campaignService.previewCampaign(req.user.organizationId, req.params.id);
+    sendSuccess(res, { preview });
+  })
+);
+router17.post(
+  "/",
+  requirePermission("campaigns.create"),
+  asyncHandler(async (req, res) => {
+    const input = createCampaignSchema.parse(req.body);
+    const campaign = await campaignService.createCampaign(req.user, input, requestMeta8(req));
+    sendSuccess(res, { campaign }, 201);
+  })
+);
+router17.patch(
+  "/:id",
+  requirePermission("campaigns.update"),
+  asyncHandler(async (req, res) => {
+    const input = updateCampaignSchema.parse(req.body);
+    const campaign = await campaignService.updateCampaign(req.user, req.params.id, input, requestMeta8(req));
+    sendSuccess(res, { campaign });
+  })
+);
+router17.post(
+  "/:id/duplicate",
+  requirePermission("campaigns.create"),
+  asyncHandler(async (req, res) => {
+    const input = duplicateCampaignSchema.parse(req.body || {});
+    const campaign = await campaignService.duplicateCampaign(req.user, req.params.id, input, requestMeta8(req));
+    sendSuccess(res, { campaign }, 201);
+  })
+);
+router17.post(
+  "/:id/activate",
+  requirePermission("campaigns.update"),
+  asyncHandler(async (req, res) => {
+    const campaign = await campaignService.activateCampaign(req.user, req.params.id, requestMeta8(req));
+    sendSuccess(res, { campaign });
+  })
+);
+router17.post(
+  "/:id/pause",
+  requirePermission("campaigns.update"),
+  asyncHandler(async (req, res) => {
+    const campaign = await campaignService.pauseCampaign(req.user, req.params.id, requestMeta8(req));
+    sendSuccess(res, { campaign });
+  })
+);
+router17.post(
+  "/:id/publish",
+  requirePermission("campaigns.publish"),
+  asyncHandler(async (req, res) => {
+    const campaign = await campaignService.publishCampaign(req.user, req.params.id, requestMeta8(req));
+    sendSuccess(res, { campaign });
+  })
+);
+router17.post(
+  "/:id/archive",
+  requirePermission("campaigns.archive"),
+  asyncHandler(async (req, res) => {
+    const campaign = await campaignService.archiveCampaign(req.user, req.params.id, requestMeta8(req));
+    sendSuccess(res, { campaign });
+  })
+);
+var campaignRoutes_default = router17;
+
+// server/routes/v1/marketingRoutes.ts
+import { Router as Router18 } from "express";
+
+// server/services/marketingService.ts
+var marketingService = {
+  async getSummary(organizationId, permissions) {
+    const canCampaigns = permissions.includes("campaigns.read");
+    const canLeads = permissions.includes("leads.read");
+    const canOpportunities = permissions.includes("opportunities.read");
+    const canClients = permissions.includes("clients.read");
+    const canContent = permissions.includes("content.read");
+    const canForms = permissions.includes("forms.read");
+    const [campaignsByStatus, campaignRecentLeads, leadAttribution, leadSources, utmCampaigns, opportunityConversions, clientConversions, landingPages, forms, recentCampaignActivity] = await Promise.all([
+      canCampaigns ? campaignRepository.countByStatus(organizationId) : Promise.resolve(null),
+      canCampaigns ? campaignRepository.leadCounts(organizationId) : Promise.resolve(null),
+      canLeads ? leadRepository.countAttribution(organizationId) : Promise.resolve(null),
+      canLeads ? leadRepository.countBySource(organizationId) : Promise.resolve(null),
+      canLeads ? campaignRepository.distinctUtmCampaigns(organizationId) : Promise.resolve(null),
+      canOpportunities ? opportunityRepository.countAttributedConversions(organizationId) : Promise.resolve(null),
+      canClients ? clientRepository.countAttributedConversions(organizationId) : Promise.resolve(null),
+      canContent ? pageRepository.countLandingPages(organizationId) : Promise.resolve(null),
+      canForms ? formRepository.countForDashboard(organizationId) : Promise.resolve(null),
+      canCampaigns ? auditLogQueryRepository.list({ organizationId, resourceType: "campaign" }, 1, 20) : Promise.resolve(null)
+    ]);
+    return {
+      campaigns: campaignsByStatus && {
+        total: Object.values(campaignsByStatus).reduce((a, b) => a + b, 0),
+        draft: campaignsByStatus.DRAFT ?? 0,
+        active: campaignsByStatus.ACTIVE ?? 0,
+        paused: campaignsByStatus.PAUSED ?? 0,
+        archived: campaignsByStatus.ARCHIVED ?? 0,
+        performance: campaignRecentLeads
+      },
+      leads: leadAttribution && {
+        total: leadAttribution.total,
+        attributed: leadAttribution.attributed,
+        unattributed: leadAttribution.total - leadAttribution.attributed
+      },
+      conversions: canOpportunities || canClients ? {
+        opportunitiesWon: opportunityConversions,
+        clientsCreated: clientConversions
+      } : null,
+      landingPages,
+      forms,
+      sources: leadSources,
+      utmCampaigns,
+      recentCampaignActivity: recentCampaignActivity?.rows ?? null
+    };
+  }
+};
+
+// server/routes/v1/marketingRoutes.ts
+var router18 = Router18();
+router18.use(authenticateToken);
+router18.get(
+  "/summary",
+  asyncHandler(async (req, res) => {
+    const summary = await marketingService.getSummary(req.user.organizationId, req.user.role.permissions);
+    sendSuccess(res, summary);
+  })
+);
+var marketingRoutes_default = router18;
+
+// server/routes/v1/onboardingRoutes.ts
+import { Router as Router19 } from "express";
+var router19 = Router19();
+router19.use(authenticateToken);
+function requestMeta9(req) {
+  return { ip: req.ip, userAgent: req.headers["user-agent"] };
+}
+router19.get(
+  "/",
   requirePermission("onboarding.read"),
   asyncHandler(async (req, res) => {
     const query = listOnboardingQuerySchema.parse(req.query);
     const { rows, total } = await onboardingService.listOnboarding(
       req.user.organizationId,
-      { status: query.status, search: query.search },
+      { status: query.status, search: query.search, ownerId: query.ownerId, overdue: query.overdue },
       query.page,
       query.limit
     );
     sendSuccess(res, { onboarding: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router17.get(
+router19.get(
+  "/template",
+  requirePermission("onboarding.read"),
+  asyncHandler(async (req, res) => {
+    const template = await onboardingService.getTemplate(req.user.organizationId);
+    sendSuccess(res, template);
+  })
+);
+router19.put(
+  "/template",
+  requirePermission("onboarding.update"),
+  asyncHandler(async (req, res) => {
+    const steps = onboardingTemplateSchema.parse(req.body);
+    const template = await onboardingService.updateTemplate(req.user, steps, requestMeta9(req));
+    sendSuccess(res, template);
+  })
+);
+router19.get(
   "/:id",
   requirePermission("onboarding.read"),
   asyncHandler(async (req, res) => {
@@ -7028,27 +9467,44 @@ router17.get(
     sendSuccess(res, { onboarding: record });
   })
 );
-router17.patch(
+router19.get(
+  "/:id/activity",
+  requirePermission("onboarding.read"),
+  asyncHandler(async (req, res) => {
+    const activity = await onboardingService.getActivity(req.user.organizationId, req.params.id);
+    sendSuccess(res, { activity });
+  })
+);
+router19.patch(
   "/:id",
   requirePermission("onboarding.update"),
   asyncHandler(async (req, res) => {
     const input = updateOnboardingSchema.parse(req.body);
-    const record = await onboardingService.updateOnboarding(req.user, req.params.id, input, requestMeta8(req));
+    const record = await onboardingService.updateOnboarding(req.user, req.params.id, input, requestMeta9(req));
     sendSuccess(res, { onboarding: record });
   })
 );
-router17.post(
+router19.patch(
+  "/:id/steps/:key",
+  requirePermission("onboarding.update"),
+  asyncHandler(async (req, res) => {
+    const input = updateOnboardingStepSchema.parse(req.body);
+    const record = await onboardingService.updateStep(req.user, req.params.id, req.params.key, input, requestMeta9(req));
+    sendSuccess(res, { onboarding: record });
+  })
+);
+router19.post(
   "/:id/complete",
   requirePermission("onboarding.complete"),
   asyncHandler(async (req, res) => {
-    const record = await onboardingService.completeOnboarding(req.user, req.params.id, requestMeta8(req));
+    const record = await onboardingService.completeOnboarding(req.user, req.params.id, requestMeta9(req));
     sendSuccess(res, { onboarding: record });
   })
 );
-var onboardingRoutes_default = router17;
+var onboardingRoutes_default = router19;
 
 // server/routes/v1/workspaceRoutes.ts
-import { Router as Router18 } from "express";
+import { Router as Router20 } from "express";
 
 // server/repositories/workspaceInvitationRepository.ts
 var workspaceInvitationRepository = {
@@ -7297,31 +9753,31 @@ var invitationService = {
 };
 
 // server/schemas/invitationSchemas.ts
-import { z as z16 } from "zod";
-var createInvitationSchema = z16.object({
-  email: z16.string().trim().min(1).email()
+import { z as z17 } from "zod";
+var createInvitationSchema = z17.object({
+  email: z17.string().trim().min(1).email()
 });
-var listInvitationsQuerySchema = z16.object({
-  page: z16.coerce.number().int().positive().default(1),
-  limit: z16.coerce.number().int().positive().max(100).default(20)
+var listInvitationsQuerySchema = z17.object({
+  page: z17.coerce.number().int().positive().default(1),
+  limit: z17.coerce.number().int().positive().max(100).default(20)
 });
-var newPasswordSchema3 = z16.string().superRefine((password, ctx) => {
+var newPasswordSchema3 = z17.string().superRefine((password, ctx) => {
   const issue = validatePasswordPolicy(password);
-  if (issue) ctx.addIssue({ code: z16.ZodIssueCode.custom, message: issue });
+  if (issue) ctx.addIssue({ code: z17.ZodIssueCode.custom, message: issue });
 });
-var acceptInvitationSchema = z16.object({
-  firstName: z16.string().trim().min(1).max(100).optional(),
-  lastName: z16.string().trim().min(1).max(100).optional(),
+var acceptInvitationSchema = z17.object({
+  firstName: z17.string().trim().min(1).max(100).optional(),
+  lastName: z17.string().trim().min(1).max(100).optional(),
   password: newPasswordSchema3.optional()
 });
 
 // server/routes/v1/workspaceRoutes.ts
-var router18 = Router18();
-router18.use(authenticateToken);
-function requestMeta9(req) {
+var router20 = Router20();
+router20.use(authenticateToken);
+function requestMeta10(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router18.get(
+router20.get(
   "/",
   requirePermission("workspaces.read"),
   asyncHandler(async (req, res) => {
@@ -7335,7 +9791,7 @@ router18.get(
     sendSuccess(res, { workspaces: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router18.get(
+router20.get(
   "/:id",
   requirePermission("workspaces.read"),
   asyncHandler(async (req, res) => {
@@ -7343,16 +9799,16 @@ router18.get(
     sendSuccess(res, { workspace });
   })
 );
-router18.patch(
+router20.patch(
   "/:id",
   requirePermission("workspaces.update"),
   asyncHandler(async (req, res) => {
     const input = updateWorkspaceSchema.parse(req.body);
-    const workspace = await workspaceService.updateWorkspace(req.user, req.params.id, input, req.user.role.permissions, requestMeta9(req));
+    const workspace = await workspaceService.updateWorkspace(req.user, req.params.id, input, req.user.role.permissions, requestMeta10(req));
     sendSuccess(res, { workspace });
   })
 );
-router18.get(
+router20.get(
   "/:id/members",
   requirePermission("workspaces.read"),
   asyncHandler(async (req, res) => {
@@ -7373,7 +9829,7 @@ router18.get(
     sendSuccess(res, { members }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router18.get(
+router20.get(
   "/:id/invitations",
   requirePermission("invitations.read"),
   asyncHandler(async (req, res) => {
@@ -7382,188 +9838,55 @@ router18.get(
     sendSuccess(res, { invitations: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router18.post(
+router20.post(
   "/:id/invitations",
   requirePermission("invitations.create"),
   asyncHandler(async (req, res) => {
     const input = createInvitationSchema.parse(req.body);
-    const { invitation, devToken } = await invitationService.createInvitation(req.user, req.params.id, input, requestMeta9(req));
+    const { invitation, devToken } = await invitationService.createInvitation(req.user, req.params.id, input, requestMeta10(req));
     const { tokenHash: _tokenHash, ...safeInvitation } = invitation;
     sendSuccess(res, { invitation: safeInvitation, devToken }, 201);
   })
 );
-var workspaceRoutes_default = router18;
+var workspaceRoutes_default = router20;
 
 // server/routes/v1/invitationRoutes.ts
-import { Router as Router19 } from "express";
-var router19 = Router19();
-function requestMeta10(req) {
+import { Router as Router21 } from "express";
+var router21 = Router21();
+function requestMeta11(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router19.post(
+router21.post(
   "/:id/revoke",
   authenticateToken,
   requirePermission("invitations.revoke"),
   asyncHandler(async (req, res) => {
-    await invitationService.revokeInvitation(req.user, req.params.id, requestMeta10(req));
+    await invitationService.revokeInvitation(req.user, req.params.id, requestMeta11(req));
     sendSuccess(res, { message: "Invitation revoked." });
   })
 );
-router19.get(
+router21.get(
   "/:token",
   asyncHandler(async (req, res) => {
     const preview = await invitationService.previewInvitation(req.params.token);
     sendSuccess(res, preview);
   })
 );
-router19.post(
+router21.post(
   "/:token/accept",
   asyncHandler(async (req, res) => {
     const input = acceptInvitationSchema.parse(req.body);
-    const result = await invitationService.acceptInvitation(req.params.token, input, requestMeta10(req));
+    const result = await invitationService.acceptInvitation(req.params.token, input, requestMeta11(req));
     sendSuccess(res, result, 201);
   })
 );
-var invitationRoutes_default = router19;
+var invitationRoutes_default = router21;
 
 // server/routes/v1/productRoutes.ts
-import { Router as Router20 } from "express";
-
-// server/repositories/productRepository.ts
-var withDetail = {
-  include: {
-    category: true,
-    currentRevision: true,
-    industries: { include: { industry: true } },
-    relatedFrom: { include: { toProduct: { select: { id: true, slug: true, name: true, type: true, status: true } } } },
-    relatedTo: { include: { fromProduct: { select: { id: true, slug: true, name: true, type: true, status: true } } } }
-  }
-};
-function slugify4(input) {
-  return input.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 100);
-}
-function buildWhere8(filters) {
-  const where = {};
-  if (filters.type) where.type = filters.type;
-  if (filters.status) where.status = filters.status;
-  if (filters.isFeatured !== void 0) where.isFeatured = filters.isFeatured;
-  if (filters.categoryId) where.categoryId = filters.categoryId;
-  if (filters.industryId) where.industries = { some: { industryId: filters.industryId } };
-  if (filters.search) {
-    const term = filters.search;
-    where.OR = [
-      { name: { contains: term, mode: "insensitive" } },
-      { code: { contains: term, mode: "insensitive" } },
-      { slug: { contains: term, mode: "insensitive" } }
-    ];
-  }
-  return where;
-}
-var productRepository = {
-  async list(filters, page, limit, sort, order) {
-    const where = buildWhere8(filters);
-    const [rows, total] = await Promise.all([
-      prisma.product.findMany({
-        where,
-        orderBy: { [sort]: order },
-        skip: (page - 1) * limit,
-        take: limit
-      }),
-      prisma.product.count({ where })
-    ]);
-    return { rows, total };
-  },
-  async findById(id) {
-    return prisma.product.findUnique({ where: { id } });
-  },
-  async findByIdWithDetail(id) {
-    return prisma.product.findUnique({ where: { id }, ...withDetail });
-  },
-  /** Existence check for relatedProductIds/duplicate validation — never trusts a caller-supplied id list without checking which ones are real. */
-  async findManyByIds(ids) {
-    if (ids.length === 0) return [];
-    return prisma.product.findMany({ where: { id: { in: ids } } });
-  },
-  async findByCode(code) {
-    return prisma.product.findUnique({ where: { code } });
-  },
-  async findBySlug(slug) {
-    return prisma.product.findUnique({ where: { slug } });
-  },
-  /** Server-generated, collision-safe (§7) — never trusts a frontend-supplied slug for uniqueness beyond a caller-requested starting point. */
-  async findUniqueSlug(base) {
-    const baseSlug = slugify4(base) || "product";
-    let slug = baseSlug;
-    let attempt = 1;
-    while (await this.findBySlug(slug)) {
-      attempt += 1;
-      slug = `${baseSlug}-${attempt}`;
-      if (attempt > 50) break;
-    }
-    return slug;
-  },
-  async create(data) {
-    return prisma.product.create({
-      data: {
-        code: data.code,
-        name: data.name,
-        slug: data.slug,
-        type: data.type,
-        shortDescription: data.shortDescription,
-        description: data.description,
-        status: data.status ?? "DRAFT",
-        isFeatured: data.isFeatured ?? false,
-        displayOrder: data.displayOrder ?? 0,
-        featuredMediaId: data.featuredMediaId,
-        categoryId: data.categoryId,
-        createdById: data.createdById,
-        updatedById: data.createdById
-      }
-    });
-  },
-  async update(id, data) {
-    return prisma.product.update({ where: { id }, data });
-  },
-  // --- Revisions (Phase 10) — mirrors templateRepository's own revision helpers. ---
-  async listRevisions(productId) {
-    return prisma.productRevision.findMany({ where: { productId }, orderBy: { version: "desc" } });
-  },
-  async findRevision(productId, revisionId) {
-    return prisma.productRevision.findFirst({ where: { id: revisionId, productId } });
-  },
-  async createRevision(data) {
-    return prisma.productRevision.create({ data });
-  },
-  // --- Relations (Phase 10) — one row per pair; queried from both directions. ---
-  async getRelatedProducts(productId) {
-    const [from, to] = await Promise.all([
-      prisma.productRelation.findMany({ where: { fromProductId: productId }, include: { toProduct: { select: { id: true, slug: true, name: true, type: true, status: true } } } }),
-      prisma.productRelation.findMany({ where: { toProductId: productId }, include: { fromProduct: { select: { id: true, slug: true, name: true, type: true, status: true } } } })
-    ]);
-    return [...from.map((r) => r.toProduct), ...to.map((r) => r.fromProduct)];
-  },
-  /** Replaces the full related-product set for `productId` with exactly `relatedIds`, storing each pair once regardless of direction. */
-  async setRelatedProducts(productId, relatedIds, createdById) {
-    await prisma.$transaction([
-      prisma.productRelation.deleteMany({ where: { OR: [{ fromProductId: productId }, { toProductId: productId }] } }),
-      ...relatedIds.map((toProductId) => prisma.productRelation.create({ data: { fromProductId: productId, toProductId, createdById } }))
-    ]);
-  },
-  // --- Industries (Phase 10) ---
-  async getIndustries(productId) {
-    const rows = await prisma.productIndustry.findMany({ where: { productId }, include: { industry: true } });
-    return rows.map((r) => r.industry);
-  },
-  async setIndustries(productId, industryIds) {
-    await prisma.$transaction([
-      prisma.productIndustry.deleteMany({ where: { productId } }),
-      ...industryIds.map((industryId) => prisma.productIndustry.create({ data: { productId, industryId } }))
-    ]);
-  }
-};
+import { Router as Router22 } from "express";
 
 // server/repositories/productCategoryRepository.ts
-function slugify5(input) {
+function slugify9(input) {
   return input.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 100);
 }
 var productCategoryRepository = {
@@ -7584,7 +9907,7 @@ var productCategoryRepository = {
     return prisma.productCategory.findMany({ where: { id: { in: ids } } });
   },
   async findUniqueSlug(base) {
-    const baseSlug = slugify5(base) || "category";
+    const baseSlug = slugify9(base) || "category";
     let slug = baseSlug;
     let attempt = 1;
     while (await this.findBySlug(slug)) {
@@ -7608,61 +9931,15 @@ var productCategoryRepository = {
   }
 };
 
-// server/repositories/industryRepository.ts
-function slugify6(input) {
-  return input.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 100);
-}
-var industryRepository = {
-  async list(search) {
-    return prisma.industry.findMany({
-      where: search ? { name: { contains: search, mode: "insensitive" } } : void 0,
-      orderBy: [{ displayOrder: "asc" }, { name: "asc" }]
-    });
-  },
-  async findById(id) {
-    return prisma.industry.findUnique({ where: { id } });
-  },
-  async findBySlug(slug) {
-    return prisma.industry.findUnique({ where: { slug } });
-  },
-  async findManyByIds(ids) {
-    if (ids.length === 0) return [];
-    return prisma.industry.findMany({ where: { id: { in: ids } } });
-  },
-  async findUniqueSlug(base) {
-    const baseSlug = slugify6(base) || "industry";
-    let slug = baseSlug;
-    let attempt = 1;
-    while (await this.findBySlug(slug)) {
-      attempt += 1;
-      slug = `${baseSlug}-${attempt}`;
-      if (attempt > 50) break;
-    }
-    return slug;
-  },
-  async create(data) {
-    return prisma.industry.create({ data });
-  },
-  async update(id, data) {
-    return prisma.industry.update({ where: { id }, data });
-  },
-  async countProducts(id) {
-    return prisma.productIndustry.count({ where: { industryId: id } });
-  },
-  async delete(id) {
-    await prisma.industry.delete({ where: { id } });
-  }
-};
-
 // server/services/productService.ts
-var TERMINAL_STATUSES3 = /* @__PURE__ */ new Set(["ARCHIVED"]);
+var TERMINAL_STATUSES4 = /* @__PURE__ */ new Set(["ARCHIVED"]);
 var ALLOWED_TRANSITIONS2 = {
   DRAFT: ["ACTIVE", "ARCHIVED"],
   ACTIVE: ["INACTIVE", "ARCHIVED"],
   INACTIVE: ["ACTIVE", "ARCHIVED"],
   ARCHIVED: []
 };
-function assertValidTransition2(current, next) {
+function assertValidTransition3(current, next) {
   if (current === next) return;
   if (!ALLOWED_TRANSITIONS2[current]?.includes(next)) {
     throw new ConflictError(`Product cannot move from ${current} to ${next}.`);
@@ -7788,14 +10065,14 @@ var productService = {
   },
   async updateProduct(caller, id, input, meta = {}) {
     const existing = await loadProductDetailOrThrow(id);
-    if (TERMINAL_STATUSES3.has(existing.status)) {
+    if (TERMINAL_STATUSES4.has(existing.status)) {
       throw new ConflictError("This product is archived and can no longer be edited.");
     }
     if (input.status !== void 0) {
       if (input.status === "ARCHIVED") {
         throw new ValidationError('Use POST /products/:id/archive to archive a product \u2014 status cannot be set to "ARCHIVED" directly.');
       }
-      assertValidTransition2(existing.status, input.status);
+      assertValidTransition3(existing.status, input.status);
     }
     if (input.slug !== void 0 && input.slug !== existing.slug) {
       const dup = await productRepository.findBySlug(input.slug);
@@ -7855,12 +10132,12 @@ var productService = {
   },
   async revertProduct(caller, id, revisionId, meta = {}) {
     const existing = await loadProductDetailOrThrow(id);
-    if (TERMINAL_STATUSES3.has(existing.status)) throw new ConflictError("This product is archived and can no longer be edited.");
+    if (TERMINAL_STATUSES4.has(existing.status)) throw new ConflictError("This product is archived and can no longer be edited.");
     const target = await productRepository.findRevision(id, revisionId);
     if (!target) throw new NotFoundError("Revision not found on this product.");
     const nextVersion = (existing.currentRevision?.version ?? 0) + 1;
     const revision = await productRepository.createRevision({ productId: id, version: nextVersion, name: target.name, content: target.content, createdById: caller.id });
-    await productRepository.update(id, { currentRevisionId: revision.id, updatedById: caller.id });
+    await productRepository.update(id, { currentRevision: { connect: { id: revision.id } }, updatedBy: { connect: { id: caller.id } } });
     await auditLogRepository.record({
       actorUserId: caller.id,
       actorType: "USER",
@@ -7963,7 +10240,7 @@ var productService = {
 };
 
 // server/repositories/productModuleRepository.ts
-function slugify7(input) {
+function slugify10(input) {
   return input.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 100);
 }
 var productModuleRepository = {
@@ -7995,7 +10272,7 @@ var productModuleRepository = {
     return prisma.productModule.findFirst({ where: { productId, slug } });
   },
   async findUniqueSlugForProduct(productId, base) {
-    const baseSlug = slugify7(base) || "module";
+    const baseSlug = slugify10(base) || "module";
     let slug = baseSlug;
     let attempt = 1;
     while (await this.findBySlugForProduct(productId, slug)) {
@@ -8179,179 +10456,179 @@ var productModuleService = {
 };
 
 // server/schemas/productSchemas.ts
-import { z as z18 } from "zod";
+import { z as z19 } from "zod";
 
 // server/schemas/contentSchemas.ts
-import { z as z17 } from "zod";
-var contentStatusSchema = z17.enum(["DRAFT", "IN_REVIEW", "SCHEDULED", "PUBLISHED", "ARCHIVED"]);
-var patchableContentStatusSchema = z17.enum(["DRAFT"]);
-var expectedUpdatedAtSchema = z17.coerce.date().optional();
-var seoMetadataSchema = z17.object({
-  metaTitle: z17.string().trim().min(1).max(70).optional(),
-  metaDescription: z17.string().trim().min(1).max(320).optional(),
-  focusKeywords: z17.array(z17.string().trim().min(1).max(60)).max(10).optional(),
-  canonicalUrl: z17.string().trim().url().max(500).optional(),
-  ogTitle: z17.string().trim().min(1).max(95).optional(),
-  ogDescription: z17.string().trim().min(1).max(320).optional(),
-  ogImage: z17.string().trim().url().max(1e3).optional(),
-  twitterImage: z17.string().trim().url().max(1e3).optional(),
-  ogType: z17.enum(["article", "website", "news"]).optional(),
-  twitterCard: z17.enum(["summary_large_image", "summary"]).optional(),
-  robotsDirective: z17.enum(["index, follow", "noindex, nofollow", "noindex, follow"]).optional(),
-  schemaType: z17.enum(["TechArticle", "NewsArticle", "BlogPosting", "Report"]).optional()
+import { z as z18 } from "zod";
+var contentStatusSchema = z18.enum(["DRAFT", "IN_REVIEW", "SCHEDULED", "PUBLISHED", "ARCHIVED"]);
+var patchableContentStatusSchema = z18.enum(["DRAFT"]);
+var expectedUpdatedAtSchema = z18.coerce.date().optional();
+var seoMetadataSchema = z18.object({
+  metaTitle: z18.string().trim().min(1).max(70).optional(),
+  metaDescription: z18.string().trim().min(1).max(320).optional(),
+  focusKeywords: z18.array(z18.string().trim().min(1).max(60)).max(10).optional(),
+  canonicalUrl: z18.string().trim().url().max(500).optional(),
+  ogTitle: z18.string().trim().min(1).max(95).optional(),
+  ogDescription: z18.string().trim().min(1).max(320).optional(),
+  ogImage: z18.string().trim().url().max(1e3).optional(),
+  twitterImage: z18.string().trim().url().max(1e3).optional(),
+  ogType: z18.enum(["article", "website", "news"]).optional(),
+  twitterCard: z18.enum(["summary_large_image", "summary"]).optional(),
+  robotsDirective: z18.enum(["index, follow", "noindex, nofollow", "noindex, follow"]).optional(),
+  schemaType: z18.enum(["TechArticle", "NewsArticle", "BlogPosting", "Report"]).optional()
 }).strict();
-var revertContentSchema = z17.object({
-  revisionId: z17.string().trim().uuid()
+var revertContentSchema = z18.object({
+  revisionId: z18.string().trim().uuid()
 });
 var SORT_FIELDS = ["title", "slug", "status", "createdAt", "updatedAt", "publishedAt"];
-var listContentQuerySchema = z17.object({
-  page: z17.coerce.number().int().positive().default(1),
-  limit: z17.coerce.number().int().positive().max(100).default(20),
-  search: z17.string().trim().max(200).optional(),
-  status: contentStatusSchema.optional(),
-  // Phase 7 — Content Dashboard date filtering, inclusive range over createdAt.
-  fromDate: z17.coerce.date().optional(),
-  toDate: z17.coerce.date().optional(),
-  sort: z17.enum(SORT_FIELDS).default("updatedAt"),
-  order: z17.enum(["asc", "desc"]).default("desc")
-});
-var scheduleContentSchema = z17.object({
-  scheduledAt: z17.coerce.date().refine((d) => d.getTime() > Date.now(), { message: "scheduledAt must be in the future" })
-});
-var slugSchema2 = z17.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)");
-var createCategorySchema = z17.object({
-  name: z17.string().trim().min(1).max(150),
-  slug: slugSchema2.optional(),
-  description: z17.string().trim().max(2e3).optional(),
-  // Phase 7 — optional parent for a simple hierarchy (Category.parentId).
-  parentId: z17.string().trim().uuid().optional()
-});
-var updateCategorySchema = z17.object({
-  name: z17.string().trim().min(1).max(150).optional(),
-  slug: slugSchema2.optional(),
-  description: z17.string().trim().max(2e3).nullable().optional(),
-  parentId: z17.string().trim().uuid().nullable().optional()
-}).refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
-var createTagSchema = z17.object({
-  name: z17.string().trim().min(1).max(100),
-  slug: slugSchema2.optional(),
-  // Phase 7 — optional description, matching Category's own field.
-  description: z17.string().trim().max(2e3).optional()
-});
-var updateTagSchema = z17.object({
-  name: z17.string().trim().min(1).max(100).optional(),
-  slug: slugSchema2.optional(),
-  description: z17.string().trim().max(2e3).nullable().optional()
-}).refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
-var bulkContentIdsSchema = z17.object({
-  ids: z17.array(z17.string().trim().uuid()).min(1).max(100)
-});
-
-// server/schemas/productSchemas.ts
-var productTypeSchema = z18.enum(["PRODUCT", "SERVICE", "SOLUTION"]);
-var productStatusSchema = z18.enum(["DRAFT", "ACTIVE", "INACTIVE", "ARCHIVED"]);
-var SORT_FIELDS2 = ["name", "code", "type", "status", "displayOrder", "createdAt", "updatedAt"];
-var listProductsQuerySchema = z18.object({
+var listContentQuerySchema = z18.object({
   page: z18.coerce.number().int().positive().default(1),
   limit: z18.coerce.number().int().positive().max(100).default(20),
   search: z18.string().trim().max(200).optional(),
-  type: productTypeSchema.optional(),
-  status: productStatusSchema.optional(),
-  isFeatured: z18.coerce.boolean().optional(),
-  categoryId: z18.string().trim().uuid().optional(),
-  industryId: z18.string().trim().uuid().optional(),
-  sort: z18.enum(SORT_FIELDS2).default("displayOrder"),
-  order: z18.enum(["asc", "desc"]).default("asc")
+  status: contentStatusSchema.optional(),
+  // Phase 7 — Content Dashboard date filtering, inclusive range over createdAt.
+  fromDate: z18.coerce.date().optional(),
+  toDate: z18.coerce.date().optional(),
+  sort: z18.enum(SORT_FIELDS).default("updatedAt"),
+  order: z18.enum(["asc", "desc"]).default("desc")
 });
-var productContentSchema = z18.object({
-  benefits: z18.array(z18.string().trim().min(1).max(200)).max(20).optional(),
-  features: z18.array(z18.string().trim().min(1).max(200)).max(20).optional(),
-  businessProblem: z18.string().trim().max(2e3).optional(),
-  // Validated for real existence against the public org's Forms at save
-  // time in productService — never trusted as a bare uuid alone.
-  ctaFormId: z18.string().trim().uuid().optional(),
-  seo: seoMetadataSchema.optional()
+var scheduleContentSchema = z18.object({
+  scheduledAt: z18.coerce.date().refine((d) => d.getTime() > Date.now(), { message: "scheduledAt must be in the future" })
 });
-var codeSchema = z18.string().trim().min(1).max(50).regex(/^[A-Za-z0-9._-]+$/, "code may only contain letters, numbers, dots, underscores, and hyphens").transform((v) => v.toUpperCase());
-var createProductSchema = z18.object({
-  code: codeSchema,
-  name: z18.string().trim().min(1).max(200),
-  slug: z18.string().trim().min(1).max(100).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)").optional(),
-  type: productTypeSchema,
-  shortDescription: z18.string().trim().max(300).optional(),
-  description: z18.string().trim().max(1e4).optional(),
-  status: productStatusSchema.optional(),
-  isFeatured: z18.boolean().optional(),
-  displayOrder: z18.number().int().min(0).optional(),
-  featuredMediaId: z18.string().trim().uuid().optional(),
-  categoryId: z18.string().trim().uuid().optional(),
-  content: productContentSchema.optional(),
-  relatedProductIds: z18.array(z18.string().trim().uuid()).max(30).optional(),
-  industryIds: z18.array(z18.string().trim().uuid()).max(30).optional()
+var slugSchema2 = z18.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)");
+var createCategorySchema = z18.object({
+  name: z18.string().trim().min(1).max(150),
+  slug: slugSchema2.optional(),
+  description: z18.string().trim().max(2e3).optional(),
+  // Phase 7 — optional parent for a simple hierarchy (Category.parentId).
+  parentId: z18.string().trim().uuid().optional()
 });
-var updateProductSchema = z18.object({
-  name: z18.string().trim().min(1).max(200).optional(),
-  slug: z18.string().trim().min(1).max(100).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)").optional(),
-  type: productTypeSchema.optional(),
-  shortDescription: z18.string().trim().max(300).nullable().optional(),
-  description: z18.string().trim().max(1e4).nullable().optional(),
-  status: productStatusSchema.optional(),
-  isFeatured: z18.boolean().optional(),
-  displayOrder: z18.number().int().min(0).optional(),
-  featuredMediaId: z18.string().trim().uuid().nullable().optional(),
-  categoryId: z18.string().trim().uuid().nullable().optional(),
-  content: productContentSchema.optional(),
-  relatedProductIds: z18.array(z18.string().trim().uuid()).max(30).optional(),
-  industryIds: z18.array(z18.string().trim().uuid()).max(30).optional()
+var updateCategorySchema = z18.object({
+  name: z18.string().trim().min(1).max(150).optional(),
+  slug: slugSchema2.optional(),
+  description: z18.string().trim().max(2e3).nullable().optional(),
+  parentId: z18.string().trim().uuid().nullable().optional()
 }).refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
-var revertProductSchema = z18.object({
-  revisionId: z18.string().trim().uuid()
+var createTagSchema = z18.object({
+  name: z18.string().trim().min(1).max(100),
+  slug: slugSchema2.optional(),
+  // Phase 7 — optional description, matching Category's own field.
+  description: z18.string().trim().max(2e3).optional()
 });
-var duplicateProductSchema = z18.object({
-  name: z18.string().trim().min(1).max(200).optional()
-});
-var bulkArchiveProductsSchema = z18.object({
+var updateTagSchema = z18.object({
+  name: z18.string().trim().min(1).max(100).optional(),
+  slug: slugSchema2.optional(),
+  description: z18.string().trim().max(2e3).nullable().optional()
+}).refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
+var bulkContentIdsSchema = z18.object({
   ids: z18.array(z18.string().trim().uuid()).min(1).max(100)
 });
 
-// server/schemas/productModuleSchemas.ts
-import { z as z19 } from "zod";
-var productModuleStatusSchema = z19.enum(["DRAFT", "ACTIVE", "INACTIVE"]);
-var listProductModulesQuerySchema = z19.object({
+// server/schemas/productSchemas.ts
+var productTypeSchema = z19.enum(["PRODUCT", "SERVICE", "SOLUTION"]);
+var productStatusSchema = z19.enum(["DRAFT", "ACTIVE", "INACTIVE", "ARCHIVED"]);
+var SORT_FIELDS2 = ["name", "code", "type", "status", "displayOrder", "createdAt", "updatedAt"];
+var listProductsQuerySchema = z19.object({
   page: z19.coerce.number().int().positive().default(1),
-  limit: z19.coerce.number().int().positive().max(100).default(50),
+  limit: z19.coerce.number().int().positive().max(100).default(20),
+  search: z19.string().trim().max(200).optional(),
+  type: productTypeSchema.optional(),
+  status: productStatusSchema.optional(),
+  isFeatured: z19.coerce.boolean().optional(),
+  categoryId: z19.string().trim().uuid().optional(),
+  industryId: z19.string().trim().uuid().optional(),
+  sort: z19.enum(SORT_FIELDS2).default("displayOrder"),
+  order: z19.enum(["asc", "desc"]).default("asc")
+});
+var productContentSchema = z19.object({
+  benefits: z19.array(z19.string().trim().min(1).max(200)).max(20).optional(),
+  features: z19.array(z19.string().trim().min(1).max(200)).max(20).optional(),
+  businessProblem: z19.string().trim().max(2e3).optional(),
+  // Validated for real existence against the public org's Forms at save
+  // time in productService — never trusted as a bare uuid alone.
+  ctaFormId: z19.string().trim().uuid().optional(),
+  seo: seoMetadataSchema.optional()
+});
+var codeSchema = z19.string().trim().min(1).max(50).regex(/^[A-Za-z0-9._-]+$/, "code may only contain letters, numbers, dots, underscores, and hyphens").transform((v) => v.toUpperCase());
+var createProductSchema = z19.object({
+  code: codeSchema,
+  name: z19.string().trim().min(1).max(200),
+  slug: z19.string().trim().min(1).max(100).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)").optional(),
+  type: productTypeSchema,
+  shortDescription: z19.string().trim().max(300).optional(),
+  description: z19.string().trim().max(1e4).optional(),
+  status: productStatusSchema.optional(),
+  isFeatured: z19.boolean().optional(),
+  displayOrder: z19.number().int().min(0).optional(),
+  featuredMediaId: z19.string().trim().uuid().optional(),
+  categoryId: z19.string().trim().uuid().optional(),
+  content: productContentSchema.optional(),
+  relatedProductIds: z19.array(z19.string().trim().uuid()).max(30).optional(),
+  industryIds: z19.array(z19.string().trim().uuid()).max(30).optional()
+});
+var updateProductSchema = z19.object({
+  name: z19.string().trim().min(1).max(200).optional(),
+  slug: z19.string().trim().min(1).max(100).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)").optional(),
+  type: productTypeSchema.optional(),
+  shortDescription: z19.string().trim().max(300).nullable().optional(),
+  description: z19.string().trim().max(1e4).nullable().optional(),
+  status: productStatusSchema.optional(),
+  isFeatured: z19.boolean().optional(),
+  displayOrder: z19.number().int().min(0).optional(),
+  featuredMediaId: z19.string().trim().uuid().nullable().optional(),
+  categoryId: z19.string().trim().uuid().nullable().optional(),
+  content: productContentSchema.optional(),
+  relatedProductIds: z19.array(z19.string().trim().uuid()).max(30).optional(),
+  industryIds: z19.array(z19.string().trim().uuid()).max(30).optional()
+}).refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
+var revertProductSchema = z19.object({
+  revisionId: z19.string().trim().uuid()
+});
+var duplicateProductSchema = z19.object({
+  name: z19.string().trim().min(1).max(200).optional()
+});
+var bulkArchiveProductsSchema = z19.object({
+  ids: z19.array(z19.string().trim().uuid()).min(1).max(100)
+});
+
+// server/schemas/productModuleSchemas.ts
+import { z as z20 } from "zod";
+var productModuleStatusSchema = z20.enum(["DRAFT", "ACTIVE", "INACTIVE"]);
+var listProductModulesQuerySchema = z20.object({
+  page: z20.coerce.number().int().positive().default(1),
+  limit: z20.coerce.number().int().positive().max(100).default(50),
   status: productModuleStatusSchema.optional()
 });
-var codeSchema2 = z19.string().trim().min(1).max(50).regex(/^[A-Za-z0-9._-]+$/, "code may only contain letters, numbers, dots, underscores, and hyphens").transform((v) => v.toUpperCase());
-var slugSchema3 = z19.string().trim().min(1).max(100).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)");
-var createProductModuleSchema = z19.object({
+var codeSchema2 = z20.string().trim().min(1).max(50).regex(/^[A-Za-z0-9._-]+$/, "code may only contain letters, numbers, dots, underscores, and hyphens").transform((v) => v.toUpperCase());
+var slugSchema3 = z20.string().trim().min(1).max(100).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)");
+var createProductModuleSchema = z20.object({
   code: codeSchema2,
-  name: z19.string().trim().min(1).max(200),
+  name: z20.string().trim().min(1).max(200),
   slug: slugSchema3.optional(),
-  description: z19.string().trim().max(1e4).optional(),
+  description: z20.string().trim().max(1e4).optional(),
   status: productModuleStatusSchema.optional(),
-  isCore: z19.boolean().optional(),
-  displayOrder: z19.number().int().min(0).optional()
+  isCore: z20.boolean().optional(),
+  displayOrder: z20.number().int().min(0).optional()
 });
-var updateProductModuleSchema = z19.object({
-  name: z19.string().trim().min(1).max(200).optional(),
+var updateProductModuleSchema = z20.object({
+  name: z20.string().trim().min(1).max(200).optional(),
   slug: slugSchema3.optional(),
-  description: z19.string().trim().max(1e4).nullable().optional(),
+  description: z20.string().trim().max(1e4).nullable().optional(),
   status: productModuleStatusSchema.optional(),
-  isCore: z19.boolean().optional(),
-  displayOrder: z19.number().int().min(0).optional()
+  isCore: z20.boolean().optional(),
+  displayOrder: z20.number().int().min(0).optional()
 }).refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
-var reorderProductModulesSchema = z19.object({
-  moduleIds: z19.array(z19.string().trim().uuid()).min(1).max(200)
+var reorderProductModulesSchema = z20.object({
+  moduleIds: z20.array(z20.string().trim().uuid()).min(1).max(200)
 });
 
 // server/routes/v1/productRoutes.ts
-var router20 = Router20();
-router20.use(authenticateToken);
-function requestMeta11(req) {
+var router22 = Router22();
+router22.use(authenticateToken);
+function requestMeta12(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router20.get(
+router22.get(
   "/",
   requirePermission("products.read"),
   asyncHandler(async (req, res) => {
@@ -8366,16 +10643,16 @@ router20.get(
     sendSuccess(res, { products: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router20.post(
+router22.post(
   "/bulk/archive",
   requirePermission("products.archive"),
   asyncHandler(async (req, res) => {
     const input = bulkArchiveProductsSchema.parse(req.body);
-    const result = await productService.bulkArchiveProducts(req.user, input.ids, requestMeta11(req));
+    const result = await productService.bulkArchiveProducts(req.user, input.ids, requestMeta12(req));
     sendSuccess(res, result);
   })
 );
-router20.get(
+router22.get(
   "/:id",
   requirePermission("products.read"),
   asyncHandler(async (req, res) => {
@@ -8383,33 +10660,33 @@ router20.get(
     sendSuccess(res, { product });
   })
 );
-router20.post(
+router22.post(
   "/",
   requirePermission("products.create"),
   asyncHandler(async (req, res) => {
     const input = createProductSchema.parse(req.body);
-    const product = await productService.createProduct(req.user, input, requestMeta11(req));
+    const product = await productService.createProduct(req.user, input, requestMeta12(req));
     sendSuccess(res, { product }, 201);
   })
 );
-router20.patch(
+router22.patch(
   "/:id",
   requirePermission("products.update"),
   asyncHandler(async (req, res) => {
     const input = updateProductSchema.parse(req.body);
-    const product = await productService.updateProduct(req.user, req.params.id, input, requestMeta11(req));
+    const product = await productService.updateProduct(req.user, req.params.id, input, requestMeta12(req));
     sendSuccess(res, { product });
   })
 );
-router20.post(
+router22.post(
   "/:id/archive",
   requirePermission("products.archive"),
   asyncHandler(async (req, res) => {
-    const product = await productService.archiveProduct(req.user, req.params.id, requestMeta11(req));
+    const product = await productService.archiveProduct(req.user, req.params.id, requestMeta12(req));
     sendSuccess(res, { product });
   })
 );
-router20.get(
+router22.get(
   "/:id/revisions",
   requirePermission("products.read"),
   asyncHandler(async (req, res) => {
@@ -8417,25 +10694,25 @@ router20.get(
     sendSuccess(res, { revisions });
   })
 );
-router20.post(
+router22.post(
   "/:id/revert",
   requirePermission("products.update"),
   asyncHandler(async (req, res) => {
     const input = revertProductSchema.parse(req.body);
-    const product = await productService.revertProduct(req.user, req.params.id, input.revisionId, requestMeta11(req));
+    const product = await productService.revertProduct(req.user, req.params.id, input.revisionId, requestMeta12(req));
     sendSuccess(res, { product });
   })
 );
-router20.post(
+router22.post(
   "/:id/duplicate",
   requirePermission("products.create"),
   asyncHandler(async (req, res) => {
     const input = duplicateProductSchema.parse(req.body ?? {});
-    const product = await productService.duplicateProduct(req.user, req.params.id, input.name, requestMeta11(req));
+    const product = await productService.duplicateProduct(req.user, req.params.id, input.name, requestMeta12(req));
     sendSuccess(res, { product }, 201);
   })
 );
-router20.get(
+router22.get(
   "/:id/modules",
   requirePermission("product_modules.read"),
   asyncHandler(async (req, res) => {
@@ -8444,34 +10721,34 @@ router20.get(
     sendSuccess(res, { modules: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router20.post(
+router22.post(
   "/:id/modules",
   requirePermission("product_modules.create"),
   asyncHandler(async (req, res) => {
     const input = createProductModuleSchema.parse(req.body);
-    const module_ = await productModuleService.createModule(req.user, req.params.id, input, requestMeta11(req));
+    const module_ = await productModuleService.createModule(req.user, req.params.id, input, requestMeta12(req));
     sendSuccess(res, { module: module_ }, 201);
   })
 );
-router20.post(
+router22.post(
   "/:id/modules/reorder",
   requirePermission("product_modules.reorder"),
   asyncHandler(async (req, res) => {
     const input = reorderProductModulesSchema.parse(req.body);
-    await productModuleService.reorderModules(req.user, req.params.id, input.moduleIds, requestMeta11(req));
+    await productModuleService.reorderModules(req.user, req.params.id, input.moduleIds, requestMeta12(req));
     sendSuccess(res, { message: "Modules reordered." });
   })
 );
-var productRoutes_default = router20;
+var productRoutes_default = router22;
 
 // server/routes/v1/productModuleRoutes.ts
-import { Router as Router21 } from "express";
-var router21 = Router21();
-router21.use(authenticateToken);
-function requestMeta12(req) {
+import { Router as Router23 } from "express";
+var router23 = Router23();
+router23.use(authenticateToken);
+function requestMeta13(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router21.get(
+router23.get(
   "/:id",
   requirePermission("product_modules.read"),
   asyncHandler(async (req, res) => {
@@ -8479,27 +10756,27 @@ router21.get(
     sendSuccess(res, { module: module_ });
   })
 );
-router21.patch(
+router23.patch(
   "/:id",
   requirePermission("product_modules.update"),
   asyncHandler(async (req, res) => {
     const input = updateProductModuleSchema.parse(req.body);
-    const module_ = await productModuleService.updateModule(req.user, req.params.id, input, requestMeta12(req));
+    const module_ = await productModuleService.updateModule(req.user, req.params.id, input, requestMeta13(req));
     sendSuccess(res, { module: module_ });
   })
 );
-router21.post(
+router23.post(
   "/:id/archive",
   requirePermission("product_modules.archive"),
   asyncHandler(async (req, res) => {
-    const module_ = await productModuleService.archiveModule(req.user, req.params.id, requestMeta12(req));
+    const module_ = await productModuleService.archiveModule(req.user, req.params.id, requestMeta13(req));
     sendSuccess(res, { module: module_ });
   })
 );
-var productModuleRoutes_default = router21;
+var productModuleRoutes_default = router23;
 
 // server/routes/v1/productCategoryRoutes.ts
-import { Router as Router22 } from "express";
+import { Router as Router24 } from "express";
 
 // server/services/productCategoryService.ts
 function isUniqueConstraintError3(err) {
@@ -8587,30 +10864,30 @@ var productCategoryService = {
 };
 
 // server/schemas/productCategorySchemas.ts
-import { z as z20 } from "zod";
-var listProductCategoriesQuerySchema = z20.object({
-  search: z20.string().trim().max(200).optional()
+import { z as z21 } from "zod";
+var listProductCategoriesQuerySchema = z21.object({
+  search: z21.string().trim().max(200).optional()
 });
-var createProductCategorySchema = z20.object({
-  name: z20.string().trim().min(1).max(150),
-  slug: z20.string().trim().min(1).max(100).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)").optional(),
-  description: z20.string().trim().max(1e3).optional(),
-  displayOrder: z20.number().int().min(0).optional()
+var createProductCategorySchema = z21.object({
+  name: z21.string().trim().min(1).max(150),
+  slug: z21.string().trim().min(1).max(100).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)").optional(),
+  description: z21.string().trim().max(1e3).optional(),
+  displayOrder: z21.number().int().min(0).optional()
 });
-var updateProductCategorySchema = z20.object({
-  name: z20.string().trim().min(1).max(150).optional(),
-  slug: z20.string().trim().min(1).max(100).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)").optional(),
-  description: z20.string().trim().max(1e3).nullable().optional(),
-  displayOrder: z20.number().int().min(0).optional()
+var updateProductCategorySchema = z21.object({
+  name: z21.string().trim().min(1).max(150).optional(),
+  slug: z21.string().trim().min(1).max(100).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)").optional(),
+  description: z21.string().trim().max(1e3).nullable().optional(),
+  displayOrder: z21.number().int().min(0).optional()
 }).refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
 
 // server/routes/v1/productCategoryRoutes.ts
-var router22 = Router22();
-router22.use(authenticateToken);
-function requestMeta13(req) {
+var router24 = Router24();
+router24.use(authenticateToken);
+function requestMeta14(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router22.get(
+router24.get(
   "/",
   requirePermission("product_categories.read"),
   asyncHandler(async (req, res) => {
@@ -8619,36 +10896,36 @@ router22.get(
     sendSuccess(res, { categories });
   })
 );
-router22.post(
+router24.post(
   "/",
   requirePermission("product_categories.manage"),
   asyncHandler(async (req, res) => {
     const input = createProductCategorySchema.parse(req.body);
-    const category = await productCategoryService.create(req.user, input, requestMeta13(req));
+    const category = await productCategoryService.create(req.user, input, requestMeta14(req));
     sendSuccess(res, { category }, 201);
   })
 );
-router22.patch(
+router24.patch(
   "/:id",
   requirePermission("product_categories.manage"),
   asyncHandler(async (req, res) => {
     const input = updateProductCategorySchema.parse(req.body);
-    const category = await productCategoryService.update(req.user, req.params.id, input, requestMeta13(req));
+    const category = await productCategoryService.update(req.user, req.params.id, input, requestMeta14(req));
     sendSuccess(res, { category });
   })
 );
-router22.delete(
+router24.delete(
   "/:id",
   requirePermission("product_categories.manage"),
   asyncHandler(async (req, res) => {
-    await productCategoryService.delete(req.user, req.params.id, requestMeta13(req));
+    await productCategoryService.delete(req.user, req.params.id, requestMeta14(req));
     sendSuccess(res, { message: "Category deleted." });
   })
 );
-var productCategoryRoutes_default = router22;
+var productCategoryRoutes_default = router24;
 
 // server/routes/v1/industryRoutes.ts
-import { Router as Router23 } from "express";
+import { Router as Router25 } from "express";
 
 // server/services/industryService.ts
 function isUniqueConstraintError4(err) {
@@ -8736,30 +11013,30 @@ var industryService = {
 };
 
 // server/schemas/industrySchemas.ts
-import { z as z21 } from "zod";
-var listIndustriesQuerySchema = z21.object({
-  search: z21.string().trim().max(200).optional()
+import { z as z22 } from "zod";
+var listIndustriesQuerySchema = z22.object({
+  search: z22.string().trim().max(200).optional()
 });
-var createIndustrySchema = z21.object({
-  name: z21.string().trim().min(1).max(150),
-  slug: z21.string().trim().min(1).max(100).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)").optional(),
-  description: z21.string().trim().max(1e3).optional(),
-  displayOrder: z21.number().int().min(0).optional()
+var createIndustrySchema = z22.object({
+  name: z22.string().trim().min(1).max(150),
+  slug: z22.string().trim().min(1).max(100).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)").optional(),
+  description: z22.string().trim().max(1e3).optional(),
+  displayOrder: z22.number().int().min(0).optional()
 });
-var updateIndustrySchema = z21.object({
-  name: z21.string().trim().min(1).max(150).optional(),
-  slug: z21.string().trim().min(1).max(100).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)").optional(),
-  description: z21.string().trim().max(1e3).nullable().optional(),
-  displayOrder: z21.number().int().min(0).optional()
+var updateIndustrySchema = z22.object({
+  name: z22.string().trim().min(1).max(150).optional(),
+  slug: z22.string().trim().min(1).max(100).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)").optional(),
+  description: z22.string().trim().max(1e3).nullable().optional(),
+  displayOrder: z22.number().int().min(0).optional()
 }).refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
 
 // server/routes/v1/industryRoutes.ts
-var router23 = Router23();
-router23.use(authenticateToken);
-function requestMeta14(req) {
+var router25 = Router25();
+router25.use(authenticateToken);
+function requestMeta15(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router23.get(
+router25.get(
   "/",
   requirePermission("industries.read"),
   asyncHandler(async (req, res) => {
@@ -8768,157 +11045,39 @@ router23.get(
     sendSuccess(res, { industries });
   })
 );
-router23.post(
+router25.post(
   "/",
   requirePermission("industries.manage"),
   asyncHandler(async (req, res) => {
     const input = createIndustrySchema.parse(req.body);
-    const industry = await industryService.create(req.user, input, requestMeta14(req));
+    const industry = await industryService.create(req.user, input, requestMeta15(req));
     sendSuccess(res, { industry }, 201);
   })
 );
-router23.patch(
+router25.patch(
   "/:id",
   requirePermission("industries.manage"),
   asyncHandler(async (req, res) => {
     const input = updateIndustrySchema.parse(req.body);
-    const industry = await industryService.update(req.user, req.params.id, input, requestMeta14(req));
+    const industry = await industryService.update(req.user, req.params.id, input, requestMeta15(req));
     sendSuccess(res, { industry });
   })
 );
-router23.delete(
+router25.delete(
   "/:id",
   requirePermission("industries.manage"),
   asyncHandler(async (req, res) => {
-    await industryService.delete(req.user, req.params.id, requestMeta14(req));
+    await industryService.delete(req.user, req.params.id, requestMeta15(req));
     sendSuccess(res, { message: "Industry deleted." });
   })
 );
-var industryRoutes_default = router23;
+var industryRoutes_default = router25;
 
 // server/routes/v1/pageRoutes.ts
-import { Router as Router24 } from "express";
-
-// server/repositories/pageRepository.ts
-function slugify8(input) {
-  return input.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 150);
-}
-var withCurrentRevision = { include: { currentRevision: true } };
-var withPublicRelations = { include: { currentRevision: true, featuredMedia: true, template: { include: { currentRevision: true } } } };
-function buildWhere9(organizationId, filters) {
-  const where = { organizationId, deletedAt: null };
-  if (filters.status) where.status = filters.status;
-  if (filters.fromDate || filters.toDate) {
-    where.createdAt = { ...filters.fromDate ? { gte: filters.fromDate } : {}, ...filters.toDate ? { lte: filters.toDate } : {} };
-  }
-  if (filters.search) {
-    where.OR = [{ title: { contains: filters.search, mode: "insensitive" } }, { slug: { contains: filters.search, mode: "insensitive" } }];
-  }
-  return where;
-}
-var pageRepository = {
-  async list(organizationId, filters, page, limit, sort, order) {
-    const where = buildWhere9(organizationId, filters);
-    const [rows, total] = await Promise.all([
-      prisma.page.findMany({ where, orderBy: { [sort]: order }, skip: (page - 1) * limit, take: limit }),
-      prisma.page.count({ where })
-    ]);
-    return { rows, total };
-  },
-  async findByIdInOrg(id, organizationId) {
-    return prisma.page.findFirst({ where: { id, organizationId, deletedAt: null }, ...withCurrentRevision });
-  },
-  async findBySlugInOrg(organizationId, slug) {
-    return prisma.page.findFirst({ where: { organizationId, slug, deletedAt: null } });
-  },
-  /** Phase 11 public projection — PUBLISHED only, with the revision content and featured media needed to render the page (docs/PUBLIC_API_ARCHITECTURE.md). Never returns DRAFT/IN_REVIEW/SCHEDULED/ARCHIVED. */
-  async findPublishedBySlugWithMedia(organizationId, slug) {
-    return prisma.page.findFirst({ where: { organizationId, slug, status: "PUBLISHED", deletedAt: null }, ...withPublicRelations });
-  },
-  /** Phase 5 — the org's designated homepage, PUBLISHED only (same safety as findPublishedBySlugWithMedia). */
-  async findPublishedHomepageWithMedia(organizationId) {
-    return prisma.page.findFirst({ where: { organizationId, isHomepage: true, status: "PUBLISHED", deletedAt: null }, ...withPublicRelations });
-  },
-  /** Phase 5 — resolves a navigation-menu "page" link target to its slug, PUBLISHED only (never leaks a draft page's existence/slug). */
-  async findPublishedByIdInOrg(id, organizationId) {
-    return prisma.page.findFirst({ where: { id, organizationId, status: "PUBLISHED", deletedAt: null }, select: { slug: true } });
-  },
-  /**
-   * Cross-organization by design (see postRepository.findDueScheduled) —
-   * backs the system cron job that promotes SCHEDULED pages to PUBLISHED.
-   */
-  async findDueScheduled(now, limit = 20) {
-    return prisma.page.findMany({
-      where: { status: "SCHEDULED", scheduledAt: { lte: now }, deletedAt: null },
-      take: limit,
-      orderBy: { scheduledAt: "asc" },
-      ...withCurrentRevision
-    });
-  },
-  /** Phase 5 SEO audit — every live-or-about-to-be-live page (not ARCHIVED, not soft-deleted), with exactly the fields the rule-based checks need. */
-  async listForSeoAudit(organizationId) {
-    return prisma.page.findMany({
-      where: { organizationId, deletedAt: null, status: { not: "ARCHIVED" } },
-      select: {
-        id: true,
-        slug: true,
-        title: true,
-        status: true,
-        currentRevision: { select: { title: true, metadata: true } },
-        featuredMedia: { select: { altText: true } }
-      }
-    });
-  },
-  async findUniqueSlugInOrg(organizationId, base) {
-    const baseSlug = slugify8(base) || "page";
-    let slug = baseSlug;
-    let attempt = 1;
-    while (await this.findBySlugInOrg(organizationId, slug)) {
-      attempt += 1;
-      slug = `${baseSlug}-${attempt}`;
-      if (attempt > 50) break;
-    }
-    return slug;
-  },
-  async listRevisions(pageId) {
-    return prisma.contentRevision.findMany({ where: { pageId }, orderBy: { version: "desc" } });
-  },
-  /** Phase 5 — page hierarchy: this page's own parentId (for cycle-checking a reparent), org-scoped. */
-  async findParentId(id, organizationId) {
-    const row = await prisma.page.findFirst({ where: { id, organizationId, deletedAt: null }, select: { parentId: true } });
-    return row?.parentId ?? null;
-  },
-  /** Phase 5 — direct children of a page, for the Pages hierarchy UI. */
-  async listChildren(parentId, organizationId) {
-    return prisma.page.findMany({
-      where: { parentId, organizationId, deletedAt: null },
-      select: { id: true, title: true, slug: true, status: true },
-      orderBy: { title: "asc" }
-    });
-  },
-  async softDelete(id) {
-    await prisma.page.update({ where: { id }, data: { deletedAt: /* @__PURE__ */ new Date() } });
-  },
-  /** Phase 7 — Trash view: pages soft-deleted but not yet permanently gone, newest-deleted first. */
-  async listTrash(organizationId, page, limit) {
-    const where = { organizationId, deletedAt: { not: null } };
-    const [rows, total] = await Promise.all([
-      prisma.page.findMany({ where, orderBy: { deletedAt: "desc" }, skip: (page - 1) * limit, take: limit }),
-      prisma.page.count({ where })
-    ]);
-    return { rows, total };
-  },
-  /** Phase 7 — Trash view: a single soft-deleted page, org-scoped (never a live one). */
-  async findTrashedByIdInOrg(id, organizationId) {
-    return prisma.page.findFirst({ where: { id, organizationId, deletedAt: { not: null } } });
-  },
-  async restore(id) {
-    await prisma.page.update({ where: { id }, data: { deletedAt: null } });
-  }
-};
+import { Router as Router26 } from "express";
 
 // server/repositories/templateRepository.ts
-function slugify9(input) {
+function slugify11(input) {
   return input.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 150);
 }
 var withUsage = {
@@ -8927,7 +11086,7 @@ var withUsage = {
     _count: { select: { pages: true } }
   }
 };
-function buildWhere10(organizationId, filters) {
+function buildWhere13(organizationId, filters) {
   const where = { organizationId, deletedAt: null };
   if (filters.status) where.status = filters.status;
   if (filters.type) where.type = filters.type;
@@ -8938,7 +11097,7 @@ function buildWhere10(organizationId, filters) {
 }
 var templateRepository = {
   async list(organizationId, filters, page, limit, sort, order) {
-    const where = buildWhere10(organizationId, filters);
+    const where = buildWhere13(organizationId, filters);
     const [rows, total] = await Promise.all([
       prisma.template.findMany({ where, orderBy: { [sort]: order }, skip: (page - 1) * limit, take: limit, ...withUsage }),
       prisma.template.count({ where })
@@ -8956,7 +11115,7 @@ var templateRepository = {
     return prisma.template.findFirst({ where: { id, organizationId, status: "PUBLISHED", deletedAt: null } });
   },
   async findUniqueSlugInOrg(organizationId, base) {
-    const baseSlug = slugify9(base) || "template";
+    const baseSlug = slugify11(base) || "template";
     let slug = baseSlug;
     let attempt = 1;
     while (await this.findBySlugInOrg(organizationId, slug)) {
@@ -9031,132 +11190,132 @@ function sanitizeContentHtml(html) {
 }
 
 // server/schemas/editorSchemas.ts
-import { z as z22 } from "zod";
-var blockIdSchema = z22.string().trim().min(1).max(100);
+import { z as z23 } from "zod";
+var blockIdSchema = z23.string().trim().min(1).max(100);
 var baseFields = {
   id: blockIdSchema
 };
-var sectionBlockSchema = z22.object({
+var sectionBlockSchema = z23.object({
   ...baseFields,
-  type: z22.literal("section"),
-  props: z22.object({
-    backgroundColor: z22.string().trim().max(50).optional(),
-    paddingY: z22.enum(["none", "sm", "md", "lg", "xl"]).optional(),
-    fullWidth: z22.boolean().optional()
+  type: z23.literal("section"),
+  props: z23.object({
+    backgroundColor: z23.string().trim().max(50).optional(),
+    paddingY: z23.enum(["none", "sm", "md", "lg", "xl"]).optional(),
+    fullWidth: z23.boolean().optional()
   }).default({}),
-  children: z22.array(z22.lazy(() => blockSchema)).default([])
+  children: z23.array(z23.lazy(() => blockSchema)).default([])
 });
-var containerBlockSchema = z22.object({
+var containerBlockSchema = z23.object({
   ...baseFields,
-  type: z22.literal("container"),
-  props: z22.object({
-    maxWidth: z22.enum(["sm", "md", "lg", "xl", "full"]).optional()
+  type: z23.literal("container"),
+  props: z23.object({
+    maxWidth: z23.enum(["sm", "md", "lg", "xl", "full"]).optional()
   }).default({}),
-  children: z22.array(z22.lazy(() => blockSchema)).default([])
+  children: z23.array(z23.lazy(() => blockSchema)).default([])
 });
-var columnsBlockSchema = z22.object({
+var columnsBlockSchema = z23.object({
   ...baseFields,
-  type: z22.literal("columns"),
-  props: z22.object({
-    columnCount: z22.number().int().min(2).max(4).default(2),
-    gap: z22.enum(["none", "sm", "md", "lg"]).optional()
+  type: z23.literal("columns"),
+  props: z23.object({
+    columnCount: z23.number().int().min(2).max(4).default(2),
+    gap: z23.enum(["none", "sm", "md", "lg"]).optional()
   }).default({ columnCount: 2 }),
   // Each child is expected to be a "container" representing one column;
   // not enforced at the schema layer (kept recursive/generic) so the
   // Site Editor can nest arbitrary content per column.
-  children: z22.array(z22.lazy(() => blockSchema)).default([])
+  children: z23.array(z23.lazy(() => blockSchema)).default([])
 });
-var textBlockSchema = z22.object({
+var textBlockSchema = z23.object({
   ...baseFields,
-  type: z22.literal("text"),
-  props: z22.object({
-    html: z22.string().max(1e5).default("")
+  type: z23.literal("text"),
+  props: z23.object({
+    html: z23.string().max(1e5).default("")
   })
 });
-var headingBlockSchema = z22.object({
+var headingBlockSchema = z23.object({
   ...baseFields,
-  type: z22.literal("heading"),
-  props: z22.object({
-    text: z22.string().trim().max(500).default(""),
-    level: z22.number().int().min(1).max(6).default(2)
+  type: z23.literal("heading"),
+  props: z23.object({
+    text: z23.string().trim().max(500).default(""),
+    level: z23.number().int().min(1).max(6).default(2)
   })
 });
-var imageBlockSchema = z22.object({
+var imageBlockSchema = z23.object({
   ...baseFields,
-  type: z22.literal("image"),
-  props: z22.object({
-    mediaId: z22.string().trim().uuid(),
-    alt: z22.string().trim().max(300).optional(),
-    caption: z22.string().trim().max(500).optional()
+  type: z23.literal("image"),
+  props: z23.object({
+    mediaId: z23.string().trim().uuid(),
+    alt: z23.string().trim().max(300).optional(),
+    caption: z23.string().trim().max(500).optional()
   })
 });
-var buttonBlockSchema = z22.object({
+var buttonBlockSchema = z23.object({
   ...baseFields,
-  type: z22.literal("button"),
-  props: z22.object({
-    label: z22.string().trim().min(1).max(100),
-    href: z22.string().trim().max(2e3),
-    variant: z22.enum(["primary", "secondary", "outline", "ghost"]).default("primary"),
-    openInNewTab: z22.boolean().optional()
+  type: z23.literal("button"),
+  props: z23.object({
+    label: z23.string().trim().min(1).max(100),
+    href: z23.string().trim().max(2e3),
+    variant: z23.enum(["primary", "secondary", "outline", "ghost"]).default("primary"),
+    openInNewTab: z23.boolean().optional()
   })
 });
-var cardBlockSchema = z22.object({
+var cardBlockSchema = z23.object({
   ...baseFields,
-  type: z22.literal("card"),
-  props: z22.object({
-    title: z22.string().trim().max(200).optional(),
-    body: z22.string().max(2e4).optional(),
-    mediaId: z22.string().trim().uuid().optional()
+  type: z23.literal("card"),
+  props: z23.object({
+    title: z23.string().trim().max(200).optional(),
+    body: z23.string().max(2e4).optional(),
+    mediaId: z23.string().trim().uuid().optional()
   }),
-  children: z22.array(z22.lazy(() => blockSchema)).default([])
+  children: z23.array(z23.lazy(() => blockSchema)).default([])
 });
-var spacerBlockSchema = z22.object({
+var spacerBlockSchema = z23.object({
   ...baseFields,
-  type: z22.literal("spacer"),
-  props: z22.object({
-    height: z22.number().int().min(0).max(1e3).default(40)
+  type: z23.literal("spacer"),
+  props: z23.object({
+    height: z23.number().int().min(0).max(1e3).default(40)
   })
 });
-var dividerBlockSchema = z22.object({
+var dividerBlockSchema = z23.object({
   ...baseFields,
-  type: z22.literal("divider"),
-  props: z22.object({
-    style: z22.enum(["solid", "dashed"]).optional()
+  type: z23.literal("divider"),
+  props: z23.object({
+    style: z23.enum(["solid", "dashed"]).optional()
   }).default({})
 });
-var templatePartBlockSchema = z22.object({
+var templatePartBlockSchema = z23.object({
   ...baseFields,
-  type: z22.literal("templatePart"),
-  props: z22.object({
-    templatePartId: z22.string().trim().uuid()
+  type: z23.literal("templatePart"),
+  props: z23.object({
+    templatePartId: z23.string().trim().uuid()
   })
 });
-var navigationMenuBlockSchema = z22.object({
+var navigationMenuBlockSchema = z23.object({
   ...baseFields,
-  type: z22.literal("navigationMenu"),
-  props: z22.object({
-    navigationMenuId: z22.string().trim().uuid()
+  type: z23.literal("navigationMenu"),
+  props: z23.object({
+    navigationMenuId: z23.string().trim().uuid()
   })
 });
-var formBlockSchema = z22.object({
+var formBlockSchema = z23.object({
   ...baseFields,
-  type: z22.literal("form"),
-  props: z22.object({
-    formId: z22.string().trim().uuid()
+  type: z23.literal("form"),
+  props: z23.object({
+    formId: z23.string().trim().uuid()
   })
 });
-var testimonialBlockSchema = z22.object({
+var testimonialBlockSchema = z23.object({
   ...baseFields,
-  type: z22.literal("testimonial"),
-  props: z22.object({
-    quote: z22.string().trim().max(2e3).default(""),
-    authorName: z22.string().trim().max(150).optional(),
-    authorTitle: z22.string().trim().max(150).optional(),
-    avatarMediaId: z22.string().trim().uuid().optional()
+  type: z23.literal("testimonial"),
+  props: z23.object({
+    quote: z23.string().trim().max(2e3).default(""),
+    authorName: z23.string().trim().max(150).optional(),
+    authorTitle: z23.string().trim().max(150).optional(),
+    avatarMediaId: z23.string().trim().uuid().optional()
   })
 });
-var blockSchema = z22.lazy(
-  () => z22.discriminatedUnion("type", [
+var blockSchema = z23.lazy(
+  () => z23.discriminatedUnion("type", [
     sectionBlockSchema,
     containerBlockSchema,
     columnsBlockSchema,
@@ -9173,9 +11332,9 @@ var blockSchema = z22.lazy(
     testimonialBlockSchema
   ])
 );
-var editorDocumentSchema = z22.object({
-  version: z22.literal(1).default(1),
-  blocks: z22.array(blockSchema).default([])
+var editorDocumentSchema = z23.object({
+  version: z23.literal(1).default(1),
+  blocks: z23.array(blockSchema).default([])
 });
 function sanitizeBlock(block) {
   const next = { ...block };
@@ -9203,7 +11362,7 @@ function sanitizeContentIfEditorDocument(content) {
 }
 
 // server/repositories/redirectRepository.ts
-function buildWhere11(organizationId, filters) {
+function buildWhere14(organizationId, filters) {
   const where = { organizationId };
   if (filters.search) {
     const term = filters.search;
@@ -9214,7 +11373,7 @@ function buildWhere11(organizationId, filters) {
 }
 var redirectRepository = {
   async list(organizationId, filters, page, limit, sort, order) {
-    const where = buildWhere11(organizationId, filters);
+    const where = buildWhere14(organizationId, filters);
     const [rows, total] = await Promise.all([
       prisma.redirect.findMany({ where, orderBy: { [sort]: order }, skip: (page - 1) * limit, take: limit }),
       prisma.redirect.count({ where })
@@ -9223,6 +11382,14 @@ var redirectRepository = {
   },
   async findByIdInOrg(id, organizationId) {
     return prisma.redirect.findFirst({ where: { id, organizationId } });
+  },
+  /** Phase 15 — SEO reporting: real redirect counts, never fabricated. */
+  async count(organizationId) {
+    const [total, active] = await Promise.all([
+      prisma.redirect.count({ where: { organizationId } }),
+      prisma.redirect.count({ where: { organizationId, isActive: true } })
+    ]);
+    return { total, active };
   },
   async findByFromPathInOrg(organizationId, fromPath) {
     return prisma.redirect.findUnique({ where: { organizationId_fromPath: { organizationId, fromPath } } });
@@ -9635,6 +11802,19 @@ var pageService = {
       ipAddress: meta.ip,
       userAgent: meta.userAgent
     });
+    try {
+      await eventEngine.emit({
+        eventType: "content.submitted_for_review",
+        entityType: "page",
+        entityId: id,
+        organizationId,
+        actorId: caller.id,
+        actorType: "USER",
+        sourceModule: "CMS",
+        payload: { title: existing.title, slug: existing.slug }
+      });
+    } catch {
+    }
     return loadPageOrThrow(id, organizationId);
   },
   async publishPage(caller, id, meta = {}) {
@@ -9811,62 +11991,62 @@ var pageService = {
 };
 
 // server/schemas/pageSchemas.ts
-import { z as z23 } from "zod";
-var slugSchema4 = z23.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)");
-var pageTypeSchema = z23.enum(["STANDARD", "LANDING"]);
-var createPageSchema = z23.object({
-  title: z23.string().trim().min(1).max(200),
+import { z as z24 } from "zod";
+var slugSchema4 = z24.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)");
+var pageTypeSchema = z24.enum(["STANDARD", "LANDING"]);
+var createPageSchema = z24.object({
+  title: z24.string().trim().min(1).max(200),
   slug: slugSchema4.optional(),
-  body: z23.string().trim().max(5e5).default(""),
+  body: z24.string().trim().max(5e5).default(""),
   // Phase 7 — short author-written summary, distinct from SEO metaDescription.
-  excerpt: z23.string().trim().max(500).optional(),
+  excerpt: z24.string().trim().max(500).optional(),
   metadata: seoMetadataSchema.optional(),
   // Phase 2 (Site Editor) — additive, optional. A page created without it
   // behaves exactly as before: body/metadata alone drive rendering
   // (publicSiteService.ts falls back whenever editorBlocks is absent).
   editorBlocks: editorDocumentSchema.optional(),
-  featuredMediaId: z23.string().trim().uuid().optional(),
-  templateId: z23.string().trim().uuid().optional(),
+  featuredMediaId: z24.string().trim().uuid().optional(),
+  templateId: z24.string().trim().uuid().optional(),
   pageType: pageTypeSchema.optional(),
-  isHomepage: z23.boolean().optional(),
+  isHomepage: z24.boolean().optional(),
   // Phase 5 — additive, optional. A page created without it behaves
   // exactly as before: parentId null, no hierarchy.
-  parentId: z23.string().trim().uuid().optional()
+  parentId: z24.string().trim().uuid().optional()
 });
-var updatePageSchema = z23.object({
-  title: z23.string().trim().min(1).max(200).optional(),
+var updatePageSchema = z24.object({
+  title: z24.string().trim().min(1).max(200).optional(),
   slug: slugSchema4.optional(),
-  body: z23.string().trim().max(5e5).optional(),
-  excerpt: z23.string().trim().max(500).nullable().optional(),
+  body: z24.string().trim().max(5e5).optional(),
+  excerpt: z24.string().trim().max(500).nullable().optional(),
   metadata: seoMetadataSchema.optional(),
   // null clears the editor composition (falls back to body-only
   // rendering); omitted leaves it unchanged.
   editorBlocks: editorDocumentSchema.nullable().optional(),
   status: patchableContentStatusSchema.optional(),
-  featuredMediaId: z23.string().trim().uuid().nullable().optional(),
+  featuredMediaId: z24.string().trim().uuid().nullable().optional(),
   // null explicitly unassigns the template (falls back to default
   // rendering — see publicSiteService.ts); omitted leaves it unchanged.
-  templateId: z23.string().trim().uuid().nullable().optional(),
+  templateId: z24.string().trim().uuid().nullable().optional(),
   pageType: pageTypeSchema.optional(),
-  isHomepage: z23.boolean().optional(),
+  isHomepage: z24.boolean().optional(),
   // null explicitly clears the parent (promotes to top-level); omitted
   // leaves it unchanged.
-  parentId: z23.string().trim().uuid().nullable().optional(),
+  parentId: z24.string().trim().uuid().nullable().optional(),
   expectedUpdatedAt: expectedUpdatedAtSchema
 }).refine((v) => Object.keys(v).filter((k) => k !== "expectedUpdatedAt").length > 0, { message: "At least one field must be provided." });
 
 // server/routes/v1/pageRoutes.ts
-import { z as z24 } from "zod";
-var trashQuerySchema = z24.object({
-  page: z24.coerce.number().int().positive().default(1),
-  limit: z24.coerce.number().int().positive().max(100).default(20)
+import { z as z25 } from "zod";
+var trashQuerySchema = z25.object({
+  page: z25.coerce.number().int().positive().default(1),
+  limit: z25.coerce.number().int().positive().max(100).default(20)
 });
-var router24 = Router24();
-router24.use(authenticateToken);
-function requestMeta15(req) {
+var router26 = Router26();
+router26.use(authenticateToken);
+function requestMeta16(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router24.get(
+router26.get(
   "/",
   requirePermission("content.read"),
   asyncHandler(async (req, res) => {
@@ -9882,7 +12062,7 @@ router24.get(
     sendSuccess(res, { pages: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router24.get(
+router26.get(
   "/trash",
   requirePermission("content.read"),
   asyncHandler(async (req, res) => {
@@ -9891,42 +12071,42 @@ router24.get(
     sendSuccess(res, { pages: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router24.post(
+router26.post(
   "/bulk/archive",
   requirePermission("content.delete"),
   asyncHandler(async (req, res) => {
     const input = bulkContentIdsSchema.parse(req.body);
-    const result = await pageService.bulkAction(req.user, "archive", input.ids, requestMeta15(req));
+    const result = await pageService.bulkAction(req.user, "archive", input.ids, requestMeta16(req));
     sendSuccess(res, result);
   })
 );
-router24.post(
+router26.post(
   "/bulk/trash",
   requirePermission("content.delete"),
   asyncHandler(async (req, res) => {
     const input = bulkContentIdsSchema.parse(req.body);
-    const result = await pageService.bulkAction(req.user, "trash", input.ids, requestMeta15(req));
+    const result = await pageService.bulkAction(req.user, "trash", input.ids, requestMeta16(req));
     sendSuccess(res, result);
   })
 );
-router24.post(
+router26.post(
   "/bulk/restore",
   requirePermission("content.delete"),
   asyncHandler(async (req, res) => {
     const input = bulkContentIdsSchema.parse(req.body);
-    const result = await pageService.bulkAction(req.user, "restore", input.ids, requestMeta15(req));
+    const result = await pageService.bulkAction(req.user, "restore", input.ids, requestMeta16(req));
     sendSuccess(res, result);
   })
 );
-router24.post(
+router26.post(
   "/:id/restore",
   requirePermission("content.delete"),
   asyncHandler(async (req, res) => {
-    await pageService.restorePage(req.user, req.params.id, requestMeta15(req));
+    await pageService.restorePage(req.user, req.params.id, requestMeta16(req));
     sendSuccess(res, { message: "Page restored from trash." });
   })
 );
-router24.get(
+router26.get(
   "/:id",
   requirePermission("content.read"),
   asyncHandler(async (req, res) => {
@@ -9934,7 +12114,7 @@ router24.get(
     sendSuccess(res, { page });
   })
 );
-router24.get(
+router26.get(
   "/:id/revisions",
   requirePermission("content.read"),
   asyncHandler(async (req, res) => {
@@ -9942,7 +12122,7 @@ router24.get(
     sendSuccess(res, { revisions });
   })
 );
-router24.get(
+router26.get(
   "/:id/children",
   requirePermission("content.read"),
   asyncHandler(async (req, res) => {
@@ -9950,78 +12130,78 @@ router24.get(
     sendSuccess(res, { children });
   })
 );
-router24.post(
+router26.post(
   "/",
   requirePermission("content.create"),
   asyncHandler(async (req, res) => {
     const input = createPageSchema.parse(req.body);
-    const page = await pageService.createPage(req.user, input, requestMeta15(req));
+    const page = await pageService.createPage(req.user, input, requestMeta16(req));
     sendSuccess(res, { page }, 201);
   })
 );
-router24.patch(
+router26.patch(
   "/:id",
   requirePermission("content.update"),
   asyncHandler(async (req, res) => {
     const input = updatePageSchema.parse(req.body);
-    const page = await pageService.updatePage(req.user, req.params.id, input, requestMeta15(req));
+    const page = await pageService.updatePage(req.user, req.params.id, input, requestMeta16(req));
     sendSuccess(res, { page });
   })
 );
-router24.post(
+router26.post(
   "/:id/submit-review",
   requirePermission("content.update"),
   asyncHandler(async (req, res) => {
-    const page = await pageService.submitForReview(req.user, req.params.id, requestMeta15(req));
+    const page = await pageService.submitForReview(req.user, req.params.id, requestMeta16(req));
     sendSuccess(res, { page });
   })
 );
-router24.post(
+router26.post(
   "/:id/publish",
   requirePermission("content.publish"),
   asyncHandler(async (req, res) => {
-    const page = await pageService.publishPage(req.user, req.params.id, requestMeta15(req));
+    const page = await pageService.publishPage(req.user, req.params.id, requestMeta16(req));
     sendSuccess(res, { page });
   })
 );
-router24.post(
+router26.post(
   "/:id/schedule",
   requirePermission("content.publish"),
   asyncHandler(async (req, res) => {
     const input = scheduleContentSchema.parse(req.body);
-    const page = await pageService.schedulePage(req.user, req.params.id, input, requestMeta15(req));
+    const page = await pageService.schedulePage(req.user, req.params.id, input, requestMeta16(req));
     sendSuccess(res, { page });
   })
 );
-router24.post(
+router26.post(
   "/:id/archive",
   requirePermission("content.delete"),
   asyncHandler(async (req, res) => {
-    const page = await pageService.archivePage(req.user, req.params.id, requestMeta15(req));
+    const page = await pageService.archivePage(req.user, req.params.id, requestMeta16(req));
     sendSuccess(res, { page });
   })
 );
-router24.post(
+router26.post(
   "/:id/revert",
   requirePermission("content.update"),
   asyncHandler(async (req, res) => {
     const input = revertContentSchema.parse(req.body);
-    const page = await pageService.revertPage(req.user, req.params.id, input, requestMeta15(req));
+    const page = await pageService.revertPage(req.user, req.params.id, input, requestMeta16(req));
     sendSuccess(res, { page });
   })
 );
-router24.delete(
+router26.delete(
   "/:id",
   requirePermission("content.delete"),
   asyncHandler(async (req, res) => {
-    await pageService.deletePage(req.user, req.params.id, requestMeta15(req));
+    await pageService.deletePage(req.user, req.params.id, requestMeta16(req));
     sendSuccess(res, { message: "Page deleted." });
   })
 );
-var pageRoutes_default = router24;
+var pageRoutes_default = router26;
 
 // server/routes/v1/templateRoutes.ts
-import { Router as Router25 } from "express";
+import { Router as Router27 } from "express";
 
 // server/utils/templateStructure.ts
 function normalizeRegions(structure) {
@@ -10066,11 +12246,11 @@ function collectNavigationMenuIds(doc) {
 }
 
 // server/repositories/templatePartRepository.ts
-function slugify10(input) {
+function slugify12(input) {
   return input.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 150);
 }
 var withCurrentRevision2 = { include: { currentRevision: true } };
-function buildWhere12(organizationId, filters) {
+function buildWhere15(organizationId, filters) {
   const where = { organizationId, deletedAt: null };
   if (filters.status) where.status = filters.status;
   if (filters.type) where.type = filters.type;
@@ -10081,7 +12261,7 @@ function buildWhere12(organizationId, filters) {
 }
 var templatePartRepository = {
   async list(organizationId, filters, page, limit, sort, order) {
-    const where = buildWhere12(organizationId, filters);
+    const where = buildWhere15(organizationId, filters);
     const [rows, total] = await Promise.all([
       prisma.templatePart.findMany({ where, orderBy: { [sort]: order }, skip: (page - 1) * limit, take: limit, ...withCurrentRevision2 }),
       prisma.templatePart.count({ where })
@@ -10098,7 +12278,7 @@ var templatePartRepository = {
     return prisma.templatePart.findFirst({ where: { id, organizationId, status: "PUBLISHED", deletedAt: null } });
   },
   async findUniqueSlugInOrg(organizationId, base) {
-    const baseSlug = slugify10(base) || "part";
+    const baseSlug = slugify12(base) || "part";
     let slug = baseSlug;
     let attempt = 1;
     while (await this.findBySlugInOrg(organizationId, slug)) {
@@ -10471,8 +12651,8 @@ var templateService = {
 };
 
 // server/schemas/templateSchemas.ts
-import { z as z25 } from "zod";
-var templateTypeSchema = z25.enum([
+import { z as z26 } from "zod";
+var templateTypeSchema = z26.enum([
   "HOMEPAGE",
   "STANDARD_PAGE",
   "BLOG_INDEX",
@@ -10489,7 +12669,7 @@ var templateTypeSchema = z25.enum([
   "CASE_STUDY",
   "LANDING_PAGE"
 ]);
-var templatePartTypeSchema = z25.enum([
+var templatePartTypeSchema = z26.enum([
   "HEADER",
   "FOOTER",
   "PRIMARY_NAVIGATION",
@@ -10501,74 +12681,74 @@ var templatePartTypeSchema = z25.enum([
   "CONTACT_SECTION",
   "SOCIAL_SECTION"
 ]);
-var templateWorkflowStatusSchema = z25.enum(["DRAFT", "PUBLISHED", "ARCHIVED"]);
-var slugSchema5 = z25.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)");
+var templateWorkflowStatusSchema = z26.enum(["DRAFT", "PUBLISHED", "ARCHIVED"]);
+var slugSchema5 = z26.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)");
 var SORT_FIELDS3 = ["name", "slug", "type", "status", "createdAt", "updatedAt"];
-var listTemplatesQuerySchema = z25.object({
-  page: z25.coerce.number().int().positive().default(1),
-  limit: z25.coerce.number().int().positive().max(100).default(20),
-  search: z25.string().trim().max(200).optional(),
+var listTemplatesQuerySchema = z26.object({
+  page: z26.coerce.number().int().positive().default(1),
+  limit: z26.coerce.number().int().positive().max(100).default(20),
+  search: z26.string().trim().max(200).optional(),
   status: templateWorkflowStatusSchema.optional(),
   type: templateTypeSchema.optional(),
-  sort: z25.enum(SORT_FIELDS3).default("updatedAt"),
-  order: z25.enum(["asc", "desc"]).default("desc")
+  sort: z26.enum(SORT_FIELDS3).default("updatedAt"),
+  order: z26.enum(["asc", "desc"]).default("desc")
 });
-var templateStructureSchema = z25.record(z25.unknown());
-var createTemplateSchema = z25.object({
+var templateStructureSchema = z26.record(z26.unknown());
+var createTemplateSchema = z26.object({
   type: templateTypeSchema,
-  name: z25.string().trim().min(1).max(150),
+  name: z26.string().trim().min(1).max(150),
   slug: slugSchema5.optional(),
-  description: z25.string().trim().max(2e3).optional(),
+  description: z26.string().trim().max(2e3).optional(),
   structure: templateStructureSchema.default({})
 });
-var updateTemplateSchema = z25.object({
-  name: z25.string().trim().min(1).max(150).optional(),
+var updateTemplateSchema = z26.object({
+  name: z26.string().trim().min(1).max(150).optional(),
   slug: slugSchema5.optional(),
-  description: z25.string().trim().max(2e3).nullable().optional(),
+  description: z26.string().trim().max(2e3).nullable().optional(),
   structure: templateStructureSchema.optional(),
   expectedUpdatedAt: expectedUpdatedAtSchema
 }).refine((v) => Object.keys(v).filter((k) => k !== "expectedUpdatedAt").length > 0, { message: "At least one field must be provided." });
-var duplicateTemplateSchema = z25.object({
-  name: z25.string().trim().min(1).max(150).optional()
+var duplicateTemplateSchema = z26.object({
+  name: z26.string().trim().min(1).max(150).optional()
 });
-var revertTemplateSchema = z25.object({
-  revisionId: z25.string().trim().uuid()
+var revertTemplateSchema = z26.object({
+  revisionId: z26.string().trim().uuid()
 });
-var listTemplatePartsQuerySchema = z25.object({
-  page: z25.coerce.number().int().positive().default(1),
-  limit: z25.coerce.number().int().positive().max(100).default(20),
-  search: z25.string().trim().max(200).optional(),
+var listTemplatePartsQuerySchema = z26.object({
+  page: z26.coerce.number().int().positive().default(1),
+  limit: z26.coerce.number().int().positive().max(100).default(20),
+  search: z26.string().trim().max(200).optional(),
   status: templateWorkflowStatusSchema.optional(),
   type: templatePartTypeSchema.optional(),
-  sort: z25.enum(SORT_FIELDS3).default("updatedAt"),
-  order: z25.enum(["asc", "desc"]).default("desc")
+  sort: z26.enum(SORT_FIELDS3).default("updatedAt"),
+  order: z26.enum(["asc", "desc"]).default("desc")
 });
-var createTemplatePartSchema = z25.object({
+var createTemplatePartSchema = z26.object({
   type: templatePartTypeSchema,
-  name: z25.string().trim().min(1).max(150),
+  name: z26.string().trim().min(1).max(150),
   slug: slugSchema5.optional(),
-  content: z25.record(z25.unknown()).default({})
+  content: z26.record(z26.unknown()).default({})
 });
-var updateTemplatePartSchema = z25.object({
-  name: z25.string().trim().min(1).max(150).optional(),
+var updateTemplatePartSchema = z26.object({
+  name: z26.string().trim().min(1).max(150).optional(),
   slug: slugSchema5.optional(),
-  content: z25.record(z25.unknown()).optional(),
+  content: z26.record(z26.unknown()).optional(),
   expectedUpdatedAt: expectedUpdatedAtSchema
 }).refine((v) => Object.keys(v).filter((k) => k !== "expectedUpdatedAt").length > 0, { message: "At least one field must be provided." });
-var duplicateTemplatePartSchema = z25.object({
-  name: z25.string().trim().min(1).max(150).optional()
+var duplicateTemplatePartSchema = z26.object({
+  name: z26.string().trim().min(1).max(150).optional()
 });
-var revertTemplatePartSchema = z25.object({
-  revisionId: z25.string().trim().uuid()
+var revertTemplatePartSchema = z26.object({
+  revisionId: z26.string().trim().uuid()
 });
 
 // server/routes/v1/templateRoutes.ts
-var router25 = Router25();
-router25.use(authenticateToken);
-function requestMeta16(req) {
+var router27 = Router27();
+router27.use(authenticateToken);
+function requestMeta17(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router25.get(
+router27.get(
   "/",
   requirePermission("templates.read"),
   asyncHandler(async (req, res) => {
@@ -10584,7 +12764,7 @@ router25.get(
     sendSuccess(res, { templates: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router25.get(
+router27.get(
   "/:id",
   requirePermission("templates.read"),
   asyncHandler(async (req, res) => {
@@ -10592,7 +12772,7 @@ router25.get(
     sendSuccess(res, { template });
   })
 );
-router25.get(
+router27.get(
   "/:id/revisions",
   requirePermission("templates.read"),
   asyncHandler(async (req, res) => {
@@ -10600,7 +12780,7 @@ router25.get(
     sendSuccess(res, { revisions });
   })
 );
-router25.get(
+router27.get(
   "/:id/usage",
   requirePermission("templates.read"),
   asyncHandler(async (req, res) => {
@@ -10608,7 +12788,7 @@ router25.get(
     sendSuccess(res, usage);
   })
 );
-router25.get(
+router27.get(
   "/:id/preview",
   requirePermission("templates.read"),
   asyncHandler(async (req, res) => {
@@ -10616,70 +12796,70 @@ router25.get(
     sendSuccess(res, preview);
   })
 );
-router25.post(
+router27.post(
   "/",
   requirePermission("templates.create"),
   asyncHandler(async (req, res) => {
     const input = createTemplateSchema.parse(req.body);
-    const template = await templateService.createTemplate(req.user, input, requestMeta16(req));
+    const template = await templateService.createTemplate(req.user, input, requestMeta17(req));
     sendSuccess(res, { template }, 201);
   })
 );
-router25.post(
+router27.post(
   "/:id/duplicate",
   requirePermission("templates.create"),
   asyncHandler(async (req, res) => {
     const input = duplicateTemplateSchema.parse(req.body ?? {});
-    const template = await templateService.duplicateTemplate(req.user, req.params.id, input, requestMeta16(req));
+    const template = await templateService.duplicateTemplate(req.user, req.params.id, input, requestMeta17(req));
     sendSuccess(res, { template }, 201);
   })
 );
-router25.patch(
+router27.patch(
   "/:id",
   requirePermission("templates.update"),
   asyncHandler(async (req, res) => {
     const input = updateTemplateSchema.parse(req.body);
-    const template = await templateService.updateTemplate(req.user, req.params.id, input, requestMeta16(req));
+    const template = await templateService.updateTemplate(req.user, req.params.id, input, requestMeta17(req));
     sendSuccess(res, { template });
   })
 );
-router25.post(
+router27.post(
   "/:id/publish",
   requirePermission("templates.publish"),
   asyncHandler(async (req, res) => {
-    const template = await templateService.publishTemplate(req.user, req.params.id, requestMeta16(req));
+    const template = await templateService.publishTemplate(req.user, req.params.id, requestMeta17(req));
     sendSuccess(res, { template });
   })
 );
-router25.post(
+router27.post(
   "/:id/archive",
   requirePermission("templates.delete"),
   asyncHandler(async (req, res) => {
-    const template = await templateService.archiveTemplate(req.user, req.params.id, requestMeta16(req));
+    const template = await templateService.archiveTemplate(req.user, req.params.id, requestMeta17(req));
     sendSuccess(res, { template });
   })
 );
-router25.post(
+router27.post(
   "/:id/revert",
   requirePermission("templates.update"),
   asyncHandler(async (req, res) => {
     const input = revertTemplateSchema.parse(req.body);
-    const template = await templateService.revertTemplate(req.user, req.params.id, input, requestMeta16(req));
+    const template = await templateService.revertTemplate(req.user, req.params.id, input, requestMeta17(req));
     sendSuccess(res, { template });
   })
 );
-router25.delete(
+router27.delete(
   "/:id",
   requirePermission("templates.delete"),
   asyncHandler(async (req, res) => {
-    await templateService.deleteTemplate(req.user, req.params.id, requestMeta16(req));
+    await templateService.deleteTemplate(req.user, req.params.id, requestMeta17(req));
     sendSuccess(res, { message: "Template deleted." });
   })
 );
-var templateRoutes_default = router25;
+var templateRoutes_default = router27;
 
 // server/routes/v1/templatePartRoutes.ts
-import { Router as Router26 } from "express";
+import { Router as Router28 } from "express";
 
 // server/services/templatePartService.ts
 function isUniqueConstraintError8(err) {
@@ -10978,12 +13158,12 @@ var templatePartService = {
 };
 
 // server/routes/v1/templatePartRoutes.ts
-var router26 = Router26();
-router26.use(authenticateToken);
-function requestMeta17(req) {
+var router28 = Router28();
+router28.use(authenticateToken);
+function requestMeta18(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router26.get(
+router28.get(
   "/",
   requirePermission("template_parts.read"),
   asyncHandler(async (req, res) => {
@@ -10999,7 +13179,7 @@ router26.get(
     sendSuccess(res, { templateParts: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router26.get(
+router28.get(
   "/:id",
   requirePermission("template_parts.read"),
   asyncHandler(async (req, res) => {
@@ -11007,7 +13187,7 @@ router26.get(
     sendSuccess(res, { templatePart });
   })
 );
-router26.get(
+router28.get(
   "/:id/revisions",
   requirePermission("template_parts.read"),
   asyncHandler(async (req, res) => {
@@ -11015,7 +13195,7 @@ router26.get(
     sendSuccess(res, { revisions });
   })
 );
-router26.get(
+router28.get(
   "/:id/usage",
   requirePermission("template_parts.read"),
   asyncHandler(async (req, res) => {
@@ -11023,77 +13203,77 @@ router26.get(
     sendSuccess(res, usage);
   })
 );
-router26.post(
+router28.post(
   "/",
   requirePermission("template_parts.create"),
   asyncHandler(async (req, res) => {
     const input = createTemplatePartSchema.parse(req.body);
-    const templatePart = await templatePartService.createPart(req.user, input, requestMeta17(req));
+    const templatePart = await templatePartService.createPart(req.user, input, requestMeta18(req));
     sendSuccess(res, { templatePart }, 201);
   })
 );
-router26.post(
+router28.post(
   "/:id/duplicate",
   requirePermission("template_parts.create"),
   asyncHandler(async (req, res) => {
     const input = duplicateTemplatePartSchema.parse(req.body ?? {});
-    const templatePart = await templatePartService.duplicatePart(req.user, req.params.id, input, requestMeta17(req));
+    const templatePart = await templatePartService.duplicatePart(req.user, req.params.id, input, requestMeta18(req));
     sendSuccess(res, { templatePart }, 201);
   })
 );
-router26.patch(
+router28.patch(
   "/:id",
   requirePermission("template_parts.update"),
   asyncHandler(async (req, res) => {
     const input = updateTemplatePartSchema.parse(req.body);
-    const templatePart = await templatePartService.updatePart(req.user, req.params.id, input, requestMeta17(req));
+    const templatePart = await templatePartService.updatePart(req.user, req.params.id, input, requestMeta18(req));
     sendSuccess(res, { templatePart });
   })
 );
-router26.post(
+router28.post(
   "/:id/publish",
   requirePermission("template_parts.publish"),
   asyncHandler(async (req, res) => {
-    const templatePart = await templatePartService.publishPart(req.user, req.params.id, requestMeta17(req));
+    const templatePart = await templatePartService.publishPart(req.user, req.params.id, requestMeta18(req));
     sendSuccess(res, { templatePart });
   })
 );
-router26.post(
+router28.post(
   "/:id/archive",
   requirePermission("template_parts.delete"),
   asyncHandler(async (req, res) => {
-    const templatePart = await templatePartService.archivePart(req.user, req.params.id, requestMeta17(req));
+    const templatePart = await templatePartService.archivePart(req.user, req.params.id, requestMeta18(req));
     sendSuccess(res, { templatePart });
   })
 );
-router26.post(
+router28.post(
   "/:id/revert",
   requirePermission("template_parts.update"),
   asyncHandler(async (req, res) => {
     const input = revertTemplatePartSchema.parse(req.body);
-    const templatePart = await templatePartService.revertPart(req.user, req.params.id, input, requestMeta17(req));
+    const templatePart = await templatePartService.revertPart(req.user, req.params.id, input, requestMeta18(req));
     sendSuccess(res, { templatePart });
   })
 );
-router26.delete(
+router28.delete(
   "/:id",
   requirePermission("template_parts.delete"),
   asyncHandler(async (req, res) => {
-    await templatePartService.deletePart(req.user, req.params.id, requestMeta17(req));
+    await templatePartService.deletePart(req.user, req.params.id, requestMeta18(req));
     sendSuccess(res, { message: "Template part deleted." });
   })
 );
-var templatePartRoutes_default = router26;
+var templatePartRoutes_default = router28;
 
 // server/routes/v1/navigationMenuRoutes.ts
-import { Router as Router27 } from "express";
+import { Router as Router29 } from "express";
 
 // server/repositories/navigationMenuRepository.ts
-function slugify11(input) {
+function slugify13(input) {
   return input.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 150);
 }
 var withCurrentRevision3 = { include: { currentRevision: true } };
-function buildWhere13(organizationId, filters) {
+function buildWhere16(organizationId, filters) {
   const where = { organizationId, deletedAt: null };
   if (filters.status) where.status = filters.status;
   if (filters.type) where.type = filters.type;
@@ -11104,7 +13284,7 @@ function buildWhere13(organizationId, filters) {
 }
 var navigationMenuRepository = {
   async list(organizationId, filters, page, limit, sort, order) {
-    const where = buildWhere13(organizationId, filters);
+    const where = buildWhere16(organizationId, filters);
     const [rows, total] = await Promise.all([
       prisma.navigationMenu.findMany({ where, orderBy: { [sort]: order }, skip: (page - 1) * limit, take: limit, ...withCurrentRevision3 }),
       prisma.navigationMenu.count({ where })
@@ -11118,7 +13298,7 @@ var navigationMenuRepository = {
     return prisma.navigationMenu.findFirst({ where: { organizationId, slug, deletedAt: null } });
   },
   async findUniqueSlugInOrg(organizationId, base) {
-    const baseSlug = slugify11(base) || "menu";
+    const baseSlug = slugify13(base) || "menu";
     let slug = baseSlug;
     let attempt = 1;
     while (await this.findBySlugInOrg(organizationId, slug)) {
@@ -11162,137 +13342,8 @@ var navigationMenuRepository = {
   }
 };
 
-// server/repositories/postRepository.ts
-function slugify12(input) {
-  return input.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 150);
-}
-var withRelations2 = { include: { currentRevision: true, category: true, author: true, tags: { include: { tag: true } } } };
-var withPublicRelations2 = {
-  include: {
-    currentRevision: true,
-    category: true,
-    author: { include: { user: { select: { firstName: true, lastName: true } } } },
-    tags: { include: { tag: true } },
-    featuredMedia: true
-  }
-};
-function buildWhere14(organizationId, filters) {
-  const where = { organizationId, deletedAt: null };
-  if (filters.status) where.status = filters.status;
-  if (filters.categoryId) where.categoryId = filters.categoryId;
-  if (filters.tagId) where.tags = { some: { tagId: filters.tagId } };
-  if (filters.fromDate || filters.toDate) {
-    where.createdAt = { ...filters.fromDate ? { gte: filters.fromDate } : {}, ...filters.toDate ? { lte: filters.toDate } : {} };
-  }
-  if (filters.search) {
-    where.OR = [{ title: { contains: filters.search, mode: "insensitive" } }, { slug: { contains: filters.search, mode: "insensitive" } }];
-  }
-  return where;
-}
-var postRepository = {
-  async list(organizationId, filters, page, limit, sort, order) {
-    const where = buildWhere14(organizationId, filters);
-    const [rows, total] = await Promise.all([
-      prisma.post.findMany({ where, orderBy: { [sort]: order }, skip: (page - 1) * limit, take: limit }),
-      prisma.post.count({ where })
-    ]);
-    return { rows, total };
-  },
-  async findByIdInOrg(id, organizationId) {
-    return prisma.post.findFirst({ where: { id, organizationId, deletedAt: null }, ...withRelations2 });
-  },
-  async findBySlugInOrg(organizationId, slug) {
-    return prisma.post.findFirst({ where: { organizationId, slug, deletedAt: null } });
-  },
-  /** Phase 11 public projection — PUBLISHED only, with category/author/tags/featured media/revision content (docs/PUBLIC_API_ARCHITECTURE.md). Never returns DRAFT/IN_REVIEW/SCHEDULED/ARCHIVED. */
-  async findPublishedBySlugWithMedia(organizationId, slug) {
-    return prisma.post.findFirst({ where: { organizationId, slug, status: "PUBLISHED", deletedAt: null }, ...withPublicRelations2 });
-  },
-  /** Phase 5 — resolves a navigation-menu "post" link target to its slug, PUBLISHED only. */
-  async findPublishedByIdInOrg(id, organizationId) {
-    return prisma.post.findFirst({ where: { id, organizationId, status: "PUBLISHED", deletedAt: null }, select: { slug: true } });
-  },
-  /** Phase 11 public projection — PUBLISHED only, paginated, with the same relations as findPublishedBySlugWithMedia. */
-  async listPublished(organizationId, filters, page, limit, sort, order) {
-    const where = buildWhere14(organizationId, { ...filters, status: "PUBLISHED" });
-    const [rows, total] = await Promise.all([
-      prisma.post.findMany({ where, orderBy: { [sort]: order }, skip: (page - 1) * limit, take: limit, ...withPublicRelations2 }),
-      prisma.post.count({ where })
-    ]);
-    return { rows, total };
-  },
-  /**
-   * Cross-organization by design (docs/AUTOMATION_ARCHITECTURE.md's
-   * scheduler tick uses the same pattern) — this backs the system cron
-   * job that promotes SCHEDULED posts to PUBLISHED, which has no single
-   * caller organization to scope to. Never used by an organization-scoped
-   * request handler.
-   */
-  async findDueScheduled(now, limit = 20) {
-    return prisma.post.findMany({
-      where: { status: "SCHEDULED", scheduledAt: { lte: now }, deletedAt: null },
-      take: limit,
-      orderBy: { scheduledAt: "asc" },
-      ...withRelations2
-    });
-  },
-  /** Phase 5 SEO audit — every live-or-about-to-be-live post (not ARCHIVED, not soft-deleted), with exactly the fields the rule-based checks need. */
-  async listForSeoAudit(organizationId) {
-    return prisma.post.findMany({
-      where: { organizationId, deletedAt: null, status: { not: "ARCHIVED" } },
-      select: {
-        id: true,
-        slug: true,
-        title: true,
-        status: true,
-        currentRevision: { select: { title: true, metadata: true } },
-        featuredMedia: { select: { altText: true } }
-      }
-    });
-  },
-  async findUniqueSlugInOrg(organizationId, base) {
-    const baseSlug = slugify12(base) || "post";
-    let slug = baseSlug;
-    let attempt = 1;
-    while (await this.findBySlugInOrg(organizationId, slug)) {
-      attempt += 1;
-      slug = `${baseSlug}-${attempt}`;
-      if (attempt > 50) break;
-    }
-    return slug;
-  },
-  async listRevisions(postId) {
-    return prisma.contentRevision.findMany({ where: { postId }, orderBy: { version: "desc" } });
-  },
-  async setTags(postId, tagIds) {
-    await prisma.$transaction([
-      prisma.postTag.deleteMany({ where: { postId } }),
-      ...tagIds.length > 0 ? [prisma.postTag.createMany({ data: tagIds.map((tagId) => ({ postId, tagId })) })] : []
-    ]);
-  },
-  async softDelete(id) {
-    await prisma.post.update({ where: { id }, data: { deletedAt: /* @__PURE__ */ new Date() } });
-  },
-  /** Phase 7 — Trash view: posts soft-deleted but not yet permanently gone, newest-deleted first. */
-  async listTrash(organizationId, page, limit) {
-    const where = { organizationId, deletedAt: { not: null } };
-    const [rows, total] = await Promise.all([
-      prisma.post.findMany({ where, orderBy: { deletedAt: "desc" }, skip: (page - 1) * limit, take: limit }),
-      prisma.post.count({ where })
-    ]);
-    return { rows, total };
-  },
-  /** Phase 7 — Trash view: a single soft-deleted post, org-scoped (never a live one). */
-  async findTrashedByIdInOrg(id, organizationId) {
-    return prisma.post.findFirst({ where: { id, organizationId, deletedAt: { not: null } } });
-  },
-  async restore(id) {
-    await prisma.post.update({ where: { id }, data: { deletedAt: null } });
-  }
-};
-
 // server/repositories/categoryRepository.ts
-function slugify13(input) {
+function slugify14(input) {
   return input.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 150);
 }
 var categoryRepository = {
@@ -11311,7 +13362,7 @@ var categoryRepository = {
     return prisma.category.findFirst({ where: { organizationId, slug } });
   },
   async findUniqueSlugInOrg(organizationId, base) {
-    const baseSlug = slugify13(base) || "category";
+    const baseSlug = slugify14(base) || "category";
     let slug = baseSlug;
     let attempt = 1;
     while (await this.findBySlugInOrg(organizationId, slug)) {
@@ -11342,7 +13393,7 @@ var categoryRepository = {
 };
 
 // server/repositories/tagRepository.ts
-function slugify14(input) {
+function slugify15(input) {
   return input.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 150);
 }
 var tagRepository = {
@@ -11361,7 +13412,7 @@ var tagRepository = {
     return prisma.tag.findFirst({ where: { organizationId, slug } });
   },
   async findUniqueSlugInOrg(organizationId, base) {
-    const baseSlug = slugify14(base) || "tag";
+    const baseSlug = slugify15(base) || "tag";
     let slug = baseSlug;
     let attempt = 1;
     while (await this.findBySlugInOrg(organizationId, slug)) {
@@ -11712,63 +13763,63 @@ var navigationMenuService = {
 };
 
 // server/schemas/navigationMenuSchemas.ts
-import { z as z26 } from "zod";
-var navigationMenuTypeSchema = z26.enum(["PRIMARY", "HEADER", "FOOTER", "MOBILE", "CUSTOM"]);
-var navigationMenuWorkflowStatusSchema = z26.enum(["DRAFT", "PUBLISHED", "ARCHIVED"]);
-var slugSchema6 = z26.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)");
+import { z as z27 } from "zod";
+var navigationMenuTypeSchema = z27.enum(["PRIMARY", "HEADER", "FOOTER", "MOBILE", "CUSTOM"]);
+var navigationMenuWorkflowStatusSchema = z27.enum(["DRAFT", "PUBLISHED", "ARCHIVED"]);
+var slugSchema6 = z27.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)");
 var SORT_FIELDS4 = ["name", "slug", "type", "status", "createdAt", "updatedAt"];
-var menuLinkTypeSchema = z26.enum(["page", "post", "category", "tag", "product", "custom"]);
+var menuLinkTypeSchema = z27.enum(["page", "post", "category", "tag", "product", "custom"]);
 var MAX_MENU_DEPTH = 4;
 function menuItemSchemaAtDepth(depth) {
-  return z26.object({
-    id: z26.string().trim().min(1).max(100),
-    label: z26.string().trim().min(1).max(150),
+  return z27.object({
+    id: z27.string().trim().min(1).max(100),
+    label: z27.string().trim().min(1).max(150),
     linkType: menuLinkTypeSchema,
-    targetId: z26.string().trim().uuid().optional(),
-    url: z26.string().trim().max(2e3).optional(),
-    openInNewTab: z26.boolean().default(false),
-    children: depth >= MAX_MENU_DEPTH ? z26.array(z26.never()).default([]) : z26.lazy(() => menuItemSchemaAtDepth(depth + 1).array()).default([])
+    targetId: z27.string().trim().uuid().optional(),
+    url: z27.string().trim().max(2e3).optional(),
+    openInNewTab: z27.boolean().default(false),
+    children: depth >= MAX_MENU_DEPTH ? z27.array(z27.never()).default([]) : z27.lazy(() => menuItemSchemaAtDepth(depth + 1).array()).default([])
   }).refine((item) => item.linkType === "custom" ? !!item.url : !!item.targetId, {
     message: "A custom link needs a url; any other link type needs a targetId."
   });
 }
 var menuItemSchema = menuItemSchemaAtDepth(0);
-var menuItemsSchema = z26.array(menuItemSchema).default([]);
-var listNavigationMenusQuerySchema = z26.object({
-  page: z26.coerce.number().int().positive().default(1),
-  limit: z26.coerce.number().int().positive().max(100).default(20),
-  search: z26.string().trim().max(200).optional(),
+var menuItemsSchema = z27.array(menuItemSchema).default([]);
+var listNavigationMenusQuerySchema = z27.object({
+  page: z27.coerce.number().int().positive().default(1),
+  limit: z27.coerce.number().int().positive().max(100).default(20),
+  search: z27.string().trim().max(200).optional(),
   status: navigationMenuWorkflowStatusSchema.optional(),
   type: navigationMenuTypeSchema.optional(),
-  sort: z26.enum(SORT_FIELDS4).default("updatedAt"),
-  order: z26.enum(["asc", "desc"]).default("desc")
+  sort: z27.enum(SORT_FIELDS4).default("updatedAt"),
+  order: z27.enum(["asc", "desc"]).default("desc")
 });
-var createNavigationMenuSchema = z26.object({
+var createNavigationMenuSchema = z27.object({
   type: navigationMenuTypeSchema,
-  name: z26.string().trim().min(1).max(150),
+  name: z27.string().trim().min(1).max(150),
   slug: slugSchema6.optional(),
   items: menuItemsSchema
 });
-var updateNavigationMenuSchema = z26.object({
-  name: z26.string().trim().min(1).max(150).optional(),
+var updateNavigationMenuSchema = z27.object({
+  name: z27.string().trim().min(1).max(150).optional(),
   slug: slugSchema6.optional(),
   items: menuItemsSchema.optional(),
   expectedUpdatedAt: expectedUpdatedAtSchema
 }).refine((v) => Object.keys(v).filter((k) => k !== "expectedUpdatedAt").length > 0, { message: "At least one field must be provided." });
-var duplicateNavigationMenuSchema = z26.object({
-  name: z26.string().trim().min(1).max(150).optional()
+var duplicateNavigationMenuSchema = z27.object({
+  name: z27.string().trim().min(1).max(150).optional()
 });
-var revertNavigationMenuSchema = z26.object({
-  revisionId: z26.string().trim().uuid()
+var revertNavigationMenuSchema = z27.object({
+  revisionId: z27.string().trim().uuid()
 });
 
 // server/routes/v1/navigationMenuRoutes.ts
-var router27 = Router27();
-router27.use(authenticateToken);
-function requestMeta18(req) {
+var router29 = Router29();
+router29.use(authenticateToken);
+function requestMeta19(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router27.get(
+router29.get(
   "/",
   requirePermission("navigation_menus.read"),
   asyncHandler(async (req, res) => {
@@ -11784,7 +13835,7 @@ router27.get(
     sendSuccess(res, { navigationMenus: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router27.get(
+router29.get(
   "/:id",
   requirePermission("navigation_menus.read"),
   asyncHandler(async (req, res) => {
@@ -11792,7 +13843,7 @@ router27.get(
     sendSuccess(res, { navigationMenu });
   })
 );
-router27.get(
+router29.get(
   "/:id/revisions",
   requirePermission("navigation_menus.read"),
   asyncHandler(async (req, res) => {
@@ -11800,7 +13851,7 @@ router27.get(
     sendSuccess(res, { revisions });
   })
 );
-router27.get(
+router29.get(
   "/:id/usage",
   requirePermission("navigation_menus.read"),
   asyncHandler(async (req, res) => {
@@ -11808,70 +13859,70 @@ router27.get(
     sendSuccess(res, usage);
   })
 );
-router27.post(
+router29.post(
   "/",
   requirePermission("navigation_menus.create"),
   asyncHandler(async (req, res) => {
     const input = createNavigationMenuSchema.parse(req.body);
-    const navigationMenu = await navigationMenuService.createMenu(req.user, input, requestMeta18(req));
+    const navigationMenu = await navigationMenuService.createMenu(req.user, input, requestMeta19(req));
     sendSuccess(res, { navigationMenu }, 201);
   })
 );
-router27.post(
+router29.post(
   "/:id/duplicate",
   requirePermission("navigation_menus.create"),
   asyncHandler(async (req, res) => {
     const input = duplicateNavigationMenuSchema.parse(req.body ?? {});
-    const navigationMenu = await navigationMenuService.duplicateMenu(req.user, req.params.id, input, requestMeta18(req));
+    const navigationMenu = await navigationMenuService.duplicateMenu(req.user, req.params.id, input, requestMeta19(req));
     sendSuccess(res, { navigationMenu }, 201);
   })
 );
-router27.patch(
+router29.patch(
   "/:id",
   requirePermission("navigation_menus.update"),
   asyncHandler(async (req, res) => {
     const input = updateNavigationMenuSchema.parse(req.body);
-    const navigationMenu = await navigationMenuService.updateMenu(req.user, req.params.id, input, requestMeta18(req));
+    const navigationMenu = await navigationMenuService.updateMenu(req.user, req.params.id, input, requestMeta19(req));
     sendSuccess(res, { navigationMenu });
   })
 );
-router27.post(
+router29.post(
   "/:id/publish",
   requirePermission("navigation_menus.publish"),
   asyncHandler(async (req, res) => {
-    const navigationMenu = await navigationMenuService.publishMenu(req.user, req.params.id, requestMeta18(req));
+    const navigationMenu = await navigationMenuService.publishMenu(req.user, req.params.id, requestMeta19(req));
     sendSuccess(res, { navigationMenu });
   })
 );
-router27.post(
+router29.post(
   "/:id/archive",
   requirePermission("navigation_menus.delete"),
   asyncHandler(async (req, res) => {
-    const navigationMenu = await navigationMenuService.archiveMenu(req.user, req.params.id, requestMeta18(req));
+    const navigationMenu = await navigationMenuService.archiveMenu(req.user, req.params.id, requestMeta19(req));
     sendSuccess(res, { navigationMenu });
   })
 );
-router27.post(
+router29.post(
   "/:id/revert",
   requirePermission("navigation_menus.update"),
   asyncHandler(async (req, res) => {
     const input = revertNavigationMenuSchema.parse(req.body);
-    const navigationMenu = await navigationMenuService.revertMenu(req.user, req.params.id, input, requestMeta18(req));
+    const navigationMenu = await navigationMenuService.revertMenu(req.user, req.params.id, input, requestMeta19(req));
     sendSuccess(res, { navigationMenu });
   })
 );
-router27.delete(
+router29.delete(
   "/:id",
   requirePermission("navigation_menus.delete"),
   asyncHandler(async (req, res) => {
-    await navigationMenuService.deleteMenu(req.user, req.params.id, requestMeta18(req));
+    await navigationMenuService.deleteMenu(req.user, req.params.id, requestMeta19(req));
     sendSuccess(res, { message: "Navigation menu deleted." });
   })
 );
-var navigationMenuRoutes_default = router27;
+var navigationMenuRoutes_default = router29;
 
 // server/routes/v1/postRoutes.ts
-import { Router as Router28 } from "express";
+import { Router as Router30 } from "express";
 
 // server/services/postService.ts
 var CONTENT_EDIT_BLOCKED_STATUSES2 = /* @__PURE__ */ new Set(["ARCHIVED"]);
@@ -12109,6 +14160,19 @@ var postService = {
       ipAddress: meta.ip,
       userAgent: meta.userAgent
     });
+    try {
+      await eventEngine.emit({
+        eventType: "content.submitted_for_review",
+        entityType: "post",
+        entityId: id,
+        organizationId,
+        actorId: caller.id,
+        actorType: "USER",
+        sourceModule: "CMS",
+        payload: { title: existing.title, slug: existing.slug }
+      });
+    } catch {
+    }
     return loadPostOrThrow(id, organizationId);
   },
   async publishPost(caller, id, meta = {}) {
@@ -12292,59 +14356,59 @@ var postService = {
 };
 
 // server/schemas/postSchemas.ts
-import { z as z27 } from "zod";
-var slugSchema7 = z27.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)");
-var createPostSchema = z27.object({
-  title: z27.string().trim().min(1).max(200),
+import { z as z28 } from "zod";
+var slugSchema7 = z28.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)");
+var createPostSchema = z28.object({
+  title: z28.string().trim().min(1).max(200),
   slug: slugSchema7.optional(),
-  body: z27.string().trim().max(5e5).default(""),
+  body: z28.string().trim().max(5e5).default(""),
   // Phase 7 — short author-written summary, distinct from SEO metaDescription.
-  excerpt: z27.string().trim().max(500).optional(),
+  excerpt: z28.string().trim().max(500).optional(),
   metadata: seoMetadataSchema.optional(),
-  categoryId: z27.string().trim().uuid().optional(),
-  authorId: z27.string().trim().uuid().optional(),
-  tagIds: z27.array(z27.string().trim().uuid()).max(50).optional(),
-  featuredMediaId: z27.string().trim().uuid().optional()
+  categoryId: z28.string().trim().uuid().optional(),
+  authorId: z28.string().trim().uuid().optional(),
+  tagIds: z28.array(z28.string().trim().uuid()).max(50).optional(),
+  featuredMediaId: z28.string().trim().uuid().optional()
 });
-var updatePostSchema = z27.object({
-  title: z27.string().trim().min(1).max(200).optional(),
+var updatePostSchema = z28.object({
+  title: z28.string().trim().min(1).max(200).optional(),
   slug: slugSchema7.optional(),
-  body: z27.string().trim().max(5e5).optional(),
-  excerpt: z27.string().trim().max(500).nullable().optional(),
+  body: z28.string().trim().max(5e5).optional(),
+  excerpt: z28.string().trim().max(500).nullable().optional(),
   metadata: seoMetadataSchema.optional(),
   status: patchableContentStatusSchema.optional(),
-  categoryId: z27.string().trim().uuid().nullable().optional(),
-  authorId: z27.string().trim().uuid().nullable().optional(),
-  tagIds: z27.array(z27.string().trim().uuid()).max(50).optional(),
-  featuredMediaId: z27.string().trim().uuid().nullable().optional(),
+  categoryId: z28.string().trim().uuid().nullable().optional(),
+  authorId: z28.string().trim().uuid().nullable().optional(),
+  tagIds: z28.array(z28.string().trim().uuid()).max(50).optional(),
+  featuredMediaId: z28.string().trim().uuid().nullable().optional(),
   expectedUpdatedAt: expectedUpdatedAtSchema
 }).refine((v) => Object.keys(v).filter((k) => k !== "expectedUpdatedAt").length > 0, { message: "At least one field must be provided." });
-var listPostsQuerySchema = z27.object({
-  page: z27.coerce.number().int().positive().default(1),
-  limit: z27.coerce.number().int().positive().max(100).default(20),
-  search: z27.string().trim().max(200).optional(),
-  status: z27.enum(["DRAFT", "IN_REVIEW", "SCHEDULED", "PUBLISHED", "ARCHIVED"]).optional(),
-  categoryId: z27.string().trim().uuid().optional(),
-  tagId: z27.string().trim().uuid().optional(),
+var listPostsQuerySchema = z28.object({
+  page: z28.coerce.number().int().positive().default(1),
+  limit: z28.coerce.number().int().positive().max(100).default(20),
+  search: z28.string().trim().max(200).optional(),
+  status: z28.enum(["DRAFT", "IN_REVIEW", "SCHEDULED", "PUBLISHED", "ARCHIVED"]).optional(),
+  categoryId: z28.string().trim().uuid().optional(),
+  tagId: z28.string().trim().uuid().optional(),
   // Phase 7 — Content Dashboard date filtering, inclusive range over createdAt.
-  fromDate: z27.coerce.date().optional(),
-  toDate: z27.coerce.date().optional(),
-  sort: z27.enum(["title", "slug", "status", "createdAt", "updatedAt", "publishedAt"]).default("updatedAt"),
-  order: z27.enum(["asc", "desc"]).default("desc")
+  fromDate: z28.coerce.date().optional(),
+  toDate: z28.coerce.date().optional(),
+  sort: z28.enum(["title", "slug", "status", "createdAt", "updatedAt", "publishedAt"]).default("updatedAt"),
+  order: z28.enum(["asc", "desc"]).default("desc")
 });
 
 // server/routes/v1/postRoutes.ts
-import { z as z28 } from "zod";
-var trashQuerySchema2 = z28.object({
-  page: z28.coerce.number().int().positive().default(1),
-  limit: z28.coerce.number().int().positive().max(100).default(20)
+import { z as z29 } from "zod";
+var trashQuerySchema2 = z29.object({
+  page: z29.coerce.number().int().positive().default(1),
+  limit: z29.coerce.number().int().positive().max(100).default(20)
 });
-var router28 = Router28();
-router28.use(authenticateToken);
-function requestMeta19(req) {
+var router30 = Router30();
+router30.use(authenticateToken);
+function requestMeta20(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router28.get(
+router30.get(
   "/",
   requirePermission("content.read"),
   asyncHandler(async (req, res) => {
@@ -12360,7 +14424,7 @@ router28.get(
     sendSuccess(res, { posts: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router28.get(
+router30.get(
   "/trash",
   requirePermission("content.read"),
   asyncHandler(async (req, res) => {
@@ -12369,42 +14433,42 @@ router28.get(
     sendSuccess(res, { posts: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router28.post(
+router30.post(
   "/bulk/archive",
   requirePermission("content.delete"),
   asyncHandler(async (req, res) => {
     const input = bulkContentIdsSchema.parse(req.body);
-    const result = await postService.bulkAction(req.user, "archive", input.ids, requestMeta19(req));
+    const result = await postService.bulkAction(req.user, "archive", input.ids, requestMeta20(req));
     sendSuccess(res, result);
   })
 );
-router28.post(
+router30.post(
   "/bulk/trash",
   requirePermission("content.delete"),
   asyncHandler(async (req, res) => {
     const input = bulkContentIdsSchema.parse(req.body);
-    const result = await postService.bulkAction(req.user, "trash", input.ids, requestMeta19(req));
+    const result = await postService.bulkAction(req.user, "trash", input.ids, requestMeta20(req));
     sendSuccess(res, result);
   })
 );
-router28.post(
+router30.post(
   "/bulk/restore",
   requirePermission("content.delete"),
   asyncHandler(async (req, res) => {
     const input = bulkContentIdsSchema.parse(req.body);
-    const result = await postService.bulkAction(req.user, "restore", input.ids, requestMeta19(req));
+    const result = await postService.bulkAction(req.user, "restore", input.ids, requestMeta20(req));
     sendSuccess(res, result);
   })
 );
-router28.post(
+router30.post(
   "/:id/restore",
   requirePermission("content.delete"),
   asyncHandler(async (req, res) => {
-    await postService.restorePost(req.user, req.params.id, requestMeta19(req));
+    await postService.restorePost(req.user, req.params.id, requestMeta20(req));
     sendSuccess(res, { message: "Post restored from trash." });
   })
 );
-router28.get(
+router30.get(
   "/:id",
   requirePermission("content.read"),
   asyncHandler(async (req, res) => {
@@ -12412,7 +14476,7 @@ router28.get(
     sendSuccess(res, { post });
   })
 );
-router28.get(
+router30.get(
   "/:id/revisions",
   requirePermission("content.read"),
   asyncHandler(async (req, res) => {
@@ -12420,81 +14484,770 @@ router28.get(
     sendSuccess(res, { revisions });
   })
 );
-router28.post(
+router30.post(
   "/",
   requirePermission("content.create"),
   asyncHandler(async (req, res) => {
     const input = createPostSchema.parse(req.body);
-    const post = await postService.createPost(req.user, input, requestMeta19(req));
+    const post = await postService.createPost(req.user, input, requestMeta20(req));
     sendSuccess(res, { post }, 201);
   })
 );
-router28.patch(
+router30.patch(
   "/:id",
   requirePermission("content.update"),
   asyncHandler(async (req, res) => {
     const input = updatePostSchema.parse(req.body);
-    const post = await postService.updatePost(req.user, req.params.id, input, requestMeta19(req));
+    const post = await postService.updatePost(req.user, req.params.id, input, requestMeta20(req));
     sendSuccess(res, { post });
   })
 );
-router28.post(
+router30.post(
   "/:id/submit-review",
   requirePermission("content.update"),
   asyncHandler(async (req, res) => {
-    const post = await postService.submitForReview(req.user, req.params.id, requestMeta19(req));
+    const post = await postService.submitForReview(req.user, req.params.id, requestMeta20(req));
     sendSuccess(res, { post });
   })
 );
-router28.post(
+router30.post(
   "/:id/publish",
   requirePermission("content.publish"),
   asyncHandler(async (req, res) => {
-    const post = await postService.publishPost(req.user, req.params.id, requestMeta19(req));
+    const post = await postService.publishPost(req.user, req.params.id, requestMeta20(req));
     sendSuccess(res, { post });
   })
 );
-router28.post(
+router30.post(
   "/:id/schedule",
   requirePermission("content.publish"),
   asyncHandler(async (req, res) => {
     const input = scheduleContentSchema.parse(req.body);
-    const post = await postService.schedulePost(req.user, req.params.id, input, requestMeta19(req));
+    const post = await postService.schedulePost(req.user, req.params.id, input, requestMeta20(req));
     sendSuccess(res, { post });
   })
 );
-router28.post(
+router30.post(
   "/:id/archive",
   requirePermission("content.delete"),
   asyncHandler(async (req, res) => {
-    const post = await postService.archivePost(req.user, req.params.id, requestMeta19(req));
+    const post = await postService.archivePost(req.user, req.params.id, requestMeta20(req));
     sendSuccess(res, { post });
   })
 );
-router28.post(
+router30.post(
   "/:id/revert",
   requirePermission("content.update"),
   asyncHandler(async (req, res) => {
     const input = revertContentSchema.parse(req.body);
-    const post = await postService.revertPost(req.user, req.params.id, input, requestMeta19(req));
+    const post = await postService.revertPost(req.user, req.params.id, input, requestMeta20(req));
     sendSuccess(res, { post });
   })
 );
-router28.delete(
+router30.delete(
   "/:id",
   requirePermission("content.delete"),
   asyncHandler(async (req, res) => {
-    await postService.deletePost(req.user, req.params.id, requestMeta19(req));
+    await postService.deletePost(req.user, req.params.id, requestMeta20(req));
     sendSuccess(res, { message: "Post deleted." });
   })
 );
-var postRoutes_default = router28;
+var postRoutes_default = router30;
+
+// server/routes/v1/caseStudyRoutes.ts
+import { Router as Router31 } from "express";
+
+// server/services/caseStudyService.ts
+import { Prisma as Prisma6 } from "@prisma/client";
+var CONTENT_EDIT_BLOCKED_STATUSES3 = /* @__PURE__ */ new Set(["ARCHIVED"]);
+function resolveEditorBlocksInput2(value) {
+  return value === null || value === void 0 ? Prisma6.DbNull : value;
+}
+function isUniqueConstraintError11(err) {
+  return !!err && typeof err === "object" && "code" in err && err.code === "P2002";
+}
+function assertHasPublishableContent3(revision) {
+  if (!revision || !revision.title.trim() || !revision.body.trim()) {
+    throw new ValidationError("This case study needs a title and body before it can be published or scheduled.");
+  }
+}
+async function loadCaseStudyOrThrow(id, organizationId) {
+  const caseStudy = await caseStudyRepository.findByIdInOrg(id, organizationId);
+  if (!caseStudy) throw new NotFoundError("Case study not found.");
+  return caseStudy;
+}
+async function assertIndustryUsable(industryId) {
+  if (!industryId) return;
+  const industry = await industryRepository.findById(industryId);
+  if (!industry) throw new ValidationError("industryId does not refer to a real industry.");
+}
+async function assertProductsUsable2(productIds) {
+  if (!productIds || productIds.length === 0) return;
+  const found = await productRepository.findManyByIds(productIds);
+  if (found.length !== new Set(productIds).size) {
+    throw new ValidationError("One or more productIds do not refer to a real product/service/solution.");
+  }
+}
+async function assertRelatedPagesUsable2(pageIds, organizationId) {
+  if (!pageIds || pageIds.length === 0) return;
+  const found = await pageRepository.findByIdsInOrg(pageIds, organizationId);
+  if (found.length !== new Set(pageIds).size) {
+    throw new ValidationError("One or more relatedPageIds do not refer to a page in this organization.");
+  }
+}
+async function assertRelatedPostsUsable2(postIds, organizationId) {
+  if (!postIds || postIds.length === 0) return;
+  const found = await postRepository.findByIdsInOrg(postIds, organizationId);
+  if (found.length !== new Set(postIds).size) {
+    throw new ValidationError("One or more relatedPostIds do not refer to a post in this organization.");
+  }
+}
+async function assertCtaFormUsable2(ctaFormId, organizationId) {
+  if (!ctaFormId) return;
+  const form = await formRepository.findByIdInOrg(ctaFormId, organizationId);
+  if (!form) throw new ValidationError("content.ctaFormId must refer to a real form in this organization.");
+}
+async function assertGalleryMediaUsable(galleryMediaIds, organizationId) {
+  if (!galleryMediaIds || galleryMediaIds.length === 0) return;
+  for (const mediaId of galleryMediaIds) {
+    await assertFeaturedMediaUsable(mediaId, organizationId);
+  }
+}
+async function assertRelationshipsUsable2(input, organizationId) {
+  await Promise.all([
+    assertIndustryUsable(input.industryId),
+    assertProductsUsable2(input.productIds),
+    assertRelatedPagesUsable2(input.relatedPageIds, organizationId),
+    assertRelatedPostsUsable2(input.relatedPostIds, organizationId),
+    assertCtaFormUsable2(input.content?.ctaFormId, organizationId),
+    assertGalleryMediaUsable(input.content?.galleryMediaIds, organizationId)
+  ]);
+}
+var caseStudyService = {
+  async listCaseStudies(organizationId, filters, page, limit, sort, order) {
+    return caseStudyRepository.list(organizationId, filters, page, limit, sort, order);
+  },
+  async getCaseStudy(organizationId, id) {
+    return loadCaseStudyOrThrow(id, organizationId);
+  },
+  async listRevisions(organizationId, id) {
+    await loadCaseStudyOrThrow(id, organizationId);
+    return caseStudyRepository.listRevisions(id);
+  },
+  async createCaseStudy(caller, input, meta = {}) {
+    const organizationId = caller.organizationId;
+    const body = sanitizeContentHtml(input.body);
+    const editorBlocks = input.editorBlocks ? sanitizeEditorDocument(input.editorBlocks) : void 0;
+    await assertRelationshipsUsable2(input, organizationId);
+    if (input.featuredMediaId) await assertFeaturedMediaUsable(input.featuredMediaId, organizationId);
+    if (input.slug) {
+      const dup = await caseStudyRepository.findBySlugInOrg(organizationId, input.slug);
+      if (dup) throw new ConflictError(`A case study with slug "${input.slug}" already exists.`, { existingCaseStudyId: dup.id });
+    }
+    const slug = input.slug ?? await caseStudyRepository.findUniqueSlugInOrg(organizationId, input.title);
+    let createdId;
+    try {
+      createdId = await prisma.$transaction(async (tx) => {
+        const caseStudy = await tx.caseStudy.create({
+          data: {
+            organizationId,
+            slug,
+            title: input.title,
+            status: "DRAFT",
+            clientName: input.clientName,
+            industryId: input.industryId,
+            featuredMediaId: input.featuredMediaId,
+            createdById: caller.id
+          }
+        });
+        const revision = await tx.contentRevision.create({
+          data: {
+            caseStudyId: caseStudy.id,
+            version: 1,
+            status: "DRAFT",
+            title: input.title,
+            excerpt: input.excerpt,
+            body,
+            metadata: input.content ?? {},
+            editorBlocks: editorBlocks ? editorBlocks : void 0,
+            createdById: caller.id
+          }
+        });
+        await tx.caseStudy.update({ where: { id: caseStudy.id }, data: { currentRevisionId: revision.id } });
+        if (input.productIds && input.productIds.length > 0) {
+          await tx.caseStudyProduct.createMany({ data: input.productIds.map((productId) => ({ caseStudyId: caseStudy.id, productId })) });
+        }
+        if (input.relatedPageIds && input.relatedPageIds.length > 0) {
+          await tx.caseStudyRelatedPage.createMany({ data: input.relatedPageIds.map((pageId) => ({ caseStudyId: caseStudy.id, pageId })) });
+        }
+        if (input.relatedPostIds && input.relatedPostIds.length > 0) {
+          await tx.caseStudyRelatedPost.createMany({ data: input.relatedPostIds.map((postId) => ({ caseStudyId: caseStudy.id, postId })) });
+        }
+        return caseStudy.id;
+      });
+    } catch (err) {
+      throw isUniqueConstraintError11(err) ? new ConflictError("A case study with this slug already exists.") : err;
+    }
+    await auditLogRepository.record({
+      organizationId,
+      actorUserId: caller.id,
+      actorType: "USER",
+      action: "CASE_STUDY_CREATED",
+      resourceType: "case_study",
+      resourceId: createdId,
+      afterData: { title: input.title, slug },
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent
+    });
+    return loadCaseStudyOrThrow(createdId, organizationId);
+  },
+  async updateCaseStudy(caller, id, input, meta = {}) {
+    const organizationId = caller.organizationId;
+    const existing = await loadCaseStudyOrThrow(id, organizationId);
+    const sanitizedBody = input.body !== void 0 ? sanitizeContentHtml(input.body) : void 0;
+    const sanitizedEditorBlocks = input.editorBlocks === void 0 ? void 0 : input.editorBlocks === null ? null : sanitizeEditorDocument(input.editorBlocks);
+    const hasContentEdit = input.title !== void 0 || input.body !== void 0 || input.excerpt !== void 0 || input.content !== void 0 || input.slug !== void 0 || input.editorBlocks !== void 0;
+    if (hasContentEdit && input.status === void 0 && CONTENT_EDIT_BLOCKED_STATUSES3.has(existing.status)) {
+      throw new ConflictError(`Case study content cannot be edited while status is ${existing.status}. Restore it to draft first.`);
+    }
+    if (input.slug !== void 0 && input.slug !== existing.slug) {
+      const dup = await caseStudyRepository.findBySlugInOrg(organizationId, input.slug);
+      if (dup && dup.id !== id) throw new ConflictError(`A case study with slug "${input.slug}" already exists.`, { existingCaseStudyId: dup.id });
+    }
+    await assertRelationshipsUsable2(
+      { content: input.content, productIds: input.productIds, relatedPageIds: input.relatedPageIds, relatedPostIds: input.relatedPostIds, industryId: input.industryId },
+      organizationId
+    );
+    const hasFeaturedMediaEdit = input.featuredMediaId !== void 0;
+    if (hasFeaturedMediaEdit) {
+      if (existing.status === "ARCHIVED") throw new ConflictError("Case study content cannot be edited while status is ARCHIVED.");
+      if (input.featuredMediaId) await assertFeaturedMediaUsable(input.featuredMediaId, organizationId);
+    }
+    const unpublishing = existing.status === "PUBLISHED" && input.status === "DRAFT";
+    const liveEditOfPublished = hasContentEdit && input.status === void 0 && existing.status === "PUBLISHED";
+    const currentRevision = existing.currentRevision;
+    try {
+      await prisma.$transaction(async (tx) => {
+        const patch = {};
+        if (input.status !== void 0) patch.status = input.status;
+        if (input.slug !== void 0) patch.slug = input.slug;
+        if (input.title !== void 0) patch.title = input.title;
+        if (input.clientName !== void 0) patch.clientName = input.clientName;
+        if (input.industryId !== void 0) patch.industryId = input.industryId;
+        if (hasFeaturedMediaEdit) patch.featuredMediaId = input.featuredMediaId;
+        if (unpublishing) patch.publishedAt = null;
+        if (currentRevision && (unpublishing || liveEditOfPublished || hasContentEdit && currentRevision.status === "PUBLISHED")) {
+          const newRevision = await tx.contentRevision.create({
+            data: {
+              caseStudyId: id,
+              version: currentRevision.version + 1,
+              status: liveEditOfPublished ? "PUBLISHED" : "DRAFT",
+              title: input.title ?? currentRevision.title,
+              excerpt: input.excerpt !== void 0 ? input.excerpt : currentRevision.excerpt,
+              body: sanitizedBody ?? currentRevision.body,
+              metadata: input.content ?? currentRevision.metadata,
+              editorBlocks: resolveEditorBlocksInput2(sanitizedEditorBlocks !== void 0 ? sanitizedEditorBlocks : currentRevision.editorBlocks),
+              createdById: caller.id,
+              publishedAt: liveEditOfPublished ? /* @__PURE__ */ new Date() : null
+            }
+          });
+          patch.currentRevisionId = newRevision.id;
+        } else if (hasContentEdit && currentRevision) {
+          const revisionPatch = {};
+          if (input.title !== void 0) revisionPatch.title = input.title;
+          if (input.excerpt !== void 0) revisionPatch.excerpt = input.excerpt;
+          if (sanitizedBody !== void 0) revisionPatch.body = sanitizedBody;
+          if (input.content !== void 0) revisionPatch.metadata = input.content;
+          if (sanitizedEditorBlocks !== void 0) revisionPatch.editorBlocks = resolveEditorBlocksInput2(sanitizedEditorBlocks);
+          if (Object.keys(revisionPatch).length > 0) {
+            await tx.contentRevision.update({ where: { id: currentRevision.id }, data: revisionPatch });
+          }
+        }
+        const willTouchRelations = input.productIds !== void 0 || input.relatedPageIds !== void 0 || input.relatedPostIds !== void 0;
+        if (hasContentEdit && Object.keys(patch).length === 0 && !willTouchRelations) {
+          patch.updatedAt = /* @__PURE__ */ new Date();
+        }
+        if (Object.keys(patch).length > 0) {
+          const where = { id, ...input.expectedUpdatedAt !== void 0 ? { updatedAt: input.expectedUpdatedAt } : {} };
+          const result = await tx.caseStudy.updateMany({ where, data: patch });
+          if (result.count === 0) {
+            throw new ConflictError("This case study was changed by someone else since you loaded it. Reload and try again.");
+          }
+        }
+        if (input.productIds !== void 0) {
+          await tx.caseStudyProduct.deleteMany({ where: { caseStudyId: id } });
+          if (input.productIds.length > 0) {
+            await tx.caseStudyProduct.createMany({ data: input.productIds.map((productId) => ({ caseStudyId: id, productId })) });
+          }
+        }
+        if (input.relatedPageIds !== void 0) {
+          await tx.caseStudyRelatedPage.deleteMany({ where: { caseStudyId: id } });
+          if (input.relatedPageIds.length > 0) {
+            await tx.caseStudyRelatedPage.createMany({ data: input.relatedPageIds.map((pageId) => ({ caseStudyId: id, pageId })) });
+          }
+        }
+        if (input.relatedPostIds !== void 0) {
+          await tx.caseStudyRelatedPost.deleteMany({ where: { caseStudyId: id } });
+          if (input.relatedPostIds.length > 0) {
+            await tx.caseStudyRelatedPost.createMany({ data: input.relatedPostIds.map((postId) => ({ caseStudyId: id, postId })) });
+          }
+        }
+      });
+    } catch (err) {
+      throw isUniqueConstraintError11(err) ? new ConflictError("A case study with this slug already exists.") : err;
+    }
+    await auditLogRepository.record({
+      organizationId,
+      actorUserId: caller.id,
+      actorType: "USER",
+      action: "CASE_STUDY_UPDATED",
+      resourceType: "case_study",
+      resourceId: id,
+      beforeData: { status: existing.status, title: existing.title },
+      afterData: { status: input.status, title: input.title, slug: input.slug },
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent
+    });
+    if (hasFeaturedMediaEdit && input.featuredMediaId !== existing.featuredMediaId) {
+      await auditLogRepository.record({
+        organizationId,
+        actorUserId: caller.id,
+        actorType: "USER",
+        action: input.featuredMediaId ? "MEDIA_ATTACHED_TO_CONTENT" : "MEDIA_DETACHED_FROM_CONTENT",
+        resourceType: "case_study",
+        resourceId: id,
+        beforeData: { featuredMediaId: existing.featuredMediaId },
+        afterData: { featuredMediaId: input.featuredMediaId ?? null },
+        ipAddress: meta.ip,
+        userAgent: meta.userAgent
+      });
+    }
+    if (input.slug !== void 0 && input.slug !== existing.slug) {
+      const finalStatus = input.status ?? existing.status;
+      if (finalStatus === "PUBLISHED") {
+        await redirectService.autoRedirectOnSlugChange({
+          organizationId,
+          fromPath: `/case-studies/${existing.slug}`,
+          toPath: `/case-studies/${input.slug}`,
+          resourceType: "case_study",
+          resourceId: id
+        });
+      }
+    }
+    return loadCaseStudyOrThrow(id, organizationId);
+  },
+  async submitForReview(caller, id, meta = {}) {
+    const organizationId = caller.organizationId;
+    const existing = await loadCaseStudyOrThrow(id, organizationId);
+    if (existing.status !== "DRAFT") throw new ConflictError(`Only a DRAFT case study can be submitted for review (current status: ${existing.status}).`);
+    if (!existing.currentRevision || !existing.currentRevision.body.trim()) {
+      throw new ValidationError("This case study needs body content before it can be submitted for review.");
+    }
+    await prisma.caseStudy.update({ where: { id }, data: { status: "IN_REVIEW" } });
+    await auditLogRepository.record({
+      organizationId,
+      actorUserId: caller.id,
+      actorType: "USER",
+      action: "CASE_STUDY_SUBMITTED_FOR_REVIEW",
+      resourceType: "case_study",
+      resourceId: id,
+      beforeData: { status: existing.status },
+      afterData: { status: "IN_REVIEW" },
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent
+    });
+    return loadCaseStudyOrThrow(id, organizationId);
+  },
+  async publishCaseStudy(caller, id, meta = {}) {
+    const organizationId = caller.organizationId;
+    const existing = await loadCaseStudyOrThrow(id, organizationId);
+    if (existing.status === "ARCHIVED") throw new ConflictError("An archived case study must be restored before it can be published.");
+    if (existing.status === "PUBLISHED") throw new ConflictError("This case study is already published.");
+    if (!existing.currentRevisionId) throw new ConflictError("This case study has no content revision to publish.");
+    assertHasPublishableContent3(existing.currentRevision);
+    const now = /* @__PURE__ */ new Date();
+    await prisma.$transaction([
+      prisma.contentRevision.update({ where: { id: existing.currentRevisionId }, data: { status: "PUBLISHED", publishedAt: now } }),
+      prisma.caseStudy.update({ where: { id }, data: { status: "PUBLISHED", publishedAt: now, scheduledAt: null } })
+    ]);
+    await auditLogRepository.record({
+      organizationId,
+      actorUserId: caller.id,
+      actorType: "USER",
+      action: "CASE_STUDY_PUBLISHED",
+      resourceType: "case_study",
+      resourceId: id,
+      beforeData: { status: existing.status },
+      afterData: { status: "PUBLISHED" },
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent
+    });
+    if (existing.createdById && existing.createdById !== caller.id) {
+      await notificationService.notify({
+        organizationId,
+        userId: existing.createdById,
+        type: "content_published",
+        title: "Your case study was published",
+        message: `"${existing.title}" is now live.`
+      });
+    }
+    return loadCaseStudyOrThrow(id, organizationId);
+  },
+  async scheduleCaseStudy(caller, id, input, meta = {}) {
+    const organizationId = caller.organizationId;
+    const existing = await loadCaseStudyOrThrow(id, organizationId);
+    if (existing.status === "ARCHIVED") throw new ConflictError("An archived case study must be restored before it can be scheduled.");
+    if (existing.status === "PUBLISHED") throw new ConflictError("This case study is already published.");
+    assertHasPublishableContent3(existing.currentRevision);
+    await prisma.caseStudy.update({ where: { id }, data: { status: "SCHEDULED", scheduledAt: input.scheduledAt } });
+    await auditLogRepository.record({
+      organizationId,
+      actorUserId: caller.id,
+      actorType: "USER",
+      action: "CASE_STUDY_SCHEDULED",
+      resourceType: "case_study",
+      resourceId: id,
+      beforeData: { status: existing.status },
+      afterData: { status: "SCHEDULED", scheduledAt: input.scheduledAt },
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent
+    });
+    return loadCaseStudyOrThrow(id, organizationId);
+  },
+  async archiveCaseStudy(caller, id, meta = {}) {
+    const organizationId = caller.organizationId;
+    const existing = await loadCaseStudyOrThrow(id, organizationId);
+    if (existing.status === "ARCHIVED") throw new ConflictError("This case study is already archived.");
+    await prisma.caseStudy.update({ where: { id }, data: { status: "ARCHIVED" } });
+    await auditLogRepository.record({
+      organizationId,
+      actorUserId: caller.id,
+      actorType: "USER",
+      action: "CASE_STUDY_ARCHIVED",
+      resourceType: "case_study",
+      resourceId: id,
+      beforeData: { status: existing.status },
+      afterData: { status: "ARCHIVED" },
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent
+    });
+    return loadCaseStudyOrThrow(id, organizationId);
+  },
+  async revertCaseStudy(caller, id, input, meta = {}) {
+    const organizationId = caller.organizationId;
+    const existing = await loadCaseStudyOrThrow(id, organizationId);
+    if (existing.status === "ARCHIVED") throw new ConflictError("An archived case study must be restored before its content can be reverted.");
+    const target = await prisma.contentRevision.findFirst({ where: { id: input.revisionId, caseStudyId: id } });
+    if (!target) throw new NotFoundError("Revision not found on this case study.");
+    const current = existing.currentRevision;
+    const nextVersion = (current?.version ?? 0) + 1;
+    const wasPublished = existing.status === "PUBLISHED";
+    await prisma.$transaction(async (tx) => {
+      const newRevision = await tx.contentRevision.create({
+        data: {
+          caseStudyId: id,
+          version: nextVersion,
+          status: wasPublished ? "PUBLISHED" : "DRAFT",
+          title: target.title,
+          excerpt: target.excerpt,
+          body: target.body,
+          metadata: target.metadata,
+          editorBlocks: resolveEditorBlocksInput2(target.editorBlocks),
+          createdById: caller.id,
+          publishedAt: wasPublished ? /* @__PURE__ */ new Date() : null
+        }
+      });
+      await tx.caseStudy.update({ where: { id }, data: { currentRevisionId: newRevision.id } });
+    });
+    await auditLogRepository.record({
+      organizationId,
+      actorUserId: caller.id,
+      actorType: "USER",
+      action: "CASE_STUDY_REVERTED",
+      resourceType: "case_study",
+      resourceId: id,
+      beforeData: { fromVersion: current?.version, revertedToRevisionId: target.id, revertedToVersion: target.version },
+      afterData: { newVersion: nextVersion },
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent
+    });
+    return loadCaseStudyOrThrow(id, organizationId);
+  },
+  async deleteCaseStudy(caller, id, meta = {}) {
+    const organizationId = caller.organizationId;
+    const existing = await loadCaseStudyOrThrow(id, organizationId);
+    await caseStudyRepository.softDelete(id);
+    await auditLogRepository.record({
+      organizationId,
+      actorUserId: caller.id,
+      actorType: "USER",
+      action: "CASE_STUDY_DELETED",
+      resourceType: "case_study",
+      resourceId: id,
+      beforeData: { status: existing.status, title: existing.title },
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent
+    });
+  },
+  async listTrash(organizationId, page, limit) {
+    return caseStudyRepository.listTrash(organizationId, page, limit);
+  },
+  async restoreCaseStudy(caller, id, meta = {}) {
+    const organizationId = caller.organizationId;
+    const existing = await caseStudyRepository.findTrashedByIdInOrg(id, organizationId);
+    if (!existing) throw new NotFoundError("Case study not found in trash.");
+    await caseStudyRepository.restore(id);
+    await auditLogRepository.record({
+      organizationId,
+      actorUserId: caller.id,
+      actorType: "USER",
+      action: "CASE_STUDY_RESTORED",
+      resourceType: "case_study",
+      resourceId: id,
+      beforeData: { status: existing.status, title: existing.title },
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent
+    });
+  },
+  /** Bulk workflow actions for the list view — same per-item isolation as postService.bulkAction/pageService.bulkAction. */
+  async bulkAction(caller, action, ids, meta = {}) {
+    const succeeded = [];
+    const failed = [];
+    for (const id of ids) {
+      try {
+        if (action === "archive") await this.archiveCaseStudy(caller, id, meta);
+        else if (action === "trash") await this.deleteCaseStudy(caller, id, meta);
+        else await this.restoreCaseStudy(caller, id, meta);
+        succeeded.push(id);
+      } catch (err) {
+        failed.push({ id, error: err instanceof Error ? err.message : "Action failed." });
+      }
+    }
+    return { succeeded, failed };
+  }
+};
+
+// server/schemas/caseStudySchemas.ts
+import { z as z30 } from "zod";
+var slugSchema8 = z30.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)");
+var uuidArray2 = (max) => z30.array(z30.string().trim().uuid()).max(max);
+var caseStudyContentSchema = seoMetadataSchema.extend({
+  challenge: z30.string().trim().max(5e3).optional(),
+  solutionApproach: z30.string().trim().max(5e3).optional(),
+  implementation: z30.string().trim().max(5e3).optional(),
+  results: z30.string().trim().max(5e3).optional(),
+  testimonialQuote: z30.string().trim().max(2e3).optional(),
+  testimonialAuthorName: z30.string().trim().max(150).optional(),
+  testimonialAuthorTitle: z30.string().trim().max(150).optional(),
+  technologies: z30.array(z30.string().trim().min(1).max(80)).max(30).optional(),
+  galleryMediaIds: uuidArray2(30).optional(),
+  ctaFormId: z30.string().trim().uuid().optional()
+});
+var createCaseStudySchema = z30.object({
+  title: z30.string().trim().min(1).max(200),
+  slug: slugSchema8.optional(),
+  body: z30.string().trim().max(5e5).default(""),
+  excerpt: z30.string().trim().max(500).optional(),
+  content: caseStudyContentSchema.optional(),
+  editorBlocks: editorDocumentSchema.optional(),
+  clientName: z30.string().trim().min(1).max(200).optional(),
+  industryId: z30.string().trim().uuid().optional(),
+  featuredMediaId: z30.string().trim().uuid().optional(),
+  productIds: uuidArray2(50).optional(),
+  relatedPageIds: uuidArray2(50).optional(),
+  relatedPostIds: uuidArray2(50).optional()
+});
+var updateCaseStudySchema = z30.object({
+  title: z30.string().trim().min(1).max(200).optional(),
+  slug: slugSchema8.optional(),
+  body: z30.string().trim().max(5e5).optional(),
+  excerpt: z30.string().trim().max(500).nullable().optional(),
+  content: caseStudyContentSchema.optional(),
+  editorBlocks: editorDocumentSchema.nullable().optional(),
+  status: patchableContentStatusSchema.optional(),
+  clientName: z30.string().trim().min(1).max(200).nullable().optional(),
+  industryId: z30.string().trim().uuid().nullable().optional(),
+  featuredMediaId: z30.string().trim().uuid().nullable().optional(),
+  productIds: uuidArray2(50).optional(),
+  relatedPageIds: uuidArray2(50).optional(),
+  relatedPostIds: uuidArray2(50).optional(),
+  expectedUpdatedAt: expectedUpdatedAtSchema
+}).refine((v) => Object.keys(v).filter((k) => k !== "expectedUpdatedAt").length > 0, { message: "At least one field must be provided." });
+var listCaseStudiesQuerySchema = z30.object({
+  page: z30.coerce.number().int().positive().default(1),
+  limit: z30.coerce.number().int().positive().max(100).default(20),
+  search: z30.string().trim().max(200).optional(),
+  status: z30.enum(["DRAFT", "IN_REVIEW", "SCHEDULED", "PUBLISHED", "ARCHIVED"]).optional(),
+  industryId: z30.string().trim().uuid().optional(),
+  productId: z30.string().trim().uuid().optional(),
+  fromDate: z30.coerce.date().optional(),
+  toDate: z30.coerce.date().optional(),
+  sort: z30.enum(["title", "slug", "status", "createdAt", "updatedAt", "publishedAt"]).default("updatedAt"),
+  order: z30.enum(["asc", "desc"]).default("desc")
+});
+
+// server/routes/v1/caseStudyRoutes.ts
+import { z as z31 } from "zod";
+var trashQuerySchema3 = z31.object({
+  page: z31.coerce.number().int().positive().default(1),
+  limit: z31.coerce.number().int().positive().max(100).default(20)
+});
+var router31 = Router31();
+router31.use(authenticateToken);
+function requestMeta21(req) {
+  return { ip: req.ip, userAgent: req.headers["user-agent"] };
+}
+router31.get(
+  "/",
+  requirePermission("content.read"),
+  asyncHandler(async (req, res) => {
+    const query = listCaseStudiesQuerySchema.parse(req.query);
+    const { rows, total } = await caseStudyService.listCaseStudies(
+      req.user.organizationId,
+      { search: query.search, status: query.status, industryId: query.industryId, productId: query.productId, fromDate: query.fromDate, toDate: query.toDate },
+      query.page,
+      query.limit,
+      query.sort,
+      query.order
+    );
+    sendSuccess(res, { caseStudies: rows }, 200, { page: query.page, limit: query.limit, total });
+  })
+);
+router31.get(
+  "/trash",
+  requirePermission("content.read"),
+  asyncHandler(async (req, res) => {
+    const query = trashQuerySchema3.parse(req.query);
+    const { rows, total } = await caseStudyService.listTrash(req.user.organizationId, query.page, query.limit);
+    sendSuccess(res, { caseStudies: rows }, 200, { page: query.page, limit: query.limit, total });
+  })
+);
+router31.post(
+  "/bulk/archive",
+  requirePermission("content.delete"),
+  asyncHandler(async (req, res) => {
+    const input = bulkContentIdsSchema.parse(req.body);
+    const result = await caseStudyService.bulkAction(req.user, "archive", input.ids, requestMeta21(req));
+    sendSuccess(res, result);
+  })
+);
+router31.post(
+  "/bulk/trash",
+  requirePermission("content.delete"),
+  asyncHandler(async (req, res) => {
+    const input = bulkContentIdsSchema.parse(req.body);
+    const result = await caseStudyService.bulkAction(req.user, "trash", input.ids, requestMeta21(req));
+    sendSuccess(res, result);
+  })
+);
+router31.post(
+  "/bulk/restore",
+  requirePermission("content.delete"),
+  asyncHandler(async (req, res) => {
+    const input = bulkContentIdsSchema.parse(req.body);
+    const result = await caseStudyService.bulkAction(req.user, "restore", input.ids, requestMeta21(req));
+    sendSuccess(res, result);
+  })
+);
+router31.post(
+  "/:id/restore",
+  requirePermission("content.delete"),
+  asyncHandler(async (req, res) => {
+    await caseStudyService.restoreCaseStudy(req.user, req.params.id, requestMeta21(req));
+    sendSuccess(res, { message: "Case study restored from trash." });
+  })
+);
+router31.get(
+  "/:id",
+  requirePermission("content.read"),
+  asyncHandler(async (req, res) => {
+    const caseStudy = await caseStudyService.getCaseStudy(req.user.organizationId, req.params.id);
+    sendSuccess(res, { caseStudy });
+  })
+);
+router31.get(
+  "/:id/revisions",
+  requirePermission("content.read"),
+  asyncHandler(async (req, res) => {
+    const revisions = await caseStudyService.listRevisions(req.user.organizationId, req.params.id);
+    sendSuccess(res, { revisions });
+  })
+);
+router31.post(
+  "/",
+  requirePermission("content.create"),
+  asyncHandler(async (req, res) => {
+    const input = createCaseStudySchema.parse(req.body);
+    const caseStudy = await caseStudyService.createCaseStudy(req.user, input, requestMeta21(req));
+    sendSuccess(res, { caseStudy }, 201);
+  })
+);
+router31.patch(
+  "/:id",
+  requirePermission("content.update"),
+  asyncHandler(async (req, res) => {
+    const input = updateCaseStudySchema.parse(req.body);
+    const caseStudy = await caseStudyService.updateCaseStudy(req.user, req.params.id, input, requestMeta21(req));
+    sendSuccess(res, { caseStudy });
+  })
+);
+router31.post(
+  "/:id/submit-review",
+  requirePermission("content.update"),
+  asyncHandler(async (req, res) => {
+    const caseStudy = await caseStudyService.submitForReview(req.user, req.params.id, requestMeta21(req));
+    sendSuccess(res, { caseStudy });
+  })
+);
+router31.post(
+  "/:id/publish",
+  requirePermission("content.publish"),
+  asyncHandler(async (req, res) => {
+    const caseStudy = await caseStudyService.publishCaseStudy(req.user, req.params.id, requestMeta21(req));
+    sendSuccess(res, { caseStudy });
+  })
+);
+router31.post(
+  "/:id/schedule",
+  requirePermission("content.publish"),
+  asyncHandler(async (req, res) => {
+    const input = scheduleContentSchema.parse(req.body);
+    const caseStudy = await caseStudyService.scheduleCaseStudy(req.user, req.params.id, input, requestMeta21(req));
+    sendSuccess(res, { caseStudy });
+  })
+);
+router31.post(
+  "/:id/archive",
+  requirePermission("content.delete"),
+  asyncHandler(async (req, res) => {
+    const caseStudy = await caseStudyService.archiveCaseStudy(req.user, req.params.id, requestMeta21(req));
+    sendSuccess(res, { caseStudy });
+  })
+);
+router31.post(
+  "/:id/revert",
+  requirePermission("content.update"),
+  asyncHandler(async (req, res) => {
+    const input = revertContentSchema.parse(req.body);
+    const caseStudy = await caseStudyService.revertCaseStudy(req.user, req.params.id, input, requestMeta21(req));
+    sendSuccess(res, { caseStudy });
+  })
+);
+router31.delete(
+  "/:id",
+  requirePermission("content.delete"),
+  asyncHandler(async (req, res) => {
+    await caseStudyService.deleteCaseStudy(req.user, req.params.id, requestMeta21(req));
+    sendSuccess(res, { message: "Case study deleted." });
+  })
+);
+var caseStudyRoutes_default = router31;
 
 // server/routes/v1/categoryRoutes.ts
-import { Router as Router29 } from "express";
+import { Router as Router32 } from "express";
 
 // server/services/categoryService.ts
-function isUniqueConstraintError11(err) {
+function isUniqueConstraintError12(err) {
   return !!err && typeof err === "object" && "code" in err && err.code === "P2002";
 }
 async function loadCategoryOrThrow(id, organizationId) {
@@ -12536,7 +15289,7 @@ var categoryService = {
     try {
       category = await categoryRepository.create({ organizationId, name: input.name, slug, description: input.description, parentId: input.parentId });
     } catch (err) {
-      throw isUniqueConstraintError11(err) ? new ConflictError("A category with this slug already exists.") : err;
+      throw isUniqueConstraintError12(err) ? new ConflictError("A category with this slug already exists.") : err;
     }
     await auditLogRepository.record({
       organizationId,
@@ -12568,7 +15321,7 @@ var categoryService = {
     try {
       updated = await categoryRepository.update(id, patch);
     } catch (err) {
-      throw isUniqueConstraintError11(err) ? new ConflictError("A category with this slug already exists.") : err;
+      throw isUniqueConstraintError12(err) ? new ConflictError("A category with this slug already exists.") : err;
     }
     await auditLogRepository.record({
       organizationId,
@@ -12607,12 +15360,12 @@ var categoryService = {
 };
 
 // server/routes/v1/categoryRoutes.ts
-var router29 = Router29();
-router29.use(authenticateToken);
-function requestMeta20(req) {
+var router32 = Router32();
+router32.use(authenticateToken);
+function requestMeta22(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router29.get(
+router32.get(
   "/",
   requirePermission("content.read"),
   asyncHandler(async (req, res) => {
@@ -12620,7 +15373,7 @@ router29.get(
     sendSuccess(res, { categories });
   })
 );
-router29.get(
+router32.get(
   "/:id",
   requirePermission("content.read"),
   asyncHandler(async (req, res) => {
@@ -12628,69 +15381,69 @@ router29.get(
     sendSuccess(res, { category });
   })
 );
-router29.post(
+router32.post(
   "/",
   requirePermission("content.create"),
   asyncHandler(async (req, res) => {
     const input = createCategorySchema.parse(req.body);
-    const category = await categoryService.createCategory(req.user, input, requestMeta20(req));
+    const category = await categoryService.createCategory(req.user, input, requestMeta22(req));
     sendSuccess(res, { category }, 201);
   })
 );
-router29.patch(
+router32.patch(
   "/:id",
   requirePermission("content.update"),
   asyncHandler(async (req, res) => {
     const input = updateCategorySchema.parse(req.body);
-    const category = await categoryService.updateCategory(req.user, req.params.id, input, requestMeta20(req));
+    const category = await categoryService.updateCategory(req.user, req.params.id, input, requestMeta22(req));
     sendSuccess(res, { category });
   })
 );
-router29.delete(
+router32.delete(
   "/:id",
   requirePermission("content.delete"),
   asyncHandler(async (req, res) => {
-    await categoryService.deleteCategory(req.user, req.params.id, requestMeta20(req));
+    await categoryService.deleteCategory(req.user, req.params.id, requestMeta22(req));
     sendSuccess(res, { message: "Category deleted." });
   })
 );
-var categoryRoutes_default = router29;
+var categoryRoutes_default = router32;
 
 // server/routes/v1/redirectRoutes.ts
-import { Router as Router30 } from "express";
+import { Router as Router33 } from "express";
 
 // server/schemas/redirectSchemas.ts
-import { z as z29 } from "zod";
-var sitePathSchema = z29.string().trim().min(1).max(2048).refine((v) => v.startsWith("/") && !v.startsWith("//"), { message: "Must be a site-relative path starting with a single /." }).refine((v) => !/[a-z][a-z0-9+.-]*:/i.test(v), { message: "Must not contain a URL scheme." });
-var listRedirectsQuerySchema = z29.object({
-  page: z29.coerce.number().int().positive().default(1),
-  limit: z29.coerce.number().int().positive().max(100).default(20),
-  search: z29.string().trim().max(200).optional(),
-  isActive: z29.enum(["true", "false"]).optional().transform((v) => v === void 0 ? void 0 : v === "true"),
-  sort: z29.enum(["createdAt", "updatedAt", "fromPath", "toPath"]).default("createdAt"),
-  order: z29.enum(["asc", "desc"]).default("desc")
+import { z as z32 } from "zod";
+var sitePathSchema = z32.string().trim().min(1).max(2048).refine((v) => v.startsWith("/") && !v.startsWith("//"), { message: "Must be a site-relative path starting with a single /." }).refine((v) => !/[a-z][a-z0-9+.-]*:/i.test(v), { message: "Must not contain a URL scheme." });
+var listRedirectsQuerySchema = z32.object({
+  page: z32.coerce.number().int().positive().default(1),
+  limit: z32.coerce.number().int().positive().max(100).default(20),
+  search: z32.string().trim().max(200).optional(),
+  isActive: z32.enum(["true", "false"]).optional().transform((v) => v === void 0 ? void 0 : v === "true"),
+  sort: z32.enum(["createdAt", "updatedAt", "fromPath", "toPath"]).default("createdAt"),
+  order: z32.enum(["asc", "desc"]).default("desc")
 });
-var createRedirectSchema = z29.object({
+var createRedirectSchema = z32.object({
   fromPath: sitePathSchema,
   toPath: sitePathSchema,
-  statusCode: z29.union([z29.literal(301), z29.literal(302), z29.literal(307), z29.literal(308)]).default(301),
-  isActive: z29.boolean().default(true),
-  notes: z29.string().trim().max(1e3).optional()
+  statusCode: z32.union([z32.literal(301), z32.literal(302), z32.literal(307), z32.literal(308)]).default(301),
+  isActive: z32.boolean().default(true),
+  notes: z32.string().trim().max(1e3).optional()
 }).strict().refine((v) => v.fromPath !== v.toPath, { message: "fromPath and toPath must differ.", path: ["toPath"] });
-var updateRedirectSchema = z29.object({
+var updateRedirectSchema = z32.object({
   toPath: sitePathSchema.optional(),
-  statusCode: z29.union([z29.literal(301), z29.literal(302), z29.literal(307), z29.literal(308)]).optional(),
-  isActive: z29.boolean().optional(),
-  notes: z29.string().trim().max(1e3).nullable().optional()
+  statusCode: z32.union([z32.literal(301), z32.literal(302), z32.literal(307), z32.literal(308)]).optional(),
+  isActive: z32.boolean().optional(),
+  notes: z32.string().trim().max(1e3).nullable().optional()
 }).strict().refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
 
 // server/routes/v1/redirectRoutes.ts
-var router30 = Router30();
-router30.use(authenticateToken);
-function requestMeta21(req) {
+var router33 = Router33();
+router33.use(authenticateToken);
+function requestMeta23(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router30.get(
+router33.get(
   "/",
   requirePermission("seo.redirects.read"),
   asyncHandler(async (req, res) => {
@@ -12706,7 +15459,7 @@ router30.get(
     sendSuccess(res, { redirects: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router30.get(
+router33.get(
   "/:id",
   requirePermission("seo.redirects.read"),
   asyncHandler(async (req, res) => {
@@ -12714,36 +15467,36 @@ router30.get(
     sendSuccess(res, { redirect });
   })
 );
-router30.post(
+router33.post(
   "/",
   requirePermission("seo.redirects.create"),
   asyncHandler(async (req, res) => {
     const input = createRedirectSchema.parse(req.body);
-    const redirect = await redirectService.createRedirect(req.user, input, requestMeta21(req));
+    const redirect = await redirectService.createRedirect(req.user, input, requestMeta23(req));
     sendSuccess(res, { redirect }, 201);
   })
 );
-router30.patch(
+router33.patch(
   "/:id",
   requirePermission("seo.redirects.update"),
   asyncHandler(async (req, res) => {
     const input = updateRedirectSchema.parse(req.body);
-    const redirect = await redirectService.updateRedirect(req.user, req.params.id, input, requestMeta21(req));
+    const redirect = await redirectService.updateRedirect(req.user, req.params.id, input, requestMeta23(req));
     sendSuccess(res, { redirect });
   })
 );
-router30.delete(
+router33.delete(
   "/:id",
   requirePermission("seo.redirects.delete"),
   asyncHandler(async (req, res) => {
-    await redirectService.deleteRedirect(req.user, req.params.id, requestMeta21(req));
+    await redirectService.deleteRedirect(req.user, req.params.id, requestMeta23(req));
     sendSuccess(res, { message: "Redirect deleted." });
   })
 );
-var redirectRoutes_default = router30;
+var redirectRoutes_default = router33;
 
 // server/routes/v1/seoRoutes.ts
-import { Router as Router31 } from "express";
+import { Router as Router34 } from "express";
 
 // server/services/seoAuditService.ts
 var LIVE_STATUSES = /* @__PURE__ */ new Set(["PUBLISHED", "SCHEDULED"]);
@@ -12810,7 +15563,11 @@ function findDuplicateField(records, code, label) {
 }
 var seoAuditService = {
   async runAudit(organizationId) {
-    const [posts, pages] = await Promise.all([postRepository.listForSeoAudit(organizationId), pageRepository.listForSeoAudit(organizationId)]);
+    const [posts, pages, caseStudies] = await Promise.all([
+      postRepository.listForSeoAudit(organizationId),
+      pageRepository.listForSeoAudit(organizationId),
+      caseStudyRepository.listForSeoAudit(organizationId)
+    ]);
     const issues = [];
     const titleIndex = [];
     const descriptionIndex = [];
@@ -12829,6 +15586,10 @@ var seoAuditService = {
       issues.push(...checkRecord("page", page));
       indexRecord("page", page);
     }
+    for (const caseStudy of caseStudies) {
+      issues.push(...checkRecord("case_study", caseStudy));
+      indexRecord("case_study", caseStudy);
+    }
     issues.push(...findDuplicateField(titleIndex, "duplicate_meta_title", "title"));
     issues.push(...findDuplicateField(descriptionIndex, "duplicate_meta_description", "description"));
     return issues.sort((a, b) => a.severity === b.severity ? 0 : a.severity === "critical" ? -1 : 1);
@@ -12836,9 +15597,9 @@ var seoAuditService = {
 };
 
 // server/routes/v1/seoRoutes.ts
-var router31 = Router31();
-router31.use(authenticateToken);
-router31.get(
+var router34 = Router34();
+router34.use(authenticateToken);
+router34.get(
   "/issues",
   requirePermission("seo.audit.read"),
   asyncHandler(async (req, res) => {
@@ -12846,13 +15607,13 @@ router31.get(
     sendSuccess(res, { issues });
   })
 );
-var seoRoutes_default = router31;
+var seoRoutes_default = router34;
 
 // server/routes/v1/tagRoutes.ts
-import { Router as Router32 } from "express";
+import { Router as Router35 } from "express";
 
 // server/services/tagService.ts
-function isUniqueConstraintError12(err) {
+function isUniqueConstraintError13(err) {
   return !!err && typeof err === "object" && "code" in err && err.code === "P2002";
 }
 async function loadTagOrThrow(id, organizationId) {
@@ -12878,7 +15639,7 @@ var tagService = {
     try {
       tag = await tagRepository.create({ organizationId, name: input.name, slug, description: input.description });
     } catch (err) {
-      throw isUniqueConstraintError12(err) ? new ConflictError("A tag with this slug already exists.") : err;
+      throw isUniqueConstraintError13(err) ? new ConflictError("A tag with this slug already exists.") : err;
     }
     await auditLogRepository.record({
       organizationId,
@@ -12908,7 +15669,7 @@ var tagService = {
     try {
       updated = await tagRepository.update(id, patch);
     } catch (err) {
-      throw isUniqueConstraintError12(err) ? new ConflictError("A tag with this slug already exists.") : err;
+      throw isUniqueConstraintError13(err) ? new ConflictError("A tag with this slug already exists.") : err;
     }
     await auditLogRepository.record({
       organizationId,
@@ -12947,12 +15708,12 @@ var tagService = {
 };
 
 // server/routes/v1/tagRoutes.ts
-var router32 = Router32();
-router32.use(authenticateToken);
-function requestMeta22(req) {
+var router35 = Router35();
+router35.use(authenticateToken);
+function requestMeta24(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router32.get(
+router35.get(
   "/",
   requirePermission("content.read"),
   asyncHandler(async (req, res) => {
@@ -12960,7 +15721,7 @@ router32.get(
     sendSuccess(res, { tags });
   })
 );
-router32.get(
+router35.get(
   "/:id",
   requirePermission("content.read"),
   asyncHandler(async (req, res) => {
@@ -12968,36 +15729,36 @@ router32.get(
     sendSuccess(res, { tag });
   })
 );
-router32.post(
+router35.post(
   "/",
   requirePermission("content.create"),
   asyncHandler(async (req, res) => {
     const input = createTagSchema.parse(req.body);
-    const tag = await tagService.createTag(req.user, input, requestMeta22(req));
+    const tag = await tagService.createTag(req.user, input, requestMeta24(req));
     sendSuccess(res, { tag }, 201);
   })
 );
-router32.patch(
+router35.patch(
   "/:id",
   requirePermission("content.update"),
   asyncHandler(async (req, res) => {
     const input = updateTagSchema.parse(req.body);
-    const tag = await tagService.updateTag(req.user, req.params.id, input, requestMeta22(req));
+    const tag = await tagService.updateTag(req.user, req.params.id, input, requestMeta24(req));
     sendSuccess(res, { tag });
   })
 );
-router32.delete(
+router35.delete(
   "/:id",
   requirePermission("content.delete"),
   asyncHandler(async (req, res) => {
-    await tagService.deleteTag(req.user, req.params.id, requestMeta22(req));
+    await tagService.deleteTag(req.user, req.params.id, requestMeta24(req));
     sendSuccess(res, { message: "Tag deleted." });
   })
 );
-var tagRoutes_default = router32;
+var tagRoutes_default = router35;
 
 // server/routes/v1/authorRoutes.ts
-import { Router as Router33 } from "express";
+import { Router as Router36 } from "express";
 
 // server/repositories/authorRepository.ts
 var withUser = { include: { user: { select: { id: true, email: true, firstName: true, lastName: true, displayName: true, status: true } } } };
@@ -13077,24 +15838,24 @@ var authorService = {
 };
 
 // server/schemas/authorSchemas.ts
-import { z as z30 } from "zod";
-var createAuthorSchema = z30.object({
-  userId: z30.string().trim().uuid(),
-  bio: z30.string().trim().max(2e3).optional(),
-  avatarUrl: z30.string().trim().url().max(500).optional()
+import { z as z33 } from "zod";
+var createAuthorSchema = z33.object({
+  userId: z33.string().trim().uuid(),
+  bio: z33.string().trim().max(2e3).optional(),
+  avatarUrl: z33.string().trim().url().max(500).optional()
 });
-var updateAuthorSchema = z30.object({
-  bio: z30.string().trim().max(2e3).nullable().optional(),
-  avatarUrl: z30.string().trim().url().max(500).nullable().optional()
+var updateAuthorSchema = z33.object({
+  bio: z33.string().trim().max(2e3).nullable().optional(),
+  avatarUrl: z33.string().trim().url().max(500).nullable().optional()
 }).refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
 
 // server/routes/v1/authorRoutes.ts
-var router33 = Router33();
-router33.use(authenticateToken);
-function requestMeta23(req) {
+var router36 = Router36();
+router36.use(authenticateToken);
+function requestMeta25(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router33.get(
+router36.get(
   "/",
   requirePermission("authors.read"),
   asyncHandler(async (_req, res) => {
@@ -13102,7 +15863,7 @@ router33.get(
     sendSuccess(res, { authors });
   })
 );
-router33.get(
+router36.get(
   "/:id",
   requirePermission("authors.read"),
   asyncHandler(async (req, res) => {
@@ -13110,69 +15871,81 @@ router33.get(
     sendSuccess(res, { author });
   })
 );
-router33.post(
+router36.post(
   "/",
   requirePermission("authors.create"),
   asyncHandler(async (req, res) => {
     const input = createAuthorSchema.parse(req.body);
-    const author = await authorService.createAuthor(req.user, input, requestMeta23(req));
+    const author = await authorService.createAuthor(req.user, input, requestMeta25(req));
     sendSuccess(res, { author }, 201);
   })
 );
-router33.patch(
+router36.patch(
   "/:id",
   requirePermission("authors.update"),
   asyncHandler(async (req, res) => {
     const input = updateAuthorSchema.parse(req.body);
-    const author = await authorService.updateAuthor(req.user, req.params.id, input, requestMeta23(req));
+    const author = await authorService.updateAuthor(req.user, req.params.id, input, requestMeta25(req));
     sendSuccess(res, { author });
   })
 );
-var authorRoutes_default = router33;
+var authorRoutes_default = router36;
 
 // server/routes/v1/mediaRoutes.ts
-import { Router as Router34 } from "express";
+import { Router as Router37 } from "express";
 import express2 from "express";
 
 // server/schemas/mediaSchemas.ts
-import { z as z31 } from "zod";
+import { z as z34 } from "zod";
 var SORT_FIELDS5 = ["originalFilename", "displayName", "mimeType", "sizeBytes", "status", "createdAt", "updatedAt"];
-var listMediaQuerySchema = z31.object({
-  page: z31.coerce.number().int().positive().default(1),
-  limit: z31.coerce.number().int().positive().max(100).default(20),
-  search: z31.string().trim().max(200).optional(),
-  status: z31.enum(["PENDING", "ACTIVE", "FAILED", "ARCHIVED"]).optional(),
-  mimeType: z31.enum(ALLOWED_MIME_TYPES).optional(),
-  uploadedById: z31.string().trim().uuid().optional(),
-  dateFrom: z31.coerce.date().optional(),
-  dateTo: z31.coerce.date().optional(),
-  sort: z31.enum(SORT_FIELDS5).default("createdAt"),
-  order: z31.enum(["asc", "desc"]).default("desc")
+var listMediaQuerySchema = z34.object({
+  page: z34.coerce.number().int().positive().default(1),
+  limit: z34.coerce.number().int().positive().max(100).default(20),
+  search: z34.string().trim().max(200).optional(),
+  status: z34.enum(["PENDING", "ACTIVE", "FAILED", "ARCHIVED"]).optional(),
+  mimeType: z34.enum(ALLOWED_MIME_TYPES).optional(),
+  uploadedById: z34.string().trim().uuid().optional(),
+  dateFrom: z34.coerce.date().optional(),
+  dateTo: z34.coerce.date().optional(),
+  // Phase 13 — Client Documents: filter the same Media Library by the
+  // client/onboarding record a document was uploaded against.
+  clientId: z34.string().trim().uuid().optional(),
+  onboardingId: z34.string().trim().uuid().optional(),
+  sort: z34.enum(SORT_FIELDS5).default("createdAt"),
+  order: z34.enum(["asc", "desc"]).default("desc")
 });
-var createUploadSessionSchema = z31.object({
-  filename: z31.string().trim().min(1).max(255),
-  mimeType: z31.enum(ALLOWED_MIME_TYPES),
-  sizeBytes: z31.number().int().positive(),
-  displayName: z31.string().trim().max(255).optional(),
-  altText: z31.string().trim().max(500).optional(),
-  caption: z31.string().trim().max(1e3).optional()
+var createUploadSessionSchema = z34.object({
+  filename: z34.string().trim().min(1).max(255),
+  mimeType: z34.enum(ALLOWED_MIME_TYPES),
+  sizeBytes: z34.number().int().positive(),
+  displayName: z34.string().trim().max(255).optional(),
+  altText: z34.string().trim().max(500).optional(),
+  caption: z34.string().trim().max(1e3).optional(),
+  // Phase 13 — associates this upload with a Client (and optionally one
+  // specific onboarding record) as a Client Document, reusing the same
+  // signed-upload pipeline as every other media asset.
+  clientId: z34.string().trim().uuid().optional(),
+  onboardingId: z34.string().trim().uuid().optional(),
+  documentCategory: z34.string().trim().max(100).optional()
 });
-var completeUploadSchema = z31.object({
-  token: z31.string().trim().min(1)
+var completeUploadSchema = z34.object({
+  token: z34.string().trim().min(1)
 });
-var updateMediaSchema = z31.object({
-  displayName: z31.string().trim().max(255).nullable().optional(),
-  altText: z31.string().trim().max(500).nullable().optional(),
-  caption: z31.string().trim().max(1e3).nullable().optional(),
-  visibility: z31.enum(["PRIVATE", "PUBLIC"]).optional()
+var updateMediaSchema = z34.object({
+  displayName: z34.string().trim().max(255).nullable().optional(),
+  altText: z34.string().trim().max(500).nullable().optional(),
+  caption: z34.string().trim().max(1e3).nullable().optional(),
+  visibility: z34.enum(["PRIVATE", "PUBLIC"]).optional(),
+  documentCategory: z34.string().trim().max(100).nullable().optional(),
+  isClientVisible: z34.boolean().optional()
 }).refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
 
 // server/routes/v1/mediaRoutes.ts
-var router34 = Router34();
-function requestMeta24(req) {
+var router37 = Router37();
+function requestMeta26(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router34.put(
+router37.put(
   "/local-object",
   express2.raw({ type: () => true, limit: Math.max(config.mediaMaxImageSizeBytes, config.mediaMaxDocumentSizeBytes) }),
   asyncHandler(async (req, res) => {
@@ -13192,7 +15965,7 @@ router34.put(
     res.status(200).json({ ok: true });
   })
 );
-router34.get(
+router37.get(
   "/local-object",
   asyncHandler(async (req, res) => {
     if (getStorageProvider().name !== "local") {
@@ -13214,15 +15987,24 @@ router34.get(
     }
   })
 );
-router34.use(authenticateToken);
-router34.get(
+router37.use(authenticateToken);
+router37.get(
   "/",
   requirePermission("media.read"),
   asyncHandler(async (req, res) => {
     const query = listMediaQuerySchema.parse(req.query);
     const { rows, total } = await mediaService.listMedia(
       req.user.organizationId,
-      { search: query.search, status: query.status, mimeType: query.mimeType, uploadedById: query.uploadedById, dateFrom: query.dateFrom, dateTo: query.dateTo },
+      {
+        search: query.search,
+        status: query.status,
+        mimeType: query.mimeType,
+        uploadedById: query.uploadedById,
+        dateFrom: query.dateFrom,
+        dateTo: query.dateTo,
+        clientId: query.clientId,
+        onboardingId: query.onboardingId
+      },
       query.page,
       query.limit,
       query.sort,
@@ -13231,7 +16013,7 @@ router34.get(
     sendSuccess(res, { media: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router34.get(
+router37.get(
   "/:id",
   requirePermission("media.read"),
   asyncHandler(async (req, res) => {
@@ -13239,74 +16021,74 @@ router34.get(
     sendSuccess(res, { media });
   })
 );
-router34.get(
+router37.get(
   "/:id/url",
   requirePermission("media.read"),
   asyncHandler(async (req, res) => {
-    const result = await mediaService.getReadUrl(req.user, req.params.id, requestMeta24(req));
+    const result = await mediaService.getReadUrl(req.user, req.params.id, requestMeta26(req));
     sendSuccess(res, result);
   })
 );
-router34.get(
+router37.get(
   "/:id/embed-url",
   requirePermission("media.update"),
   asyncHandler(async (req, res) => {
-    const result = await mediaService.getEmbedUrl(req.user, req.params.id, requestMeta24(req));
+    const result = await mediaService.getEmbedUrl(req.user, req.params.id, requestMeta26(req));
     sendSuccess(res, result);
   })
 );
-router34.post(
+router37.post(
   "/upload-session",
   requirePermission("media.upload"),
   asyncHandler(async (req, res) => {
     const input = createUploadSessionSchema.parse(req.body);
-    const result = await mediaService.createUploadSession(req.user, input, requestMeta24(req));
+    const result = await mediaService.createUploadSession(req.user, input, requestMeta26(req));
     sendSuccess(res, result, 201);
   })
 );
-router34.post(
+router37.post(
   "/:id/complete",
   requirePermission("media.upload"),
   asyncHandler(async (req, res) => {
     const input = completeUploadSchema.parse(req.body);
     if (!input.token) throw new ValidationError("token is required.");
-    const media = await mediaService.completeUpload(req.user, req.params.id, input.token, requestMeta24(req));
+    const media = await mediaService.completeUpload(req.user, req.params.id, input.token, requestMeta26(req));
     sendSuccess(res, { media });
   })
 );
-router34.patch(
+router37.patch(
   "/:id",
   requirePermission("media.update"),
   asyncHandler(async (req, res) => {
     const input = updateMediaSchema.parse(req.body);
-    const media = await mediaService.updateMedia(req.user, req.params.id, input, requestMeta24(req));
+    const media = await mediaService.updateMedia(req.user, req.params.id, input, requestMeta26(req));
     sendSuccess(res, { media });
   })
 );
-router34.post(
+router37.post(
   "/:id/archive",
   requirePermission("media.delete"),
   asyncHandler(async (req, res) => {
-    const media = await mediaService.archiveMedia(req.user, req.params.id, requestMeta24(req));
+    const media = await mediaService.archiveMedia(req.user, req.params.id, requestMeta26(req));
     sendSuccess(res, { media });
   })
 );
-router34.delete(
+router37.delete(
   "/:id",
   requirePermission("media.delete"),
   asyncHandler(async (req, res) => {
-    await mediaService.deleteMedia(req.user, req.params.id, requestMeta24(req));
+    await mediaService.deleteMedia(req.user, req.params.id, requestMeta26(req));
     sendSuccess(res, { message: "Media deleted." });
   })
 );
-var mediaRoutes_default = router34;
+var mediaRoutes_default = router37;
 
 // server/routes/v1/contractRoutes.ts
-import { Router as Router35 } from "express";
+import { Router as Router38 } from "express";
 
 // server/repositories/contractRepository.ts
 var withVariations = { include: { variations: { orderBy: { variationNumber: "asc" } } } };
-function buildWhere15(organizationId, filters) {
+function buildWhere17(organizationId, filters) {
   const where = { organizationId };
   if (filters.status) where.status = filters.status;
   if (filters.clientId) where.clientId = filters.clientId;
@@ -13320,7 +16102,7 @@ function buildWhere15(organizationId, filters) {
 }
 var contractRepository = {
   async list(organizationId, filters, page, limit, sort, order) {
-    const where = buildWhere15(organizationId, filters);
+    const where = buildWhere17(organizationId, filters);
     const [rows, total] = await Promise.all([
       prisma.contract.findMany({ where, orderBy: { [sort]: order }, skip: (page - 1) * limit, take: limit, ...withVariations }),
       prisma.contract.count({ where })
@@ -13601,66 +16383,66 @@ var contractService = {
 };
 
 // server/schemas/contractSchemas.ts
-import { z as z33 } from "zod";
+import { z as z36 } from "zod";
 
 // server/schemas/commercialSchemas.ts
-import { z as z32 } from "zod";
-var expectedUpdatedAtSchema2 = z32.coerce.date().optional();
-var currencyCodeSchema = z32.string().trim().toUpperCase().regex(/^[A-Z]{3}$/, "currency must be a 3-letter ISO 4217 code").default(DEFAULT_CURRENCY);
-var moneyAmountSchema = z32.union([z32.string(), z32.number()]).transform((v) => String(v).trim()).refine((v) => /^\d+(\.\d{1,3})?$/.test(v), { message: "amount must be a non-negative number with at most 3 decimal places" });
-var signedMoneyAmountSchema = z32.union([z32.string(), z32.number()]).transform((v) => String(v).trim()).refine((v) => /^-?\d+(\.\d{1,3})?$/.test(v), { message: "amount must be a number with at most 3 decimal places" });
+import { z as z35 } from "zod";
+var expectedUpdatedAtSchema2 = z35.coerce.date().optional();
+var currencyCodeSchema = z35.string().trim().toUpperCase().regex(/^[A-Z]{3}$/, "currency must be a 3-letter ISO 4217 code").default(DEFAULT_CURRENCY);
+var moneyAmountSchema = z35.union([z35.string(), z35.number()]).transform((v) => String(v).trim()).refine((v) => /^\d+(\.\d{1,3})?$/.test(v), { message: "amount must be a non-negative number with at most 3 decimal places" });
+var signedMoneyAmountSchema = z35.union([z35.string(), z35.number()]).transform((v) => String(v).trim()).refine((v) => /^-?\d+(\.\d{1,3})?$/.test(v), { message: "amount must be a number with at most 3 decimal places" });
 var SORT_ORDER = ["asc", "desc"];
 function paginationQuerySchema(sortFields, defaultSort, defaultOrder = "desc") {
   return {
-    page: z32.coerce.number().int().positive().default(1),
-    limit: z32.coerce.number().int().positive().max(100).default(20),
-    search: z32.string().trim().max(200).optional(),
-    sort: z32.enum(sortFields).default(defaultSort),
-    order: z32.enum(SORT_ORDER).default(defaultOrder)
+    page: z35.coerce.number().int().positive().default(1),
+    limit: z35.coerce.number().int().positive().max(100).default(20),
+    search: z35.string().trim().max(200).optional(),
+    sort: z35.enum(sortFields).default(defaultSort),
+    order: z35.enum(SORT_ORDER).default(defaultOrder)
   };
 }
 
 // server/schemas/contractSchemas.ts
-var contractStatusSchema = z33.enum(["DRAFT", "ACTIVE", "SUSPENDED", "EXPIRED", "TERMINATED"]);
+var contractStatusSchema = z36.enum(["DRAFT", "ACTIVE", "SUSPENDED", "EXPIRED", "TERMINATED"]);
 var SORT_FIELDS6 = ["contractNumber", "title", "status", "startDate", "endDate", "createdAt", "updatedAt"];
-var listContractsQuerySchema = z33.object({
+var listContractsQuerySchema = z36.object({
   ...paginationQuerySchema(SORT_FIELDS6, "createdAt"),
   status: contractStatusSchema.optional(),
-  clientId: z33.string().trim().uuid().optional()
+  clientId: z36.string().trim().uuid().optional()
 });
-var createContractSchema = z33.object({
-  clientId: z33.string().trim().uuid(),
-  title: z33.string().trim().min(1).max(200),
-  description: z33.string().trim().max(5e3).optional(),
-  startDate: z33.coerce.date(),
-  endDate: z33.coerce.date().optional(),
+var createContractSchema = z36.object({
+  clientId: z36.string().trim().uuid(),
+  title: z36.string().trim().min(1).max(200),
+  description: z36.string().trim().max(5e3).optional(),
+  startDate: z36.coerce.date(),
+  endDate: z36.coerce.date().optional(),
   contractValue: moneyAmountSchema,
   currency: currencyCodeSchema.optional(),
-  notes: z33.string().trim().max(5e3).optional()
+  notes: z36.string().trim().max(5e3).optional()
 });
-var updateContractSchema = z33.object({
-  title: z33.string().trim().min(1).max(200).optional(),
-  description: z33.string().trim().max(5e3).nullable().optional(),
-  endDate: z33.coerce.date().nullable().optional(),
-  notes: z33.string().trim().max(5e3).nullable().optional(),
+var updateContractSchema = z36.object({
+  title: z36.string().trim().min(1).max(200).optional(),
+  description: z36.string().trim().max(5e3).nullable().optional(),
+  endDate: z36.coerce.date().nullable().optional(),
+  notes: z36.string().trim().max(5e3).nullable().optional(),
   expectedUpdatedAt: expectedUpdatedAtSchema2
 }).refine((v) => Object.keys(v).some((k) => k !== "expectedUpdatedAt"), { message: "At least one field must be provided." });
-var terminateContractSchema = z33.object({
-  reason: z33.string().trim().min(1).max(1e3)
+var terminateContractSchema = z36.object({
+  reason: z36.string().trim().min(1).max(1e3)
 });
-var createContractVariationSchema = z33.object({
+var createContractVariationSchema = z36.object({
   amount: signedMoneyAmountSchema,
-  effectiveDate: z33.coerce.date(),
-  reason: z33.string().trim().min(1).max(1e3)
+  effectiveDate: z36.coerce.date(),
+  reason: z36.string().trim().min(1).max(1e3)
 });
 
 // server/routes/v1/contractRoutes.ts
-var router35 = Router35();
-router35.use(authenticateToken);
-function requestMeta25(req) {
+var router38 = Router38();
+router38.use(authenticateToken);
+function requestMeta27(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router35.get(
+router38.get(
   "/",
   requirePermission("contracts.read"),
   asyncHandler(async (req, res) => {
@@ -13676,7 +16458,7 @@ router35.get(
     sendSuccess(res, { contracts: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router35.get(
+router38.get(
   "/:id",
   requirePermission("contracts.read"),
   asyncHandler(async (req, res) => {
@@ -13684,66 +16466,66 @@ router35.get(
     sendSuccess(res, { contract });
   })
 );
-router35.post(
+router38.post(
   "/",
   requirePermission("contracts.create"),
   asyncHandler(async (req, res) => {
     const input = createContractSchema.parse(req.body);
-    const contract = await contractService.createContract(req.user, input, requestMeta25(req));
+    const contract = await contractService.createContract(req.user, input, requestMeta27(req));
     sendSuccess(res, { contract }, 201);
   })
 );
-router35.patch(
+router38.patch(
   "/:id",
   requirePermission("contracts.update"),
   asyncHandler(async (req, res) => {
     const input = updateContractSchema.parse(req.body);
-    const contract = await contractService.updateContract(req.user, req.params.id, input, requestMeta25(req));
+    const contract = await contractService.updateContract(req.user, req.params.id, input, requestMeta27(req));
     sendSuccess(res, { contract });
   })
 );
-router35.post(
+router38.post(
   "/:id/activate",
   requirePermission("contracts.activate"),
   asyncHandler(async (req, res) => {
-    const contract = await contractService.activateContract(req.user, req.params.id, requestMeta25(req));
+    const contract = await contractService.activateContract(req.user, req.params.id, requestMeta27(req));
     sendSuccess(res, { contract });
   })
 );
-router35.post(
+router38.post(
   "/:id/suspend",
   requirePermission("contracts.suspend"),
   asyncHandler(async (req, res) => {
-    const contract = await contractService.suspendContract(req.user, req.params.id, requestMeta25(req));
+    const contract = await contractService.suspendContract(req.user, req.params.id, requestMeta27(req));
     sendSuccess(res, { contract });
   })
 );
-router35.post(
+router38.post(
   "/:id/terminate",
   requirePermission("contracts.terminate"),
   asyncHandler(async (req, res) => {
     const input = terminateContractSchema.parse(req.body);
-    const contract = await contractService.terminateContract(req.user, req.params.id, input, requestMeta25(req));
+    const contract = await contractService.terminateContract(req.user, req.params.id, input, requestMeta27(req));
     sendSuccess(res, { contract });
   })
 );
-router35.post(
+router38.post(
   "/:id/variations",
   requirePermission("contracts.variations.create"),
   asyncHandler(async (req, res) => {
     const input = createContractVariationSchema.parse(req.body);
-    const contract = await contractService.createVariation(req.user, req.params.id, input, requestMeta25(req));
+    const contract = await contractService.createVariation(req.user, req.params.id, input, requestMeta27(req));
     sendSuccess(res, { contract }, 201);
   })
 );
-var contractRoutes_default = router35;
+var contractRoutes_default = router38;
 
 // server/routes/v1/subscriptionRoutes.ts
-import { Router as Router36 } from "express";
+import { Router as Router39 } from "express";
 
 // server/repositories/subscriptionRepository.ts
 var withItems = { include: { items: true } };
-function buildWhere16(organizationId, filters) {
+function buildWhere18(organizationId, filters) {
   const where = { organizationId };
   if (filters.status) where.status = filters.status;
   if (filters.clientId) where.clientId = filters.clientId;
@@ -13753,7 +16535,7 @@ function buildWhere16(organizationId, filters) {
 }
 var subscriptionRepository = {
   async list(organizationId, filters, page, limit, sort, order) {
-    const where = buildWhere16(organizationId, filters);
+    const where = buildWhere18(organizationId, filters);
     const [rows, total] = await Promise.all([
       prisma.subscription.findMany({ where, orderBy: { [sort]: order }, skip: (page - 1) * limit, take: limit }),
       prisma.subscription.count({ where })
@@ -13957,50 +16739,50 @@ var subscriptionService = {
 };
 
 // server/schemas/subscriptionSchemas.ts
-import { z as z34 } from "zod";
-var subscriptionStatusSchema = z34.enum(["DRAFT", "TRIALING", "ACTIVE", "PAST_DUE", "PAUSED", "CANCELLED", "EXPIRED"]);
-var billingCycleSchema = z34.enum(["ONE_TIME", "MONTHLY", "QUARTERLY", "ANNUAL"]);
+import { z as z37 } from "zod";
+var subscriptionStatusSchema = z37.enum(["DRAFT", "TRIALING", "ACTIVE", "PAST_DUE", "PAUSED", "CANCELLED", "EXPIRED"]);
+var billingCycleSchema = z37.enum(["ONE_TIME", "MONTHLY", "QUARTERLY", "ANNUAL"]);
 var SORT_FIELDS7 = ["subscriptionNumber", "status", "startDate", "renewalDate", "createdAt", "updatedAt"];
-var listSubscriptionsQuerySchema = z34.object({
+var listSubscriptionsQuerySchema = z37.object({
   ...paginationQuerySchema(SORT_FIELDS7, "createdAt"),
   status: subscriptionStatusSchema.optional(),
-  clientId: z34.string().trim().uuid().optional(),
-  productId: z34.string().trim().uuid().optional()
+  clientId: z37.string().trim().uuid().optional(),
+  productId: z37.string().trim().uuid().optional()
 });
-var subscriptionItemInputSchema = z34.object({
-  productModuleId: z34.string().trim().uuid().optional(),
-  description: z34.string().trim().min(1).max(500),
-  quantity: z34.number().int().positive().default(1),
+var subscriptionItemInputSchema = z37.object({
+  productModuleId: z37.string().trim().uuid().optional(),
+  description: z37.string().trim().min(1).max(500),
+  quantity: z37.number().int().positive().default(1),
   unitPrice: moneyAmountSchema
 });
-var createSubscriptionSchema = z34.object({
-  clientId: z34.string().trim().uuid(),
-  productId: z34.string().trim().uuid(),
-  startDate: z34.coerce.date(),
+var createSubscriptionSchema = z37.object({
+  clientId: z37.string().trim().uuid(),
+  productId: z37.string().trim().uuid(),
+  startDate: z37.coerce.date(),
   billingCycle: billingCycleSchema,
-  quantity: z34.number().int().positive().default(1),
+  quantity: z37.number().int().positive().default(1),
   price: moneyAmountSchema,
   currency: currencyCodeSchema.optional(),
-  items: z34.array(subscriptionItemInputSchema).default([])
+  items: z37.array(subscriptionItemInputSchema).default([])
 });
-var updateSubscriptionSchema = z34.object({
-  renewalDate: z34.coerce.date().nullable().optional(),
-  endDate: z34.coerce.date().nullable().optional(),
-  quantity: z34.number().int().positive().optional(),
+var updateSubscriptionSchema = z37.object({
+  renewalDate: z37.coerce.date().nullable().optional(),
+  endDate: z37.coerce.date().nullable().optional(),
+  quantity: z37.number().int().positive().optional(),
   price: moneyAmountSchema.optional(),
   expectedUpdatedAt: expectedUpdatedAtSchema2
 }).refine((v) => Object.keys(v).some((k) => k !== "expectedUpdatedAt"), { message: "At least one field must be provided." });
-var cancelSubscriptionSchema = z34.object({
-  reason: z34.string().trim().min(1).max(1e3)
+var cancelSubscriptionSchema = z37.object({
+  reason: z37.string().trim().min(1).max(1e3)
 });
 
 // server/routes/v1/subscriptionRoutes.ts
-var router36 = Router36();
-router36.use(authenticateToken);
-function requestMeta26(req) {
+var router39 = Router39();
+router39.use(authenticateToken);
+function requestMeta28(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router36.get(
+router39.get(
   "/",
   requirePermission("subscriptions.read"),
   asyncHandler(async (req, res) => {
@@ -14016,7 +16798,7 @@ router36.get(
     sendSuccess(res, { subscriptions: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router36.get(
+router39.get(
   "/:id",
   requirePermission("subscriptions.read"),
   asyncHandler(async (req, res) => {
@@ -14024,57 +16806,57 @@ router36.get(
     sendSuccess(res, { subscription });
   })
 );
-router36.post(
+router39.post(
   "/",
   requirePermission("subscriptions.create"),
   asyncHandler(async (req, res) => {
     const input = createSubscriptionSchema.parse(req.body);
-    const subscription = await subscriptionService.createSubscription(req.user, input, requestMeta26(req));
+    const subscription = await subscriptionService.createSubscription(req.user, input, requestMeta28(req));
     sendSuccess(res, { subscription }, 201);
   })
 );
-router36.patch(
+router39.patch(
   "/:id",
   requirePermission("subscriptions.update"),
   asyncHandler(async (req, res) => {
     const input = updateSubscriptionSchema.parse(req.body);
-    const subscription = await subscriptionService.updateSubscription(req.user, req.params.id, input, requestMeta26(req));
+    const subscription = await subscriptionService.updateSubscription(req.user, req.params.id, input, requestMeta28(req));
     sendSuccess(res, { subscription });
   })
 );
-router36.post(
+router39.post(
   "/:id/activate",
   requirePermission("subscriptions.activate"),
   asyncHandler(async (req, res) => {
-    const subscription = await subscriptionService.activateSubscription(req.user, req.params.id, requestMeta26(req));
+    const subscription = await subscriptionService.activateSubscription(req.user, req.params.id, requestMeta28(req));
     sendSuccess(res, { subscription });
   })
 );
-router36.post(
+router39.post(
   "/:id/pause",
   requirePermission("subscriptions.pause"),
   asyncHandler(async (req, res) => {
-    const subscription = await subscriptionService.pauseSubscription(req.user, req.params.id, requestMeta26(req));
+    const subscription = await subscriptionService.pauseSubscription(req.user, req.params.id, requestMeta28(req));
     sendSuccess(res, { subscription });
   })
 );
-router36.post(
+router39.post(
   "/:id/cancel",
   requirePermission("subscriptions.cancel"),
   asyncHandler(async (req, res) => {
     const input = cancelSubscriptionSchema.parse(req.body);
-    const subscription = await subscriptionService.cancelSubscription(req.user, req.params.id, input, requestMeta26(req));
+    const subscription = await subscriptionService.cancelSubscription(req.user, req.params.id, input, requestMeta28(req));
     sendSuccess(res, { subscription });
   })
 );
-var subscriptionRoutes_default = router36;
+var subscriptionRoutes_default = router39;
 
 // server/routes/v1/invoiceRoutes.ts
-import { Router as Router37 } from "express";
+import { Router as Router40 } from "express";
 
 // server/repositories/invoiceRepository.ts
 var withItemsAndPayments = { include: { items: true, payments: { orderBy: { createdAt: "asc" } } } };
-function buildWhere17(organizationId, filters) {
+function buildWhere19(organizationId, filters) {
   const where = { organizationId };
   if (filters.status) where.status = filters.status;
   if (filters.clientId) where.clientId = filters.clientId;
@@ -14091,7 +16873,7 @@ function buildWhere17(organizationId, filters) {
 }
 var invoiceRepository = {
   async list(organizationId, filters, page, limit, sort, order) {
-    const where = buildWhere17(organizationId, filters);
+    const where = buildWhere19(organizationId, filters);
     const [rows, total] = await Promise.all([
       prisma.invoice.findMany({ where, orderBy: { [sort]: order }, skip: (page - 1) * limit, take: limit }),
       prisma.invoice.count({ where })
@@ -14136,7 +16918,7 @@ var invoiceRepository = {
 };
 
 // server/repositories/paymentRepository.ts
-function buildWhere18(organizationId, filters) {
+function buildWhere20(organizationId, filters) {
   const where = { organizationId };
   if (filters.status) where.status = filters.status;
   if (filters.method) where.method = filters.method;
@@ -14152,7 +16934,7 @@ function buildWhere18(organizationId, filters) {
 }
 var paymentRepository = {
   async list(organizationId, filters, page, limit, sort, order) {
-    const where = buildWhere18(organizationId, filters);
+    const where = buildWhere20(organizationId, filters);
     const [rows, total] = await Promise.all([
       prisma.payment.findMany({ where, orderBy: { [sort]: order }, skip: (page - 1) * limit, take: limit }),
       prisma.payment.count({ where })
@@ -14501,68 +17283,68 @@ var paymentService = {
 };
 
 // server/schemas/invoiceSchemas.ts
-import { z as z35 } from "zod";
-var invoiceStatusSchema = z35.enum(["DRAFT", "ISSUED", "PARTIALLY_PAID", "PAID", "OVERDUE", "VOID", "CANCELLED"]);
-var paymentMethodSchema = z35.enum(["BANK_TRANSFER", "CARD", "CASH", "CHEQUE", "ONLINE", "OTHER"]);
-var paymentStatusSchema = z35.enum(["PENDING", "COMPLETED", "FAILED", "REVERSED"]);
+import { z as z38 } from "zod";
+var invoiceStatusSchema = z38.enum(["DRAFT", "ISSUED", "PARTIALLY_PAID", "PAID", "OVERDUE", "VOID", "CANCELLED"]);
+var paymentMethodSchema = z38.enum(["BANK_TRANSFER", "CARD", "CASH", "CHEQUE", "ONLINE", "OTHER"]);
+var paymentStatusSchema = z38.enum(["PENDING", "COMPLETED", "FAILED", "REVERSED"]);
 var SORT_FIELDS8 = ["invoiceNumber", "status", "issueDate", "dueDate", "total", "amountDue", "createdAt", "updatedAt"];
-var listInvoicesQuerySchema = z35.object({
+var listInvoicesQuerySchema = z38.object({
   ...paginationQuerySchema(SORT_FIELDS8, "issueDate"),
   status: invoiceStatusSchema.optional(),
-  clientId: z35.string().trim().uuid().optional(),
-  contractId: z35.string().trim().uuid().optional(),
-  subscriptionId: z35.string().trim().uuid().optional(),
-  dateFrom: z35.coerce.date().optional(),
-  dateTo: z35.coerce.date().optional()
+  clientId: z38.string().trim().uuid().optional(),
+  contractId: z38.string().trim().uuid().optional(),
+  subscriptionId: z38.string().trim().uuid().optional(),
+  dateFrom: z38.coerce.date().optional(),
+  dateTo: z38.coerce.date().optional()
 });
-var invoiceItemInputSchema = z35.object({
-  productModuleId: z35.string().trim().uuid().optional(),
-  description: z35.string().trim().min(1).max(500),
-  quantity: z35.number().int().positive().default(1),
+var invoiceItemInputSchema = z38.object({
+  productModuleId: z38.string().trim().uuid().optional(),
+  description: z38.string().trim().min(1).max(500),
+  quantity: z38.number().int().positive().default(1),
   unitPrice: moneyAmountSchema,
   discount: moneyAmountSchema.default("0")
 });
-var createInvoiceSchema = z35.object({
-  clientId: z35.string().trim().uuid(),
-  contractId: z35.string().trim().uuid().optional(),
-  subscriptionId: z35.string().trim().uuid().optional(),
-  issueDate: z35.coerce.date(),
-  dueDate: z35.coerce.date(),
+var createInvoiceSchema = z38.object({
+  clientId: z38.string().trim().uuid(),
+  contractId: z38.string().trim().uuid().optional(),
+  subscriptionId: z38.string().trim().uuid().optional(),
+  issueDate: z38.coerce.date(),
+  dueDate: z38.coerce.date(),
   currency: currencyCodeSchema.optional(),
   discount: moneyAmountSchema.default("0"),
   tax: moneyAmountSchema.default("0"),
-  notes: z35.string().trim().max(5e3).optional(),
-  items: z35.array(invoiceItemInputSchema).min(1, "An invoice needs at least one line item.")
+  notes: z38.string().trim().max(5e3).optional(),
+  items: z38.array(invoiceItemInputSchema).min(1, "An invoice needs at least one line item.")
 });
-var updateInvoiceSchema = z35.object({
-  issueDate: z35.coerce.date().optional(),
-  dueDate: z35.coerce.date().optional(),
+var updateInvoiceSchema = z38.object({
+  issueDate: z38.coerce.date().optional(),
+  dueDate: z38.coerce.date().optional(),
   discount: moneyAmountSchema.optional(),
   tax: moneyAmountSchema.optional(),
-  notes: z35.string().trim().max(5e3).nullable().optional(),
-  items: z35.array(invoiceItemInputSchema).min(1).optional(),
+  notes: z38.string().trim().max(5e3).nullable().optional(),
+  items: z38.array(invoiceItemInputSchema).min(1).optional(),
   expectedUpdatedAt: expectedUpdatedAtSchema2
 }).refine((v) => Object.keys(v).some((k) => k !== "expectedUpdatedAt"), { message: "At least one field must be provided." });
-var issueInvoiceSchema = z35.object({ expectedUpdatedAt: expectedUpdatedAtSchema2 });
-var voidInvoiceSchema = z35.object({
-  reason: z35.string().trim().min(1).max(1e3)
+var issueInvoiceSchema = z38.object({ expectedUpdatedAt: expectedUpdatedAtSchema2 });
+var voidInvoiceSchema = z38.object({
+  reason: z38.string().trim().min(1).max(1e3)
 });
-var recordPaymentSchema = z35.object({
+var recordPaymentSchema = z38.object({
   amount: moneyAmountSchema,
   currency: currencyCodeSchema.optional(),
-  paymentDate: z35.coerce.date(),
+  paymentDate: z38.coerce.date(),
   method: paymentMethodSchema,
-  reference: z35.string().trim().max(200).optional(),
-  notes: z35.string().trim().max(2e3).optional()
+  reference: z38.string().trim().max(200).optional(),
+  notes: z38.string().trim().max(2e3).optional()
 });
 
 // server/routes/v1/invoiceRoutes.ts
-var router37 = Router37();
-router37.use(authenticateToken);
-function requestMeta27(req) {
+var router40 = Router40();
+router40.use(authenticateToken);
+function requestMeta29(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router37.get(
+router40.get(
   "/",
   requirePermission("invoices.read"),
   asyncHandler(async (req, res) => {
@@ -14586,7 +17368,7 @@ router37.get(
     sendSuccess(res, { invoices: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router37.get(
+router40.get(
   "/:id",
   requirePermission("invoices.read"),
   asyncHandler(async (req, res) => {
@@ -14594,43 +17376,43 @@ router37.get(
     sendSuccess(res, { invoice });
   })
 );
-router37.post(
+router40.post(
   "/",
   requirePermission("invoices.create"),
   asyncHandler(async (req, res) => {
     const input = createInvoiceSchema.parse(req.body);
-    const invoice = await invoiceService.createInvoice(req.user, input, requestMeta27(req));
+    const invoice = await invoiceService.createInvoice(req.user, input, requestMeta29(req));
     sendSuccess(res, { invoice }, 201);
   })
 );
-router37.patch(
+router40.patch(
   "/:id",
   requirePermission("invoices.update"),
   asyncHandler(async (req, res) => {
     const input = updateInvoiceSchema.parse(req.body);
-    const invoice = await invoiceService.updateInvoice(req.user, req.params.id, input, requestMeta27(req));
+    const invoice = await invoiceService.updateInvoice(req.user, req.params.id, input, requestMeta29(req));
     sendSuccess(res, { invoice });
   })
 );
-router37.post(
+router40.post(
   "/:id/issue",
   requirePermission("invoices.issue"),
   asyncHandler(async (req, res) => {
     const input = issueInvoiceSchema.parse(req.body ?? {});
-    const invoice = await invoiceService.issueInvoice(req.user, req.params.id, input, requestMeta27(req));
+    const invoice = await invoiceService.issueInvoice(req.user, req.params.id, input, requestMeta29(req));
     sendSuccess(res, { invoice });
   })
 );
-router37.post(
+router40.post(
   "/:id/void",
   requirePermission("invoices.void"),
   asyncHandler(async (req, res) => {
     const input = voidInvoiceSchema.parse(req.body);
-    const invoice = await invoiceService.voidInvoice(req.user, req.params.id, input, requestMeta27(req));
+    const invoice = await invoiceService.voidInvoice(req.user, req.params.id, input, requestMeta29(req));
     sendSuccess(res, { invoice });
   })
 );
-router37.get(
+router40.get(
   "/:id/payments",
   requirePermission("payments.read"),
   asyncHandler(async (req, res) => {
@@ -14638,43 +17420,43 @@ router37.get(
     sendSuccess(res, { payments: rows }, 200, { page: 1, limit: 100, total });
   })
 );
-router37.post(
+router40.post(
   "/:id/payments",
   requirePermission("payments.create"),
   asyncHandler(async (req, res) => {
     const input = recordPaymentSchema.parse(req.body);
-    const payment = await invoiceService.recordPayment(req.user, req.params.id, input, requestMeta27(req));
+    const payment = await invoiceService.recordPayment(req.user, req.params.id, input, requestMeta29(req));
     sendSuccess(res, { payment }, 201);
   })
 );
-var invoiceRoutes_default = router37;
+var invoiceRoutes_default = router40;
 
 // server/routes/v1/paymentRoutes.ts
-import { Router as Router38 } from "express";
+import { Router as Router41 } from "express";
 
 // server/schemas/paymentSchemas.ts
-import { z as z36 } from "zod";
+import { z as z39 } from "zod";
 var SORT_FIELDS9 = ["paymentDate", "amount", "status", "createdAt"];
-var listPaymentsQuerySchema = z36.object({
+var listPaymentsQuerySchema = z39.object({
   ...paginationQuerySchema(SORT_FIELDS9, "paymentDate"),
   status: paymentStatusSchema.optional(),
   method: paymentMethodSchema.optional(),
-  invoiceId: z36.string().trim().uuid().optional(),
-  clientId: z36.string().trim().uuid().optional(),
-  dateFrom: z36.coerce.date().optional(),
-  dateTo: z36.coerce.date().optional()
+  invoiceId: z39.string().trim().uuid().optional(),
+  clientId: z39.string().trim().uuid().optional(),
+  dateFrom: z39.coerce.date().optional(),
+  dateTo: z39.coerce.date().optional()
 });
-var reversePaymentSchema = z36.object({
-  reason: z36.string().trim().min(1).max(1e3)
+var reversePaymentSchema = z39.object({
+  reason: z39.string().trim().min(1).max(1e3)
 });
 
 // server/routes/v1/paymentRoutes.ts
-var router38 = Router38();
-router38.use(authenticateToken);
-function requestMeta28(req) {
+var router41 = Router41();
+router41.use(authenticateToken);
+function requestMeta30(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router38.get(
+router41.get(
   "/",
   requirePermission("payments.read"),
   asyncHandler(async (req, res) => {
@@ -14690,7 +17472,7 @@ router38.get(
     sendSuccess(res, { payments: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router38.get(
+router41.get(
   "/:id",
   requirePermission("payments.read"),
   asyncHandler(async (req, res) => {
@@ -14698,20 +17480,20 @@ router38.get(
     sendSuccess(res, { payment });
   })
 );
-router38.post(
+router41.post(
   "/:id/reverse",
   requirePermission("payments.reverse"),
   asyncHandler(async (req, res) => {
     const input = reversePaymentSchema.parse(req.body);
-    const payment = await paymentService.reversePayment(req.user, req.params.id, input, requestMeta28(req));
+    const payment = await paymentService.reversePayment(req.user, req.params.id, input, requestMeta30(req));
     sendSuccess(res, { payment });
   })
 );
-var paymentRoutes_default = router38;
+var paymentRoutes_default = router41;
 
 // server/routes/v1/portalRoutes.ts
-import { Router as Router39 } from "express";
-import { z as z37 } from "zod";
+import { Router as Router42 } from "express";
+import { z as z40 } from "zod";
 
 // server/services/clientPortalService.ts
 async function resolveClientForCaller(caller) {
@@ -14775,17 +17557,58 @@ var clientPortalService = {
   async listPayments(caller, page, limit) {
     const client3 = await resolveClientForCaller(caller);
     return paymentRepository.list(client3.organizationId, { clientId: client3.id }, page, limit, "paymentDate", "desc");
+  },
+  /**
+   * Phase 13 — only documents explicitly marked `isClientVisible` are ever
+   * returned here; the agency's other media (CMS assets, non-client
+   * documents, documents awaiting internal review) stay invisible to the
+   * portal regardless of status, same boundary pattern as every other
+   * portal method (resolve-then-scope, never a caller-supplied id).
+   */
+  async listDocuments(caller, page, limit) {
+    const client3 = await resolveClientForCaller(caller);
+    return mediaRepository.list(client3.organizationId, { clientId: client3.id, isClientVisible: true }, page, limit, "createdAt", "desc");
+  },
+  /**
+   * Phase 13 — a safe projection of the client's onboarding record: real
+   * progress/checklist data only, with internal Control Center fields
+   * (staff notes, assignee user ids, who completed/created it) stripped
+   * out before this ever leaves the server (§9 "never expose internal
+   * Control Center data to clients").
+   */
+  async getOnboarding(caller) {
+    const client3 = await resolveClientForCaller(caller);
+    const record = await clientOnboardingRepository.findByClientId(client3.id);
+    if (!record) return null;
+    const checklist = record.checklist ?? [];
+    return {
+      id: record.id,
+      status: record.status,
+      currentStep: record.currentStep,
+      startedAt: record.startedAt,
+      completedAt: record.completedAt,
+      dueDate: record.dueDate,
+      checklist: checklist.map((item) => ({
+        key: item.key,
+        label: item.label,
+        completed: item.completed,
+        completedAt: item.completedAt,
+        dueDate: item.dueDate ?? null,
+        requiresDocument: item.requiresDocument ?? false,
+        documentMediaId: item.documentMediaId ?? null
+      }))
+    };
   }
 };
 
 // server/routes/v1/portalRoutes.ts
-var router39 = Router39();
-router39.use(authenticateToken);
-var pageQuerySchema = z37.object({
-  page: z37.coerce.number().int().positive().default(1),
-  limit: z37.coerce.number().int().positive().max(100).default(20)
+var router42 = Router42();
+router42.use(authenticateToken);
+var pageQuerySchema = z40.object({
+  page: z40.coerce.number().int().positive().default(1),
+  limit: z40.coerce.number().int().positive().max(100).default(20)
 });
-router39.get(
+router42.get(
   "/dashboard",
   requirePermission("portal.dashboard.read"),
   asyncHandler(async (req, res) => {
@@ -14793,7 +17616,7 @@ router39.get(
     sendSuccess(res, { dashboard });
   })
 );
-router39.get(
+router42.get(
   "/contracts",
   requirePermission("portal.contracts.read"),
   asyncHandler(async (req, res) => {
@@ -14802,7 +17625,7 @@ router39.get(
     sendSuccess(res, { contracts: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router39.get(
+router42.get(
   "/contracts/:id",
   requirePermission("portal.contracts.read"),
   asyncHandler(async (req, res) => {
@@ -14810,7 +17633,7 @@ router39.get(
     sendSuccess(res, { contract });
   })
 );
-router39.get(
+router42.get(
   "/subscriptions",
   requirePermission("portal.subscriptions.read"),
   asyncHandler(async (req, res) => {
@@ -14819,7 +17642,7 @@ router39.get(
     sendSuccess(res, { subscriptions: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router39.get(
+router42.get(
   "/subscriptions/:id",
   requirePermission("portal.subscriptions.read"),
   asyncHandler(async (req, res) => {
@@ -14827,7 +17650,7 @@ router39.get(
     sendSuccess(res, { subscription });
   })
 );
-router39.get(
+router42.get(
   "/invoices",
   requirePermission("portal.invoices.read"),
   asyncHandler(async (req, res) => {
@@ -14836,7 +17659,7 @@ router39.get(
     sendSuccess(res, { invoices: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router39.get(
+router42.get(
   "/invoices/:id",
   requirePermission("portal.invoices.read"),
   asyncHandler(async (req, res) => {
@@ -14844,7 +17667,7 @@ router39.get(
     sendSuccess(res, { invoice });
   })
 );
-router39.get(
+router42.get(
   "/payments",
   requirePermission("portal.payments.read"),
   asyncHandler(async (req, res) => {
@@ -14853,10 +17676,256 @@ router39.get(
     sendSuccess(res, { payments: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-var portalRoutes_default = router39;
+router42.get(
+  "/documents",
+  requirePermission("portal.documents.read"),
+  asyncHandler(async (req, res) => {
+    const query = pageQuerySchema.parse(req.query);
+    const { rows, total } = await clientPortalService.listDocuments(req.user, query.page, query.limit);
+    sendSuccess(res, { documents: rows }, 200, { page: query.page, limit: query.limit, total });
+  })
+);
+router42.get(
+  "/onboarding",
+  requirePermission("portal.onboarding.read"),
+  asyncHandler(async (req, res) => {
+    const onboarding = await clientPortalService.getOnboarding(req.user);
+    sendSuccess(res, { onboarding });
+  })
+);
+var portalRoutes_default = router42;
 
 // server/routes/v1/publicRoutes.ts
-import { Router as Router40 } from "express";
+import { Router as Router43 } from "express";
+
+// server/services/publicFormService.ts
+var DEFAULT_SUCCESS_MESSAGE = "Thank you \u2014 your submission has been received. We'll be in touch shortly.";
+function isFieldActive(field, data) {
+  if (!field.visibleWhen) return true;
+  return data[field.visibleWhen.fieldKey] === field.visibleWhen.equals;
+}
+function valueToDisplay(value) {
+  if (Array.isArray(value)) return value.join(", ");
+  return value ?? "";
+}
+function buildNotes(form, fields, data, utm, consentGiven) {
+  const lines = [`Submitted via form: ${form.name}`, ""];
+  for (const field of fields) {
+    const value = data[field.key];
+    if (value !== void 0 && value !== "") lines.push(`${field.label}: ${valueToDisplay(value)}`);
+  }
+  if (consentGiven !== null) lines.push("", `Consent to be contacted: ${consentGiven ? "given" : "declined"}.`);
+  const utmParts = [
+    utm.utmSource && `source=${utm.utmSource}`,
+    utm.utmMedium && `medium=${utm.utmMedium}`,
+    utm.utmCampaign && `campaign=${utm.utmCampaign}`,
+    utm.utmTerm && `term=${utm.utmTerm}`,
+    utm.utmContent && `content=${utm.utmContent}`
+  ].filter(Boolean);
+  if (utmParts.length > 0) lines.push("", `UTM: ${utmParts.join(", ")}`);
+  return lines.join("\n");
+}
+function projectFormForPublic(form) {
+  return {
+    id: form.id,
+    name: form.name,
+    slug: form.slug,
+    fields: form.fields,
+    successMessage: form.successMessage || DEFAULT_SUCCESS_MESSAGE
+  };
+}
+async function loadActiveFormOrThrow(where, organizationId) {
+  const form = "id" in where ? await formRepository.findByIdInOrg(where.id, organizationId) : await formRepository.findBySlugInOrg(organizationId, where.slug);
+  if (!form || form.status !== "ACTIVE") throw new NotFoundError("Form not found.");
+  return form;
+}
+var publicFormService = {
+  /** Backs the public `GET /public/forms/:slug` (and by-id) read used by the public site's actual form renderer — the Control Center's authoring UI already has its own authenticated read via formService.getForm. */
+  async getFormForRender(slugOrId) {
+    const organizationId = config.publicWebsiteOrganizationId;
+    if (!organizationId) throw new InfrastructureError("Public form intake is not configured.");
+    const form = await loadActiveFormOrThrow(slugOrId, organizationId);
+    return projectFormForPublic(form);
+  },
+  /**
+   * A non-empty `website` field (the honeypot) means the caller is almost
+   * certainly a bot — still resolves and returns the form's real
+   * successMessage (§8's "accepted-but-discarded" contract from
+   * publicLeadService), but writes nothing.
+   */
+  async submit(slug, input, meta = {}) {
+    const organizationId = config.publicWebsiteOrganizationId;
+    if (!organizationId) {
+      throw new InfrastructureError("Public form intake is not configured.");
+    }
+    const form = await formRepository.findBySlugInOrg(organizationId, slug);
+    if (!form || form.status !== "ACTIVE") {
+      throw new NotFoundError("Form not found.");
+    }
+    const successMessage = form.successMessage || DEFAULT_SUCCESS_MESSAGE;
+    if (input.website) {
+      return { successMessage };
+    }
+    const data = input.data;
+    const fields = form.fields;
+    let consentGiven = null;
+    for (const field of fields) {
+      const value = data[field.key];
+      const active = isFieldActive(field, data);
+      if (field.type === "multiselect") {
+        if (value !== void 0 && !Array.isArray(value)) throw new ValidationError(`"${field.label}" must be a list of values.`);
+      } else if (Array.isArray(value)) {
+        throw new ValidationError(`"${field.label}" must be a single value.`);
+      }
+      if (active && field.required) {
+        const isEmpty = value === void 0 || (typeof value === "string" ? !value.trim() : value.length === 0);
+        if (isEmpty) throw new ValidationError(`"${field.label}" is required.`);
+      }
+      if (value !== void 0 && (field.type === "select" || field.type === "radio") && typeof value === "string" && value) {
+        if (!field.options?.some((o) => o.value === value)) throw new ValidationError(`"${field.label}" has an invalid selection.`);
+      }
+      if (value !== void 0 && field.type === "multiselect" && Array.isArray(value)) {
+        const allowed = new Set((field.options ?? []).map((o) => o.value));
+        if (!value.every((v) => allowed.has(v))) throw new ValidationError(`"${field.label}" has an invalid selection.`);
+      }
+      if (value !== void 0 && field.type === "number" && typeof value === "string" && value.trim()) {
+        const n = Number(value);
+        if (Number.isNaN(n)) throw new ValidationError(`"${field.label}" must be a number.`);
+        if (field.min !== void 0 && n < field.min) throw new ValidationError(`"${field.label}" must be at least ${field.min}.`);
+        if (field.max !== void 0 && n > field.max) throw new ValidationError(`"${field.label}" must be at most ${field.max}.`);
+      }
+      if (field.type === "checkbox" && field.key === "consent") {
+        consentGiven = typeof value === "string" && (value === "true" || value === "on" || value === "yes");
+      }
+    }
+    const emailValue = typeof data.email === "string" ? data.email.trim() || void 0 : void 0;
+    const nameValue = typeof data.name === "string" ? data.name.trim() || void 0 : void 0;
+    const companyValue = typeof data.company === "string" ? data.company.trim() || void 0 : void 0;
+    const phoneValue = typeof data.phone === "string" ? data.phone.trim() || void 0 : void 0;
+    const sourceTag = `form:${form.slug}${input.utmSource ? `:${input.utmSource}` : ""}`;
+    const notes = buildNotes(form, fields, data, input, consentGiven);
+    const campaignId = await campaignAttributionService.resolveCampaignId(organizationId, input.utmCampaign);
+    const attribution = {
+      utmSource: input.utmSource,
+      utmMedium: input.utmMedium,
+      utmCampaign: input.utmCampaign,
+      utmTerm: input.utmTerm,
+      utmContent: input.utmContent,
+      landingPagePath: input.landingPagePath,
+      referrer: meta.referrer,
+      consentGiven: consentGiven ?? void 0,
+      formId: form.id,
+      campaignId
+    };
+    let leadId;
+    if (emailValue) {
+      const existingLeads = await leadRepository.findByEmailInOrg(organizationId, emailValue);
+      if (existingLeads.length > 0) {
+        const existing = existingLeads[0];
+        const updated = await leadRepository.update(existing.id, {
+          contactName: nameValue ?? existing.contactName,
+          phone: phoneValue ?? existing.phone,
+          source: sourceTag,
+          notes: existing.notes ? `${existing.notes}
+
+---
+
+${notes}` : notes,
+          ...attribution
+        });
+        leadId = updated.id;
+      } else {
+        const lead = await leadRepository.create({
+          organizationId,
+          companyName: companyValue || nameValue || emailValue || "Website form submission",
+          contactName: nameValue,
+          email: emailValue,
+          phone: phoneValue,
+          source: sourceTag,
+          notes,
+          ...attribution
+        });
+        leadId = lead.id;
+      }
+    } else {
+      const lead = await leadRepository.create({
+        organizationId,
+        companyName: companyValue || nameValue || "Website form submission",
+        contactName: nameValue,
+        phone: phoneValue,
+        source: sourceTag,
+        notes,
+        ...attribution
+      });
+      leadId = lead.id;
+    }
+    const submission = await formRepository.createSubmission({
+      formId: form.id,
+      organizationId,
+      data: input.data,
+      utmSource: input.utmSource,
+      utmMedium: input.utmMedium,
+      utmCampaign: input.utmCampaign,
+      utmTerm: input.utmTerm,
+      utmContent: input.utmContent,
+      leadId,
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent,
+      consentGiven: consentGiven ?? void 0,
+      landingPagePath: input.landingPagePath,
+      referrer: meta.referrer,
+      campaignId
+    });
+    await auditLogRepository.record({
+      organizationId,
+      actorType: "SYSTEM",
+      actorName: "Public Website",
+      action: "FORM_SUBMITTED",
+      resourceType: "form_submission",
+      resourceId: submission.id,
+      afterData: { formId: form.id, formSlug: form.slug, leadId },
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent
+    });
+    try {
+      await eventEngine.emit({
+        eventType: "form.submitted",
+        entityType: "form_submission",
+        entityId: submission.id,
+        organizationId,
+        actorType: "SYSTEM",
+        sourceModule: "MARKETING",
+        payload: { formId: form.id, formSlug: form.slug, leadId, campaignId: campaignId ?? null }
+      });
+    } catch {
+    }
+    await analyticsEventService.recordBusinessEvent({
+      organizationId,
+      eventType: "form_submission",
+      entityType: "form_submission",
+      entityId: submission.id,
+      utmSource: input.utmSource,
+      utmMedium: input.utmMedium,
+      utmCampaign: input.utmCampaign,
+      utmTerm: input.utmTerm,
+      utmContent: input.utmContent,
+      campaignId,
+      path: input.landingPagePath,
+      referrer: meta.referrer
+    });
+    const notifyUserIds = form.notifyUserIds ?? [];
+    for (const userId of notifyUserIds) {
+      await notificationService.notify({
+        organizationId,
+        userId,
+        type: "FORM_SUBMITTED",
+        title: `New submission: ${form.name}`,
+        message: nameValue || emailValue ? `From ${nameValue ?? emailValue}` : "A new form submission was received."
+      });
+    }
+    return { successMessage };
+  }
+};
 
 // server/services/publicSiteService.ts
 async function projectPublicMedia(media) {
@@ -14999,6 +18068,48 @@ async function projectPost(post) {
     updatedAt: post.updatedAt
   };
 }
+async function projectCaseStudyCtaForm(ctaFormId) {
+  if (!ctaFormId) return null;
+  try {
+    return await publicFormService.getFormForRender({ id: ctaFormId });
+  } catch (err) {
+    if (err instanceof NotFoundError) return null;
+    throw err;
+  }
+}
+async function projectCaseStudy(caseStudy) {
+  const revision = caseStudy.currentRevision;
+  const content = revision?.metadata ?? {};
+  const [featuredMedia, gallery, ctaForm] = await Promise.all([
+    projectPublicMedia(caseStudy.featuredMedia),
+    Promise.all((content.galleryMediaIds ?? []).map((id) => mediaRepository.findByIdInOrg(id, caseStudy.organizationId).then(projectPublicMedia))),
+    projectCaseStudyCtaForm(content.ctaFormId)
+  ]);
+  return {
+    slug: caseStudy.slug,
+    title: caseStudy.title,
+    clientName: caseStudy.clientName,
+    industry: caseStudy.industry ? { slug: caseStudy.industry.slug, name: caseStudy.industry.name } : null,
+    body: revision?.body ?? "",
+    excerpt: revision?.excerpt ?? null,
+    editorBlocks: revision?.editorBlocks ?? null,
+    challenge: content.challenge ?? null,
+    solutionApproach: content.solutionApproach ?? null,
+    implementation: content.implementation ?? null,
+    results: content.results ?? null,
+    testimonial: content.testimonialQuote ? { quote: content.testimonialQuote, authorName: content.testimonialAuthorName ?? null, authorTitle: content.testimonialAuthorTitle ?? null } : null,
+    technologies: content.technologies ?? [],
+    gallery: gallery.filter((m) => m !== null),
+    seo: await applySeoDefaults(content, caseStudy.organizationId, !!featuredMedia),
+    featuredMedia,
+    ctaForm,
+    relatedProducts: caseStudy.products.map((p) => p.product).filter((p) => p.status === "ACTIVE").map((p) => ({ slug: p.slug, name: p.name, type: p.type, shortDescription: p.shortDescription })),
+    relatedPages: caseStudy.relatedPages.map((r) => r.page).filter((p) => p.status === "PUBLISHED").map((p) => ({ slug: p.slug, title: p.title })),
+    relatedPosts: caseStudy.relatedPosts.map((r) => r.post).filter((p) => p.status === "PUBLISHED").map((p) => ({ slug: p.slug, title: p.title })),
+    publishedAt: caseStudy.publishedAt,
+    updatedAt: caseStudy.updatedAt
+  };
+}
 async function projectSiteIdentityMedia(identity, organizationId) {
   const entries = await Promise.all(
     SITE_IDENTITY_MEDIA_FIELDS.map(async (field) => {
@@ -15113,6 +18224,31 @@ var publicSiteService = {
     if (!post) throw new NotFoundError("Post not found.");
     return projectPost(post);
   },
+  /** Phase 11 — Case Studies index. `productSlug`/`industrySlug` resolve through the same global catalog/industry lookups publicProductService uses. */
+  async listCaseStudies(filters, page, limit, sort, order) {
+    if (!hasPublicWebsiteOrganization()) return { rows: [], total: 0 };
+    const organizationId = config.publicWebsiteOrganizationId;
+    let industryId;
+    if (filters.industrySlug) {
+      const industry = await industryRepository.findBySlug(filters.industrySlug);
+      if (!industry) return { rows: [], total: 0 };
+      industryId = industry.id;
+    }
+    let productId;
+    if (filters.productSlug) {
+      const product = await productRepository.findBySlug(filters.productSlug);
+      if (!product) return { rows: [], total: 0 };
+      productId = product.id;
+    }
+    const { rows, total } = await caseStudyRepository.listPublished(organizationId, { search: filters.search, industryId, productId }, page, limit, sort, order);
+    return { rows: await Promise.all(rows.map(projectCaseStudy)), total };
+  },
+  async getCaseStudyBySlug(slug) {
+    if (!hasPublicWebsiteOrganization()) throw new NotFoundError("Case study not found.");
+    const caseStudy = await caseStudyRepository.findPublishedBySlugWithMedia(config.publicWebsiteOrganizationId, slug);
+    if (!caseStudy) throw new NotFoundError("Case study not found.");
+    return projectCaseStudy(caseStudy);
+  },
   async listCategories() {
     if (!hasPublicWebsiteOrganization()) return [];
     const categories = await categoryRepository.list(config.publicWebsiteOrganizationId);
@@ -15134,192 +18270,6 @@ var publicSiteService = {
     const redirect = await redirectRepository.findByFromPathInOrg(config.publicWebsiteOrganizationId, path);
     if (!redirect || !redirect.isActive) return null;
     return { toPath: redirect.toPath, statusCode: redirect.statusCode };
-  }
-};
-
-// server/services/publicFormService.ts
-var DEFAULT_SUCCESS_MESSAGE = "Thank you \u2014 your submission has been received. We'll be in touch shortly.";
-function isFieldActive(field, data) {
-  if (!field.visibleWhen) return true;
-  return data[field.visibleWhen.fieldKey] === field.visibleWhen.equals;
-}
-function valueToDisplay(value) {
-  if (Array.isArray(value)) return value.join(", ");
-  return value ?? "";
-}
-function buildNotes(form, fields, data, utm, consentGiven) {
-  const lines = [`Submitted via form: ${form.name}`, ""];
-  for (const field of fields) {
-    const value = data[field.key];
-    if (value !== void 0 && value !== "") lines.push(`${field.label}: ${valueToDisplay(value)}`);
-  }
-  if (consentGiven !== null) lines.push("", `Consent to be contacted: ${consentGiven ? "given" : "declined"}.`);
-  const utmParts = [
-    utm.utmSource && `source=${utm.utmSource}`,
-    utm.utmMedium && `medium=${utm.utmMedium}`,
-    utm.utmCampaign && `campaign=${utm.utmCampaign}`,
-    utm.utmTerm && `term=${utm.utmTerm}`,
-    utm.utmContent && `content=${utm.utmContent}`
-  ].filter(Boolean);
-  if (utmParts.length > 0) lines.push("", `UTM: ${utmParts.join(", ")}`);
-  return lines.join("\n");
-}
-function projectFormForPublic(form) {
-  return {
-    id: form.id,
-    name: form.name,
-    slug: form.slug,
-    fields: form.fields,
-    successMessage: form.successMessage || DEFAULT_SUCCESS_MESSAGE
-  };
-}
-async function loadActiveFormOrThrow(where, organizationId) {
-  const form = "id" in where ? await formRepository.findByIdInOrg(where.id, organizationId) : await formRepository.findBySlugInOrg(organizationId, where.slug);
-  if (!form || form.status !== "ACTIVE") throw new NotFoundError("Form not found.");
-  return form;
-}
-var publicFormService = {
-  /** Backs the public `GET /public/forms/:slug` (and by-id) read used by the public site's actual form renderer — the Control Center's authoring UI already has its own authenticated read via formService.getForm. */
-  async getFormForRender(slugOrId) {
-    const organizationId = config.publicWebsiteOrganizationId;
-    if (!organizationId) throw new InfrastructureError("Public form intake is not configured.");
-    const form = await loadActiveFormOrThrow(slugOrId, organizationId);
-    return projectFormForPublic(form);
-  },
-  /**
-   * A non-empty `website` field (the honeypot) means the caller is almost
-   * certainly a bot — still resolves and returns the form's real
-   * successMessage (§8's "accepted-but-discarded" contract from
-   * publicLeadService), but writes nothing.
-   */
-  async submit(slug, input, meta = {}) {
-    const organizationId = config.publicWebsiteOrganizationId;
-    if (!organizationId) {
-      throw new InfrastructureError("Public form intake is not configured.");
-    }
-    const form = await formRepository.findBySlugInOrg(organizationId, slug);
-    if (!form || form.status !== "ACTIVE") {
-      throw new NotFoundError("Form not found.");
-    }
-    const successMessage = form.successMessage || DEFAULT_SUCCESS_MESSAGE;
-    if (input.website) {
-      return { successMessage };
-    }
-    const data = input.data;
-    const fields = form.fields;
-    let consentGiven = null;
-    for (const field of fields) {
-      const value = data[field.key];
-      const active = isFieldActive(field, data);
-      if (field.type === "multiselect") {
-        if (value !== void 0 && !Array.isArray(value)) throw new ValidationError(`"${field.label}" must be a list of values.`);
-      } else if (Array.isArray(value)) {
-        throw new ValidationError(`"${field.label}" must be a single value.`);
-      }
-      if (active && field.required) {
-        const isEmpty = value === void 0 || (typeof value === "string" ? !value.trim() : value.length === 0);
-        if (isEmpty) throw new ValidationError(`"${field.label}" is required.`);
-      }
-      if (value !== void 0 && (field.type === "select" || field.type === "radio") && typeof value === "string" && value) {
-        if (!field.options?.some((o) => o.value === value)) throw new ValidationError(`"${field.label}" has an invalid selection.`);
-      }
-      if (value !== void 0 && field.type === "multiselect" && Array.isArray(value)) {
-        const allowed = new Set((field.options ?? []).map((o) => o.value));
-        if (!value.every((v) => allowed.has(v))) throw new ValidationError(`"${field.label}" has an invalid selection.`);
-      }
-      if (value !== void 0 && field.type === "number" && typeof value === "string" && value.trim()) {
-        const n = Number(value);
-        if (Number.isNaN(n)) throw new ValidationError(`"${field.label}" must be a number.`);
-        if (field.min !== void 0 && n < field.min) throw new ValidationError(`"${field.label}" must be at least ${field.min}.`);
-        if (field.max !== void 0 && n > field.max) throw new ValidationError(`"${field.label}" must be at most ${field.max}.`);
-      }
-      if (field.type === "checkbox" && field.key === "consent") {
-        consentGiven = typeof value === "string" && (value === "true" || value === "on" || value === "yes");
-      }
-    }
-    const emailValue = typeof data.email === "string" ? data.email.trim() || void 0 : void 0;
-    const nameValue = typeof data.name === "string" ? data.name.trim() || void 0 : void 0;
-    const companyValue = typeof data.company === "string" ? data.company.trim() || void 0 : void 0;
-    const phoneValue = typeof data.phone === "string" ? data.phone.trim() || void 0 : void 0;
-    const sourceTag = `form:${form.slug}${input.utmSource ? `:${input.utmSource}` : ""}`;
-    const notes = buildNotes(form, fields, data, input, consentGiven);
-    let leadId;
-    if (emailValue) {
-      const existingLeads = await leadRepository.findByEmailInOrg(organizationId, emailValue);
-      if (existingLeads.length > 0) {
-        const existing = existingLeads[0];
-        const updated = await leadRepository.update(existing.id, {
-          contactName: nameValue ?? existing.contactName,
-          phone: phoneValue ?? existing.phone,
-          source: sourceTag,
-          notes: existing.notes ? `${existing.notes}
-
----
-
-${notes}` : notes
-        });
-        leadId = updated.id;
-      } else {
-        const lead = await leadRepository.create({
-          organizationId,
-          companyName: companyValue || nameValue || emailValue || "Website form submission",
-          contactName: nameValue,
-          email: emailValue,
-          phone: phoneValue,
-          source: sourceTag,
-          notes
-        });
-        leadId = lead.id;
-      }
-    } else {
-      const lead = await leadRepository.create({
-        organizationId,
-        companyName: companyValue || nameValue || "Website form submission",
-        contactName: nameValue,
-        phone: phoneValue,
-        source: sourceTag,
-        notes
-      });
-      leadId = lead.id;
-    }
-    const submission = await formRepository.createSubmission({
-      formId: form.id,
-      organizationId,
-      data: input.data,
-      utmSource: input.utmSource,
-      utmMedium: input.utmMedium,
-      utmCampaign: input.utmCampaign,
-      utmTerm: input.utmTerm,
-      utmContent: input.utmContent,
-      leadId,
-      ipAddress: meta.ip,
-      userAgent: meta.userAgent,
-      consentGiven: consentGiven ?? void 0,
-      landingPagePath: input.landingPagePath,
-      referrer: meta.referrer
-    });
-    await auditLogRepository.record({
-      organizationId,
-      actorType: "SYSTEM",
-      actorName: "Public Website",
-      action: "FORM_SUBMITTED",
-      resourceType: "form_submission",
-      resourceId: submission.id,
-      afterData: { formId: form.id, formSlug: form.slug, leadId },
-      ipAddress: meta.ip,
-      userAgent: meta.userAgent
-    });
-    const notifyUserIds = form.notifyUserIds ?? [];
-    for (const userId of notifyUserIds) {
-      await notificationService.notify({
-        organizationId,
-        userId,
-        type: "FORM_SUBMITTED",
-        title: `New submission: ${form.name}`,
-        message: nameValue || emailValue ? `From ${nameValue ?? emailValue}` : "A new form submission was received."
-      });
-    }
-    return { successMessage };
   }
 };
 
@@ -15452,6 +18402,7 @@ var publicLeadService = {
     if (!organizationId) {
       throw new InfrastructureError("Public lead intake is not configured.");
     }
+    const campaignId = await campaignAttributionService.resolveCampaignId(organizationId, input.utmCampaign);
     const lead = await leadRepository.create({
       organizationId,
       companyName: input.company || input.name,
@@ -15459,7 +18410,16 @@ var publicLeadService = {
       email: input.email,
       phone: input.phone,
       source: `website:${input.source}`,
-      notes: buildNotes2(input)
+      notes: buildNotes2(input),
+      utmSource: input.utmSource,
+      utmMedium: input.utmMedium,
+      utmCampaign: input.utmCampaign,
+      utmTerm: input.utmTerm,
+      utmContent: input.utmContent,
+      landingPagePath: input.landingPagePath,
+      referrer: meta.referrer,
+      consentGiven: true,
+      campaignId
     });
     await auditLogRepository.record({
       organizationId,
@@ -15472,53 +18432,137 @@ var publicLeadService = {
       ipAddress: meta.ip,
       userAgent: meta.userAgent
     });
+    try {
+      await eventEngine.emit({
+        eventType: "lead.created",
+        entityType: "lead",
+        entityId: lead.id,
+        organizationId,
+        actorType: "SYSTEM",
+        sourceModule: "CRM",
+        payload: { companyName: lead.companyName, source: lead.source, campaignId: campaignId ?? null }
+      });
+    } catch {
+    }
+    await analyticsEventService.recordBusinessEvent({
+      organizationId,
+      eventType: "lead_created",
+      entityType: "lead",
+      entityId: lead.id,
+      utmSource: input.utmSource,
+      utmMedium: input.utmMedium,
+      utmCampaign: input.utmCampaign,
+      utmTerm: input.utmTerm,
+      utmContent: input.utmContent,
+      campaignId,
+      path: input.landingPagePath,
+      referrer: meta.referrer
+    });
     return lead;
   }
 };
 
 // server/schemas/publicSchemas.ts
-import { z as z38 } from "zod";
+import { z as z41 } from "zod";
 var SORT_FIELDS10 = ["publishedAt", "createdAt", "title"];
-var listPublicPostsQuerySchema = z38.object({
-  page: z38.coerce.number().int().positive().default(1),
-  limit: z38.coerce.number().int().positive().max(50).default(12),
-  search: z38.string().trim().max(200).optional(),
-  category: z38.string().trim().max(150).optional(),
-  tag: z38.string().trim().max(150).optional(),
-  sort: z38.enum(SORT_FIELDS10).default("publishedAt"),
-  order: z38.enum(["asc", "desc"]).default("desc")
+var listPublicPostsQuerySchema = z41.object({
+  page: z41.coerce.number().int().positive().default(1),
+  limit: z41.coerce.number().int().positive().max(50).default(12),
+  search: z41.string().trim().max(200).optional(),
+  category: z41.string().trim().max(150).optional(),
+  tag: z41.string().trim().max(150).optional(),
+  sort: z41.enum(SORT_FIELDS10).default("publishedAt"),
+  order: z41.enum(["asc", "desc"]).default("desc")
 });
-var listPublicProductsQuerySchema = z38.object({
-  page: z38.coerce.number().int().positive().default(1),
-  limit: z38.coerce.number().int().positive().max(50).default(20),
-  search: z38.string().trim().max(200).optional(),
-  type: z38.enum(["PRODUCT", "SERVICE", "SOLUTION"]).optional(),
+var listPublicProductsQuerySchema = z41.object({
+  page: z41.coerce.number().int().positive().default(1),
+  limit: z41.coerce.number().int().positive().max(50).default(20),
+  search: z41.string().trim().max(200).optional(),
+  type: z41.enum(["PRODUCT", "SERVICE", "SOLUTION"]).optional(),
   // Phase 10 — filter by the real category/industry taxonomy, by slug
   // (never an internal id crossing the public boundary).
-  categorySlug: z38.string().trim().max(100).optional(),
-  industrySlug: z38.string().trim().max(100).optional()
+  categorySlug: z41.string().trim().max(100).optional(),
+  industrySlug: z41.string().trim().max(100).optional()
 });
-var publicNavigationMenuTypeSchema = z38.enum(["PRIMARY", "HEADER", "FOOTER", "MOBILE", "CUSTOM"]);
-var publicRedirectLookupQuerySchema = z38.object({
-  path: z38.string().trim().min(1).max(2048).refine((v) => v.startsWith("/") && !v.startsWith("//"), { message: "Must be a site-relative path starting with a single /." })
+var listPublicCaseStudiesQuerySchema = z41.object({
+  page: z41.coerce.number().int().positive().default(1),
+  limit: z41.coerce.number().int().positive().max(50).default(12),
+  search: z41.string().trim().max(200).optional(),
+  industrySlug: z41.string().trim().max(100).optional(),
+  productSlug: z41.string().trim().max(150).optional(),
+  sort: z41.enum(SORT_FIELDS10).default("publishedAt"),
+  order: z41.enum(["asc", "desc"]).default("desc")
 });
-var nonEmptyTrimmed = (max) => z38.string().trim().min(1).max(max);
-var createPublicLeadSchema = z38.object({
+var publicNavigationMenuTypeSchema = z41.enum(["PRIMARY", "HEADER", "FOOTER", "MOBILE", "CUSTOM"]);
+var publicRedirectLookupQuerySchema = z41.object({
+  path: z41.string().trim().min(1).max(2048).refine((v) => v.startsWith("/") && !v.startsWith("//"), { message: "Must be a site-relative path starting with a single /." })
+});
+var nonEmptyTrimmed = (max) => z41.string().trim().min(1).max(max);
+var createPublicLeadSchema = z41.object({
   name: nonEmptyTrimmed(200),
-  company: z38.string().trim().max(200).optional(),
-  email: z38.string().trim().email().max(320),
-  phone: z38.string().trim().max(50).optional(),
-  subject: z38.string().trim().max(200).optional(),
+  company: z41.string().trim().max(200).optional(),
+  email: z41.string().trim().email().max(320),
+  phone: z41.string().trim().max(50).optional(),
+  subject: z41.string().trim().max(200).optional(),
   message: nonEmptyTrimmed(5e3),
-  productInterest: z38.string().trim().max(200).optional(),
-  source: z38.enum(["contact_form", "product_inquiry", "project_brief", "other"]).default("contact_form"),
-  consent: z38.literal(true, { errorMap: () => ({ message: "Consent is required to submit this form." }) }),
-  website: z38.string().trim().max(200).optional()
+  productInterest: z41.string().trim().max(200).optional(),
+  source: z41.enum(["contact_form", "product_inquiry", "project_brief", "other"]).default("contact_form"),
+  consent: z41.literal(true, { errorMap: () => ({ message: "Consent is required to submit this form." }) }),
+  website: z41.string().trim().max(200).optional(),
+  // Phase 12 (CRM Integration) — same real attribution capture
+  // publicFormSubmitSchema already has for Control-Center-authored
+  // Forms, extended to this site's own hardcoded contact/brief form so
+  // every lead-capture surface records real source data, not just free text.
+  utmSource: z41.string().trim().max(200).optional(),
+  utmMedium: z41.string().trim().max(200).optional(),
+  utmCampaign: z41.string().trim().max(200).optional(),
+  utmTerm: z41.string().trim().max(200).optional(),
+  utmContent: z41.string().trim().max(200).optional(),
+  landingPagePath: z41.string().trim().max(500).optional()
+});
+
+// server/schemas/analyticsSchemas.ts
+import { z as z42 } from "zod";
+var publicAnalyticsEventSchema = z42.object({
+  eventType: z42.enum(PUBLIC_EVENT_TYPES),
+  path: z42.string().trim().max(500).optional(),
+  referrer: z42.string().trim().max(2e3).optional(),
+  sessionId: z42.string().trim().max(100).optional(),
+  utmSource: z42.string().trim().max(200).optional(),
+  utmMedium: z42.string().trim().max(200).optional(),
+  utmCampaign: z42.string().trim().max(200).optional(),
+  utmTerm: z42.string().trim().max(200).optional(),
+  utmContent: z42.string().trim().max(200).optional()
+});
+var dateRangeShape = {
+  from: z42.coerce.date().optional(),
+  to: z42.coerce.date().optional(),
+  compare: z42.coerce.boolean().optional().default(false)
+};
+var analyticsOverviewQuerySchema = z42.object(dateRangeShape);
+var analyticsTopPagesQuerySchema = z42.object({
+  ...dateRangeShape,
+  limit: z42.coerce.number().int().positive().max(50).default(10)
+});
+var REPORT_TYPES = [
+  "executive_summary",
+  "website_performance",
+  "content_performance",
+  "seo_report",
+  "lead_generation",
+  "crm_pipeline",
+  "campaign_performance",
+  "conversion_report",
+  "client_acquisition"
+];
+var reportQuerySchema = z42.object({
+  ...dateRangeShape,
+  format: z42.enum(["json", "csv"]).default("json")
 });
 
 // server/routes/v1/publicRoutes.ts
-var router40 = Router40();
-function requestMeta29(req) {
+var router43 = Router43();
+function requestMeta31(req) {
   const referrerHeader = req.headers["referer"];
   return {
     ip: req.ip,
@@ -15526,34 +18570,34 @@ function requestMeta29(req) {
     referrer: typeof referrerHeader === "string" ? referrerHeader.slice(0, 2e3) : void 0
   };
 }
-router40.get(
+router43.get(
   "/site",
   asyncHandler(async (_req, res) => {
     sendSuccess(res, { configured: publicSiteService.isConfigured() });
   })
 );
-router40.get(
+router43.get(
   "/site-settings",
   asyncHandler(async (_req, res) => {
     const settings = await publicSiteService.getSiteSettings();
     sendSuccess(res, { settings });
   })
 );
-router40.get(
+router43.get(
   "/pages/:slug",
   asyncHandler(async (req, res) => {
     const page = await publicSiteService.getPageBySlug(req.params.slug);
     sendSuccess(res, { page });
   })
 );
-router40.get(
+router43.get(
   "/homepage",
   asyncHandler(async (_req, res) => {
     const page = await publicSiteService.getHomepage();
     sendSuccess(res, { page });
   })
 );
-router40.get(
+router43.get(
   "/navigation-menus/:type",
   asyncHandler(async (req, res) => {
     const type = publicNavigationMenuTypeSchema.parse(req.params.type);
@@ -15561,7 +18605,7 @@ router40.get(
     sendSuccess(res, { menu });
   })
 );
-router40.get(
+router43.get(
   "/posts",
   asyncHandler(async (req, res) => {
     const query = listPublicPostsQuerySchema.parse(req.query);
@@ -15575,28 +18619,49 @@ router40.get(
     sendSuccess(res, { posts: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router40.get(
+router43.get(
   "/posts/:slug",
   asyncHandler(async (req, res) => {
     const post = await publicSiteService.getPostBySlug(req.params.slug);
     sendSuccess(res, { post });
   })
 );
-router40.get(
+router43.get(
+  "/case-studies",
+  asyncHandler(async (req, res) => {
+    const query = listPublicCaseStudiesQuerySchema.parse(req.query);
+    const { rows, total } = await publicSiteService.listCaseStudies(
+      { search: query.search, industrySlug: query.industrySlug, productSlug: query.productSlug },
+      query.page,
+      query.limit,
+      query.sort,
+      query.order
+    );
+    sendSuccess(res, { caseStudies: rows }, 200, { page: query.page, limit: query.limit, total });
+  })
+);
+router43.get(
+  "/case-studies/:slug",
+  asyncHandler(async (req, res) => {
+    const caseStudy = await publicSiteService.getCaseStudyBySlug(req.params.slug);
+    sendSuccess(res, { caseStudy });
+  })
+);
+router43.get(
   "/categories",
   asyncHandler(async (_req, res) => {
     const categories = await publicSiteService.listCategories();
     sendSuccess(res, { categories });
   })
 );
-router40.get(
+router43.get(
   "/tags",
   asyncHandler(async (_req, res) => {
     const tags = await publicSiteService.listTags();
     sendSuccess(res, { tags });
   })
 );
-router40.get(
+router43.get(
   "/products",
   asyncHandler(async (req, res) => {
     const query = listPublicProductsQuerySchema.parse(req.query);
@@ -15608,35 +18673,35 @@ router40.get(
     sendSuccess(res, { products: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router40.get(
+router43.get(
   "/product-categories",
   asyncHandler(async (_req, res) => {
     const categories = await publicProductService.listProductCategories();
     sendSuccess(res, { categories });
   })
 );
-router40.get(
+router43.get(
   "/industries",
   asyncHandler(async (_req, res) => {
     const industries = await publicProductService.listIndustries();
     sendSuccess(res, { industries });
   })
 );
-router40.get(
+router43.get(
   "/products/:slug",
   asyncHandler(async (req, res) => {
     const product = await publicProductService.getProductBySlug(req.params.slug);
     sendSuccess(res, { product });
   })
 );
-router40.get(
+router43.get(
   "/products/:slug/modules",
   asyncHandler(async (req, res) => {
     const modules = await publicProductService.getProductModules(req.params.slug);
     sendSuccess(res, { modules });
   })
 );
-router40.get(
+router43.get(
   "/redirects",
   asyncHandler(async (req, res) => {
     const query = publicRedirectLookupQuerySchema.parse(req.query);
@@ -15644,42 +18709,51 @@ router40.get(
     sendSuccess(res, { redirect });
   })
 );
-router40.post(
+router43.post(
   "/leads",
   publicLeadLimiter,
   asyncHandler(async (req, res) => {
     const input = createPublicLeadSchema.parse(req.body);
-    await publicLeadService.createLead(input, requestMeta29(req));
+    await publicLeadService.createLead(input, requestMeta31(req));
     sendSuccess(res, { message: "Thank you \u2014 your message has been received. We'll be in touch shortly." }, 201);
   })
 );
-router40.get(
+router43.get(
   "/forms/by-id/:id",
   asyncHandler(async (req, res) => {
     const form = await publicFormService.getFormForRender({ id: req.params.id });
     sendSuccess(res, { form });
   })
 );
-router40.get(
+router43.get(
   "/forms/:slug",
   asyncHandler(async (req, res) => {
     const form = await publicFormService.getFormForRender({ slug: req.params.slug });
     sendSuccess(res, { form });
   })
 );
-router40.post(
+router43.post(
   "/forms/:slug/submit",
   publicLeadLimiter,
   asyncHandler(async (req, res) => {
     const input = publicFormSubmitSchema.parse(req.body);
-    const { successMessage } = await publicFormService.submit(req.params.slug, input, requestMeta29(req));
+    const { successMessage } = await publicFormService.submit(req.params.slug, input, requestMeta31(req));
     sendSuccess(res, { message: successMessage }, 201);
   })
 );
-var publicRoutes_default = router40;
+router43.post(
+  "/analytics/events",
+  publicAnalyticsLimiter,
+  asyncHandler(async (req, res) => {
+    const input = publicAnalyticsEventSchema.parse(req.body);
+    await analyticsEventService.recordPublicEvent({ ...input, referrer: input.referrer ?? requestMeta31(req).referrer });
+    sendSuccess(res, { recorded: true }, 201);
+  })
+);
+var publicRoutes_default = router43;
 
 // server/routes/v1/aiProviderRoutes.ts
-import { Router as Router41 } from "express";
+import { Router as Router44 } from "express";
 
 // server/repositories/aiProviderRepository.ts
 var aiProviderRepository = {
@@ -15819,116 +18893,116 @@ var aiProviderService = {
 };
 
 // server/schemas/aiSchemas.ts
-import { z as z39 } from "zod";
-var createAiProviderSchema = z39.object({
-  code: z39.string().trim().min(1).max(50),
-  name: z39.string().trim().min(1).max(200),
-  status: z39.enum(["ACTIVE", "INACTIVE"]).optional(),
-  isDefault: z39.boolean().optional()
+import { z as z43 } from "zod";
+var createAiProviderSchema = z43.object({
+  code: z43.string().trim().min(1).max(50),
+  name: z43.string().trim().min(1).max(200),
+  status: z43.enum(["ACTIVE", "INACTIVE"]).optional(),
+  isDefault: z43.boolean().optional()
 });
-var updateAiProviderSchema = z39.object({
-  name: z39.string().trim().min(1).max(200).optional(),
-  status: z39.enum(["ACTIVE", "INACTIVE"]).optional(),
-  isDefault: z39.boolean().optional()
+var updateAiProviderSchema = z43.object({
+  name: z43.string().trim().min(1).max(200).optional(),
+  status: z43.enum(["ACTIVE", "INACTIVE"]).optional(),
+  isDefault: z43.boolean().optional()
 });
-var createAiModelSchema = z39.object({
-  providerId: z39.string().uuid(),
-  modelId: z39.string().trim().min(1).max(100),
-  displayName: z39.string().trim().min(1).max(200),
-  contextWindow: z39.number().int().positive().optional(),
-  supportsStructuredOutput: z39.boolean().optional(),
-  supportsToolCalling: z39.boolean().optional(),
-  inputPricePerMillionTokens: z39.number().nonnegative().optional(),
-  outputPricePerMillionTokens: z39.number().nonnegative().optional(),
-  isActive: z39.boolean().optional(),
-  isDefault: z39.boolean().optional()
+var createAiModelSchema = z43.object({
+  providerId: z43.string().uuid(),
+  modelId: z43.string().trim().min(1).max(100),
+  displayName: z43.string().trim().min(1).max(200),
+  contextWindow: z43.number().int().positive().optional(),
+  supportsStructuredOutput: z43.boolean().optional(),
+  supportsToolCalling: z43.boolean().optional(),
+  inputPricePerMillionTokens: z43.number().nonnegative().optional(),
+  outputPricePerMillionTokens: z43.number().nonnegative().optional(),
+  isActive: z43.boolean().optional(),
+  isDefault: z43.boolean().optional()
 });
 var updateAiModelSchema = createAiModelSchema.partial().omit({ providerId: true, modelId: true });
-var updateAiOrgToolSettingSchema = z39.object({
-  enabled: z39.boolean().optional(),
-  requireApprovalOverride: z39.boolean().nullable().optional()
+var updateAiOrgToolSettingSchema = z43.object({
+  enabled: z43.boolean().optional(),
+  requireApprovalOverride: z43.boolean().nullable().optional()
 });
 var PROMPT_SORT_FIELDS = ["key", "name", "status", "createdAt", "updatedAt"];
-var listAiPromptsQuerySchema = z39.object(paginationQuerySchema(PROMPT_SORT_FIELDS, "createdAt", "desc"));
-var createAiPromptTemplateSchema = z39.object({
-  key: z39.string().trim().min(1).max(100).regex(/^[a-z0-9._-]+$/, "key must be lowercase, URL-safe (letters, numbers, dots, hyphens, underscores)"),
-  name: z39.string().trim().min(1).max(200),
-  purpose: z39.string().trim().max(1e3).optional(),
-  systemInstructions: z39.string().trim().min(1).max(2e4),
-  userTemplate: z39.string().trim().min(1).max(2e4),
-  variablesSchema: z39.record(z39.unknown()).optional()
+var listAiPromptsQuerySchema = z43.object(paginationQuerySchema(PROMPT_SORT_FIELDS, "createdAt", "desc"));
+var createAiPromptTemplateSchema = z43.object({
+  key: z43.string().trim().min(1).max(100).regex(/^[a-z0-9._-]+$/, "key must be lowercase, URL-safe (letters, numbers, dots, hyphens, underscores)"),
+  name: z43.string().trim().min(1).max(200),
+  purpose: z43.string().trim().max(1e3).optional(),
+  systemInstructions: z43.string().trim().min(1).max(2e4),
+  userTemplate: z43.string().trim().min(1).max(2e4),
+  variablesSchema: z43.record(z43.unknown()).optional()
 });
-var createAiPromptVersionSchema = z39.object({
-  systemInstructions: z39.string().trim().min(1).max(2e4),
-  userTemplate: z39.string().trim().min(1).max(2e4),
-  variablesSchema: z39.record(z39.unknown()).optional()
+var createAiPromptVersionSchema = z43.object({
+  systemInstructions: z43.string().trim().min(1).max(2e4),
+  userTemplate: z43.string().trim().min(1).max(2e4),
+  variablesSchema: z43.record(z43.unknown()).optional()
 });
-var updateAiPromptTemplateSchema = z39.object({
-  name: z39.string().trim().min(1).max(200).optional(),
-  purpose: z39.string().trim().max(1e3).nullable().optional(),
-  status: z39.enum(["DRAFT", "ACTIVE", "ARCHIVED"]).optional()
+var updateAiPromptTemplateSchema = z43.object({
+  name: z43.string().trim().min(1).max(200).optional(),
+  purpose: z43.string().trim().max(1e3).nullable().optional(),
+  status: z43.enum(["DRAFT", "ACTIVE", "ARCHIVED"]).optional()
 });
-var publishAiPromptVersionSchema = z39.object({
-  versionId: z39.string().uuid()
+var publishAiPromptVersionSchema = z43.object({
+  versionId: z43.string().uuid()
 });
 var WORKFLOW_SORT_FIELDS = ["key", "name", "status", "createdAt", "updatedAt"];
-var listAiWorkflowsQuerySchema = z39.object(paginationQuerySchema(WORKFLOW_SORT_FIELDS, "createdAt", "desc"));
-var workflowStepSchema = z39.object({
-  order: z39.number().int().nonnegative(),
-  toolCode: z39.string().trim().min(1).max(100),
-  description: z39.string().trim().max(500).optional()
+var listAiWorkflowsQuerySchema = z43.object(paginationQuerySchema(WORKFLOW_SORT_FIELDS, "createdAt", "desc"));
+var workflowStepSchema = z43.object({
+  order: z43.number().int().nonnegative(),
+  toolCode: z43.string().trim().min(1).max(100),
+  description: z43.string().trim().max(500).optional()
 });
-var createAiWorkflowSchema = z39.object({
-  key: z39.string().trim().min(1).max(100).regex(/^[a-z0-9._-]+$/, "key must be lowercase, URL-safe (letters, numbers, dots, hyphens, underscores)"),
-  name: z39.string().trim().min(1).max(200),
-  description: z39.string().trim().max(2e3).optional(),
-  steps: z39.array(workflowStepSchema).min(1).max(10),
-  maxSteps: z39.number().int().positive().max(10).optional(),
-  timeoutMs: z39.number().int().positive().max(12e4).optional()
+var createAiWorkflowSchema = z43.object({
+  key: z43.string().trim().min(1).max(100).regex(/^[a-z0-9._-]+$/, "key must be lowercase, URL-safe (letters, numbers, dots, hyphens, underscores)"),
+  name: z43.string().trim().min(1).max(200),
+  description: z43.string().trim().max(2e3).optional(),
+  steps: z43.array(workflowStepSchema).min(1).max(10),
+  maxSteps: z43.number().int().positive().max(10).optional(),
+  timeoutMs: z43.number().int().positive().max(12e4).optional()
 });
-var updateAiWorkflowSchema = z39.object({
-  name: z39.string().trim().min(1).max(200).optional(),
-  description: z39.string().trim().max(2e3).nullable().optional(),
-  steps: z39.array(workflowStepSchema).min(1).max(10).optional(),
-  maxSteps: z39.number().int().positive().max(10).optional(),
-  timeoutMs: z39.number().int().positive().max(12e4).optional(),
+var updateAiWorkflowSchema = z43.object({
+  name: z43.string().trim().min(1).max(200).optional(),
+  description: z43.string().trim().max(2e3).nullable().optional(),
+  steps: z43.array(workflowStepSchema).min(1).max(10).optional(),
+  maxSteps: z43.number().int().positive().max(10).optional(),
+  timeoutMs: z43.number().int().positive().max(12e4).optional(),
   expectedUpdatedAt: expectedUpdatedAtSchema2
 });
-var executeAiWorkflowSchema = z39.object({
+var executeAiWorkflowSchema = z43.object({
   /** Keyed by step order — each step's tool input, supplied by the caller (Phase 12 has no autonomous planning, see AIWorkflow's schema.prisma doc comment). */
-  stepInputs: z39.record(z39.string(), z39.record(z39.unknown())).default({})
+  stepInputs: z43.record(z43.string(), z43.record(z43.unknown())).default({})
 });
-var executeAiToolSchema = z39.object({
-  toolCode: z39.string().trim().min(1).max(100),
-  input: z39.record(z39.unknown()).default({})
+var executeAiToolSchema = z43.object({
+  toolCode: z43.string().trim().min(1).max(100),
+  input: z43.record(z43.unknown()).default({})
 });
 var EXECUTION_SORT_FIELDS = ["createdAt", "startedAt", "status"];
-var listAiExecutionsQuerySchema = z39.object({
+var listAiExecutionsQuerySchema = z43.object({
   ...paginationQuerySchema(EXECUTION_SORT_FIELDS, "createdAt", "desc"),
-  kind: z39.enum(["TOOL_CALL", "WORKFLOW"]).optional(),
-  status: z39.enum(["PENDING", "RUNNING", "AWAITING_APPROVAL", "COMPLETED", "FAILED", "CANCELLED"]).optional()
+  kind: z43.enum(["TOOL_CALL", "WORKFLOW"]).optional(),
+  status: z43.enum(["PENDING", "RUNNING", "AWAITING_APPROVAL", "COMPLETED", "FAILED", "CANCELLED"]).optional()
 });
-var usageSummaryQuerySchema = z39.object({
-  dateFrom: z39.coerce.date().optional(),
-  dateTo: z39.coerce.date().optional()
+var usageSummaryQuerySchema = z43.object({
+  dateFrom: z43.coerce.date().optional(),
+  dateTo: z43.coerce.date().optional()
 });
 var APPROVAL_SORT_FIELDS = ["createdAt", "expiresAt", "status"];
-var listAiApprovalsQuerySchema = z39.object({
+var listAiApprovalsQuerySchema = z43.object({
   ...paginationQuerySchema(APPROVAL_SORT_FIELDS, "createdAt", "desc"),
-  status: z39.enum(["PENDING", "APPROVED", "REJECTED", "EXPIRED"]).optional()
+  status: z43.enum(["PENDING", "APPROVED", "REJECTED", "EXPIRED"]).optional()
 });
-var decideAiApprovalSchema = z39.object({
-  decision: z39.enum(["APPROVE", "REJECT"]),
-  rejectionReason: z39.string().trim().max(2e3).optional()
+var decideAiApprovalSchema = z43.object({
+  decision: z43.enum(["APPROVE", "REJECT"]),
+  rejectionReason: z43.string().trim().max(2e3).optional()
 });
 
 // server/routes/v1/aiProviderRoutes.ts
-var router41 = Router41();
-router41.use(authenticateToken);
-function requestMeta30(req) {
+var router44 = Router44();
+router44.use(authenticateToken);
+function requestMeta32(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"], requestId: req.requestId };
 }
-router41.get(
+router44.get(
   "/",
   requirePermission("ai.providers.read"),
   asyncHandler(async (_req, res) => {
@@ -15936,25 +19010,25 @@ router41.get(
     sendSuccess(res, { providers });
   })
 );
-router41.post(
+router44.post(
   "/",
   requirePermission("ai.providers.manage"),
   asyncHandler(async (req, res) => {
     const input = createAiProviderSchema.parse(req.body);
-    const provider = await aiProviderService.createProvider(req.user, input, requestMeta30(req));
+    const provider = await aiProviderService.createProvider(req.user, input, requestMeta32(req));
     sendSuccess(res, { provider }, 201);
   })
 );
-router41.patch(
+router44.patch(
   "/:id",
   requirePermission("ai.providers.manage"),
   asyncHandler(async (req, res) => {
     const input = updateAiProviderSchema.parse(req.body);
-    const provider = await aiProviderService.updateProvider(req.user, req.params.id, input, requestMeta30(req));
+    const provider = await aiProviderService.updateProvider(req.user, req.params.id, input, requestMeta32(req));
     sendSuccess(res, { provider });
   })
 );
-router41.get(
+router44.get(
   "/models",
   requirePermission("ai.models.read"),
   asyncHandler(async (req, res) => {
@@ -15963,28 +19037,28 @@ router41.get(
     sendSuccess(res, { models });
   })
 );
-router41.post(
+router44.post(
   "/models",
   requirePermission("ai.models.manage"),
   asyncHandler(async (req, res) => {
     const input = createAiModelSchema.parse(req.body);
-    const model = await aiProviderService.createModel(req.user, input, requestMeta30(req));
+    const model = await aiProviderService.createModel(req.user, input, requestMeta32(req));
     sendSuccess(res, { model }, 201);
   })
 );
-router41.patch(
+router44.patch(
   "/models/:id",
   requirePermission("ai.models.manage"),
   asyncHandler(async (req, res) => {
     const input = updateAiModelSchema.parse(req.body);
-    const model = await aiProviderService.updateModel(req.user, req.params.id, input, requestMeta30(req));
+    const model = await aiProviderService.updateModel(req.user, req.params.id, input, requestMeta32(req));
     sendSuccess(res, { model });
   })
 );
-var aiProviderRoutes_default = router41;
+var aiProviderRoutes_default = router44;
 
 // server/routes/v1/aiToolRoutes.ts
-import { Router as Router42 } from "express";
+import { Router as Router45 } from "express";
 
 // server/repositories/aiToolRepository.ts
 var aiToolRepository = {
@@ -16045,12 +19119,12 @@ var aiToolService = {
 };
 
 // server/routes/v1/aiToolRoutes.ts
-var router42 = Router42();
-router42.use(authenticateToken);
-function requestMeta31(req) {
+var router45 = Router45();
+router45.use(authenticateToken);
+function requestMeta33(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"], requestId: req.requestId };
 }
-router42.get(
+router45.get(
   "/",
   requirePermission("ai.tools.read"),
   asyncHandler(async (req, res) => {
@@ -16058,19 +19132,19 @@ router42.get(
     sendSuccess(res, { tools });
   })
 );
-router42.patch(
+router45.patch(
   "/:code/settings",
   requirePermission("ai.tools.manage"),
   asyncHandler(async (req, res) => {
     const input = updateAiOrgToolSettingSchema.parse(req.body);
-    const setting = await aiToolService.updateOrgSetting(req.user, req.params.code, input, requestMeta31(req));
+    const setting = await aiToolService.updateOrgSetting(req.user, req.params.code, input, requestMeta33(req));
     sendSuccess(res, { setting });
   })
 );
-var aiToolRoutes_default = router42;
+var aiToolRoutes_default = router45;
 
 // server/routes/v1/aiPromptRoutes.ts
-import { Router as Router43 } from "express";
+import { Router as Router46 } from "express";
 
 // server/repositories/aiPromptRepository.ts
 var aiPromptRepository = {
@@ -16264,12 +19338,12 @@ var aiPromptService = {
 };
 
 // server/routes/v1/aiPromptRoutes.ts
-var router43 = Router43();
-router43.use(authenticateToken);
-function requestMeta32(req) {
+var router46 = Router46();
+router46.use(authenticateToken);
+function requestMeta34(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"], requestId: req.requestId };
 }
-router43.get(
+router46.get(
   "/",
   requirePermission("ai.prompts.read"),
   asyncHandler(async (req, res) => {
@@ -16285,7 +19359,7 @@ router43.get(
     sendSuccess(res, { promptTemplates: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router43.get(
+router46.get(
   "/:id",
   requirePermission("ai.prompts.read"),
   asyncHandler(async (req, res) => {
@@ -16293,54 +19367,54 @@ router43.get(
     sendSuccess(res, { promptTemplate });
   })
 );
-router43.post(
+router46.post(
   "/",
   requirePermission("ai.prompts.create"),
   asyncHandler(async (req, res) => {
     const input = createAiPromptTemplateSchema.parse(req.body);
-    const promptTemplate = await aiPromptService.createTemplate(req.user, input, requestMeta32(req));
+    const promptTemplate = await aiPromptService.createTemplate(req.user, input, requestMeta34(req));
     sendSuccess(res, { promptTemplate }, 201);
   })
 );
-router43.patch(
+router46.patch(
   "/:id",
   requirePermission("ai.prompts.update"),
   asyncHandler(async (req, res) => {
     const input = updateAiPromptTemplateSchema.parse(req.body);
-    const promptTemplate = await aiPromptService.updateTemplate(req.user, req.params.id, input, requestMeta32(req));
+    const promptTemplate = await aiPromptService.updateTemplate(req.user, req.params.id, input, requestMeta34(req));
     sendSuccess(res, { promptTemplate });
   })
 );
-router43.post(
+router46.post(
   "/:id/versions",
   requirePermission("ai.prompts.update"),
   asyncHandler(async (req, res) => {
     const input = createAiPromptVersionSchema.parse(req.body);
-    const version = await aiPromptService.createVersion(req.user, req.params.id, input, requestMeta32(req));
+    const version = await aiPromptService.createVersion(req.user, req.params.id, input, requestMeta34(req));
     sendSuccess(res, { version }, 201);
   })
 );
-router43.post(
+router46.post(
   "/:id/publish",
   requirePermission("ai.prompts.publish"),
   asyncHandler(async (req, res) => {
     const input = publishAiPromptVersionSchema.parse(req.body);
-    const promptTemplate = await aiPromptService.publishVersion(req.user, req.params.id, input.versionId, requestMeta32(req));
+    const promptTemplate = await aiPromptService.publishVersion(req.user, req.params.id, input.versionId, requestMeta34(req));
     sendSuccess(res, { promptTemplate });
   })
 );
-router43.delete(
+router46.delete(
   "/:id",
   requirePermission("ai.prompts.delete"),
   asyncHandler(async (req, res) => {
-    await aiPromptService.deleteTemplate(req.user, req.params.id, requestMeta32(req));
+    await aiPromptService.deleteTemplate(req.user, req.params.id, requestMeta34(req));
     sendSuccess(res, { archived: true });
   })
 );
-var aiPromptRoutes_default = router43;
+var aiPromptRoutes_default = router46;
 
 // server/routes/v1/aiWorkflowRoutes.ts
-import { Router as Router44 } from "express";
+import { Router as Router47 } from "express";
 
 // server/repositories/aiWorkflowRepository.ts
 var aiWorkflowRepository = {
@@ -16443,70 +19517,70 @@ var aiExecutionRepository = {
 };
 
 // server/ai/governance.ts
-import crypto from "crypto";
-import { Prisma as Prisma6 } from "@prisma/client";
+import crypto2 from "crypto";
+import { Prisma as Prisma7 } from "@prisma/client";
 
 // server/ai/toolRegistry.ts
-import { z as z40 } from "zod";
+import { z as z44 } from "zod";
 function tool(def) {
   return def;
 }
-var listLeadsInput = z40.object({
-  search: z40.string().trim().max(200).optional(),
-  status: z40.enum(["NEW", "CONTACTED", "QUALIFIED", "CONVERTED", "LOST"]).optional(),
-  page: z40.number().int().positive().default(1),
-  limit: z40.number().int().positive().max(50).default(20)
+var listLeadsInput = z44.object({
+  search: z44.string().trim().max(200).optional(),
+  status: z44.enum(["NEW", "CONTACTED", "QUALIFIED", "CONVERTED", "LOST"]).optional(),
+  page: z44.number().int().positive().default(1),
+  limit: z44.number().int().positive().max(50).default(20)
 });
-var createLeadInput = z40.object({
-  companyName: z40.string().trim().min(1).max(200),
-  contactName: z40.string().trim().max(200).optional(),
-  email: z40.string().trim().email().max(255).optional(),
-  phone: z40.string().trim().max(50).optional(),
-  source: z40.string().trim().max(100).optional(),
-  notes: z40.string().trim().max(5e3).optional()
+var createLeadInput = z44.object({
+  companyName: z44.string().trim().min(1).max(200),
+  contactName: z44.string().trim().max(200).optional(),
+  email: z44.string().trim().email().max(255).optional(),
+  phone: z44.string().trim().max(50).optional(),
+  source: z44.string().trim().max(100).optional(),
+  notes: z44.string().trim().max(5e3).optional()
 });
-var convertLeadInput = z40.object({
-  leadId: z40.string().uuid(),
-  clientCode: z40.string().trim().min(1).max(50).regex(/^[A-Za-z0-9._-]+$/),
-  name: z40.string().trim().max(200).optional(),
-  createContact: z40.boolean().default(true)
+var convertLeadInput = z44.object({
+  leadId: z44.string().uuid(),
+  clientCode: z44.string().trim().min(1).max(50).regex(/^[A-Za-z0-9._-]+$/),
+  name: z44.string().trim().max(200).optional(),
+  createContact: z44.boolean().default(true)
 });
-var listClientsInput = z40.object({
-  search: z40.string().trim().max(200).optional(),
-  status: z40.enum(["ACTIVE", "INACTIVE", "ARCHIVED"]).optional(),
-  page: z40.number().int().positive().default(1),
-  limit: z40.number().int().positive().max(50).default(20)
+var listClientsInput = z44.object({
+  search: z44.string().trim().max(200).optional(),
+  status: z44.enum(["ACTIVE", "INACTIVE", "ARCHIVED"]).optional(),
+  page: z44.number().int().positive().default(1),
+  limit: z44.number().int().positive().max(50).default(20)
 });
-var createClientInput = z40.object({
-  clientCode: z40.string().trim().min(1).max(50).regex(/^[A-Za-z0-9._-]+$/),
-  name: z40.string().trim().min(1).max(200),
-  email: z40.string().trim().email().max(255).optional(),
-  phone: z40.string().trim().max(50).optional(),
-  notes: z40.string().trim().max(5e3).optional()
+var createClientInput = z44.object({
+  clientCode: z44.string().trim().min(1).max(50).regex(/^[A-Za-z0-9._-]+$/),
+  name: z44.string().trim().min(1).max(200),
+  email: z44.string().trim().email().max(255).optional(),
+  phone: z44.string().trim().max(50).optional(),
+  notes: z44.string().trim().max(5e3).optional()
 });
-var listPostsInput = z40.object({
-  search: z40.string().trim().max(200).optional(),
-  status: z40.enum(["DRAFT", "IN_REVIEW", "SCHEDULED", "PUBLISHED", "ARCHIVED"]).optional(),
-  page: z40.number().int().positive().default(1),
-  limit: z40.number().int().positive().max(50).default(20)
+var listPostsInput = z44.object({
+  search: z44.string().trim().max(200).optional(),
+  status: z44.enum(["DRAFT", "IN_REVIEW", "SCHEDULED", "PUBLISHED", "ARCHIVED"]).optional(),
+  page: z44.number().int().positive().default(1),
+  limit: z44.number().int().positive().max(50).default(20)
 });
-var createDraftPostInput = z40.object({
-  title: z40.string().trim().min(1).max(200),
-  body: z40.string().trim().max(5e5).default(""),
-  categoryId: z40.string().trim().uuid().optional()
+var createDraftPostInput = z44.object({
+  title: z44.string().trim().min(1).max(200),
+  body: z44.string().trim().max(5e5).default(""),
+  categoryId: z44.string().trim().uuid().optional()
 });
-var listProductsInput = z40.object({
-  search: z40.string().trim().max(200).optional(),
-  type: z40.enum(["PRODUCT", "SERVICE"]).optional(),
-  status: z40.enum(["DRAFT", "ACTIVE", "INACTIVE", "ARCHIVED"]).optional(),
-  page: z40.number().int().positive().default(1),
-  limit: z40.number().int().positive().max(50).default(20)
+var listProductsInput = z44.object({
+  search: z44.string().trim().max(200).optional(),
+  type: z44.enum(["PRODUCT", "SERVICE"]).optional(),
+  status: z44.enum(["DRAFT", "ACTIVE", "INACTIVE", "ARCHIVED"]).optional(),
+  page: z44.number().int().positive().default(1),
+  limit: z44.number().int().positive().max(50).default(20)
 });
-var issueInvoiceInput = z40.object({
-  invoiceId: z40.string().uuid()
+var issueInvoiceInput = z44.object({
+  invoiceId: z44.string().uuid()
 });
-var activateContractInput = z40.object({
-  contractId: z40.string().uuid()
+var activateContractInput = z44.object({
+  contractId: z44.string().uuid()
 });
 var AI_TOOL_REGISTRY = Object.freeze({
   "leads.list": tool({
@@ -16645,7 +19719,7 @@ function hasPermission(caller, permission) {
   return caller.role.key === SUPER_ADMIN_ROLE_KEY2 || caller.role.permissions.includes(permission);
 }
 function payloadHash(input) {
-  return crypto.createHash("sha256").update(JSON.stringify(input ?? {})).digest("hex");
+  return crypto2.createHash("sha256").update(JSON.stringify(input ?? {})).digest("hex");
 }
 function resolveRequiresApproval(definition, orgOverride) {
   if (definition.riskLevel === "HIGH") return true;
@@ -16747,7 +19821,7 @@ async function runToolHandler(definition, caller, validatedInput, meta, toolExec
       where: { id: toolExecutionId },
       data: {
         status: "COMPLETED",
-        output: output === void 0 ? Prisma6.JsonNull : output,
+        output: output === void 0 ? Prisma7.JsonNull : output,
         completedAt,
         durationMs: completedAt.getTime() - startedAt.getTime()
       }
@@ -16950,12 +20024,12 @@ var aiWorkflowService = {
 };
 
 // server/routes/v1/aiWorkflowRoutes.ts
-var router44 = Router44();
-router44.use(authenticateToken);
-function requestMeta33(req) {
+var router47 = Router47();
+router47.use(authenticateToken);
+function requestMeta35(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"], requestId: req.requestId };
 }
-router44.get(
+router47.get(
   "/",
   requirePermission("ai.workflows.read"),
   asyncHandler(async (req, res) => {
@@ -16971,7 +20045,7 @@ router44.get(
     sendSuccess(res, { workflows: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router44.get(
+router47.get(
   "/:id",
   requirePermission("ai.workflows.read"),
   asyncHandler(async (req, res) => {
@@ -16979,54 +20053,54 @@ router44.get(
     sendSuccess(res, { workflow });
   })
 );
-router44.post(
+router47.post(
   "/",
   requirePermission("ai.workflows.create"),
   asyncHandler(async (req, res) => {
     const input = createAiWorkflowSchema.parse(req.body);
-    const workflow = await aiWorkflowService.createWorkflow(req.user, input, requestMeta33(req));
+    const workflow = await aiWorkflowService.createWorkflow(req.user, input, requestMeta35(req));
     sendSuccess(res, { workflow }, 201);
   })
 );
-router44.patch(
+router47.patch(
   "/:id",
   requirePermission("ai.workflows.update"),
   asyncHandler(async (req, res) => {
     const input = updateAiWorkflowSchema.parse(req.body);
-    const workflow = await aiWorkflowService.updateWorkflow(req.user, req.params.id, input, requestMeta33(req));
+    const workflow = await aiWorkflowService.updateWorkflow(req.user, req.params.id, input, requestMeta35(req));
     sendSuccess(res, { workflow });
   })
 );
-router44.post(
+router47.post(
   "/:id/publish",
   requirePermission("ai.workflows.publish"),
   asyncHandler(async (req, res) => {
-    const workflow = await aiWorkflowService.publishWorkflow(req.user, req.params.id, requestMeta33(req));
+    const workflow = await aiWorkflowService.publishWorkflow(req.user, req.params.id, requestMeta35(req));
     sendSuccess(res, { workflow });
   })
 );
-router44.delete(
+router47.delete(
   "/:id",
   requirePermission("ai.workflows.delete"),
   asyncHandler(async (req, res) => {
-    const workflow = await aiWorkflowService.archiveWorkflow(req.user, req.params.id, requestMeta33(req));
+    const workflow = await aiWorkflowService.archiveWorkflow(req.user, req.params.id, requestMeta35(req));
     sendSuccess(res, { workflow });
   })
 );
-router44.post(
+router47.post(
   "/:id/execute",
   requirePermission("ai.workflows.execute"),
   aiExecutionLimiter,
   asyncHandler(async (req, res) => {
     const input = executeAiWorkflowSchema.parse(req.body);
-    const execution = await aiWorkflowService.executeWorkflow(req.user, req.params.id, input, requestMeta33(req));
+    const execution = await aiWorkflowService.executeWorkflow(req.user, req.params.id, input, requestMeta35(req));
     sendSuccess(res, { execution }, 202);
   })
 );
-var aiWorkflowRoutes_default = router44;
+var aiWorkflowRoutes_default = router47;
 
 // server/routes/v1/aiExecutionRoutes.ts
-import { Router as Router45 } from "express";
+import { Router as Router48 } from "express";
 
 // server/services/aiExecutionService.ts
 var aiExecutionService = {
@@ -17066,12 +20140,12 @@ var aiExecutionService = {
 };
 
 // server/routes/v1/aiExecutionRoutes.ts
-var router45 = Router45();
-router45.use(authenticateToken);
-function requestMeta34(req) {
+var router48 = Router48();
+router48.use(authenticateToken);
+function requestMeta36(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"], requestId: req.requestId };
 }
-router45.get(
+router48.get(
   "/",
   requirePermission("ai.executions.read"),
   asyncHandler(async (req, res) => {
@@ -17087,7 +20161,7 @@ router45.get(
     sendSuccess(res, { executions: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router45.get(
+router48.get(
   "/:id",
   requirePermission("ai.executions.read"),
   asyncHandler(async (req, res) => {
@@ -17095,7 +20169,7 @@ router45.get(
     sendSuccess(res, { execution });
   })
 );
-router45.post(
+router48.post(
   "/tool-call",
   // Reuses ai.workflows.execute — "can invoke governed AI actions" is one
   // capability whether the call is wrapped in a workflow or made directly;
@@ -17105,14 +20179,14 @@ router45.post(
   aiExecutionLimiter,
   asyncHandler(async (req, res) => {
     const input = executeAiToolSchema.parse(req.body);
-    const execution = await aiExecutionService.executeTool(req.user, input, requestMeta34(req));
+    const execution = await aiExecutionService.executeTool(req.user, input, requestMeta36(req));
     sendSuccess(res, { execution }, 202);
   })
 );
-var aiExecutionRoutes_default = router45;
+var aiExecutionRoutes_default = router48;
 
 // server/routes/v1/aiUsageRoutes.ts
-import { Router as Router46 } from "express";
+import { Router as Router49 } from "express";
 
 // server/repositories/aiUsageRepository.ts
 var aiUsageRepository = {
@@ -17173,10 +20247,10 @@ var aiUsageService = {
 };
 
 // server/routes/v1/aiUsageRoutes.ts
-var router46 = Router46();
-router46.use(authenticateToken);
-router46.use(requirePermission("ai.usage.read"));
-router46.get(
+var router49 = Router49();
+router49.use(authenticateToken);
+router49.use(requirePermission("ai.usage.read"));
+router49.get(
   "/",
   asyncHandler(async (req, res) => {
     const query = usageSummaryQuerySchema.parse(req.query);
@@ -17184,7 +20258,7 @@ router46.get(
     sendSuccess(res, { usageRecords: records });
   })
 );
-router46.get(
+router49.get(
   "/summary",
   asyncHandler(async (req, res) => {
     const query = usageSummaryQuerySchema.parse(req.query);
@@ -17192,13 +20266,13 @@ router46.get(
     sendSuccess(res, { summary });
   })
 );
-var aiUsageRoutes_default = router46;
+var aiUsageRoutes_default = router49;
 
 // server/routes/v1/aiApprovalRoutes.ts
-import { Router as Router47 } from "express";
+import { Router as Router50 } from "express";
 
 // server/services/aiApprovalService.ts
-import crypto2 from "crypto";
+import crypto3 from "crypto";
 
 // server/repositories/aiApprovalRepository.ts
 var aiApprovalRepository = {
@@ -17244,7 +20318,7 @@ var aiApprovalRepository = {
 
 // server/services/aiApprovalService.ts
 function payloadHash2(input) {
-  return crypto2.createHash("sha256").update(JSON.stringify(input ?? {})).digest("hex");
+  return crypto3.createHash("sha256").update(JSON.stringify(input ?? {})).digest("hex");
 }
 var aiApprovalService = {
   async listApprovals(organizationId, filters, page, limit, sort, order) {
@@ -17321,12 +20395,12 @@ var aiApprovalService = {
 };
 
 // server/routes/v1/aiApprovalRoutes.ts
-var router47 = Router47();
-router47.use(authenticateToken);
-function requestMeta35(req) {
+var router50 = Router50();
+router50.use(authenticateToken);
+function requestMeta37(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"], requestId: req.requestId };
 }
-router47.get(
+router50.get(
   "/",
   requirePermission("ai.approvals.read"),
   asyncHandler(async (req, res) => {
@@ -17342,7 +20416,7 @@ router47.get(
     sendSuccess(res, { approvals: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router47.get(
+router50.get(
   "/:id",
   requirePermission("ai.approvals.read"),
   asyncHandler(async (req, res) => {
@@ -17350,20 +20424,20 @@ router47.get(
     sendSuccess(res, { approval });
   })
 );
-router47.post(
+router50.post(
   "/:id/decide",
   requirePermission("ai.approvals.decide"),
   asyncHandler(async (req, res) => {
     const input = decideAiApprovalSchema.parse(req.body);
-    const approval = await aiApprovalService.decide(req.user, req.params.id, input, requestMeta35(req));
+    const approval = await aiApprovalService.decide(req.user, req.params.id, input, requestMeta37(req));
     sendSuccess(res, { approval });
   })
 );
-var aiApprovalRoutes_default = router47;
+var aiApprovalRoutes_default = router50;
 
 // server/routes/v1/automationRoutes.ts
-import { Router as Router48 } from "express";
-import { z as z43 } from "zod";
+import { Router as Router51 } from "express";
+import { z as z47 } from "zod";
 
 // server/services/automation/AutomationService.ts
 import crypto11 from "node:crypto";
@@ -17538,165 +20612,8 @@ var ConditionEngine = class {
   }
 };
 
-// server/services/automation/EventEngine.ts
-import crypto3 from "node:crypto";
-var EventEngine = class _EventEngine {
-  constructor() {
-    this.eventRegistry = /* @__PURE__ */ new Map();
-    this.listeners = [];
-    this.registerStandardEvents();
-  }
-  static getInstance() {
-    if (!_EventEngine.instance) {
-      _EventEngine.instance = new _EventEngine();
-    }
-    return _EventEngine.instance;
-  }
-  /**
-   * Registers default Artify business event types.
-   */
-  registerStandardEvents() {
-    const standardEvents = [
-      // CRM & Clients
-      { eventType: "client.created", entityType: "client", sourceModule: "CRM", description: "Triggered when a new client record is created" },
-      { eventType: "client.updated", entityType: "client", sourceModule: "CRM", description: "Triggered when client details are updated" },
-      { eventType: "client.onboarded", entityType: "client", sourceModule: "ONBOARDING", description: "Triggered when client onboarding is completed" },
-      // Projects
-      { eventType: "project.created", entityType: "project", sourceModule: "PROJECTS", description: "Triggered when a new client project is initiated" },
-      { eventType: "project.status_changed", entityType: "project", sourceModule: "PROJECTS", description: "Triggered when project workflow status changes" },
-      // Products & Catalog
-      { eventType: "product.created", entityType: "product", sourceModule: "CATALOG", description: "Triggered when a new service/product is added" },
-      { eventType: "product.updated", entityType: "product", sourceModule: "CATALOG", description: "Triggered when a product/service is updated" },
-      // Commercial & Billing
-      { eventType: "invoice.created", entityType: "invoice", sourceModule: "BILLING", description: "Triggered when a new invoice is created" },
-      { eventType: "invoice.overdue", entityType: "invoice", sourceModule: "BILLING", description: "Triggered when an invoice passes its due date without payment" },
-      { eventType: "invoice.paid", entityType: "invoice", sourceModule: "BILLING", description: "Triggered when an invoice is fully marked paid" },
-      { eventType: "payment.created", entityType: "payment", sourceModule: "BILLING", description: "Triggered when a payment is recorded" },
-      { eventType: "payment.failed", entityType: "payment", sourceModule: "BILLING", description: "Triggered when a payment attempt fails" },
-      // CMS & Content
-      { eventType: "cms.content_created", entityType: "content", sourceModule: "CMS", description: "Triggered when CMS page or post is drafted" },
-      { eventType: "cms.content_updated", entityType: "content", sourceModule: "CMS", description: "Triggered when CMS content revision is updated" },
-      { eventType: "cms.content_published", entityType: "content", sourceModule: "CMS", description: "Triggered when CMS content is published" },
-      // Identity & RBAC
-      { eventType: "user.created", entityType: "user", sourceModule: "AUTH", description: "Triggered when a new team member is registered" },
-      { eventType: "user.role_changed", entityType: "user", sourceModule: "RBAC", description: "Triggered when a user's role/permissions change" },
-      // Automation Lifecycle
-      { eventType: "workflow.created", entityType: "workflow", sourceModule: "AUTOMATION", description: "Triggered when a new workflow is configured" },
-      { eventType: "workflow.failed", entityType: "workflow", sourceModule: "AUTOMATION", description: "Triggered when an execution fails" },
-      { eventType: "workflow.completed", entityType: "workflow", sourceModule: "AUTOMATION", description: "Triggered when an execution completes" }
-    ];
-    for (const evt of standardEvents) {
-      this.eventRegistry.set(evt.eventType, evt);
-    }
-  }
-  /**
-   * Register a custom event dynamically.
-   */
-  registerEvent(registration) {
-    this.eventRegistry.set(registration.eventType, registration);
-  }
-  /**
-   * List all registered event descriptors.
-   */
-  listRegisteredEvents() {
-    return Array.from(this.eventRegistry.values());
-  }
-  /**
-   * Subscribe to business events.
-   */
-  subscribe(listener) {
-    this.listeners.push(listener);
-    return () => {
-      this.listeners = this.listeners.filter((l) => l !== listener);
-    };
-  }
-  /**
-   * Emits a business event into the system.
-   * Sanitizes payload, persists to automation_events, and dispatches to subscribers.
-   */
-  async emit(params) {
-    const eventId = crypto3.randomUUID();
-    const correlationId = params.correlationId || crypto3.randomUUID();
-    const timestamp = (/* @__PURE__ */ new Date()).toISOString();
-    const registered = this.eventRegistry.get(params.eventType);
-    const sourceModule = params.sourceModule || registered?.sourceModule || "SYSTEM";
-    const sanitizedPayload = this.sanitizePayload(params.payload);
-    const event = {
-      eventId,
-      eventType: params.eventType,
-      entityType: params.entityType,
-      entityId: params.entityId,
-      organizationId: params.organizationId,
-      actorId: params.actorId,
-      actorType: params.actorType || "USER",
-      timestamp,
-      payload: sanitizedPayload,
-      correlationId,
-      sourceModule
-    };
-    try {
-      await prisma.automationEvent.create({
-        data: {
-          id: eventId,
-          organizationId: params.organizationId,
-          eventType: params.eventType,
-          entityType: params.entityType,
-          entityId: params.entityId,
-          actorId: params.actorId || null,
-          actorType: event.actorType,
-          sourceModule,
-          correlationId,
-          payload: sanitizedPayload,
-          processed: false
-        }
-      });
-    } catch (err) {
-      logger.error({ err, eventId }, "[EventEngine] Failed to persist automation event");
-    }
-    for (const listener of this.listeners) {
-      try {
-        await listener(event);
-      } catch (err) {
-        logger.error({ err, eventId, eventType: params.eventType }, "[EventEngine] Listener error");
-      }
-    }
-    return event;
-  }
-  /**
-   * Sanitizes payload by stripping sensitive keys.
-   */
-  sanitizePayload(data) {
-    if (!data || typeof data !== "object") return data;
-    if (Array.isArray(data)) {
-      return data.map((item) => this.sanitizePayload(item));
-    }
-    const sanitized = {};
-    const sensitiveKeys = /* @__PURE__ */ new Set([
-      "password",
-      "passwordhash",
-      "token",
-      "accesstoken",
-      "refreshtoken",
-      "secret",
-      "apikey",
-      "sessionsecret"
-    ]);
-    for (const [key, value] of Object.entries(data)) {
-      if (sensitiveKeys.has(key.toLowerCase())) {
-        sanitized[key] = "[REDACTED]";
-      } else if (typeof value === "object" && value !== null) {
-        sanitized[key] = this.sanitizePayload(value);
-      } else {
-        sanitized[key] = value;
-      }
-    }
-    return sanitized;
-  }
-};
-var eventEngine = EventEngine.getInstance();
-
 // server/services/automation/ActionRegistry.ts
-import { z as z41 } from "zod";
+import { z as z45 } from "zod";
 import crypto4 from "node:crypto";
 var ActionRegistry = class _ActionRegistry {
   constructor() {
@@ -17735,19 +20652,19 @@ var ActionRegistry = class _ActionRegistry {
       riskLevel: "LOW",
       requiresApproval: false,
       requiresAudit: true,
-      inputSchema: z41.object({
-        title: z41.string().min(1),
-        description: z41.string().optional(),
-        assignedUserId: z41.string().optional(),
-        assignedRole: z41.string().optional(),
-        priority: z41.enum(["LOW", "MEDIUM", "HIGH", "URGENT"]).default("MEDIUM"),
-        dueDate: z41.string().optional(),
-        sourceEntityType: z41.string().optional(),
-        sourceEntityId: z41.string().optional(),
-        isAiGenerated: z41.boolean().default(true),
-        metadata: z41.record(z41.unknown()).optional()
+      inputSchema: z45.object({
+        title: z45.string().min(1),
+        description: z45.string().optional(),
+        assignedUserId: z45.string().optional(),
+        assignedRole: z45.string().optional(),
+        priority: z45.enum(["LOW", "MEDIUM", "HIGH", "URGENT"]).default("MEDIUM"),
+        dueDate: z45.string().optional(),
+        sourceEntityType: z45.string().optional(),
+        sourceEntityId: z45.string().optional(),
+        isAiGenerated: z45.boolean().default(true),
+        metadata: z45.record(z45.unknown()).optional()
       }),
-      outputSchema: z41.object({ taskId: z41.string(), title: z41.string(), status: z41.string() }),
+      outputSchema: z45.object({ taskId: z45.string(), title: z45.string(), status: z45.string() }),
       execute: async (input, context) => {
         const taskId = crypto4.randomUUID();
         const dueDate = input.dueDate ? new Date(input.dueDate) : null;
@@ -17781,12 +20698,12 @@ var ActionRegistry = class _ActionRegistry {
       riskLevel: "MEDIUM",
       requiresApproval: false,
       requiresAudit: true,
-      inputSchema: z41.object({
-        clientId: z41.string().min(1),
-        status: z41.enum(["PROSPECT", "ACTIVE", "INACTIVE", "SUSPENDED", "ARCHIVED"]).optional(),
-        notes: z41.string().optional()
+      inputSchema: z45.object({
+        clientId: z45.string().min(1),
+        status: z45.enum(["PROSPECT", "ACTIVE", "INACTIVE", "SUSPENDED", "ARCHIVED"]).optional(),
+        notes: z45.string().optional()
       }),
-      outputSchema: z41.object({ clientId: z41.string(), updated: z41.boolean() }),
+      outputSchema: z45.object({ clientId: z45.string(), updated: z45.boolean() }),
       execute: async (input, context) => {
         const client3 = await prisma.client.findFirst({ where: { id: input.clientId, organizationId: context.organizationId } });
         if (!client3) {
@@ -17809,16 +20726,16 @@ var ActionRegistry = class _ActionRegistry {
       riskLevel: "LOW",
       requiresApproval: false,
       requiresAudit: false,
-      inputSchema: z41.object({
-        userId: z41.string().optional(),
-        recipientRole: z41.string().optional(),
-        title: z41.string().min(1),
-        message: z41.string().min(1),
-        level: z41.enum(["INFO", "WARNING", "ERROR", "SUCCESS"]).default("INFO"),
-        channel: z41.enum(["IN_APP", "EMAIL", "SMS", "WEBHOOK"]).default("IN_APP"),
-        metadata: z41.record(z41.unknown()).optional()
+      inputSchema: z45.object({
+        userId: z45.string().optional(),
+        recipientRole: z45.string().optional(),
+        title: z45.string().min(1),
+        message: z45.string().min(1),
+        level: z45.enum(["INFO", "WARNING", "ERROR", "SUCCESS"]).default("INFO"),
+        channel: z45.enum(["IN_APP", "EMAIL", "SMS", "WEBHOOK"]).default("IN_APP"),
+        metadata: z45.record(z45.unknown()).optional()
       }),
-      outputSchema: z41.object({ notificationId: z41.string(), delivered: z41.boolean() }),
+      outputSchema: z45.object({ notificationId: z45.string(), delivered: z45.boolean() }),
       execute: async (input, context) => {
         const notifId = crypto4.randomUUID();
         const autoNotif = await prisma.automationNotification.create({
@@ -17865,12 +20782,12 @@ var ActionRegistry = class _ActionRegistry {
       riskLevel: "MEDIUM",
       requiresApproval: false,
       requiresAudit: true,
-      inputSchema: z41.object({
-        entityType: z41.enum(["LEAD", "CLIENT", "TASK"]),
-        entityId: z41.string().min(1),
-        userId: z41.string().min(1)
+      inputSchema: z45.object({
+        entityType: z45.enum(["LEAD", "CLIENT", "TASK"]),
+        entityId: z45.string().min(1),
+        userId: z45.string().min(1)
       }),
-      outputSchema: z41.object({ entityId: z41.string(), assignedUserId: z41.string(), success: z41.boolean() }),
+      outputSchema: z45.object({ entityId: z45.string(), assignedUserId: z45.string(), success: z45.boolean() }),
       execute: async (input, _context) => {
         if (input.entityType === "LEAD") {
           await prisma.lead.update({ where: { id: input.entityId }, data: { assignedTo: input.userId } });
@@ -17890,8 +20807,8 @@ var ActionRegistry = class _ActionRegistry {
       riskLevel: "LOW",
       requiresApproval: false,
       requiresAudit: true,
-      inputSchema: z41.object({ reportType: z41.string(), title: z41.string(), parameters: z41.record(z41.unknown()).optional() }),
-      outputSchema: z41.object({ reportId: z41.string(), generatedAt: z41.string(), summary: z41.string() }),
+      inputSchema: z45.object({ reportType: z45.string(), title: z45.string(), parameters: z45.record(z45.unknown()).optional() }),
+      outputSchema: z45.object({ reportId: z45.string(), generatedAt: z45.string(), summary: z45.string() }),
       // Phase 1 audit finding (docs/control-center-module-gap-analysis.md):
       // this previously fabricated a reportId/summary with no real report
       // ever generated. No reporting service exists in this codebase
@@ -17912,14 +20829,14 @@ var ActionRegistry = class _ActionRegistry {
       riskLevel: "HIGH",
       requiresApproval: true,
       requiresAudit: true,
-      inputSchema: z41.object({
-        clientId: z41.string().min(1),
-        amountDue: z41.number().positive(),
-        currency: z41.string().default("USD"),
-        dueDate: z41.string().optional(),
-        memo: z41.string().optional()
+      inputSchema: z45.object({
+        clientId: z45.string().min(1),
+        amountDue: z45.number().positive(),
+        currency: z45.string().default("USD"),
+        dueDate: z45.string().optional(),
+        memo: z45.string().optional()
       }),
-      outputSchema: z41.object({ draftCreated: z41.boolean(), invoiceId: z41.string(), invoiceNumber: z41.string(), amountDue: z41.number() }),
+      outputSchema: z45.object({ draftCreated: z45.boolean(), invoiceId: z45.string(), invoiceNumber: z45.string(), amountDue: z45.number() }),
       // Phase 1 audit finding (docs/control-center-module-gap-analysis.md):
       // this previously fabricated an "INV-DRAFT-..." string with no
       // Invoice row ever created. Fixed by real service integration —
@@ -17979,8 +20896,8 @@ var ActionRegistry = class _ActionRegistry {
       riskLevel: "HIGH",
       requiresApproval: false,
       requiresAudit: true,
-      inputSchema: z41.object({ workflowId: z41.string().min(1), status: z41.enum(["ACTIVE", "PAUSED", "ARCHIVED"]) }),
-      outputSchema: z41.object({ workflowId: z41.string(), newStatus: z41.string() }),
+      inputSchema: z45.object({ workflowId: z45.string().min(1), status: z45.enum(["ACTIVE", "PAUSED", "ARCHIVED"]) }),
+      outputSchema: z45.object({ workflowId: z45.string(), newStatus: z45.string() }),
       execute: async (input, _context) => {
         const updated = await prisma.automationWorkflow.update({ where: { id: input.workflowId }, data: { status: input.status } });
         return { workflowId: updated.id, newStatus: updated.status };
@@ -17994,15 +20911,98 @@ var ActionRegistry = class _ActionRegistry {
       riskLevel: "HIGH",
       requiresApproval: true,
       requiresAudit: true,
-      inputSchema: z41.object({ contentType: z41.enum(["PAGE", "POST"]), contentId: z41.string().min(1) }),
-      outputSchema: z41.object({ contentId: z41.string(), published: z41.boolean() }),
-      execute: async (input, _context) => {
-        if (input.contentType === "PAGE") {
-          await prisma.page.update({ where: { id: input.contentId }, data: { status: "PUBLISHED", publishedAt: /* @__PURE__ */ new Date() } });
-        } else {
-          await prisma.post.update({ where: { id: input.contentId }, data: { status: "PUBLISHED", publishedAt: /* @__PURE__ */ new Date() } });
+      inputSchema: z45.object({ contentType: z45.enum(["PAGE", "POST"]), contentId: z45.string().min(1) }),
+      outputSchema: z45.object({ contentId: z45.string(), published: z45.boolean() }),
+      execute: async (input, context) => {
+        const where = { id: input.contentId, organizationId: context.organizationId };
+        const result = input.contentType === "PAGE" ? await prisma.page.updateMany({ where, data: { status: "PUBLISHED", publishedAt: /* @__PURE__ */ new Date() } }) : await prisma.post.updateMany({ where, data: { status: "PUBLISHED", publishedAt: /* @__PURE__ */ new Date() } });
+        if (result.count === 0) {
+          throw new ValidationError(`publish_approved_content: contentId "${input.contentId}" does not refer to a ${input.contentType.toLowerCase()} in this organization.`);
         }
         return { contentId: input.contentId, published: true };
+      }
+    });
+    this.registerAction({
+      id: "create_lead",
+      name: "Create Lead",
+      description: "Creates a real CRM lead from automation (e.g. a campaign-driven or AI-recommended follow-up contact)",
+      requiredPermission: "leads.create",
+      riskLevel: "LOW",
+      requiresApproval: false,
+      requiresAudit: true,
+      inputSchema: z45.object({
+        companyName: z45.string().trim().min(1),
+        contactName: z45.string().trim().optional(),
+        email: z45.string().trim().email().optional(),
+        phone: z45.string().trim().optional(),
+        source: z45.string().trim().max(100).optional(),
+        assignedTo: z45.string().trim().optional(),
+        campaignId: z45.string().trim().optional()
+      }),
+      outputSchema: z45.object({ leadId: z45.string(), companyName: z45.string(), status: z45.string() }),
+      execute: async (input, context) => {
+        if (input.email) {
+          const duplicates = await leadRepository.findByEmailInOrg(context.organizationId, input.email);
+          if (duplicates.length > 0) {
+            throw new ValidationError(`create_lead: an open lead with email "${input.email}" already exists in this organization (id ${duplicates[0].id}).`);
+          }
+        }
+        const lead = await leadRepository.create({
+          organizationId: context.organizationId,
+          companyName: input.companyName,
+          contactName: input.contactName,
+          email: input.email,
+          phone: input.phone,
+          source: input.source ?? "automation",
+          assignedTo: input.assignedTo,
+          campaignId: input.campaignId
+        });
+        await auditLogRepository.record({
+          organizationId: context.organizationId,
+          actorUserId: context.userId,
+          actorType: context.userId ? "USER" : "SYSTEM",
+          action: "LEAD_CREATED",
+          resourceType: "lead",
+          resourceId: lead.id,
+          afterData: { companyName: lead.companyName, status: lead.status, source: "automation:create_lead", workflowId: context.workflowId }
+        });
+        return { leadId: lead.id, companyName: lead.companyName, status: lead.status };
+      }
+    });
+    this.registerAction({
+      id: "update_lead_status",
+      name: "Update Lead Status",
+      description: "Moves a CRM lead to a new non-terminal status (CONVERTED is reachable only through the real lead-conversion flow, never this action)",
+      requiredPermission: "leads.update",
+      riskLevel: "LOW",
+      requiresApproval: false,
+      requiresAudit: true,
+      inputSchema: z45.object({
+        leadId: z45.string().trim().min(1),
+        status: z45.enum(["NEW", "CONTACTED", "QUALIFIED", "LOST"])
+      }),
+      outputSchema: z45.object({ leadId: z45.string(), fromStatus: z45.string(), toStatus: z45.string() }),
+      execute: async (input, context) => {
+        const lead = await prisma.lead.findFirst({ where: { id: input.leadId, organizationId: context.organizationId, deletedAt: null } });
+        if (!lead) throw new ValidationError(`update_lead_status: leadId "${input.leadId}" does not refer to a lead in this organization.`);
+        if (lead.status === "CONVERTED") {
+          throw new ValidationError("update_lead_status: this lead has already been converted and can no longer change status.");
+        }
+        if (lead.status === input.status) {
+          return { leadId: lead.id, fromStatus: lead.status, toStatus: input.status };
+        }
+        await leadRepository.update(lead.id, { status: input.status });
+        await auditLogRepository.record({
+          organizationId: context.organizationId,
+          actorUserId: context.userId,
+          actorType: context.userId ? "USER" : "SYSTEM",
+          action: "LEAD_UPDATED",
+          resourceType: "lead",
+          resourceId: lead.id,
+          beforeData: { status: lead.status },
+          afterData: { status: input.status, source: "automation:update_lead_status", workflowId: context.workflowId }
+        });
+        return { leadId: lead.id, fromStatus: lead.status, toStatus: input.status };
       }
     });
     this.registerAction({
@@ -18013,8 +21013,8 @@ var ActionRegistry = class _ActionRegistry {
       riskLevel: "MEDIUM",
       requiresApproval: true,
       requiresAudit: true,
-      inputSchema: z41.object({ recipientUserId: z41.string().min(1), title: z41.string().min(1), message: z41.string().min(1) }),
-      outputSchema: z41.object({ sent: z41.boolean() }),
+      inputSchema: z45.object({ recipientUserId: z45.string().min(1), title: z45.string().min(1), message: z45.string().min(1) }),
+      outputSchema: z45.object({ sent: z45.boolean() }),
       execute: async (input, context) => {
         await prisma.automationNotification.create({
           data: {
@@ -18261,6 +21261,17 @@ var TaskManager = class _TaskManager {
         }
       }
     });
+    if (task.assignedUserId) {
+      await notificationService.notify({
+        organizationId: params.organizationId,
+        userId: task.assignedUserId,
+        type: "task_assigned",
+        title: "New task assigned to you",
+        message: task.title,
+        entityType: "automation_task",
+        entityId: task.id
+      });
+    }
     return task;
   }
   /**
@@ -18309,7 +21320,75 @@ var TaskManager = class _TaskManager {
         metadata: { updateData }
       });
     }
+    if (params.assignedUserId !== void 0 && params.assignedUserId && params.assignedUserId !== task.assignedUserId) {
+      await notificationService.notify({
+        organizationId: params.organizationId,
+        userId: params.assignedUserId,
+        type: "task_assigned",
+        title: "Task assigned to you",
+        message: updated.title,
+        entityType: "automation_task",
+        entityId: updated.id
+      });
+    }
+    if (params.status === "COMPLETED" && task.status !== "COMPLETED") {
+      try {
+        await eventEngine.emit({
+          eventType: "task.completed",
+          entityType: "automation_task",
+          entityId: updated.id,
+          organizationId: params.organizationId,
+          actorId: params.userId,
+          actorType: params.userId ? "USER" : "SYSTEM",
+          sourceModule: "AUTOMATION",
+          payload: { title: updated.title, sourceEntityType: updated.sourceEntityType ?? null, sourceEntityId: updated.sourceEntityId ?? null }
+        });
+      } catch {
+      }
+    }
     return updated;
+  }
+  /**
+   * Append a comment to a task. Stored in `metadata.comments` (append-only
+   * array) rather than a dedicated table — AutomationTask already has a
+   * free-form `metadata` Json column for exactly this kind of
+   * lightweight, task-scoped data, so a comment thread doesn't need its
+   * own schema (consistent with "only introduce database structures
+   * genuinely required").
+   */
+  async addComment(params) {
+    const task = await prisma.automationTask.findFirst({ where: { id: params.taskId, organizationId: params.organizationId } });
+    if (!task) throw new NotFoundError("Automation task not found.");
+    const metadata = task.metadata && typeof task.metadata === "object" ? task.metadata : {};
+    const comments = Array.isArray(metadata.comments) ? metadata.comments : [];
+    const comment = { id: crypto6.randomUUID(), userId: params.userId, text: params.text, createdAt: (/* @__PURE__ */ new Date()).toISOString() };
+    comments.push(comment);
+    const updated = await prisma.automationTask.update({
+      where: { id: task.id },
+      data: { metadata: { ...metadata, comments } },
+      include: { assignedUser: { select: { id: true, firstName: true, lastName: true, email: true } } }
+    });
+    await auditLogRepository.record({
+      organizationId: params.organizationId,
+      actorUserId: params.userId,
+      actorType: "USER",
+      action: "AUTOMATION_TASK_COMMENTED",
+      resourceType: "automation_task",
+      resourceId: task.id,
+      metadata: { commentId: comment.id }
+    });
+    if (updated.assignedUserId && updated.assignedUserId !== params.userId) {
+      await notificationService.notify({
+        organizationId: params.organizationId,
+        userId: updated.assignedUserId,
+        type: "task_commented",
+        title: "New comment on your task",
+        message: `${updated.title}: ${params.text.slice(0, 140)}`,
+        entityType: "automation_task",
+        entityId: updated.id
+      });
+    }
+    return { task: updated, comment };
   }
   /**
    * List tasks with filters.
@@ -18341,6 +21420,70 @@ var TaskManager = class _TaskManager {
       prisma.automationTask.count({ where })
     ]);
     return { rows, total, page, limit };
+  }
+  /**
+   * Phase 16 — due-soon/overdue task notifications, driven by the
+   * existing cron tick (POST /automation/internal/tick, already runs
+   * every minute — see automationRoutes.ts's header comment). Idempotent
+   * by design: each task is notified at most once per threshold, tracked
+   * via a `metadata.dueSoonNotifiedAt`/`overdueNotifiedAt` timestamp set
+   * right after the notification is sent, so a tick that runs twice (or
+   * every minute, which it does) never re-notifies the same task.
+   */
+  async checkDueDates() {
+    const now = /* @__PURE__ */ new Date();
+    const dueSoonHorizon = new Date(now.getTime() + 24 * 60 * 60 * 1e3);
+    const openStatus = { in: ["PENDING", "IN_PROGRESS"] };
+    const [dueSoonTasks, overdueTasks] = await Promise.all([
+      prisma.automationTask.findMany({ where: { status: openStatus, assignedUserId: { not: null }, dueDate: { gte: now, lte: dueSoonHorizon } } }),
+      prisma.automationTask.findMany({ where: { status: openStatus, assignedUserId: { not: null }, dueDate: { lt: now } } })
+    ]);
+    let dueSoonNotified = 0;
+    for (const task of dueSoonTasks) {
+      const metadata = task.metadata && typeof task.metadata === "object" ? task.metadata : {};
+      if (metadata.dueSoonNotifiedAt) continue;
+      await notificationService.notify({
+        organizationId: task.organizationId,
+        userId: task.assignedUserId,
+        type: "task_due_soon",
+        title: "Task due soon",
+        message: task.title,
+        entityType: "automation_task",
+        entityId: task.id
+      });
+      await prisma.automationTask.update({ where: { id: task.id }, data: { metadata: { ...metadata, dueSoonNotifiedAt: now.toISOString() } } });
+      dueSoonNotified += 1;
+    }
+    let overdueNotified = 0;
+    for (const task of overdueTasks) {
+      const metadata = task.metadata && typeof task.metadata === "object" ? task.metadata : {};
+      if (metadata.overdueNotifiedAt) continue;
+      await notificationService.notify({
+        organizationId: task.organizationId,
+        userId: task.assignedUserId,
+        type: "task_overdue",
+        title: "Task overdue",
+        message: task.title,
+        entityType: "automation_task",
+        entityId: task.id
+      });
+      await prisma.automationTask.update({ where: { id: task.id }, data: { metadata: { ...metadata, overdueNotifiedAt: now.toISOString() } } });
+      overdueNotified += 1;
+    }
+    return { dueSoonNotified, overdueNotified };
+  }
+  /** Phase 16 — My Work: this user's own open tasks split into overdue/upcoming/other, never another user's. */
+  async getMyTasks(organizationId, userId) {
+    const now = /* @__PURE__ */ new Date();
+    const upcomingHorizon = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1e3);
+    const openWhere = { organizationId, assignedUserId: userId, status: { in: ["PENDING", "IN_PROGRESS"] } };
+    const include = { workflow: { select: { id: true, name: true, category: true } } };
+    const [overdue, upcoming, assigned] = await Promise.all([
+      prisma.automationTask.findMany({ where: { ...openWhere, dueDate: { lt: now } }, orderBy: { dueDate: "asc" }, include }),
+      prisma.automationTask.findMany({ where: { ...openWhere, dueDate: { gte: now, lte: upcomingHorizon } }, orderBy: { dueDate: "asc" }, include }),
+      prisma.automationTask.findMany({ where: openWhere, orderBy: { createdAt: "desc" }, take: 50, include })
+    ]);
+    return { overdue, upcoming, assigned };
   }
 };
 var taskManager = TaskManager.getInstance();
@@ -19809,13 +22952,13 @@ var KnowledgeService = class {
 };
 
 // server/services/automation/types.ts
-import { z as z42 } from "zod";
-var StructuredAiDecisionSchema = z42.object({
-  decision: z42.string(),
-  reason: z42.string(),
-  confidence: z42.number().min(0).max(1),
-  recommended_action: z42.string().optional(),
-  metadata: z42.record(z42.unknown()).optional()
+import { z as z46 } from "zod";
+var StructuredAiDecisionSchema = z46.object({
+  decision: z46.string(),
+  reason: z46.string(),
+  confidence: z46.number().min(0).max(1),
+  recommended_action: z46.string().optional(),
+  metadata: z46.record(z46.unknown()).optional()
 });
 var DEFAULT_WORKFLOW_LIMITS = {
   maxSteps: 50,
@@ -20212,6 +23355,30 @@ ${interpolatedPrompt}`;
       resourceId: workflow.id,
       metadata: { executionId, workflowName: workflow.name, durationMs: totalDuration, stepsExecuted: stepCount }
     });
+    if (execution.initiatedById) {
+      await notificationService.notify({
+        organizationId: execution.organizationId,
+        userId: execution.initiatedById,
+        type: "workflow_completed",
+        title: "Workflow completed",
+        message: `"${workflow.name}" finished successfully.`,
+        entityType: "automation_execution",
+        entityId: executionId
+      });
+    }
+    try {
+      await eventEngine.emit({
+        eventType: "workflow.completed",
+        entityType: "automation_execution",
+        entityId: executionId,
+        organizationId: execution.organizationId,
+        actorId: execution.initiatedById || void 0,
+        actorType: execution.initiatedById ? "USER" : "SYSTEM",
+        sourceModule: "AUTOMATION",
+        payload: { workflowId: workflow.id, workflowName: workflow.name, durationMs: totalDuration }
+      });
+    } catch {
+    }
     return completed;
   }
   /** Resume an execution after approval grant. */
@@ -20240,6 +23407,31 @@ ${interpolatedPrompt}`;
   async failExecution(executionId, organizationId, error) {
     const failed = await prisma.automationExecution.update({ where: { id: executionId }, data: { status: "FAILED", completedAt: /* @__PURE__ */ new Date(), errorMessage: error } });
     await auditLogRepository.record({ organizationId, actorType: "SYSTEM", action: "AUTOMATION_WORKFLOW_FAILED", resourceType: "automation_execution", resourceId: executionId, metadata: { error } });
+    const workflow = await prisma.automationWorkflow.findUnique({ where: { id: failed.workflowId }, select: { name: true } });
+    if (failed.initiatedById) {
+      await notificationService.notify({
+        organizationId,
+        userId: failed.initiatedById,
+        type: "workflow_failed",
+        title: "Workflow failed",
+        message: `"${workflow?.name ?? "Workflow"}" failed: ${error}`,
+        entityType: "automation_execution",
+        entityId: executionId
+      });
+    }
+    try {
+      await eventEngine.emit({
+        eventType: "workflow.failed",
+        entityType: "automation_execution",
+        entityId: executionId,
+        organizationId,
+        actorId: failed.initiatedById || void 0,
+        actorType: failed.initiatedById ? "USER" : "SYSTEM",
+        sourceModule: "AUTOMATION",
+        payload: { workflowId: failed.workflowId, workflowName: workflow?.name ?? null, error }
+      });
+    } catch {
+    }
     return failed;
   }
   /** Interpolate variable strings like {{payload.client.name}} or {{invoice.amount}} */
@@ -20413,6 +23605,7 @@ var WorkflowValidator = class {
 };
 
 // server/services/automation/AutomationService.ts
+var MAX_EVENT_CHAIN_DEPTH = 25;
 var AutomationService = class _AutomationService {
   constructor() {
     this.initEventListeners();
@@ -20430,6 +23623,16 @@ var AutomationService = class _AutomationService {
   initEventListeners() {
     eventEngine.subscribe(async (event) => {
       try {
+        const chainLength = await prisma.automationExecution.count({
+          where: { organizationId: event.organizationId, correlationId: event.correlationId }
+        });
+        if (chainLength >= MAX_EVENT_CHAIN_DEPTH) {
+          logger.error(
+            { eventType: event.eventType, correlationId: event.correlationId, chainLength },
+            "[AutomationService] Event chain depth limit reached \u2014 refusing to trigger further workflows (recursion guard)"
+          );
+          return;
+        }
         const workflows = await prisma.automationWorkflow.findMany({
           where: {
             organizationId: event.organizationId,
@@ -20806,6 +24009,9 @@ ${validation.errors.join("\n")}`);
   async updateTask(params) {
     return taskManager.updateTask(params);
   }
+  async addTaskComment(params) {
+    return taskManager.addComment(params);
+  }
   // ---------------------------------------------------------------------------
   // Schedules
   // ---------------------------------------------------------------------------
@@ -20863,6 +24069,51 @@ ${validation.errors.join("\n")}`);
       userPermissions: params.userPermissions,
       correlationId: crypto11.randomUUID()
     });
+  }
+  // ---------------------------------------------------------------------------
+  // My Work (Phase 16)
+  // ---------------------------------------------------------------------------
+  /**
+   * Aggregates one user's own corner of the automation surface: their
+   * open tasks (split into overdue/upcoming/all), the approvals they're
+   * actually eligible to decide (role-matched, same rule
+   * ApprovalEngine.decideApproval itself enforces — ADMIN/SUPER_ADMIN see
+   * every pending approval; everyone else only ones whose requiredRole
+   * matches their own role), and their own recent workflow activity.
+   * Every section is a real, scoped query — never another user's data,
+   * never a fabricated count.
+   */
+  async getMyWork(organizationId, userId, userRole) {
+    const isUniversalApprover = userRole === "ADMIN" || userRole === "SUPER_ADMIN";
+    const [myTasks, pendingApprovals, recentExecutions, recentlyCompletedTasks] = await Promise.all([
+      taskManager.getMyTasks(organizationId, userId),
+      prisma.automationApproval.findMany({
+        where: {
+          organizationId,
+          status: "PENDING",
+          ...isUniversalApprover ? {} : { requiredRole: userRole }
+        },
+        orderBy: { requestedAt: "desc" },
+        take: 50,
+        include: { workflow: { select: { id: true, name: true, category: true } } }
+      }),
+      prisma.automationExecution.findMany({
+        where: { organizationId, initiatedById: userId },
+        orderBy: { createdAt: "desc" },
+        take: 10,
+        include: { workflow: { select: { id: true, name: true, category: true } } }
+      }),
+      prisma.automationTask.findMany({
+        where: { organizationId, assignedUserId: userId, status: "COMPLETED" },
+        orderBy: { completedAt: "desc" },
+        take: 10
+      })
+    ]);
+    return {
+      tasks: myTasks,
+      pendingApprovals,
+      recentActivity: { executions: recentExecutions, completedTasks: recentlyCompletedTasks }
+    };
   }
   // ---------------------------------------------------------------------------
   // Dashboard & Analytics
@@ -20926,7 +24177,8 @@ ${validation.errors.join("\n")}`);
   async runCronTick() {
     const schedulesTriggered = await schedulerEngine.tick();
     const queuedExecutionsProcessed = await workflowEngine.processQueue();
-    return { schedulesTriggered, queuedExecutionsProcessed };
+    const { dueSoonNotified, overdueNotified } = await taskManager.checkDueDates();
+    return { schedulesTriggered, queuedExecutionsProcessed, dueSoonNotified, overdueNotified };
   }
 };
 var automationService = AutomationService.getInstance();
@@ -20938,9 +24190,14 @@ function hasPublishableContent(revision) {
 var contentSchedulingService = {
   async publishDueScheduled() {
     const now = /* @__PURE__ */ new Date();
-    const [duePosts, duePages] = await Promise.all([postRepository.findDueScheduled(now), pageRepository.findDueScheduled(now)]);
+    const [duePosts, duePages, dueCaseStudies] = await Promise.all([
+      postRepository.findDueScheduled(now),
+      pageRepository.findDueScheduled(now),
+      caseStudyRepository.findDueScheduled(now)
+    ]);
     let postsPublished = 0;
     let pagesPublished = 0;
+    let caseStudiesPublished = 0;
     let skipped = 0;
     for (const post of duePosts) {
       if (!post.currentRevisionId || !hasPublishableContent(post.currentRevision)) {
@@ -20994,13 +24251,39 @@ var contentSchedulingService = {
         logger.error({ err, pageId: page.id }, "[contentSchedulingService] Failed to publish due scheduled page");
       }
     }
-    return { postsPublished, pagesPublished, skipped };
+    for (const caseStudy of dueCaseStudies) {
+      if (!caseStudy.currentRevisionId || !hasPublishableContent(caseStudy.currentRevision)) {
+        skipped++;
+        logger.warn({ caseStudyId: caseStudy.id }, "[contentSchedulingService] Skipped due scheduled case study with no publishable content");
+        continue;
+      }
+      try {
+        await prisma.$transaction([
+          prisma.contentRevision.update({ where: { id: caseStudy.currentRevisionId }, data: { status: "PUBLISHED", publishedAt: now } }),
+          prisma.caseStudy.update({ where: { id: caseStudy.id }, data: { status: "PUBLISHED", publishedAt: now, scheduledAt: null } })
+        ]);
+        await auditLogRepository.record({
+          organizationId: caseStudy.organizationId,
+          actorType: "SYSTEM",
+          actorName: "content-scheduler",
+          action: "CASE_STUDY_PUBLISHED",
+          resourceType: "case_study",
+          resourceId: caseStudy.id,
+          beforeData: { status: "SCHEDULED", scheduledAt: caseStudy.scheduledAt },
+          afterData: { status: "PUBLISHED" }
+        });
+        caseStudiesPublished++;
+      } catch (err) {
+        logger.error({ err, caseStudyId: caseStudy.id }, "[contentSchedulingService] Failed to publish due scheduled case study");
+      }
+    }
+    return { postsPublished, pagesPublished, caseStudiesPublished, skipped };
   }
 };
 
 // server/routes/v1/automationRoutes.ts
-var router48 = Router48();
-router48.get(
+var router51 = Router51();
+router51.get(
   "/internal/tick",
   asyncHandler(async (req, res) => {
     if (!config.cronSecret) {
@@ -21013,82 +24296,85 @@ router48.get(
     sendSuccess(res, { automation, content });
   })
 );
-router48.use(authenticateToken);
-var CreateWorkflowSchema = z43.object({
-  name: z43.string().min(1).max(200),
-  description: z43.string().optional(),
-  category: z43.string().default("GENERAL"),
-  triggerType: z43.enum(["EVENT", "SCHEDULE", "MANUAL", "API", "CONDITIONAL"]).default("EVENT"),
-  triggerConfig: z43.record(z43.unknown()).default({}),
-  conditions: z43.unknown().default([]),
-  steps: z43.array(z43.record(z43.unknown())).default([]),
-  retryPolicy: z43.object({
-    maxRetries: z43.number().int().min(0).max(5).default(2),
-    backoffMs: z43.number().int().min(100).max(6e4).default(1e3),
-    exponential: z43.boolean().default(true)
+router51.use(authenticateToken);
+var CreateWorkflowSchema = z47.object({
+  name: z47.string().min(1).max(200),
+  description: z47.string().optional(),
+  category: z47.string().default("GENERAL"),
+  triggerType: z47.enum(["EVENT", "SCHEDULE", "MANUAL", "API", "CONDITIONAL"]).default("EVENT"),
+  triggerConfig: z47.record(z47.unknown()).default({}),
+  conditions: z47.unknown().default([]),
+  steps: z47.array(z47.record(z47.unknown())).default([]),
+  retryPolicy: z47.object({
+    maxRetries: z47.number().int().min(0).max(5).default(2),
+    backoffMs: z47.number().int().min(100).max(6e4).default(1e3),
+    exponential: z47.boolean().default(true)
   }).optional(),
-  limits: z43.object({
-    maxSteps: z43.number().int().min(1).max(100).default(50),
-    maxDurationMs: z43.number().int().min(5e3).max(6e5).default(3e5),
-    maxAiCalls: z43.number().int().min(0).max(50).default(10),
-    maxToolCalls: z43.number().int().min(0).max(50).default(15),
-    maxLoopIterations: z43.number().int().min(1).max(50).default(10)
+  limits: z47.object({
+    maxSteps: z47.number().int().min(1).max(100).default(50),
+    maxDurationMs: z47.number().int().min(5e3).max(6e5).default(3e5),
+    maxAiCalls: z47.number().int().min(0).max(50).default(10),
+    maxToolCalls: z47.number().int().min(0).max(50).default(15),
+    maxLoopIterations: z47.number().int().min(1).max(50).default(10)
   }).optional()
 });
 var UpdateWorkflowSchema = CreateWorkflowSchema.partial().extend({
-  status: z43.enum(["DRAFT", "ACTIVE", "PAUSED", "ARCHIVED"]).optional()
+  status: z47.enum(["DRAFT", "ACTIVE", "PAUSED", "ARCHIVED"]).optional()
 });
-var TriggerWorkflowSchema = z43.object({
-  input: z43.record(z43.unknown()).default({}),
-  correlationId: z43.string().optional()
+var TriggerWorkflowSchema = z47.object({
+  input: z47.record(z47.unknown()).default({}),
+  correlationId: z47.string().optional()
 });
-var DecideApprovalSchema = z43.object({
-  decision: z43.enum(["APPROVED", "REJECTED"]),
-  reason: z43.string().optional()
+var DecideApprovalSchema = z47.object({
+  decision: z47.enum(["APPROVED", "REJECTED"]),
+  reason: z47.string().optional()
 });
-var CreateTaskSchema = z43.object({
-  title: z43.string().min(1),
-  description: z43.string().optional(),
-  assignedUserId: z43.string().optional(),
-  assignedRole: z43.string().optional(),
-  priority: z43.enum(["LOW", "MEDIUM", "HIGH", "URGENT"]).default("MEDIUM"),
-  dueDate: z43.string().optional(),
-  sourceWorkflowId: z43.string().optional(),
-  sourceExecutionId: z43.string().optional(),
-  sourceEntityType: z43.string().optional(),
-  sourceEntityId: z43.string().optional(),
-  isAiGenerated: z43.boolean().default(false),
-  metadata: z43.record(z43.unknown()).optional()
+var CreateTaskSchema = z47.object({
+  title: z47.string().min(1),
+  description: z47.string().optional(),
+  assignedUserId: z47.string().optional(),
+  assignedRole: z47.string().optional(),
+  priority: z47.enum(["LOW", "MEDIUM", "HIGH", "URGENT"]).default("MEDIUM"),
+  dueDate: z47.string().optional(),
+  sourceWorkflowId: z47.string().optional(),
+  sourceExecutionId: z47.string().optional(),
+  sourceEntityType: z47.string().optional(),
+  sourceEntityId: z47.string().optional(),
+  isAiGenerated: z47.boolean().default(false),
+  metadata: z47.record(z47.unknown()).optional()
 });
-var UpdateTaskSchema = z43.object({
-  status: z43.enum(["PENDING", "IN_PROGRESS", "COMPLETED", "CANCELLED"]).optional(),
-  assignedUserId: z43.string().optional(),
-  priority: z43.enum(["LOW", "MEDIUM", "HIGH", "URGENT"]).optional(),
-  dueDate: z43.string().optional()
+var UpdateTaskSchema = z47.object({
+  status: z47.enum(["PENDING", "IN_PROGRESS", "COMPLETED", "CANCELLED"]).optional(),
+  assignedUserId: z47.string().optional(),
+  priority: z47.enum(["LOW", "MEDIUM", "HIGH", "URGENT"]).optional(),
+  dueDate: z47.string().optional()
 });
-var CreateScheduleSchema = z43.object({
-  workflowId: z43.string().uuid(),
-  name: z43.string().min(1),
-  description: z43.string().optional(),
-  scheduleType: z43.enum(["ONE_TIME", "RECURRING", "CRON"]).default("RECURRING"),
-  cronExpression: z43.string().optional(),
-  timezone: z43.string().default("UTC"),
-  intervalSeconds: z43.number().int().positive().optional(),
-  config: z43.record(z43.unknown()).optional()
+var AddTaskCommentSchema = z47.object({
+  text: z47.string().trim().min(1).max(4e3)
 });
-var EmitEventSchema = z43.object({
-  eventType: z43.string().min(1),
-  entityType: z43.string().min(1),
-  entityId: z43.string().min(1),
-  sourceModule: z43.string().optional(),
-  payload: z43.record(z43.unknown()).default({}),
-  correlationId: z43.string().optional()
+var CreateScheduleSchema = z47.object({
+  workflowId: z47.string().uuid(),
+  name: z47.string().min(1),
+  description: z47.string().optional(),
+  scheduleType: z47.enum(["ONE_TIME", "RECURRING", "CRON"]).default("RECURRING"),
+  cronExpression: z47.string().optional(),
+  timezone: z47.string().default("UTC"),
+  intervalSeconds: z47.number().int().positive().optional(),
+  config: z47.record(z47.unknown()).optional()
 });
-var ExecuteActionSchema = z43.object({
-  actionId: z43.string().min(1),
-  input: z43.record(z43.unknown()).default({})
+var EmitEventSchema = z47.object({
+  eventType: z47.string().min(1),
+  entityType: z47.string().min(1),
+  entityId: z47.string().min(1),
+  sourceModule: z47.string().optional(),
+  payload: z47.record(z47.unknown()).default({}),
+  correlationId: z47.string().optional()
 });
-router48.get(
+var ExecuteActionSchema = z47.object({
+  actionId: z47.string().min(1),
+  input: z47.record(z47.unknown()).default({})
+});
+router51.get(
   "/dashboard",
   requirePermission("automation.read"),
   asyncHandler(async (req, res) => {
@@ -21096,7 +24382,7 @@ router48.get(
     sendSuccess(res, data);
   })
 );
-router48.get(
+router51.get(
   "/workflows",
   requirePermission("automation.read"),
   asyncHandler(async (req, res) => {
@@ -21112,7 +24398,7 @@ router48.get(
     sendSuccess(res, result);
   })
 );
-router48.post(
+router51.post(
   "/workflows",
   requirePermission("automation.create"),
   asyncHandler(async (req, res) => {
@@ -21133,7 +24419,7 @@ router48.post(
     sendSuccess(res, { workflow }, 201);
   })
 );
-router48.get(
+router51.get(
   "/workflows/:id",
   requirePermission("automation.read"),
   asyncHandler(async (req, res) => {
@@ -21141,7 +24427,7 @@ router48.get(
     sendSuccess(res, { workflow });
   })
 );
-router48.put(
+router51.put(
   "/workflows/:id",
   requirePermission("automation.edit"),
   asyncHandler(async (req, res) => {
@@ -21164,11 +24450,11 @@ router48.put(
     sendSuccess(res, { workflow: updated });
   })
 );
-router48.post(
+router51.post(
   "/workflows/:id/publish",
   requirePermission("automation.publish"),
   asyncHandler(async (req, res) => {
-    const body = z43.object({ changeSummary: z43.string().optional() }).parse(req.body || {});
+    const body = z47.object({ changeSummary: z47.string().optional() }).parse(req.body || {});
     const published = await automationService.publishWorkflow({
       id: req.params.id,
       organizationId: req.user.organizationId,
@@ -21178,7 +24464,7 @@ router48.post(
     sendSuccess(res, { workflow: published });
   })
 );
-router48.get(
+router51.get(
   "/workflows/:id/versions",
   requirePermission("automation.read"),
   asyncHandler(async (req, res) => {
@@ -21186,7 +24472,7 @@ router48.get(
     sendSuccess(res, { versions });
   })
 );
-router48.post(
+router51.post(
   "/workflows/:id/trigger",
   requirePermission("automation.execute"),
   asyncHandler(async (req, res) => {
@@ -21202,7 +24488,7 @@ router48.post(
     sendSuccess(res, result, 202);
   })
 );
-router48.get(
+router51.get(
   "/executions",
   requirePermission("automation.read"),
   asyncHandler(async (req, res) => {
@@ -21217,7 +24503,7 @@ router48.get(
     sendSuccess(res, result);
   })
 );
-router48.get(
+router51.get(
   "/executions/:id",
   requirePermission("automation.read"),
   asyncHandler(async (req, res) => {
@@ -21225,7 +24511,7 @@ router48.get(
     sendSuccess(res, { execution });
   })
 );
-router48.post(
+router51.post(
   "/executions/:id/retry",
   requirePermission("automation.execute"),
   asyncHandler(async (req, res) => {
@@ -21233,16 +24519,16 @@ router48.post(
     sendSuccess(res, { execution: result });
   })
 );
-router48.post(
+router51.post(
   "/executions/:id/cancel",
   requirePermission("automation.manage"),
   asyncHandler(async (req, res) => {
-    const body = z43.object({ reason: z43.string().optional() }).parse(req.body || {});
+    const body = z47.object({ reason: z47.string().optional() }).parse(req.body || {});
     const result = await automationService.cancelExecution(req.params.id, req.user.organizationId, body.reason);
     sendSuccess(res, { execution: result });
   })
 );
-router48.get(
+router51.get(
   "/approvals",
   requirePermission("automation.read"),
   asyncHandler(async (req, res) => {
@@ -21256,7 +24542,7 @@ router48.get(
     sendSuccess(res, result);
   })
 );
-router48.post(
+router51.post(
   "/approvals/:id/decide",
   requirePermission("automation.approve"),
   asyncHandler(async (req, res) => {
@@ -21272,7 +24558,7 @@ router48.post(
     sendSuccess(res, result);
   })
 );
-router48.get(
+router51.get(
   "/tasks",
   requirePermission("automation.read"),
   asyncHandler(async (req, res) => {
@@ -21288,7 +24574,7 @@ router48.get(
     sendSuccess(res, result);
   })
 );
-router48.post(
+router51.post(
   "/tasks",
   requirePermission("automation.execute"),
   asyncHandler(async (req, res) => {
@@ -21300,7 +24586,7 @@ router48.post(
     sendSuccess(res, { task }, 201);
   })
 );
-router48.patch(
+router51.patch(
   "/tasks/:id",
   requirePermission("automation.execute"),
   asyncHandler(async (req, res) => {
@@ -21314,7 +24600,29 @@ router48.patch(
     sendSuccess(res, { task: updated });
   })
 );
-router48.get(
+router51.post(
+  "/tasks/:id/comments",
+  requirePermission("automation.execute"),
+  asyncHandler(async (req, res) => {
+    const body = AddTaskCommentSchema.parse(req.body);
+    const result = await automationService.addTaskComment({
+      taskId: req.params.id,
+      organizationId: req.user.organizationId,
+      userId: req.user.id,
+      text: body.text
+    });
+    sendSuccess(res, result, 201);
+  })
+);
+router51.get(
+  "/my-work",
+  requirePermission("automation.read"),
+  asyncHandler(async (req, res) => {
+    const result = await automationService.getMyWork(req.user.organizationId, req.user.id, req.user.role.key);
+    sendSuccess(res, result);
+  })
+);
+router51.get(
   "/schedules",
   requirePermission("automation.read"),
   asyncHandler(async (req, res) => {
@@ -21329,7 +24637,7 @@ router48.get(
     sendSuccess(res, result);
   })
 );
-router48.post(
+router51.post(
   "/schedules",
   requirePermission("automation.manage"),
   asyncHandler(async (req, res) => {
@@ -21341,16 +24649,16 @@ router48.post(
     sendSuccess(res, { schedule }, 201);
   })
 );
-router48.patch(
+router51.patch(
   "/schedules/:id/toggle",
   requirePermission("automation.manage"),
   asyncHandler(async (req, res) => {
-    const body = z43.object({ isActive: z43.boolean().optional() }).parse(req.body || {});
+    const body = z47.object({ isActive: z47.boolean().optional() }).parse(req.body || {});
     const schedule = await automationService.toggleSchedule(req.params.id, req.user.organizationId, body.isActive);
     sendSuccess(res, { schedule });
   })
 );
-router48.delete(
+router51.delete(
   "/schedules/:id",
   requirePermission("automation.manage"),
   asyncHandler(async (req, res) => {
@@ -21358,7 +24666,7 @@ router48.delete(
     sendSuccess(res, result);
   })
 );
-router48.get(
+router51.get(
   "/events/types",
   requirePermission("automation.read"),
   asyncHandler(async (_req, res) => {
@@ -21366,7 +24674,7 @@ router48.get(
     sendSuccess(res, { types });
   })
 );
-router48.get(
+router51.get(
   "/events",
   requirePermission("automation.read"),
   asyncHandler(async (req, res) => {
@@ -21380,7 +24688,7 @@ router48.get(
     sendSuccess(res, result);
   })
 );
-router48.post(
+router51.post(
   "/events",
   requirePermission("automation.execute"),
   asyncHandler(async (req, res) => {
@@ -21394,7 +24702,7 @@ router48.post(
     sendSuccess(res, { event }, 202);
   })
 );
-router48.get(
+router51.get(
   "/actions",
   requirePermission("automation.read"),
   asyncHandler(async (_req, res) => {
@@ -21402,7 +24710,7 @@ router48.get(
     sendSuccess(res, { actions });
   })
 );
-router48.post(
+router51.post(
   "/actions/execute",
   requirePermission("automation.execute"),
   asyncHandler(async (req, res) => {
@@ -21417,16 +24725,16 @@ router48.post(
     sendSuccess(res, { result });
   })
 );
-var automationRoutes_default = router48;
+var automationRoutes_default = router51;
 
 // server/routes/v1/knowledgeRoutes.ts
-import { Router as Router49 } from "express";
+import { Router as Router52 } from "express";
 import express3 from "express";
 
 // server/schemas/knowledgeSchemas.ts
-import { z as z44 } from "zod";
-var knowledgeAccessPolicySchema = z44.enum(["PUBLIC", "RESTRICTED", "ROLE_BASED", "OWNER_ONLY"]);
-var knowledgeSourceTypeSchema = z44.enum([
+import { z as z48 } from "zod";
+var knowledgeAccessPolicySchema = z48.enum(["PUBLIC", "RESTRICTED", "ROLE_BASED", "OWNER_ONLY"]);
+var knowledgeSourceTypeSchema = z48.enum([
   "UPLOADED_DOCUMENT",
   "MEDIA_ASSET",
   "CMS_CONTENT",
@@ -21438,53 +24746,53 @@ var knowledgeSourceTypeSchema = z44.enum([
   "MANUAL_ENTRY",
   "EXTERNAL_CONNECTOR"
 ]);
-var createCollectionSchema = z44.object({
-  name: z44.string().trim().min(1).max(200),
-  description: z44.string().trim().max(2e3).optional(),
+var createCollectionSchema = z48.object({
+  name: z48.string().trim().min(1).max(200),
+  description: z48.string().trim().max(2e3).optional(),
   accessPolicy: knowledgeAccessPolicySchema.optional(),
-  allowedRoles: z44.array(z44.string().trim().min(1)).max(50).optional(),
-  metadata: z44.record(z44.unknown()).optional()
+  allowedRoles: z48.array(z48.string().trim().min(1)).max(50).optional(),
+  metadata: z48.record(z48.unknown()).optional()
 });
-var registerSourceSchema = z44.object({
-  collectionId: z44.string().trim().uuid().optional(),
-  name: z44.string().trim().min(1).max(200),
+var registerSourceSchema = z48.object({
+  collectionId: z48.string().trim().uuid().optional(),
+  name: z48.string().trim().min(1).max(200),
   sourceType: knowledgeSourceTypeSchema,
-  entityType: z44.string().trim().max(100).optional(),
-  entityId: z44.string().trim().max(200).optional(),
-  config: z44.record(z44.unknown()).optional()
+  entityType: z48.string().trim().max(100).optional(),
+  entityId: z48.string().trim().max(200).optional(),
+  config: z48.record(z48.unknown()).optional()
 });
-var listDocumentsQuerySchema = z44.object({
-  collectionId: z44.string().trim().uuid().optional(),
-  sourceId: z44.string().trim().uuid().optional(),
-  status: z44.enum(["UPLOADED", "PROCESSING", "EXTRACTED", "CHUNKED", "INDEXING", "INDEXED", "FAILED", "ARCHIVED"]).optional()
+var listDocumentsQuerySchema = z48.object({
+  collectionId: z48.string().trim().uuid().optional(),
+  sourceId: z48.string().trim().uuid().optional(),
+  status: z48.enum(["UPLOADED", "PROCESSING", "EXTRACTED", "CHUNKED", "INDEXING", "INDEXED", "FAILED", "ARCHIVED"]).optional()
 });
-var uploadDocumentSchema = z44.object({
-  text: z44.string().max(2e6).optional(),
-  contentBase64: z44.string().max(4e7).optional(),
-  mimeType: z44.string().trim().max(100).optional(),
-  filename: z44.string().trim().max(300).optional(),
-  title: z44.string().trim().max(300).optional(),
-  description: z44.string().trim().max(2e3).optional(),
-  collectionId: z44.string().trim().uuid().optional(),
-  sourceId: z44.string().trim().uuid().optional(),
-  securityScope: z44.string().trim().max(100).optional(),
-  requiredRole: z44.string().trim().max(100).optional(),
-  metadata: z44.record(z44.unknown()).optional()
+var uploadDocumentSchema = z48.object({
+  text: z48.string().max(2e6).optional(),
+  contentBase64: z48.string().max(4e7).optional(),
+  mimeType: z48.string().trim().max(100).optional(),
+  filename: z48.string().trim().max(300).optional(),
+  title: z48.string().trim().max(300).optional(),
+  description: z48.string().trim().max(2e3).optional(),
+  collectionId: z48.string().trim().uuid().optional(),
+  sourceId: z48.string().trim().uuid().optional(),
+  securityScope: z48.string().trim().max(100).optional(),
+  requiredRole: z48.string().trim().max(100).optional(),
+  metadata: z48.record(z48.unknown()).optional()
 }).refine((v) => v.contentBase64 !== void 0 || v.text !== void 0, {
   message: "Either text or contentBase64 is required."
 });
-var searchKnowledgeSchema = z44.object({
-  query: z44.string().trim().min(1).max(2e3),
-  mode: z44.enum(["KEYWORD", "SEMANTIC", "HYBRID"]).optional(),
-  limit: z44.coerce.number().int().positive().max(50).optional(),
-  minScore: z44.coerce.number().min(0).max(1).optional(),
-  filter: z44.record(z44.unknown()).optional()
+var searchKnowledgeSchema = z48.object({
+  query: z48.string().trim().min(1).max(2e3),
+  mode: z48.enum(["KEYWORD", "SEMANTIC", "HYBRID"]).optional(),
+  limit: z48.coerce.number().int().positive().max(50).optional(),
+  minScore: z48.coerce.number().min(0).max(1).optional(),
+  filter: z48.record(z48.unknown()).optional()
 });
 
 // server/routes/v1/knowledgeRoutes.ts
-var router49 = Router49();
-router49.use(authenticateToken);
-router49.get(
+var router52 = Router52();
+router52.use(authenticateToken);
+router52.get(
   "/collections",
   requirePermission("knowledge.read"),
   asyncHandler(async (req, res) => {
@@ -21492,7 +24800,7 @@ router49.get(
     sendSuccess(res, { collections });
   })
 );
-router49.post(
+router52.post(
   "/collections",
   requirePermission("knowledge.create"),
   asyncHandler(async (req, res) => {
@@ -21505,7 +24813,7 @@ router49.post(
     sendSuccess(res, { collection }, 201);
   })
 );
-router49.get(
+router52.get(
   "/collections/:id",
   requirePermission("knowledge.read"),
   asyncHandler(async (req, res) => {
@@ -21513,7 +24821,7 @@ router49.get(
     sendSuccess(res, { collection });
   })
 );
-router49.post(
+router52.post(
   "/sources",
   requirePermission("knowledge.create"),
   asyncHandler(async (req, res) => {
@@ -21525,7 +24833,7 @@ router49.post(
     sendSuccess(res, { source }, 201);
   })
 );
-router49.get(
+router52.get(
   "/sources",
   requirePermission("knowledge.read"),
   asyncHandler(async (req, res) => {
@@ -21539,7 +24847,7 @@ router49.get(
     sendSuccess(res, { sources });
   })
 );
-router49.get(
+router52.get(
   "/documents",
   requirePermission("knowledge.read"),
   asyncHandler(async (req, res) => {
@@ -21561,7 +24869,7 @@ router49.get(
     sendSuccess(res, { documents });
   })
 );
-router49.get(
+router52.get(
   "/documents/:id",
   requirePermission("knowledge.read"),
   asyncHandler(async (req, res) => {
@@ -21580,7 +24888,7 @@ router49.get(
     sendSuccess(res, { document });
   })
 );
-router49.post(
+router52.post(
   "/documents/upload",
   requirePermission("knowledge.upload"),
   express3.json({ limit: "25mb" }),
@@ -21612,7 +24920,7 @@ router49.post(
     sendSuccess(res, result, 201);
   })
 );
-router49.post(
+router52.post(
   "/documents/:id/reindex",
   requirePermission("knowledge.reindex"),
   asyncHandler(async (req, res) => {
@@ -21620,7 +24928,7 @@ router49.post(
     sendSuccess(res, result);
   })
 );
-router49.post(
+router52.post(
   "/search",
   requirePermission("knowledge.search"),
   asyncHandler(async (req, res) => {
@@ -21643,10 +24951,10 @@ router49.post(
     sendSuccess(res, { results, count: results.length });
   })
 );
-var knowledgeRoutes_default = router49;
+var knowledgeRoutes_default = router52;
 
 // server/routes/v1/copilotRoutes.ts
-import { Router as Router50 } from "express";
+import { Router as Router53 } from "express";
 
 // server/services/copilot/CopilotService.ts
 import crypto12 from "crypto";
@@ -22451,54 +25759,54 @@ ${JSON.stringify(executionResult, null, 2)}
 };
 
 // server/schemas/copilotSchemas.ts
-import { z as z45 } from "zod";
-var conversationModeSchema = z45.enum(["ANSWER", "EXPLAIN", "SUMMARIZE", "ANALYZE", "RECOMMEND", "DRAFT", "EXECUTE"]);
-var createWorkspaceSchema = z45.object({
-  name: z45.string().trim().min(1).max(200),
-  slug: z45.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)").optional(),
-  description: z45.string().trim().max(2e3).optional(),
-  icon: z45.string().trim().max(100).optional(),
-  allowedTools: z45.array(z45.string().trim().min(1)).max(100).optional(),
-  allowedModules: z45.array(z45.string().trim().min(1)).max(100).optional(),
-  requiredPermissions: z45.array(z45.string().trim().min(1)).max(100).optional(),
-  systemInstruction: z45.string().trim().max(1e4).optional(),
+import { z as z49 } from "zod";
+var conversationModeSchema = z49.enum(["ANSWER", "EXPLAIN", "SUMMARIZE", "ANALYZE", "RECOMMEND", "DRAFT", "EXECUTE"]);
+var createWorkspaceSchema = z49.object({
+  name: z49.string().trim().min(1).max(200),
+  slug: z49.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)").optional(),
+  description: z49.string().trim().max(2e3).optional(),
+  icon: z49.string().trim().max(100).optional(),
+  allowedTools: z49.array(z49.string().trim().min(1)).max(100).optional(),
+  allowedModules: z49.array(z49.string().trim().min(1)).max(100).optional(),
+  requiredPermissions: z49.array(z49.string().trim().min(1)).max(100).optional(),
+  systemInstruction: z49.string().trim().max(1e4).optional(),
   defaultMode: conversationModeSchema.optional(),
-  temperature: z45.coerce.number().min(0).max(2).optional(),
-  maxTokens: z45.coerce.number().int().positive().max(32e3).optional(),
-  requireCitations: z45.coerce.boolean().optional()
+  temperature: z49.coerce.number().min(0).max(2).optional(),
+  maxTokens: z49.coerce.number().int().positive().max(32e3).optional(),
+  requireCitations: z49.coerce.boolean().optional()
 });
-var createConversationSchema = z45.object({
-  workspaceId: z45.string().trim().uuid().optional(),
-  title: z45.string().trim().max(300).optional(),
-  contextMetadata: z45.record(z45.unknown()).optional()
+var createConversationSchema = z49.object({
+  workspaceId: z49.string().trim().uuid().optional(),
+  title: z49.string().trim().max(300).optional(),
+  contextMetadata: z49.record(z49.unknown()).optional()
 });
-var listConversationsQuerySchema = z45.object({
-  workspaceId: z45.string().trim().uuid().optional(),
-  status: z45.string().trim().max(50).optional(),
-  search: z45.string().trim().max(300).optional(),
-  limit: z45.coerce.number().int().positive().max(100).optional(),
-  offset: z45.coerce.number().int().nonnegative().optional()
+var listConversationsQuerySchema = z49.object({
+  workspaceId: z49.string().trim().uuid().optional(),
+  status: z49.string().trim().max(50).optional(),
+  search: z49.string().trim().max(300).optional(),
+  limit: z49.coerce.number().int().positive().max(100).optional(),
+  offset: z49.coerce.number().int().nonnegative().optional()
 });
-var contextMetadataSchema = z45.object({
-  currentModule: z45.string().trim().max(200).optional(),
-  currentPage: z45.string().trim().max(200).optional(),
-  selectedClientId: z45.string().trim().uuid().optional(),
-  selectedInvoiceId: z45.string().trim().uuid().optional(),
-  selectedDocumentId: z45.string().trim().uuid().optional(),
-  selectedWorkflowId: z45.string().trim().uuid().optional()
-}).catchall(z45.unknown()).optional();
-var sendMessageSchema = z45.object({
-  conversationId: z45.string().trim().uuid().optional(),
-  workspaceId: z45.string().trim().uuid().optional(),
-  content: z45.string().trim().min(1).max(2e4),
+var contextMetadataSchema = z49.object({
+  currentModule: z49.string().trim().max(200).optional(),
+  currentPage: z49.string().trim().max(200).optional(),
+  selectedClientId: z49.string().trim().uuid().optional(),
+  selectedInvoiceId: z49.string().trim().uuid().optional(),
+  selectedDocumentId: z49.string().trim().uuid().optional(),
+  selectedWorkflowId: z49.string().trim().uuid().optional()
+}).catchall(z49.unknown()).optional();
+var sendMessageSchema = z49.object({
+  conversationId: z49.string().trim().uuid().optional(),
+  workspaceId: z49.string().trim().uuid().optional(),
+  content: z49.string().trim().min(1).max(2e4),
   mode: conversationModeSchema.optional(),
   contextMetadata: contextMetadataSchema
 });
 
 // server/routes/v1/copilotRoutes.ts
-var router50 = Router50();
-router50.use(authenticateToken);
-router50.get(
+var router53 = Router53();
+router53.use(authenticateToken);
+router53.get(
   "/workspaces",
   asyncHandler(async (req, res) => {
     const permissions = req.user.role.permissions || [];
@@ -22506,7 +25814,7 @@ router50.get(
     sendSuccess(res, { workspaces });
   })
 );
-router50.post(
+router53.post(
   "/workspaces",
   requirePermission("copilot.manage"),
   asyncHandler(async (req, res) => {
@@ -22515,7 +25823,7 @@ router50.post(
     sendSuccess(res, { workspace }, 201);
   })
 );
-router50.get(
+router53.get(
   "/workspaces/:id",
   asyncHandler(async (req, res) => {
     const permissions = req.user.role.permissions || [];
@@ -22523,7 +25831,7 @@ router50.get(
     sendSuccess(res, { workspace });
   })
 );
-router50.get(
+router53.get(
   "/conversations",
   requirePermission("copilot.read"),
   asyncHandler(async (req, res) => {
@@ -22538,7 +25846,7 @@ router50.get(
     sendSuccess(res, result);
   })
 );
-router50.post(
+router53.post(
   "/conversations",
   requirePermission("copilot.use"),
   asyncHandler(async (req, res) => {
@@ -22547,7 +25855,7 @@ router50.post(
     sendSuccess(res, { conversation }, 201);
   })
 );
-router50.get(
+router53.get(
   "/conversations/:id",
   requirePermission("copilot.read"),
   asyncHandler(async (req, res) => {
@@ -22555,7 +25863,7 @@ router50.get(
     sendSuccess(res, { conversation });
   })
 );
-router50.post(
+router53.post(
   "/conversations/:id/archive",
   requirePermission("copilot.use"),
   asyncHandler(async (req, res) => {
@@ -22563,7 +25871,7 @@ router50.post(
     sendSuccess(res, { conversation: updated });
   })
 );
-router50.delete(
+router53.delete(
   "/conversations/:id",
   requirePermission("copilot.use"),
   asyncHandler(async (req, res) => {
@@ -22571,7 +25879,7 @@ router50.delete(
     sendSuccess(res, result);
   })
 );
-router50.post(
+router53.post(
   "/messages",
   requirePermission("copilot.use"),
   asyncHandler(async (req, res) => {
@@ -22589,7 +25897,7 @@ router50.post(
     sendSuccess(res, result);
   })
 );
-router50.post(
+router53.post(
   "/messages/stream",
   requirePermission("copilot.use"),
   asyncHandler(async (req, res) => {
@@ -22642,7 +25950,7 @@ data: ${JSON.stringify(data)}
     }
   })
 );
-router50.post(
+router53.post(
   "/actions/:id/confirm",
   requirePermission("copilot.use"),
   asyncHandler(async (req, res) => {
@@ -22655,7 +25963,7 @@ router50.post(
     sendSuccess(res, result);
   })
 );
-router50.post(
+router53.post(
   "/actions/:id/reject",
   requirePermission("copilot.use"),
   asyncHandler(async (req, res) => {
@@ -22668,7 +25976,7 @@ router50.post(
     sendSuccess(res, result);
   })
 );
-router50.get(
+router53.get(
   "/dashboard",
   requirePermission("copilot.read"),
   asyncHandler(async (req, res) => {
@@ -22676,10 +25984,508 @@ router50.get(
     sendSuccess(res, stats);
   })
 );
-var copilotRoutes_default = router50;
+var copilotRoutes_default = router53;
+
+// server/routes/v1/analyticsRoutes.ts
+import { Router as Router54 } from "express";
+
+// server/services/analyticsReportingService.ts
+var DEFAULT_RANGE_DAYS = 30;
+var DAY_MS = 24 * 60 * 60 * 1e3;
+function resolveRange(input) {
+  const to = input.to ?? /* @__PURE__ */ new Date();
+  const from = input.from ?? new Date(to.getTime() - DEFAULT_RANGE_DAYS * DAY_MS);
+  if (from > to) throw new ValidationError("`from` must not be after `to`.");
+  let previous;
+  if (input.compare) {
+    const spanMs = to.getTime() - from.getTime();
+    previous = { from: new Date(from.getTime() - spanMs), to: new Date(from.getTime() - 1) };
+  }
+  return { from, to, previous };
+}
+function percentChange(current, previous) {
+  if (previous === 0) return current === 0 ? 0 : null;
+  return Math.round((current - previous) / previous * 1e4) / 100;
+}
+var analyticsReportingService = {
+  resolveRange,
+  async getOverview(organizationId, permissions, rangeInput) {
+    const range = resolveRange(rangeInput);
+    const canAnalytics = permissions.includes("analytics.read");
+    const canLeads = permissions.includes("leads.read");
+    const canOpportunities = permissions.includes("opportunities.read");
+    const canClients = permissions.includes("clients.read");
+    const canCampaigns = permissions.includes("campaigns.read");
+    const canForms = permissions.includes("forms.read");
+    const [
+      hasAnyTraffic,
+      pageViews,
+      pageViewsPrev,
+      sessions,
+      sessionsPrev,
+      topPages,
+      utmSources,
+      leadsTotal,
+      leadsTotalPrev,
+      leadsBySource,
+      pipeline,
+      pipelinePrev,
+      clientsCreated,
+      clientsCreatedPrev,
+      clientsAttributed,
+      campaignPerformance,
+      formSubmissions,
+      seoIssues,
+      recentActivity
+    ] = await Promise.all([
+      canAnalytics ? analyticsEventRepository.hasAnyEvent(organizationId) : Promise.resolve(false),
+      canAnalytics ? analyticsEventRepository.countByEventType(organizationId, "page_view", range) : Promise.resolve(null),
+      canAnalytics && range.previous ? analyticsEventRepository.countByEventType(organizationId, "page_view", range.previous) : Promise.resolve(null),
+      canAnalytics ? analyticsEventRepository.distinctSessionCount(organizationId, range, "page_view") : Promise.resolve(null),
+      canAnalytics && range.previous ? analyticsEventRepository.distinctSessionCount(organizationId, range.previous, "page_view") : Promise.resolve(null),
+      canAnalytics ? analyticsEventRepository.topPaths(organizationId, range, "page_view", 10) : Promise.resolve(null),
+      canAnalytics ? analyticsEventRepository.utmSourceBreakdown(organizationId, range, "page_view") : Promise.resolve(null),
+      canLeads ? leadRepository.countInRange(organizationId, range) : Promise.resolve(null),
+      canLeads && range.previous ? leadRepository.countInRange(organizationId, range.previous) : Promise.resolve(null),
+      canLeads ? leadRepository.countBySourceInRange(organizationId, range) : Promise.resolve(null),
+      canOpportunities ? opportunityRepository.pipelineInRange(organizationId, range) : Promise.resolve(null),
+      canOpportunities && range.previous ? opportunityRepository.pipelineInRange(organizationId, range.previous) : Promise.resolve(null),
+      canClients ? clientRepository.countCreatedInRange(organizationId, range) : Promise.resolve(null),
+      canClients && range.previous ? clientRepository.countCreatedInRange(organizationId, range.previous) : Promise.resolve(null),
+      canClients ? clientRepository.countAttributedConversionsInRange(organizationId, range) : Promise.resolve(null),
+      canCampaigns ? campaignRepository.performanceInRange(organizationId, range) : Promise.resolve(null),
+      canForms ? formRepository.countSubmissionsInRange(organizationId, range) : Promise.resolve(null),
+      canAnalytics ? seoAuditService.runAudit(organizationId) : Promise.resolve(null),
+      canAnalytics || canCampaigns ? auditLogQueryRepository.list({ organizationId }, 1, 15) : Promise.resolve(null)
+    ]);
+    const conversionRate = leadsTotal && leadsTotal > 0 && pipeline ? Math.round(pipeline.wonCount / leadsTotal * 1e4) / 100 : null;
+    return {
+      range: { from: range.from.toISOString(), to: range.to.toISOString(), comparing: Boolean(range.previous) },
+      website: canAnalytics ? {
+        configured: Boolean(config.publicWebsiteOrganizationId),
+        hasAnyTraffic,
+        pageViews,
+        pageViewsChangePct: range.previous ? percentChange(pageViews ?? 0, pageViewsPrev ?? 0) : null,
+        sessions,
+        sessionsChangePct: range.previous ? percentChange(sessions ?? 0, sessionsPrev ?? 0) : null,
+        topPages,
+        utmSources
+      } : null,
+      leads: canLeads ? {
+        total: leadsTotal,
+        changePct: range.previous ? percentChange(leadsTotal ?? 0, leadsTotalPrev ?? 0) : null,
+        bySource: leadsBySource
+      } : null,
+      pipeline: canOpportunities && pipeline ? {
+        ...pipeline,
+        wonChangePct: range.previous && pipelinePrev ? percentChange(pipeline.wonCount, pipelinePrev.wonCount) : null
+      } : null,
+      clients: canClients ? {
+        created: clientsCreated,
+        changePct: range.previous ? percentChange(clientsCreated ?? 0, clientsCreatedPrev ?? 0) : null,
+        attributedConversions: clientsAttributed
+      } : null,
+      campaigns: canCampaigns ? campaignPerformance : null,
+      forms: canForms ? { submissions: formSubmissions } : null,
+      conversionRate,
+      seo: canAnalytics && seoIssues ? { issueCount: seoIssues.length, topIssues: seoIssues.slice(0, 10) } : null,
+      recentActivity: recentActivity?.rows ?? null
+    };
+  },
+  async getTopPages(organizationId, rangeInput, limit) {
+    const range = resolveRange(rangeInput);
+    return analyticsEventRepository.topPaths(organizationId, range, "page_view", limit);
+  },
+  async getReport(organizationId, permissions, type, rangeInput) {
+    const range = resolveRange(rangeInput);
+    const canAnalytics = permissions.includes("analytics.read");
+    const canLeads = permissions.includes("leads.read");
+    const canOpportunities = permissions.includes("opportunities.read");
+    const canClients = permissions.includes("clients.read");
+    const canCampaigns = permissions.includes("campaigns.read");
+    const canContent = permissions.includes("content.read");
+    switch (type) {
+      case "executive_summary":
+        return this.getOverview(organizationId, permissions, rangeInput);
+      case "website_performance":
+        if (!canAnalytics) return null;
+        return {
+          pageViews: await analyticsEventRepository.countByEventType(organizationId, "page_view", range),
+          sessions: await analyticsEventRepository.distinctSessionCount(organizationId, range, "page_view"),
+          dailyPageViews: await analyticsEventRepository.countByDay(organizationId, "page_view", range),
+          topPages: await analyticsEventRepository.topPaths(organizationId, range, "page_view", 25),
+          utmSources: await analyticsEventRepository.utmSourceBreakdown(organizationId, range, "page_view"),
+          utmCampaigns: await analyticsEventRepository.utmCampaignBreakdown(organizationId, range, "page_view")
+        };
+      case "content_performance": {
+        if (!canContent && !canAnalytics) return null;
+        const [pages, posts, topPages] = await Promise.all([
+          pageRepository.countForContentInventory(organizationId),
+          postRepository.countForContentInventory(organizationId),
+          canAnalytics ? analyticsEventRepository.topPaths(organizationId, range, "page_view", 25) : Promise.resolve(null)
+        ]);
+        return { pages, posts, topPages };
+      }
+      case "seo_report": {
+        const [issues, redirects] = await Promise.all([seoAuditService.runAudit(organizationId), redirectRepository.count(organizationId)]);
+        return { issueCount: issues.length, issues, redirects };
+      }
+      case "lead_generation":
+        if (!canLeads) return null;
+        return {
+          total: await leadRepository.countInRange(organizationId, range),
+          bySource: await leadRepository.countBySourceInRange(organizationId, range),
+          byCampaign: await leadRepository.countByCampaignInRange(organizationId, range)
+        };
+      case "crm_pipeline":
+        if (!canOpportunities) return null;
+        return opportunityRepository.pipelineInRange(organizationId, range);
+      case "campaign_performance":
+        if (!canCampaigns) return null;
+        return campaignRepository.performanceInRange(organizationId, range);
+      case "conversion_report": {
+        if (!canLeads || !canOpportunities || !canClients) return null;
+        const [leads, pipeline, clients] = await Promise.all([
+          leadRepository.countInRange(organizationId, range),
+          opportunityRepository.pipelineInRange(organizationId, range),
+          clientRepository.countCreatedInRange(organizationId, range)
+        ]);
+        return {
+          leads,
+          opportunitiesWon: pipeline.wonCount,
+          opportunitiesLost: pipeline.lostCount,
+          clientsCreated: clients,
+          leadToOpportunityRate: leads > 0 ? Math.round(Object.values(pipeline.byStage).reduce((a, s) => a + s.count, 0) / leads * 1e4) / 100 : null,
+          opportunityWinRate: pipeline.wonCount + pipeline.lostCount > 0 ? Math.round(pipeline.wonCount / (pipeline.wonCount + pipeline.lostCount) * 1e4) / 100 : null
+        };
+      }
+      case "client_acquisition":
+        if (!canClients) return null;
+        return {
+          created: await clientRepository.countCreatedInRange(organizationId, range),
+          attributedConversions: await clientRepository.countAttributedConversionsInRange(organizationId, range)
+        };
+      default:
+        throw new ValidationError(`Unknown report type: ${type}`);
+    }
+  }
+};
+
+// server/routes/v1/analyticsRoutes.ts
+var router54 = Router54();
+router54.use(authenticateToken);
+router54.get(
+  "/overview",
+  requirePermission("analytics.read"),
+  asyncHandler(async (req, res) => {
+    const query = analyticsOverviewQuerySchema.parse(req.query);
+    const overview = await analyticsReportingService.getOverview(req.user.organizationId, req.user.role.permissions, query);
+    sendSuccess(res, overview);
+  })
+);
+router54.get(
+  "/content/top-pages",
+  requirePermission("analytics.read"),
+  asyncHandler(async (req, res) => {
+    const query = analyticsTopPagesQuerySchema.parse(req.query);
+    const topPages = await analyticsReportingService.getTopPages(req.user.organizationId, query, query.limit);
+    sendSuccess(res, { topPages });
+  })
+);
+var analyticsRoutes_default = router54;
+
+// server/routes/v1/reportsRoutes.ts
+import { Router as Router55 } from "express";
+
+// server/utils/csv.ts
+function escapeCsvCell(value) {
+  let s = String(value ?? "");
+  if (/^[=+\-@]/.test(s)) s = `'${s}`;
+  return `"${s.replace(/"/g, '""')}"`;
+}
+function toCsv(header, rows) {
+  const lines = [header.map(escapeCsvCell).join(",")];
+  for (const row of rows) lines.push(row.map(escapeCsvCell).join(","));
+  return lines.join("\n");
+}
+function sendCsv(res, filename, csv) {
+  res.setHeader("Content-Type", "text/csv; charset=utf-8");
+  res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+  res.send(csv);
+}
+
+// server/routes/v1/reportsRoutes.ts
+var router55 = Router55();
+router55.use(authenticateToken);
+function assertReportType(value) {
+  if (REPORT_TYPES.includes(value)) return value;
+  throw new NotFoundError("Unknown report type.");
+}
+function reportToCsvRows(data) {
+  if (Array.isArray(data)) {
+    if (data.length === 0) return { header: ["(no data)"], rows: [] };
+    const first = data[0];
+    if (first && typeof first === "object") {
+      const header = Object.keys(first);
+      return { header, rows: data.map((row) => header.map((k) => row[k])) };
+    }
+    return { header: ["value"], rows: data.map((v) => [v]) };
+  }
+  if (data && typeof data === "object") {
+    const entries = Object.entries(data);
+    return { header: ["field", "value"], rows: entries.map(([k, v]) => [k, typeof v === "object" ? JSON.stringify(v) : v]) };
+  }
+  return { header: ["value"], rows: [[data]] };
+}
+router55.get(
+  "/:type",
+  requirePermission("reports.read"),
+  asyncHandler(async (req, res) => {
+    const type = assertReportType(req.params.type);
+    const query = reportQuerySchema.parse(req.query);
+    const report = await analyticsReportingService.getReport(req.user.organizationId, req.user.role.permissions, type, query);
+    sendSuccess(res, { type, range: { from: query.from ?? null, to: query.to ?? null }, report });
+  })
+);
+router55.get(
+  "/:type/export",
+  requirePermission("reports.export"),
+  asyncHandler(async (req, res) => {
+    const type = assertReportType(req.params.type);
+    const query = reportQuerySchema.parse(req.query);
+    const report = await analyticsReportingService.getReport(req.user.organizationId, req.user.role.permissions, type, query);
+    const { header, rows } = reportToCsvRows(report);
+    sendCsv(res, `${type}.csv`, toCsv(header, rows));
+  })
+);
+var reportsRoutes_default = router55;
+
+// server/routes/v1/contentApprovalRoutes.ts
+import { Router as Router56 } from "express";
+import { z as z50 } from "zod";
+
+// server/services/automation/ContentApprovalService.ts
+import crypto13 from "node:crypto";
+var SYSTEM_WORKFLOW_NAME = "Content Approval";
+var SYSTEM_WORKFLOW_CATEGORY = "CONTENT_APPROVAL";
+var APPROVER_ROLE_KEYS = ["ADMIN", "SUPER_ADMIN"];
+async function getOrCreateWorkflow(organizationId) {
+  const existing = await prisma.automationWorkflow.findFirst({ where: { organizationId, category: SYSTEM_WORKFLOW_CATEGORY } });
+  if (existing) return existing;
+  return prisma.automationWorkflow.create({
+    data: {
+      organizationId,
+      name: SYSTEM_WORKFLOW_NAME,
+      description: "System workflow anchoring CMS content approval requests.",
+      category: SYSTEM_WORKFLOW_CATEGORY,
+      status: "ACTIVE",
+      triggerType: "MANUAL",
+      steps: []
+    }
+  });
+}
+async function loadContentOrThrow(contentType, id, organizationId) {
+  if (contentType === "page") {
+    const page = await prisma.page.findFirst({ where: { id, organizationId }, select: { title: true, slug: true, status: true } });
+    if (!page) throw new NotFoundError("Page not found.");
+    return page;
+  }
+  const post = await prisma.post.findFirst({ where: { id, organizationId }, select: { title: true, slug: true, status: true } });
+  if (!post) throw new NotFoundError("Post not found.");
+  return post;
+}
+var contentApprovalService = {
+  async submitForApproval(caller, contentType, contentId) {
+    const organizationId = caller.organizationId;
+    const content = await loadContentOrThrow(contentType, contentId, organizationId);
+    if (content.status !== "IN_REVIEW") {
+      throw new ConflictError(`Only content already submitted for review (status IN_REVIEW) can be sent for approval (current status: ${content.status}).`);
+    }
+    const existingPending = await prisma.automationApproval.findFirst({
+      where: { organizationId, entityType: contentType, entityId: contentId, status: "PENDING" }
+    });
+    if (existingPending) {
+      throw new ConflictError("This content already has a pending approval request.", { approvalId: existingPending.id });
+    }
+    const workflow = await getOrCreateWorkflow(organizationId);
+    const execution = await prisma.automationExecution.create({
+      data: {
+        organizationId,
+        workflowId: workflow.id,
+        workflowVersion: workflow.currentVersion,
+        status: "WAITING_APPROVAL",
+        triggerType: "MANUAL",
+        entityType: contentType,
+        entityId: contentId,
+        correlationId: crypto13.randomUUID(),
+        initiatedById: caller.id
+      }
+    });
+    const approval = await prisma.automationApproval.create({
+      data: {
+        organizationId,
+        executionId: execution.id,
+        workflowId: workflow.id,
+        stepId: "content-approval",
+        action: `publish_${contentType}`,
+        description: `Publish "${content.title}"`,
+        entityType: contentType,
+        entityId: contentId,
+        requesterId: caller.id,
+        status: "PENDING"
+      }
+    });
+    await auditLogRepository.record({
+      organizationId,
+      actorUserId: caller.id,
+      actorType: "USER",
+      action: "CONTENT_APPROVAL_REQUESTED",
+      resourceType: contentType,
+      resourceId: contentId,
+      afterData: { approvalId: approval.id }
+    });
+    const approvers = await userRepository.listActiveByRoleKeysInOrg(organizationId, APPROVER_ROLE_KEYS);
+    await Promise.all(
+      approvers.filter((u) => u.id !== caller.id).map(
+        (u) => notificationService.notify({
+          organizationId,
+          userId: u.id,
+          type: "approval_requested",
+          title: "Content approval requested",
+          message: `"${content.title}" is waiting for your approval.`,
+          entityType: "automation_approval",
+          entityId: approval.id
+        })
+      )
+    );
+    return { approvalId: approval.id };
+  },
+  async decide(caller, approvalId, decision, reason) {
+    const organizationId = caller.organizationId;
+    const approval = await prisma.automationApproval.findFirst({ where: { id: approvalId, organizationId } });
+    if (!approval) throw new NotFoundError("Approval request not found.");
+    if (approval.status !== "PENDING") throw new ValidationError(`This approval is already resolved with status ${approval.status}.`);
+    if (approval.entityType !== "page" && approval.entityType !== "post") {
+      throw new ValidationError("This approval is not a content approval.");
+    }
+    const contentType = approval.entityType;
+    const entityId = approval.entityId;
+    const content = await loadContentOrThrow(contentType, entityId, organizationId);
+    const updated = await prisma.automationApproval.update({
+      where: { id: approval.id },
+      data: { status: decision, approverId: caller.id, decisionReason: reason || null, decidedAt: /* @__PURE__ */ new Date() }
+    });
+    let executionStatus = "CANCELLED";
+    if (decision === "APPROVED") {
+      if (contentType === "page") await pageService.publishPage(caller, entityId);
+      else await postService.publishPost(caller, entityId);
+      executionStatus = "COMPLETED";
+    } else {
+      if (contentType === "page") await prisma.page.update({ where: { id: entityId }, data: { status: "DRAFT" } });
+      else await prisma.post.update({ where: { id: entityId }, data: { status: "DRAFT" } });
+    }
+    await prisma.automationExecution.update({ where: { id: approval.executionId }, data: { status: executionStatus, completedAt: /* @__PURE__ */ new Date() } });
+    await auditLogRepository.record({
+      organizationId,
+      actorUserId: caller.id,
+      actorType: "USER",
+      action: decision === "APPROVED" ? "CONTENT_APPROVAL_GRANTED" : decision === "CHANGES_REQUESTED" ? "CONTENT_APPROVAL_CHANGES_REQUESTED" : "CONTENT_APPROVAL_REJECTED",
+      resourceType: contentType,
+      resourceId: entityId,
+      metadata: { approvalId: approval.id, reason: reason ?? null }
+    });
+    if (approval.requesterId && approval.requesterId !== caller.id) {
+      await notificationService.notify({
+        organizationId,
+        userId: approval.requesterId,
+        type: decision === "APPROVED" ? "approval_completed" : "approval_rejected",
+        title: decision === "APPROVED" ? "Content approved" : decision === "CHANGES_REQUESTED" ? "Changes requested" : "Content rejected",
+        message: reason ? `"${content.title}": ${reason}` : `"${content.title}" was ${decision.toLowerCase().replace("_", " ")}.`,
+        entityType: contentType,
+        entityId
+      });
+    }
+    try {
+      await eventEngine.emit({
+        eventType: decision === "APPROVED" ? "content.approved" : "content.rejected",
+        entityType: contentType,
+        entityId,
+        organizationId,
+        actorId: caller.id,
+        actorType: "USER",
+        sourceModule: "CMS",
+        payload: { approvalId: approval.id, decision, reason: reason ?? null }
+      });
+    } catch {
+    }
+    return { approvalId: updated.id, decision: updated.status };
+  },
+  async listForOrg(organizationId, status, page, limit) {
+    const where = {
+      organizationId,
+      entityType: { in: ["page", "post"] }
+    };
+    if (status) where.status = status;
+    const [rows, total] = await Promise.all([
+      prisma.automationApproval.findMany({
+        where,
+        orderBy: { requestedAt: "desc" },
+        skip: (page - 1) * limit,
+        take: limit,
+        include: { approver: { select: { id: true, firstName: true, lastName: true, email: true } } }
+      }),
+      prisma.automationApproval.count({ where })
+    ]);
+    return { rows, total, page, limit };
+  }
+};
+
+// server/routes/v1/contentApprovalRoutes.ts
+var router56 = Router56();
+router56.use(authenticateToken);
+var SubmitSchema = z50.object({
+  contentType: z50.enum(["page", "post"]),
+  contentId: z50.string().min(1)
+});
+var DecideSchema = z50.object({
+  decision: z50.enum(["APPROVED", "REJECTED", "CHANGES_REQUESTED"]),
+  reason: z50.string().max(2e3).optional()
+});
+router56.get(
+  "/",
+  requirePermission("content.update"),
+  asyncHandler(async (req, res) => {
+    const result = await contentApprovalService.listForOrg(
+      req.user.organizationId,
+      req.query.status,
+      req.query.page ? Number(req.query.page) : 1,
+      req.query.limit ? Number(req.query.limit) : 20
+    );
+    sendSuccess(res, result);
+  })
+);
+router56.post(
+  "/",
+  requirePermission("content.update"),
+  asyncHandler(async (req, res) => {
+    const body = SubmitSchema.parse(req.body);
+    const result = await contentApprovalService.submitForApproval(req.user, body.contentType, body.contentId);
+    sendSuccess(res, result, 201);
+  })
+);
+router56.post(
+  "/:id/decide",
+  requirePermission("content.publish"),
+  asyncHandler(async (req, res) => {
+    const body = DecideSchema.parse(req.body);
+    const result = await contentApprovalService.decide(req.user, req.params.id, body.decision, body.reason);
+    sendSuccess(res, result);
+  })
+);
+var contentApprovalRoutes_default = router56;
 
 // server/routes/v1/index.ts
-var v1Router = Router51();
+var v1Router = Router57();
 v1Router.use("/auth", authRoutes_default);
 v1Router.use("/webhooks", webhookRoutes_default);
 v1Router.use("/system", systemRoutes_default);
@@ -22697,6 +26503,8 @@ v1Router.use("/opportunities", opportunityRoutes_default);
 v1Router.use("/notifications", notificationRoutes_default);
 v1Router.use("/forms", formRoutes_default);
 v1Router.use("/crm", crmRoutes_default);
+v1Router.use("/campaigns", campaignRoutes_default);
+v1Router.use("/marketing", marketingRoutes_default);
 v1Router.use("/onboarding", onboardingRoutes_default);
 v1Router.use("/workspaces", workspaceRoutes_default);
 v1Router.use("/invitations", invitationRoutes_default);
@@ -22709,6 +26517,7 @@ v1Router.use("/templates", templateRoutes_default);
 v1Router.use("/template-parts", templatePartRoutes_default);
 v1Router.use("/navigation-menus", navigationMenuRoutes_default);
 v1Router.use("/posts", postRoutes_default);
+v1Router.use("/case-studies", caseStudyRoutes_default);
 v1Router.use("/categories", categoryRoutes_default);
 v1Router.use("/redirects", redirectRoutes_default);
 v1Router.use("/seo", seoRoutes_default);
@@ -22731,6 +26540,9 @@ v1Router.use("/ai/approvals", aiApprovalRoutes_default);
 v1Router.use("/automation", automationRoutes_default);
 v1Router.use("/knowledge", knowledgeRoutes_default);
 v1Router.use("/copilot", copilotRoutes_default);
+v1Router.use("/analytics", analyticsRoutes_default);
+v1Router.use("/reports", reportsRoutes_default);
+v1Router.use("/automation/content-approvals", contentApprovalRoutes_default);
 var v1_default = v1Router;
 
 // server/app/app.ts

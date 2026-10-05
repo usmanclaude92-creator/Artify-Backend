@@ -266,7 +266,7 @@ export const productService = {
 
     const nextVersion = (existing.currentRevision?.version ?? 0) + 1;
     const revision = await productRepository.createRevision({ productId: id, version: nextVersion, name: target.name, content: target.content as Prisma.InputJsonValue, createdById: caller.id });
-    await productRepository.update(id, { currentRevisionId: revision.id, updatedById: caller.id });
+    await productRepository.update(id, { currentRevision: { connect: { id: revision.id } }, updatedBy: { connect: { id: caller.id } } });
 
     await auditLogRepository.record({
       actorUserId: caller.id,

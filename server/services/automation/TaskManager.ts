@@ -5,6 +5,7 @@
  */
 
 import crypto from "node:crypto";
+import type { AutomationTaskStatus } from "@prisma/client";
 import { prisma } from "../../db/prisma";
 import { NotFoundError } from "../../core/errors";
 import { auditLogRepository } from "../../repositories/auditLogRepository";
@@ -284,7 +285,7 @@ export class TaskManager {
   public async checkDueDates(): Promise<{ dueSoonNotified: number; overdueNotified: number }> {
     const now = new Date();
     const dueSoonHorizon = new Date(now.getTime() + 24 * 60 * 60 * 1000);
-    const openStatus = { in: ["PENDING", "IN_PROGRESS"] as const };
+    const openStatus = { in: ["PENDING", "IN_PROGRESS"] as AutomationTaskStatus[] };
 
     const [dueSoonTasks, overdueTasks] = await Promise.all([
       prisma.automationTask.findMany({ where: { status: openStatus, assignedUserId: { not: null }, dueDate: { gte: now, lte: dueSoonHorizon } } }),
@@ -332,7 +333,7 @@ export class TaskManager {
   public async getMyTasks(organizationId: string, userId: string) {
     const now = new Date();
     const upcomingHorizon = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
-    const openWhere = { organizationId, assignedUserId: userId, status: { in: ["PENDING", "IN_PROGRESS"] as const } };
+    const openWhere = { organizationId, assignedUserId: userId, status: { in: ["PENDING", "IN_PROGRESS"] as AutomationTaskStatus[] } };
     const include = { workflow: { select: { id: true, name: true, category: true } } };
 
     const [overdue, upcoming, assigned] = await Promise.all([

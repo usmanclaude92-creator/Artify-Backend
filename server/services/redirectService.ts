@@ -149,7 +149,7 @@ export const redirectService = {
     organizationId: string;
     fromPath: string;
     toPath: string;
-    resourceType: "post" | "page";
+    resourceType: "post" | "page" | "case_study";
     resourceId: string;
   }): Promise<void> {
     if (params.fromPath === params.toPath) return;
