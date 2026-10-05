@@ -19,6 +19,7 @@
  *     `aiOrchestrator`/agent catalog, which this repo does not have.
  */
 
+import { aiQuotaService } from "../aiQuotaService";
 import crypto from "node:crypto";
 import { prisma } from "../../db/prisma";
 import { logger } from "../../core/logger";
@@ -233,6 +234,7 @@ export class WorkflowEngine {
             if (aiCallCount > limits.maxAiCalls) {
               throw new Error(`Exceeded maximum allowed AI calls (${limits.maxAiCalls}).`);
             }
+            await aiQuotaService.assertWithinLimits(execution.organizationId);
 
             const interpolatedPrompt = this.interpolate(step.prompt, context);
             const decisionInstruction = `${interpolatedPrompt}\n\nYou MUST respond strictly in valid JSON matching this schema:\n{\n  "decision": "APPROVED" | "REJECTED" | "REVIEW_REQUIRED" | "FLAGGED",\n  "reason": "explanation string",\n  "confidence": number between 0 and 1,\n  "recommended_action": "action_string"\n}`;
@@ -258,6 +260,7 @@ export class WorkflowEngine {
             if (aiCallCount > limits.maxAiCalls) {
               throw new Error(`Exceeded maximum allowed AI calls (${limits.maxAiCalls}).`);
             }
+            await aiQuotaService.assertWithinLimits(execution.organizationId);
 
             const interpolatedPrompt = this.interpolate(step.prompt, context);
             let citations: unknown[] = [];
@@ -267,7 +270,7 @@ export class WorkflowEngine {
               try {
                 const grounded = await KnowledgeService.getGroundedContext(
                   interpolatedPrompt,
-                  { organizationId: execution.organizationId, userId: execution.initiatedById || undefined, userPermissions: ["*"] },
+                  { organizationId: execution.organizationId, userId: execution.initiatedById || undefined, userPermissions: await this.initiatorPermissions(execution) },
                   { filter: step.knowledgeFilter }
                 );
                 if (grounded.formattedContext) {
@@ -440,7 +443,7 @@ export class WorkflowEngine {
             const query = this.interpolate(step.queryTemplate, context);
             const results = await KnowledgeService.search(
               { query, limit: step.maxResults || 5, filter: step.collectionIds?.length ? { collectionIds: step.collectionIds } : undefined },
-              { organizationId: execution.organizationId, userId: execution.initiatedById || undefined, userPermissions: ["*"] }
+              { organizationId: execution.organizationId, userId: execution.initiatedById || undefined, userPermissions: await this.initiatorPermissions(execution) }
             );
 
             stepOutput = {
@@ -592,6 +595,18 @@ export class WorkflowEngine {
   }
 
   /** Interpolate variable strings like {{payload.client.name}} or {{invoice.amount}} */
+  /**
+   * Permissions used to scope knowledge retrieval for AI steps: the initiating
+   * user's real permissions, or none for unattributed runs (never superuser).
+   */
+  private async initiatorPermissions(execution: { initiatedById: string | null; organizationId: string }): Promise<string[]> {
+    if (!execution.initiatedById) return [];
+    const user = await userRepository.findById(execution.initiatedById);
+    const caller = user && (await resolveSanitizedUserForOrganization(user, execution.organizationId));
+    if (!caller) return [];
+    return caller.role.key === "SUPER_ADMIN" ? ["*"] : [...caller.role.permissions];
+  }
+
   private interpolate(template: string, context: Record<string, unknown>): string {
     if (!template) return "";
     return template.replace(/\{\{([^}]+)\}\}/g, (_match, path) => {

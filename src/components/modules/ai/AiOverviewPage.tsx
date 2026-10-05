@@ -5,6 +5,7 @@ import { useAuth } from "../../../context/AuthContext";
 import { aiExecutionsApi, aiApprovalsApi, aiUsageApi, type AiExecution, type AiApprovalRequest, type AiUsageSummary } from "../../../lib/aiApi";
 import { Card, Badge, LoadingState } from "../../ui/ui";
 import { hasPermission } from "../../../lib/permissions";
+import { AiHealthPanel } from "./AiHealthPanel";
 
 const StatCard: React.FC<{ icon: React.ElementType; label: string; value: React.ReactNode }> = ({ icon: Icon, label, value }) => (
   <Card className="p-4 flex items-center gap-3">
@@ -71,6 +72,8 @@ export const AiOverviewPage: React.FC = () => {
         {canReadExecutions && <StatCard icon={History} label="Recent executions" value={recentExecutions?.length ?? "—"} />}
         {canReadUsage && <StatCard icon={Gauge} label="Total AI requests" value={usage?.totals._count ?? "—"} />}
       </div>
+
+      {canReadUsage && <AiHealthPanel canManage={hasPermission(user?.role.permissions, "ai.providers.manage")} />}
 
       {canReadApprovals && pendingApprovals && pendingApprovals.length > 0 && (
         <Card>

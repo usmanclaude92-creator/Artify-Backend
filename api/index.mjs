@@ -375,6 +375,13 @@ var ConflictError = class extends AppError {
     this.code = "RESOURCE_CONFLICT" /* RESOURCE_CONFLICT */;
   }
 };
+var RateLimitError = class extends AppError {
+  constructor(message = "Too many requests") {
+    super(message);
+    this.statusCode = 429;
+    this.code = "RATE_LIMIT_EXCEEDED" /* RATE_LIMIT_EXCEEDED */;
+  }
+};
 var NotImplementedError = class extends AppError {
   constructor(message = "This feature is not implemented yet") {
     super(message);
@@ -1252,7 +1259,7 @@ function errorHandlerMiddleware(err, req, res, _next) {
 }
 
 // server/routes/v1/index.ts
-import { Router as Router60 } from "express";
+import { Router as Router61 } from "express";
 
 // server/routes/v1/authRoutes.ts
 import { Router } from "express";
@@ -21112,8 +21119,477 @@ router49.get(
 );
 var aiUsageRoutes_default = router49;
 
-// server/routes/v1/aiApprovalRoutes.ts
+// server/routes/v1/aiHealthRoutes.ts
 import { Router as Router50 } from "express";
+
+// server/services/aiQuotaService.ts
+import { z as z46 } from "zod";
+var AI_LIMITS_KEY = "ai.limits";
+var aiLimitsSchema = z46.object({
+  dailyRequests: z46.number().int().min(0).max(1e7),
+  dailyTokens: z46.number().int().min(0).max(1e9)
+});
+var startOfUtcDay = () => {
+  const d = /* @__PURE__ */ new Date();
+  d.setUTCHours(0, 0, 0, 0);
+  return d;
+};
+var aiQuotaService = {
+  async getLimits(organizationId) {
+    const row = await systemSettingRepository.findByKey(organizationId, AI_LIMITS_KEY);
+    const parsed = aiLimitsSchema.safeParse(row?.value);
+    return parsed.success ? parsed.data : { dailyRequests: 0, dailyTokens: 0 };
+  },
+  async setLimits(organizationId, actorUserId, limits, meta3 = {}) {
+    const before = await this.getLimits(organizationId);
+    await systemSettingRepository.upsert({
+      organizationId,
+      key: AI_LIMITS_KEY,
+      value: limits,
+      type: "JSON",
+      description: "AI usage limits (0 = unlimited)",
+      updatedById: actorUserId
+    });
+    await auditLogRepository.record({
+      organizationId,
+      actorUserId,
+      actorType: "USER",
+      action: "AI_LIMITS_UPDATED",
+      resourceType: "ai_limits",
+      beforeData: before,
+      afterData: limits,
+      ipAddress: meta3.ip,
+      userAgent: meta3.userAgent
+    });
+    return limits;
+  },
+  async usageToday(organizationId) {
+    const agg = await prisma.copilotUsage.aggregate({
+      where: { organizationId, createdAt: { gte: startOfUtcDay() }, status: "SUCCESS" },
+      _count: { _all: true },
+      _sum: { totalTokens: true }
+    });
+    return { requests: agg._count._all, tokens: agg._sum.totalTokens ?? 0 };
+  },
+  /** Throws RateLimitError (429) when today's org-wide usage has reached a configured cap. */
+  async assertWithinLimits(organizationId) {
+    const limits = await this.getLimits(organizationId);
+    if (!limits.dailyRequests && !limits.dailyTokens) return;
+    const used = await this.usageToday(organizationId);
+    if (limits.dailyRequests && used.requests >= limits.dailyRequests) {
+      throw new RateLimitError("Daily AI request limit reached for this organization.");
+    }
+    if (limits.dailyTokens && used.tokens >= limits.dailyTokens) {
+      throw new RateLimitError("Daily AI token limit reached for this organization.");
+    }
+  }
+};
+
+// server/ai/adapters/geminiAdapter.ts
+import { GoogleGenAI } from "@google/genai";
+var GeminiAdapter = class {
+  constructor(apiKey) {
+    this.providerType = "GEMINI";
+    this.client = null;
+    this.apiKey = apiKey && apiKey.length > 0 ? apiKey : config.geminiApiKey;
+  }
+  getClient() {
+    if (this.client) return this.client;
+    if (!this.apiKey || this.apiKey.length === 0) {
+      throw new InfrastructureError("Gemini API key is not configured in server environment.");
+    }
+    this.client = new GoogleGenAI({ apiKey: this.apiKey });
+    return this.client;
+  }
+  async generateText(params) {
+    const start = Date.now();
+    const client3 = this.getClient();
+    const model = params.modelName || "gemini-2.5-flash";
+    try {
+      const response = await client3.models.generateContent({
+        model,
+        contents: params.prompt,
+        config: {
+          systemInstruction: params.systemInstruction,
+          temperature: params.temperature ?? 0.3,
+          maxOutputTokens: params.maxTokens ?? 2048,
+          responseMimeType: params.responseMimeType,
+          stopSequences: params.stopSequences
+        }
+      });
+      const durationMs = Date.now() - start;
+      const text = response.text || "";
+      const usage = response.usageMetadata;
+      const inputTokens = usage?.promptTokenCount ?? Math.max(1, Math.ceil(params.prompt.length / 4));
+      const outputTokens = usage?.candidatesTokenCount ?? Math.max(1, Math.ceil(text.length / 4));
+      const totalTokens = usage?.totalTokenCount ?? inputTokens + outputTokens;
+      return {
+        text,
+        inputTokens,
+        outputTokens,
+        totalTokens,
+        durationMs,
+        finishReason: "STOP"
+      };
+    } catch (err) {
+      const durationMs = Date.now() - start;
+      logger.error({ err, model, durationMs, event: "gemini_adapter_error" }, "Gemini invocation failed");
+      const message = err instanceof Error ? err.message : "Gemini provider call failed.";
+      throw new InfrastructureError(`Gemini error: ${message}`);
+    }
+  }
+  async generateStructured(params) {
+    const res = await this.generateText({
+      ...params,
+      responseMimeType: "application/json"
+    });
+    try {
+      const clean = res.text.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
+      return JSON.parse(clean);
+    } catch {
+      throw new InfrastructureError(`Failed to parse structured JSON output: ${res.text.slice(0, 100)}...`);
+    }
+  }
+  async generateEmbedding(params) {
+    const client3 = this.getClient();
+    const model = params.modelName || "text-embedding-004";
+    try {
+      const response = await client3.models.embedContent({
+        model,
+        contents: params.text
+      });
+      const values = response.embeddings?.[0]?.values;
+      if (Array.isArray(values) && values.length > 0) {
+        return values;
+      }
+      throw new Error("No embedding values returned from Gemini model.");
+    } catch (err) {
+      logger.error({ err, model }, "Gemini embedding invocation failed");
+      const message = err instanceof Error ? err.message : "Gemini embedContent failed.";
+      throw new InfrastructureError(`Gemini embedding error: ${message}`);
+    }
+  }
+};
+
+// server/ai/adapters/mockAdapter.ts
+var MockAdapter = class {
+  constructor() {
+    this.providerType = "MOCK";
+  }
+  async generateText(params) {
+    const start = Date.now();
+    const prompt = params.prompt.trim();
+    let responseText = "";
+    if (params.responseMimeType === "application/json" || prompt.toLowerCase().includes("json")) {
+      responseText = JSON.stringify({
+        status: "success",
+        synthesis: "Simulated structured intelligence output generated by Artify Mock Adapter.",
+        entities: [{ name: "Target Entity", type: "ENTERPRISE", score: 0.94 }],
+        recommendation: "Proceed with executive relationship advancement.",
+        timestamp: (/* @__PURE__ */ new Date()).toISOString()
+      }, null, 2);
+    } else if (prompt.toLowerCase().includes("summariz") || prompt.toLowerCase().includes("brief")) {
+      responseText = `**Executive Brief**
+
+- **Overview:** Synthesized analysis for prompt: "${prompt.slice(0, 80)}..."
+- **Key Finding:** Strong commercial alignment observed across account parameters.
+- **Risk Factor:** Low risk with operational governance active.
+- **Recommended Next Step:** Schedule milestone audit and confirm contract schedule.`;
+    } else if (prompt.toLowerCase().includes("classif") || prompt.toLowerCase().includes("categor")) {
+      responseText = `**Classification Result**
+- Primary Category: HIGH_PRIORITY
+- Confidence Score: 0.92
+- Strategic Alignment: Enterprise Tier Growth`;
+    } else {
+      responseText = `Artify Intelligence Response:
+
+Analysis completed successfully for model ${params.modelName}.
+
+Parameters evaluated: temperature=${params.temperature ?? 0.3}, maxTokens=${params.maxTokens ?? 2048}.
+System instructions observed: ${params.systemInstruction ? "Active" : "None"}.
+
+Evaluated input: ${prompt}
+
+Output: High quality deterministic synthesis conforming to Artify enterprise governance policies.`;
+    }
+    const durationMs = Math.max(15, Date.now() - start);
+    const inputTokens = Math.max(1, Math.ceil(prompt.length / 4));
+    const outputTokens = Math.max(1, Math.ceil(responseText.length / 4));
+    return {
+      text: responseText,
+      inputTokens,
+      outputTokens,
+      totalTokens: inputTokens + outputTokens,
+      durationMs,
+      finishReason: "STOP"
+    };
+  }
+  async generateStructured(params) {
+    const res = await this.generateText({
+      ...params,
+      responseMimeType: "application/json"
+    });
+    return JSON.parse(res.text);
+  }
+  async generateEmbedding(params) {
+    const dim = params.dimension || 768;
+    const text = params.text.toLowerCase();
+    const vec = new Array(dim).fill(0);
+    for (let i = 0; i < text.length; i++) {
+      const code = text.charCodeAt(i);
+      const idx = (code * 31 + i * 17) % dim;
+      vec[idx] = (vec[idx] + code / 255) % 1;
+    }
+    const norm = Math.sqrt(vec.reduce((sum, v) => sum + v * v, 0)) || 1;
+    return vec.map((v) => Number((v / norm).toFixed(6)));
+  }
+};
+
+// server/ai/adapters/adapterFactory.ts
+var AdapterFactory = class {
+  static {
+    this.mockInstance = new MockAdapter();
+  }
+  static {
+    this.geminiInstance = null;
+  }
+  static getAdapter(providerType, apiKey) {
+    const normalized = (providerType || "GEMINI").toUpperCase();
+    if (normalized === "MOCK") {
+      return this.mockInstance;
+    }
+    if (normalized === "GEMINI") {
+      const key2 = apiKey || config.geminiApiKey;
+      if (!key2 || key2.length === 0) {
+        if (process.env.NODE_ENV === "test") return this.mockInstance;
+        throw new InfrastructureError("AI provider is not configured");
+      }
+      if (!this.geminiInstance || apiKey) {
+        const adapter = new GeminiAdapter(key2);
+        if (!apiKey) this.geminiInstance = adapter;
+        return adapter;
+      }
+      return this.geminiInstance;
+    }
+    if (process.env.NODE_ENV === "test") return this.mockInstance;
+    throw new InfrastructureError(`AI provider adapter "${normalized}" is not implemented`);
+  }
+};
+
+// server/ai/adapters/index.ts
+function getAdapter(providerType = "GEMINI", apiKey) {
+  return AdapterFactory.getAdapter(providerType, apiKey);
+}
+
+// server/services/knowledge/EmbeddingService.ts
+var EmbeddingService = class {
+  /**
+   * Returns an embedding from the configured AI provider, or null when no
+   * provider is configured or the call fails. Never fabricates vectors outside
+   * the test runner, so callers must degrade to keyword retrieval on null.
+   */
+  static async tryGenerateEmbedding(text, modelName = "text-embedding-004") {
+    let adapter;
+    try {
+      adapter = getAdapter();
+    } catch {
+      return null;
+    }
+    if (!adapter.generateEmbedding) return null;
+    try {
+      return await adapter.generateEmbedding({ text, modelName, dimension: 768 });
+    } catch (err) {
+      logger.warn({ err }, "[EmbeddingService] Provider embedding failed");
+      return null;
+    }
+  }
+  /** True when a real (non-mock) embedding provider is configured. */
+  static isAvailable() {
+    return process.env.NODE_ENV === "test" || config.geminiApiKey.length > 0;
+  }
+  /**
+   * Computes cosine similarity between two unit vectors.
+   */
+  static cosineSimilarity(a, b) {
+    if (!a || !b || a.length === 0 || b.length === 0) return 0;
+    const len = Math.min(a.length, b.length);
+    let dot = 0;
+    let normA = 0;
+    let normB = 0;
+    for (let i = 0; i < len; i++) {
+      const ai = a[i] ?? 0;
+      const bi = b[i] ?? 0;
+      dot += ai * bi;
+      normA += ai * ai;
+      normB += bi * bi;
+    }
+    const denom = Math.sqrt(normA) * Math.sqrt(normB);
+    return denom === 0 ? 0 : Math.max(0, Math.min(1, dot / denom));
+  }
+  /**
+   * Stores embedding for a chunk in the database.
+   */
+  static async storeEmbedding(chunkId, vector, modelName = "text-embedding-004") {
+    await prisma.knowledgeEmbedding.create({
+      data: {
+        chunkId,
+        providerType: getAdapter().providerType,
+        modelName,
+        dimension: vector.length,
+        vector
+      }
+    });
+  }
+};
+
+// server/services/aiHealthService.ts
+var DAY = 24 * 60 * 60 * 1e3;
+var aiHealthService = {
+  async snapshot(organizationId) {
+    const now = Date.now();
+    const since30 = new Date(now - 30 * DAY);
+    const since24 = new Date(now - DAY);
+    const hasKey = config.geminiApiKey.length > 0;
+    const providerEnabled = config.aiProvider === "gemini";
+    const configured = providerEnabled && hasKey;
+    const [
+      providers,
+      copilot30,
+      copilotFailed30,
+      copilot24,
+      byModel,
+      execByStatus,
+      recentExecFailures,
+      recentCopilot,
+      usageRecordAgg,
+      docsByStatus,
+      chunkCount,
+      embeddingCount,
+      failedJobs,
+      limits,
+      today
+    ] = await Promise.all([
+      prisma.aIProvider.findMany({ include: { models: { select: { id: true, isActive: true } } }, orderBy: { code: "asc" } }),
+      prisma.copilotUsage.aggregate({
+        where: { organizationId, createdAt: { gte: since30 }, status: "SUCCESS" },
+        _count: { _all: true },
+        _sum: { inputTokens: true, outputTokens: true, totalTokens: true, estimatedCost: true },
+        _avg: { durationMs: true }
+      }),
+      prisma.copilotUsage.count({ where: { organizationId, createdAt: { gte: since30 }, status: { not: "SUCCESS" } } }),
+      prisma.copilotUsage.count({ where: { organizationId, createdAt: { gte: since24 } } }),
+      prisma.copilotUsage.groupBy({
+        by: ["providerType", "modelName"],
+        where: { organizationId, createdAt: { gte: since30 }, status: "SUCCESS" },
+        _count: { _all: true },
+        _sum: { totalTokens: true }
+      }),
+      prisma.aIExecution.groupBy({ by: ["status"], where: { organizationId, startedAt: { gte: since30 } }, _count: { _all: true } }),
+      prisma.aIExecution.findMany({
+        where: { organizationId, status: "FAILED" },
+        orderBy: { startedAt: "desc" },
+        take: 5,
+        select: { id: true, errorCategory: true, errorMessage: true, startedAt: true }
+      }),
+      prisma.copilotUsage.findMany({
+        where: { organizationId },
+        orderBy: { createdAt: "desc" },
+        take: 8,
+        select: { id: true, providerType: true, modelName: true, totalTokens: true, durationMs: true, status: true, createdAt: true }
+      }),
+      prisma.aIUsageRecord.aggregate({
+        where: { organizationId, createdAt: { gte: since30 } },
+        _count: { _all: true },
+        _sum: { totalTokens: true, estimatedCost: true }
+      }),
+      prisma.knowledgeDocument.groupBy({ by: ["status"], where: { organizationId }, _count: { _all: true } }),
+      prisma.knowledgeChunk.count({ where: { organizationId } }),
+      prisma.knowledgeEmbedding.count({ where: { chunk: { organizationId } } }),
+      prisma.knowledgeIngestionJob.count({ where: { organizationId, status: "FAILED" } }),
+      aiQuotaService.getLimits(organizationId),
+      aiQuotaService.usageToday(organizationId)
+    ]);
+    const embeddingsAvailable = EmbeddingService.isAvailable();
+    return {
+      generatedAt: new Date(now).toISOString(),
+      provider: {
+        active: config.aiProvider,
+        configured,
+        state: configured ? "CONFIGURED" : providerEnabled ? "NOT_CONFIGURED_KEY_MISSING" : "DISABLED",
+        label: configured ? "Configured (credentials present, connectivity not probed)" : "Not configured",
+        defaultModel: configured ? "gemini-3.7-flash" : null,
+        embeddingsAvailable,
+        capabilities: {
+          textGeneration: configured,
+          structuredOutput: configured,
+          embeddings: embeddingsAvailable,
+          copilot: configured,
+          knowledgeSemanticSearch: embeddingsAvailable,
+          knowledgeKeywordSearch: true
+        }
+      },
+      catalog: providers.map((p) => ({
+        code: p.code,
+        name: p.name,
+        status: p.status,
+        isDefault: p.isDefault,
+        models: p.models.length,
+        activeModels: p.models.filter((m) => m.isActive).length
+      })),
+      usage: {
+        window: "30d",
+        copilotRequests: copilot30._count._all,
+        copilotFailures: copilotFailed30,
+        copilotRequests24h: copilot24,
+        inputTokens: copilot30._sum.inputTokens ?? 0,
+        outputTokens: copilot30._sum.outputTokens ?? 0,
+        totalTokens: copilot30._sum.totalTokens ?? 0,
+        estimatedCost: Number(copilot30._sum.estimatedCost ?? 0),
+        avgLatencyMs: copilot30._avg.durationMs ? Math.round(copilot30._avg.durationMs) : null,
+        byModel: byModel.map((m) => ({ provider: m.providerType, model: m.modelName, requests: m._count._all, tokens: m._sum.totalTokens ?? 0 })),
+        governedExecutions: execByStatus.map((e) => ({ status: e.status, count: e._count._all })),
+        governedUsage: { records: usageRecordAgg._count._all, tokens: usageRecordAgg._sum.totalTokens ?? 0, estimatedCost: Number(usageRecordAgg._sum.estimatedCost ?? 0) }
+      },
+      limits: { ...limits, usedToday: today },
+      recentActivity: recentCopilot,
+      recentErrors: recentExecFailures.map((e) => ({ id: e.id, category: e.errorCategory, message: (e.errorMessage ?? "").slice(0, 200), at: e.startedAt })),
+      knowledge: {
+        documents: docsByStatus.map((d) => ({ status: d.status, count: d._count._all })),
+        chunks: chunkCount,
+        embeddedChunks: embeddingCount,
+        failedIngestionJobs: failedJobs,
+        retrievalMode: embeddingsAvailable ? "HYBRID" : "KEYWORD_ONLY"
+      }
+    };
+  }
+};
+
+// server/routes/v1/aiHealthRoutes.ts
+var router50 = Router50();
+router50.use(authenticateToken);
+router50.get(
+  "/health",
+  requirePermission("ai.usage.read"),
+  asyncHandler(async (req, res) => {
+    sendSuccess(res, { health: await aiHealthService.snapshot(req.user.organizationId) });
+  })
+);
+router50.put(
+  "/limits",
+  requirePermission("ai.providers.manage"),
+  asyncHandler(async (req, res) => {
+    const input = aiLimitsSchema.parse(req.body);
+    const limits = await aiQuotaService.setLimits(req.user.organizationId, req.user.id, input, {
+      ip: req.ip,
+      userAgent: req.headers["user-agent"]
+    });
+    sendSuccess(res, { limits });
+  })
+);
+var aiHealthRoutes_default = router50;
+
+// server/routes/v1/aiApprovalRoutes.ts
+import { Router as Router51 } from "express";
 
 // server/services/aiApprovalService.ts
 import crypto3 from "crypto";
@@ -21239,12 +21715,12 @@ var aiApprovalService = {
 };
 
 // server/routes/v1/aiApprovalRoutes.ts
-var router50 = Router50();
-router50.use(authenticateToken);
+var router51 = Router51();
+router51.use(authenticateToken);
 function requestMeta37(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"], requestId: req.requestId };
 }
-router50.get(
+router51.get(
   "/",
   requirePermission("ai.approvals.read"),
   asyncHandler(async (req, res) => {
@@ -21260,7 +21736,7 @@ router50.get(
     sendSuccess(res, { approvals: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router50.get(
+router51.get(
   "/:id",
   requirePermission("ai.approvals.read"),
   asyncHandler(async (req, res) => {
@@ -21268,7 +21744,7 @@ router50.get(
     sendSuccess(res, { approval });
   })
 );
-router50.post(
+router51.post(
   "/:id/decide",
   requirePermission("ai.approvals.decide"),
   asyncHandler(async (req, res) => {
@@ -21277,12 +21753,12 @@ router50.post(
     sendSuccess(res, { approval });
   })
 );
-var aiApprovalRoutes_default = router50;
+var aiApprovalRoutes_default = router51;
 
 // server/routes/v1/automationRoutes.ts
 import { timingSafeEqual as timingSafeEqual2 } from "node:crypto";
-import { Router as Router51 } from "express";
-import { z as z48 } from "zod";
+import { Router as Router52 } from "express";
+import { z as z49 } from "zod";
 
 // server/services/automation/AutomationService.ts
 import crypto11 from "node:crypto";
@@ -21458,7 +21934,7 @@ var ConditionEngine = class {
 };
 
 // server/services/automation/ActionRegistry.ts
-import { z as z46 } from "zod";
+import { z as z47 } from "zod";
 import crypto4 from "node:crypto";
 var ActionRegistry = class _ActionRegistry {
   constructor() {
@@ -21497,19 +21973,19 @@ var ActionRegistry = class _ActionRegistry {
       riskLevel: "LOW",
       requiresApproval: false,
       requiresAudit: true,
-      inputSchema: z46.object({
-        title: z46.string().min(1),
-        description: z46.string().optional(),
-        assignedUserId: z46.string().optional(),
-        assignedRole: z46.string().optional(),
-        priority: z46.enum(["LOW", "MEDIUM", "HIGH", "URGENT"]).default("MEDIUM"),
-        dueDate: z46.string().optional(),
-        sourceEntityType: z46.string().optional(),
-        sourceEntityId: z46.string().optional(),
-        isAiGenerated: z46.boolean().default(true),
-        metadata: z46.record(z46.unknown()).optional()
+      inputSchema: z47.object({
+        title: z47.string().min(1),
+        description: z47.string().optional(),
+        assignedUserId: z47.string().optional(),
+        assignedRole: z47.string().optional(),
+        priority: z47.enum(["LOW", "MEDIUM", "HIGH", "URGENT"]).default("MEDIUM"),
+        dueDate: z47.string().optional(),
+        sourceEntityType: z47.string().optional(),
+        sourceEntityId: z47.string().optional(),
+        isAiGenerated: z47.boolean().default(true),
+        metadata: z47.record(z47.unknown()).optional()
       }),
-      outputSchema: z46.object({ taskId: z46.string(), title: z46.string(), status: z46.string() }),
+      outputSchema: z47.object({ taskId: z47.string(), title: z47.string(), status: z47.string() }),
       execute: async (input, context) => {
         const taskId = crypto4.randomUUID();
         const dueDate = input.dueDate ? new Date(input.dueDate) : null;
@@ -21543,12 +22019,12 @@ var ActionRegistry = class _ActionRegistry {
       riskLevel: "MEDIUM",
       requiresApproval: false,
       requiresAudit: true,
-      inputSchema: z46.object({
-        clientId: z46.string().min(1),
-        status: z46.enum(["PROSPECT", "ACTIVE", "INACTIVE", "SUSPENDED", "ARCHIVED"]).optional(),
-        notes: z46.string().optional()
+      inputSchema: z47.object({
+        clientId: z47.string().min(1),
+        status: z47.enum(["PROSPECT", "ACTIVE", "INACTIVE", "SUSPENDED", "ARCHIVED"]).optional(),
+        notes: z47.string().optional()
       }),
-      outputSchema: z46.object({ clientId: z46.string(), updated: z46.boolean() }),
+      outputSchema: z47.object({ clientId: z47.string(), updated: z47.boolean() }),
       execute: async (input, context) => {
         const client3 = await prisma.client.findFirst({ where: { id: input.clientId, organizationId: context.organizationId } });
         if (!client3) {
@@ -21571,16 +22047,16 @@ var ActionRegistry = class _ActionRegistry {
       riskLevel: "LOW",
       requiresApproval: false,
       requiresAudit: false,
-      inputSchema: z46.object({
-        userId: z46.string().optional(),
-        recipientRole: z46.string().optional(),
-        title: z46.string().min(1),
-        message: z46.string().min(1),
-        level: z46.enum(["INFO", "WARNING", "ERROR", "SUCCESS"]).default("INFO"),
-        channel: z46.enum(["IN_APP", "EMAIL", "SMS", "WEBHOOK"]).default("IN_APP"),
-        metadata: z46.record(z46.unknown()).optional()
+      inputSchema: z47.object({
+        userId: z47.string().optional(),
+        recipientRole: z47.string().optional(),
+        title: z47.string().min(1),
+        message: z47.string().min(1),
+        level: z47.enum(["INFO", "WARNING", "ERROR", "SUCCESS"]).default("INFO"),
+        channel: z47.enum(["IN_APP", "EMAIL", "SMS", "WEBHOOK"]).default("IN_APP"),
+        metadata: z47.record(z47.unknown()).optional()
       }),
-      outputSchema: z46.object({ notificationId: z46.string(), delivered: z46.boolean() }),
+      outputSchema: z47.object({ notificationId: z47.string(), delivered: z47.boolean() }),
       execute: async (input, context) => {
         const notifId = crypto4.randomUUID();
         const autoNotif = await prisma.automationNotification.create({
@@ -21627,12 +22103,12 @@ var ActionRegistry = class _ActionRegistry {
       riskLevel: "MEDIUM",
       requiresApproval: false,
       requiresAudit: true,
-      inputSchema: z46.object({
-        entityType: z46.enum(["LEAD", "CLIENT", "TASK"]),
-        entityId: z46.string().min(1),
-        userId: z46.string().min(1)
+      inputSchema: z47.object({
+        entityType: z47.enum(["LEAD", "CLIENT", "TASK"]),
+        entityId: z47.string().min(1),
+        userId: z47.string().min(1)
       }),
-      outputSchema: z46.object({ entityId: z46.string(), assignedUserId: z46.string(), success: z46.boolean() }),
+      outputSchema: z47.object({ entityId: z47.string(), assignedUserId: z47.string(), success: z47.boolean() }),
       execute: async (input, _context) => {
         if (input.entityType === "LEAD") {
           await prisma.lead.update({ where: { id: input.entityId }, data: { assignedTo: input.userId } });
@@ -21652,8 +22128,8 @@ var ActionRegistry = class _ActionRegistry {
       riskLevel: "LOW",
       requiresApproval: false,
       requiresAudit: true,
-      inputSchema: z46.object({ reportType: z46.string(), title: z46.string(), parameters: z46.record(z46.unknown()).optional() }),
-      outputSchema: z46.object({ reportId: z46.string(), generatedAt: z46.string(), summary: z46.string() }),
+      inputSchema: z47.object({ reportType: z47.string(), title: z47.string(), parameters: z47.record(z47.unknown()).optional() }),
+      outputSchema: z47.object({ reportId: z47.string(), generatedAt: z47.string(), summary: z47.string() }),
       // Phase 1 audit finding (docs/control-center-module-gap-analysis.md):
       // this previously fabricated a reportId/summary with no real report
       // ever generated. No reporting service exists in this codebase
@@ -21674,14 +22150,14 @@ var ActionRegistry = class _ActionRegistry {
       riskLevel: "HIGH",
       requiresApproval: true,
       requiresAudit: true,
-      inputSchema: z46.object({
-        clientId: z46.string().min(1),
-        amountDue: z46.number().positive(),
-        currency: z46.string().default("USD"),
-        dueDate: z46.string().optional(),
-        memo: z46.string().optional()
+      inputSchema: z47.object({
+        clientId: z47.string().min(1),
+        amountDue: z47.number().positive(),
+        currency: z47.string().default("USD"),
+        dueDate: z47.string().optional(),
+        memo: z47.string().optional()
       }),
-      outputSchema: z46.object({ draftCreated: z46.boolean(), invoiceId: z46.string(), invoiceNumber: z46.string(), amountDue: z46.number() }),
+      outputSchema: z47.object({ draftCreated: z47.boolean(), invoiceId: z47.string(), invoiceNumber: z47.string(), amountDue: z47.number() }),
       // Phase 1 audit finding (docs/control-center-module-gap-analysis.md):
       // this previously fabricated an "INV-DRAFT-..." string with no
       // Invoice row ever created. Fixed by real service integration —
@@ -21741,8 +22217,8 @@ var ActionRegistry = class _ActionRegistry {
       riskLevel: "HIGH",
       requiresApproval: false,
       requiresAudit: true,
-      inputSchema: z46.object({ workflowId: z46.string().min(1), status: z46.enum(["ACTIVE", "PAUSED", "ARCHIVED"]) }),
-      outputSchema: z46.object({ workflowId: z46.string(), newStatus: z46.string() }),
+      inputSchema: z47.object({ workflowId: z47.string().min(1), status: z47.enum(["ACTIVE", "PAUSED", "ARCHIVED"]) }),
+      outputSchema: z47.object({ workflowId: z47.string(), newStatus: z47.string() }),
       execute: async (input, _context) => {
         const updated = await prisma.automationWorkflow.update({ where: { id: input.workflowId }, data: { status: input.status } });
         return { workflowId: updated.id, newStatus: updated.status };
@@ -21756,8 +22232,8 @@ var ActionRegistry = class _ActionRegistry {
       riskLevel: "HIGH",
       requiresApproval: true,
       requiresAudit: true,
-      inputSchema: z46.object({ contentType: z46.enum(["PAGE", "POST"]), contentId: z46.string().min(1) }),
-      outputSchema: z46.object({ contentId: z46.string(), published: z46.boolean() }),
+      inputSchema: z47.object({ contentType: z47.enum(["PAGE", "POST"]), contentId: z47.string().min(1) }),
+      outputSchema: z47.object({ contentId: z47.string(), published: z47.boolean() }),
       execute: async (input, context) => {
         const where = { id: input.contentId, organizationId: context.organizationId };
         const result = input.contentType === "PAGE" ? await prisma.page.updateMany({ where, data: { status: "PUBLISHED", publishedAt: /* @__PURE__ */ new Date() } }) : await prisma.post.updateMany({ where, data: { status: "PUBLISHED", publishedAt: /* @__PURE__ */ new Date() } });
@@ -21775,16 +22251,16 @@ var ActionRegistry = class _ActionRegistry {
       riskLevel: "LOW",
       requiresApproval: false,
       requiresAudit: true,
-      inputSchema: z46.object({
-        companyName: z46.string().trim().min(1),
-        contactName: z46.string().trim().optional(),
-        email: z46.string().trim().email().optional(),
-        phone: z46.string().trim().optional(),
-        source: z46.string().trim().max(100).optional(),
-        assignedTo: z46.string().trim().optional(),
-        campaignId: z46.string().trim().optional()
+      inputSchema: z47.object({
+        companyName: z47.string().trim().min(1),
+        contactName: z47.string().trim().optional(),
+        email: z47.string().trim().email().optional(),
+        phone: z47.string().trim().optional(),
+        source: z47.string().trim().max(100).optional(),
+        assignedTo: z47.string().trim().optional(),
+        campaignId: z47.string().trim().optional()
       }),
-      outputSchema: z46.object({ leadId: z46.string(), companyName: z46.string(), status: z46.string() }),
+      outputSchema: z47.object({ leadId: z47.string(), companyName: z47.string(), status: z47.string() }),
       execute: async (input, context) => {
         if (input.email) {
           const duplicates = await leadRepository.findByEmailInOrg(context.organizationId, input.email);
@@ -21822,11 +22298,11 @@ var ActionRegistry = class _ActionRegistry {
       riskLevel: "LOW",
       requiresApproval: false,
       requiresAudit: true,
-      inputSchema: z46.object({
-        leadId: z46.string().trim().min(1),
-        status: z46.enum(["NEW", "CONTACTED", "QUALIFIED", "LOST"])
+      inputSchema: z47.object({
+        leadId: z47.string().trim().min(1),
+        status: z47.enum(["NEW", "CONTACTED", "QUALIFIED", "LOST"])
       }),
-      outputSchema: z46.object({ leadId: z46.string(), fromStatus: z46.string(), toStatus: z46.string() }),
+      outputSchema: z47.object({ leadId: z47.string(), fromStatus: z47.string(), toStatus: z47.string() }),
       execute: async (input, context) => {
         const lead = await prisma.lead.findFirst({ where: { id: input.leadId, organizationId: context.organizationId, deletedAt: null } });
         if (!lead) throw new ValidationError(`update_lead_status: leadId "${input.leadId}" does not refer to a lead in this organization.`);
@@ -21858,8 +22334,8 @@ var ActionRegistry = class _ActionRegistry {
       riskLevel: "MEDIUM",
       requiresApproval: true,
       requiresAudit: true,
-      inputSchema: z46.object({ recipientUserId: z46.string().min(1), title: z46.string().min(1), message: z46.string().min(1) }),
-      outputSchema: z46.object({ sent: z46.boolean() }),
+      inputSchema: z47.object({ recipientUserId: z47.string().min(1), title: z47.string().min(1), message: z47.string().min(1) }),
+      outputSchema: z47.object({ sent: z47.boolean() }),
       execute: async (input, context) => {
         await prisma.automationNotification.create({
           data: {
@@ -22683,8 +23159,16 @@ var NotificationEngine = class _NotificationEngine {
 var notificationEngine = NotificationEngine.getInstance();
 
 // server/ai/provider.ts
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenAI as GoogleGenAI2 } from "@google/genai";
 var GEMINI_MODEL = "gemini-3.7-flash";
+var AI_TIMEOUT_MS = Math.max(1e3, Number(process.env.AI_REQUEST_TIMEOUT_MS) || 3e4);
+function withTimeout2(p, ms) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new InfrastructureError("AI provider request timed out.")), ms);
+  });
+  return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
+}
 var GeminiProvider = class {
   constructor() {
     this.code = "gemini";
@@ -22700,23 +23184,26 @@ var GeminiProvider = class {
     if (!this.available) {
       throw new InfrastructureError("AI provider is not configured (GEMINI_API_KEY missing).");
     }
-    this.client = new GoogleGenAI({ apiKey: config.geminiApiKey });
+    this.client = new GoogleGenAI2({ apiKey: config.geminiApiKey });
     return this.client;
   }
   async generateText(prompt, options) {
     const client3 = this.getClient();
     const model = options?.model ?? this.defaultModel;
     try {
-      const response = await client3.models.generateContent({
-        model,
-        contents: prompt,
-        config: {
-          systemInstruction: options?.systemInstruction,
-          temperature: options?.temperature ?? 0.3,
-          maxOutputTokens: options?.maxOutputTokens ?? 2048,
-          responseMimeType: options?.responseMimeType
-        }
-      });
+      const response = await withTimeout2(
+        client3.models.generateContent({
+          model,
+          contents: prompt,
+          config: {
+            systemInstruction: options?.systemInstruction,
+            temperature: options?.temperature ?? 0.3,
+            maxOutputTokens: options?.maxOutputTokens ?? 2048,
+            responseMimeType: options?.responseMimeType
+          }
+        }),
+        AI_TIMEOUT_MS
+      );
       const text = response.text;
       if (!text) {
         throw new InfrastructureError("Empty response received from the AI provider.");
@@ -23036,261 +23523,6 @@ ${trimmed}` : trimmed;
   }
 };
 
-// server/ai/adapters/geminiAdapter.ts
-import { GoogleGenAI as GoogleGenAI2 } from "@google/genai";
-var GeminiAdapter = class {
-  constructor(apiKey) {
-    this.providerType = "GEMINI";
-    this.client = null;
-    this.apiKey = apiKey && apiKey.length > 0 ? apiKey : config.geminiApiKey;
-  }
-  getClient() {
-    if (this.client) return this.client;
-    if (!this.apiKey || this.apiKey.length === 0) {
-      throw new InfrastructureError("Gemini API key is not configured in server environment.");
-    }
-    this.client = new GoogleGenAI2({ apiKey: this.apiKey });
-    return this.client;
-  }
-  async generateText(params) {
-    const start = Date.now();
-    const client3 = this.getClient();
-    const model = params.modelName || "gemini-2.5-flash";
-    try {
-      const response = await client3.models.generateContent({
-        model,
-        contents: params.prompt,
-        config: {
-          systemInstruction: params.systemInstruction,
-          temperature: params.temperature ?? 0.3,
-          maxOutputTokens: params.maxTokens ?? 2048,
-          responseMimeType: params.responseMimeType,
-          stopSequences: params.stopSequences
-        }
-      });
-      const durationMs = Date.now() - start;
-      const text = response.text || "";
-      const usage = response.usageMetadata;
-      const inputTokens = usage?.promptTokenCount ?? Math.max(1, Math.ceil(params.prompt.length / 4));
-      const outputTokens = usage?.candidatesTokenCount ?? Math.max(1, Math.ceil(text.length / 4));
-      const totalTokens = usage?.totalTokenCount ?? inputTokens + outputTokens;
-      return {
-        text,
-        inputTokens,
-        outputTokens,
-        totalTokens,
-        durationMs,
-        finishReason: "STOP"
-      };
-    } catch (err) {
-      const durationMs = Date.now() - start;
-      logger.error({ err, model, durationMs, event: "gemini_adapter_error" }, "Gemini invocation failed");
-      const message = err instanceof Error ? err.message : "Gemini provider call failed.";
-      throw new InfrastructureError(`Gemini error: ${message}`);
-    }
-  }
-  async generateStructured(params) {
-    const res = await this.generateText({
-      ...params,
-      responseMimeType: "application/json"
-    });
-    try {
-      const clean = res.text.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
-      return JSON.parse(clean);
-    } catch {
-      throw new InfrastructureError(`Failed to parse structured JSON output: ${res.text.slice(0, 100)}...`);
-    }
-  }
-  async generateEmbedding(params) {
-    const client3 = this.getClient();
-    const model = params.modelName || "text-embedding-004";
-    try {
-      const response = await client3.models.embedContent({
-        model,
-        contents: params.text
-      });
-      const values = response.embeddings?.[0]?.values;
-      if (Array.isArray(values) && values.length > 0) {
-        return values;
-      }
-      throw new Error("No embedding values returned from Gemini model.");
-    } catch (err) {
-      logger.error({ err, model }, "Gemini embedding invocation failed");
-      const message = err instanceof Error ? err.message : "Gemini embedContent failed.";
-      throw new InfrastructureError(`Gemini embedding error: ${message}`);
-    }
-  }
-};
-
-// server/ai/adapters/mockAdapter.ts
-var MockAdapter = class {
-  constructor() {
-    this.providerType = "MOCK";
-  }
-  async generateText(params) {
-    const start = Date.now();
-    const prompt = params.prompt.trim();
-    let responseText = "";
-    if (params.responseMimeType === "application/json" || prompt.toLowerCase().includes("json")) {
-      responseText = JSON.stringify({
-        status: "success",
-        synthesis: "Simulated structured intelligence output generated by Artify Mock Adapter.",
-        entities: [{ name: "Target Entity", type: "ENTERPRISE", score: 0.94 }],
-        recommendation: "Proceed with executive relationship advancement.",
-        timestamp: (/* @__PURE__ */ new Date()).toISOString()
-      }, null, 2);
-    } else if (prompt.toLowerCase().includes("summariz") || prompt.toLowerCase().includes("brief")) {
-      responseText = `**Executive Brief**
-
-- **Overview:** Synthesized analysis for prompt: "${prompt.slice(0, 80)}..."
-- **Key Finding:** Strong commercial alignment observed across account parameters.
-- **Risk Factor:** Low risk with operational governance active.
-- **Recommended Next Step:** Schedule milestone audit and confirm contract schedule.`;
-    } else if (prompt.toLowerCase().includes("classif") || prompt.toLowerCase().includes("categor")) {
-      responseText = `**Classification Result**
-- Primary Category: HIGH_PRIORITY
-- Confidence Score: 0.92
-- Strategic Alignment: Enterprise Tier Growth`;
-    } else {
-      responseText = `Artify Intelligence Response:
-
-Analysis completed successfully for model ${params.modelName}.
-
-Parameters evaluated: temperature=${params.temperature ?? 0.3}, maxTokens=${params.maxTokens ?? 2048}.
-System instructions observed: ${params.systemInstruction ? "Active" : "None"}.
-
-Evaluated input: ${prompt}
-
-Output: High quality deterministic synthesis conforming to Artify enterprise governance policies.`;
-    }
-    const durationMs = Math.max(15, Date.now() - start);
-    const inputTokens = Math.max(1, Math.ceil(prompt.length / 4));
-    const outputTokens = Math.max(1, Math.ceil(responseText.length / 4));
-    return {
-      text: responseText,
-      inputTokens,
-      outputTokens,
-      totalTokens: inputTokens + outputTokens,
-      durationMs,
-      finishReason: "STOP"
-    };
-  }
-  async generateStructured(params) {
-    const res = await this.generateText({
-      ...params,
-      responseMimeType: "application/json"
-    });
-    return JSON.parse(res.text);
-  }
-  async generateEmbedding(params) {
-    const dim = params.dimension || 768;
-    const text = params.text.toLowerCase();
-    const vec = new Array(dim).fill(0);
-    for (let i = 0; i < text.length; i++) {
-      const code = text.charCodeAt(i);
-      const idx = (code * 31 + i * 17) % dim;
-      vec[idx] = (vec[idx] + code / 255) % 1;
-    }
-    const norm = Math.sqrt(vec.reduce((sum, v) => sum + v * v, 0)) || 1;
-    return vec.map((v) => Number((v / norm).toFixed(6)));
-  }
-};
-
-// server/ai/adapters/adapterFactory.ts
-var AdapterFactory = class {
-  static {
-    this.mockInstance = new MockAdapter();
-  }
-  static {
-    this.geminiInstance = null;
-  }
-  static getAdapter(providerType, apiKey) {
-    const normalized = (providerType || "GEMINI").toUpperCase();
-    if (normalized === "MOCK") {
-      return this.mockInstance;
-    }
-    if (normalized === "GEMINI") {
-      const key2 = apiKey || config.geminiApiKey;
-      if (!key2 || key2.length === 0) {
-        return this.mockInstance;
-      }
-      if (!this.geminiInstance || apiKey) {
-        const adapter = new GeminiAdapter(key2);
-        if (!apiKey) this.geminiInstance = adapter;
-        return adapter;
-      }
-      return this.geminiInstance;
-    }
-    return this.mockInstance;
-  }
-};
-
-// server/ai/adapters/index.ts
-function getAdapter(providerType = "GEMINI", apiKey) {
-  return AdapterFactory.getAdapter(providerType, apiKey);
-}
-
-// server/services/knowledge/EmbeddingService.ts
-var EmbeddingService = class {
-  /**
-   * Generates embedding vector for a piece of text using the active AI adapter.
-   */
-  static async generateEmbedding(text, modelName = "text-embedding-004") {
-    const adapter = getAdapter();
-    if (adapter.generateEmbedding) {
-      try {
-        return await adapter.generateEmbedding({ text, modelName, dimension: 768 });
-      } catch (err) {
-        logger.warn({ err }, "[EmbeddingService] Adapter embedding failed, calculating deterministic vector");
-      }
-    }
-    const dim = 768;
-    const lower = text.toLowerCase();
-    const vec = new Array(dim).fill(0);
-    for (let i = 0; i < lower.length; i++) {
-      const code = lower.charCodeAt(i);
-      const idx = (code * 31 + i * 17) % dim;
-      vec[idx] = (vec[idx] + code / 255) % 1;
-    }
-    const norm = Math.sqrt(vec.reduce((sum, v) => sum + v * v, 0)) || 1;
-    return vec.map((v) => Number((v / norm).toFixed(6)));
-  }
-  /**
-   * Computes cosine similarity between two unit vectors.
-   */
-  static cosineSimilarity(a, b) {
-    if (!a || !b || a.length === 0 || b.length === 0) return 0;
-    const len = Math.min(a.length, b.length);
-    let dot = 0;
-    let normA = 0;
-    let normB = 0;
-    for (let i = 0; i < len; i++) {
-      const ai = a[i] ?? 0;
-      const bi = b[i] ?? 0;
-      dot += ai * bi;
-      normA += ai * ai;
-      normB += bi * bi;
-    }
-    const denom = Math.sqrt(normA) * Math.sqrt(normB);
-    return denom === 0 ? 0 : Math.max(0, Math.min(1, dot / denom));
-  }
-  /**
-   * Stores embedding for a chunk in the database.
-   */
-  static async storeEmbedding(chunkId, vector, modelName = "text-embedding-004") {
-    const adapter = getAdapter();
-    await prisma.knowledgeEmbedding.create({
-      data: {
-        chunkId,
-        providerType: adapter.providerType,
-        modelName,
-        dimension: vector.length,
-        vector
-      }
-    });
-  }
-};
-
 // server/services/knowledge/HybridSearchEngine.ts
 var HybridSearchEngine = class {
   /**
@@ -23298,7 +23530,7 @@ var HybridSearchEngine = class {
    */
   static async search(request, context) {
     const startTime = Date.now();
-    const mode = request.mode || "HYBRID";
+    let mode = request.mode || "HYBRID";
     const limit = Math.min(request.limit || 10, 50);
     const minScore = request.minScore ?? 0.15;
     const documents = await prisma.knowledgeDocument.findMany({
@@ -23361,7 +23593,9 @@ var HybridSearchEngine = class {
     }
     let queryVector = [];
     if (mode === "SEMANTIC" || mode === "HYBRID") {
-      queryVector = await EmbeddingService.generateEmbedding(request.query);
+      const qv = await EmbeddingService.tryGenerateEmbedding(request.query);
+      if (qv) queryVector = qv;
+      else mode = "KEYWORD";
     }
     const queryTerms = request.query.toLowerCase().split(/\s+/).filter((t) => t.length > 1);
     const scoredItems = [];
@@ -23681,8 +23915,8 @@ var KnowledgeService = class {
             metadata: ch.metadata || {}
           }
         });
-        const vector = await EmbeddingService.generateEmbedding(ch.content);
-        await EmbeddingService.storeEmbedding(createdChunk.id, vector);
+        const vector = await EmbeddingService.tryGenerateEmbedding(ch.content);
+        if (vector) await EmbeddingService.storeEmbedding(createdChunk.id, vector);
       }
       await prisma.knowledgeDocument.update({
         where: { id: documentId },
@@ -23762,8 +23996,8 @@ var KnowledgeService = class {
           metadata: ch.metadata || {}
         }
       });
-      const vector = await EmbeddingService.generateEmbedding(ch.content);
-      await EmbeddingService.storeEmbedding(createdChunk.id, vector);
+      const vector = await EmbeddingService.tryGenerateEmbedding(ch.content);
+      if (vector) await EmbeddingService.storeEmbedding(createdChunk.id, vector);
     }
     await prisma.knowledgeDocument.update({
       where: { id: documentId },
@@ -23797,13 +24031,13 @@ var KnowledgeService = class {
 };
 
 // server/services/automation/types.ts
-import { z as z47 } from "zod";
-var StructuredAiDecisionSchema = z47.object({
-  decision: z47.string(),
-  reason: z47.string(),
-  confidence: z47.number().min(0).max(1),
-  recommended_action: z47.string().optional(),
-  metadata: z47.record(z47.unknown()).optional()
+import { z as z48 } from "zod";
+var StructuredAiDecisionSchema = z48.object({
+  decision: z48.string(),
+  reason: z48.string(),
+  confidence: z48.number().min(0).max(1),
+  recommended_action: z48.string().optional(),
+  metadata: z48.record(z48.unknown()).optional()
 });
 var DEFAULT_WORKFLOW_LIMITS = {
   maxSteps: 50,
@@ -23972,6 +24206,7 @@ var WorkflowEngine = class _WorkflowEngine {
             if (aiCallCount > limits.maxAiCalls) {
               throw new Error(`Exceeded maximum allowed AI calls (${limits.maxAiCalls}).`);
             }
+            await aiQuotaService.assertWithinLimits(execution.organizationId);
             const interpolatedPrompt = this.interpolate(step.prompt, context);
             const decisionInstruction = `${interpolatedPrompt}
 
@@ -24001,6 +24236,7 @@ You MUST respond strictly in valid JSON matching this schema:
             if (aiCallCount > limits.maxAiCalls) {
               throw new Error(`Exceeded maximum allowed AI calls (${limits.maxAiCalls}).`);
             }
+            await aiQuotaService.assertWithinLimits(execution.organizationId);
             const interpolatedPrompt = this.interpolate(step.prompt, context);
             let citations = [];
             let promptWithContext = interpolatedPrompt;
@@ -24008,7 +24244,7 @@ You MUST respond strictly in valid JSON matching this schema:
               try {
                 const grounded = await KnowledgeService.getGroundedContext(
                   interpolatedPrompt,
-                  { organizationId: execution.organizationId, userId: execution.initiatedById || void 0, userPermissions: ["*"] },
+                  { organizationId: execution.organizationId, userId: execution.initiatedById || void 0, userPermissions: await this.initiatorPermissions(execution) },
                   { filter: step.knowledgeFilter }
                 );
                 if (grounded.formattedContext) {
@@ -24160,7 +24396,7 @@ ${interpolatedPrompt}`;
             const query = this.interpolate(step.queryTemplate, context);
             const results = await KnowledgeService.search(
               { query, limit: step.maxResults || 5, filter: step.collectionIds?.length ? { collectionIds: step.collectionIds } : void 0 },
-              { organizationId: execution.organizationId, userId: execution.initiatedById || void 0, userPermissions: ["*"] }
+              { organizationId: execution.organizationId, userId: execution.initiatedById || void 0, userPermissions: await this.initiatorPermissions(execution) }
             );
             stepOutput = {
               query,
@@ -24280,6 +24516,17 @@ ${interpolatedPrompt}`;
     return failed;
   }
   /** Interpolate variable strings like {{payload.client.name}} or {{invoice.amount}} */
+  /**
+   * Permissions used to scope knowledge retrieval for AI steps: the initiating
+   * user's real permissions, or none for unattributed runs (never superuser).
+   */
+  async initiatorPermissions(execution) {
+    if (!execution.initiatedById) return [];
+    const user = await userRepository.findById(execution.initiatedById);
+    const caller = user && await resolveSanitizedUserForOrganization(user, execution.organizationId);
+    if (!caller) return [];
+    return caller.role.key === "SUPER_ADMIN" ? ["*"] : [...caller.role.permissions];
+  }
   interpolate(template, context) {
     if (!template) return "";
     return template.replace(/\{\{([^}]+)\}\}/g, (_match, path) => {
@@ -25132,8 +25379,8 @@ function constantTimeEquals(a, b) {
   const bb = Buffer.from(b);
   return ab.length === bb.length && timingSafeEqual2(ab, bb);
 }
-var router51 = Router51();
-router51.get(
+var router52 = Router52();
+router52.get(
   "/internal/tick",
   asyncHandler(async (req, res) => {
     if (!config.cronSecret) {
@@ -25150,85 +25397,85 @@ router51.get(
     sendSuccess(res, { automation, content, webhookRetries });
   })
 );
-router51.use(authenticateToken);
-var CreateWorkflowSchema = z48.object({
-  name: z48.string().min(1).max(200),
-  description: z48.string().optional(),
-  category: z48.string().default("GENERAL"),
-  triggerType: z48.enum(["EVENT", "SCHEDULE", "MANUAL", "API", "CONDITIONAL"]).default("EVENT"),
-  triggerConfig: z48.record(z48.unknown()).default({}),
-  conditions: z48.unknown().default([]),
-  steps: z48.array(z48.record(z48.unknown())).default([]),
-  retryPolicy: z48.object({
-    maxRetries: z48.number().int().min(0).max(5).default(2),
-    backoffMs: z48.number().int().min(100).max(6e4).default(1e3),
-    exponential: z48.boolean().default(true)
+router52.use(authenticateToken);
+var CreateWorkflowSchema = z49.object({
+  name: z49.string().min(1).max(200),
+  description: z49.string().optional(),
+  category: z49.string().default("GENERAL"),
+  triggerType: z49.enum(["EVENT", "SCHEDULE", "MANUAL", "API", "CONDITIONAL"]).default("EVENT"),
+  triggerConfig: z49.record(z49.unknown()).default({}),
+  conditions: z49.unknown().default([]),
+  steps: z49.array(z49.record(z49.unknown())).default([]),
+  retryPolicy: z49.object({
+    maxRetries: z49.number().int().min(0).max(5).default(2),
+    backoffMs: z49.number().int().min(100).max(6e4).default(1e3),
+    exponential: z49.boolean().default(true)
   }).optional(),
-  limits: z48.object({
-    maxSteps: z48.number().int().min(1).max(100).default(50),
-    maxDurationMs: z48.number().int().min(5e3).max(6e5).default(3e5),
-    maxAiCalls: z48.number().int().min(0).max(50).default(10),
-    maxToolCalls: z48.number().int().min(0).max(50).default(15),
-    maxLoopIterations: z48.number().int().min(1).max(50).default(10)
+  limits: z49.object({
+    maxSteps: z49.number().int().min(1).max(100).default(50),
+    maxDurationMs: z49.number().int().min(5e3).max(6e5).default(3e5),
+    maxAiCalls: z49.number().int().min(0).max(50).default(10),
+    maxToolCalls: z49.number().int().min(0).max(50).default(15),
+    maxLoopIterations: z49.number().int().min(1).max(50).default(10)
   }).optional()
 });
 var UpdateWorkflowSchema = CreateWorkflowSchema.partial().extend({
-  status: z48.enum(["DRAFT", "ACTIVE", "PAUSED", "ARCHIVED"]).optional()
+  status: z49.enum(["DRAFT", "ACTIVE", "PAUSED", "ARCHIVED"]).optional()
 });
-var TriggerWorkflowSchema = z48.object({
-  input: z48.record(z48.unknown()).default({}),
-  correlationId: z48.string().optional()
+var TriggerWorkflowSchema = z49.object({
+  input: z49.record(z49.unknown()).default({}),
+  correlationId: z49.string().optional()
 });
-var DecideApprovalSchema = z48.object({
-  decision: z48.enum(["APPROVED", "REJECTED"]),
-  reason: z48.string().optional()
+var DecideApprovalSchema = z49.object({
+  decision: z49.enum(["APPROVED", "REJECTED"]),
+  reason: z49.string().optional()
 });
-var CreateTaskSchema = z48.object({
-  title: z48.string().min(1),
-  description: z48.string().optional(),
-  assignedUserId: z48.string().optional(),
-  assignedRole: z48.string().optional(),
-  priority: z48.enum(["LOW", "MEDIUM", "HIGH", "URGENT"]).default("MEDIUM"),
-  dueDate: z48.string().optional(),
-  sourceWorkflowId: z48.string().optional(),
-  sourceExecutionId: z48.string().optional(),
-  sourceEntityType: z48.string().optional(),
-  sourceEntityId: z48.string().optional(),
-  isAiGenerated: z48.boolean().default(false),
-  metadata: z48.record(z48.unknown()).optional()
+var CreateTaskSchema = z49.object({
+  title: z49.string().min(1),
+  description: z49.string().optional(),
+  assignedUserId: z49.string().optional(),
+  assignedRole: z49.string().optional(),
+  priority: z49.enum(["LOW", "MEDIUM", "HIGH", "URGENT"]).default("MEDIUM"),
+  dueDate: z49.string().optional(),
+  sourceWorkflowId: z49.string().optional(),
+  sourceExecutionId: z49.string().optional(),
+  sourceEntityType: z49.string().optional(),
+  sourceEntityId: z49.string().optional(),
+  isAiGenerated: z49.boolean().default(false),
+  metadata: z49.record(z49.unknown()).optional()
 });
-var UpdateTaskSchema = z48.object({
-  status: z48.enum(["PENDING", "IN_PROGRESS", "COMPLETED", "CANCELLED"]).optional(),
-  assignedUserId: z48.string().optional(),
-  priority: z48.enum(["LOW", "MEDIUM", "HIGH", "URGENT"]).optional(),
-  dueDate: z48.string().optional()
+var UpdateTaskSchema = z49.object({
+  status: z49.enum(["PENDING", "IN_PROGRESS", "COMPLETED", "CANCELLED"]).optional(),
+  assignedUserId: z49.string().optional(),
+  priority: z49.enum(["LOW", "MEDIUM", "HIGH", "URGENT"]).optional(),
+  dueDate: z49.string().optional()
 });
-var AddTaskCommentSchema = z48.object({
-  text: z48.string().trim().min(1).max(4e3)
+var AddTaskCommentSchema = z49.object({
+  text: z49.string().trim().min(1).max(4e3)
 });
-var CreateScheduleSchema = z48.object({
-  workflowId: z48.string().uuid(),
-  name: z48.string().min(1),
-  description: z48.string().optional(),
-  scheduleType: z48.enum(["ONE_TIME", "RECURRING", "CRON"]).default("RECURRING"),
-  cronExpression: z48.string().optional(),
-  timezone: z48.string().default("UTC"),
-  intervalSeconds: z48.number().int().positive().optional(),
-  config: z48.record(z48.unknown()).optional()
+var CreateScheduleSchema = z49.object({
+  workflowId: z49.string().uuid(),
+  name: z49.string().min(1),
+  description: z49.string().optional(),
+  scheduleType: z49.enum(["ONE_TIME", "RECURRING", "CRON"]).default("RECURRING"),
+  cronExpression: z49.string().optional(),
+  timezone: z49.string().default("UTC"),
+  intervalSeconds: z49.number().int().positive().optional(),
+  config: z49.record(z49.unknown()).optional()
 });
-var EmitEventSchema = z48.object({
-  eventType: z48.string().min(1),
-  entityType: z48.string().min(1),
-  entityId: z48.string().min(1),
-  sourceModule: z48.string().optional(),
-  payload: z48.record(z48.unknown()).default({}),
-  correlationId: z48.string().optional()
+var EmitEventSchema = z49.object({
+  eventType: z49.string().min(1),
+  entityType: z49.string().min(1),
+  entityId: z49.string().min(1),
+  sourceModule: z49.string().optional(),
+  payload: z49.record(z49.unknown()).default({}),
+  correlationId: z49.string().optional()
 });
-var ExecuteActionSchema = z48.object({
-  actionId: z48.string().min(1),
-  input: z48.record(z48.unknown()).default({})
+var ExecuteActionSchema = z49.object({
+  actionId: z49.string().min(1),
+  input: z49.record(z49.unknown()).default({})
 });
-router51.get(
+router52.get(
   "/dashboard",
   requirePermission("automation.read"),
   asyncHandler(async (req, res) => {
@@ -25236,7 +25483,7 @@ router51.get(
     sendSuccess(res, data);
   })
 );
-router51.get(
+router52.get(
   "/workflows",
   requirePermission("automation.read"),
   asyncHandler(async (req, res) => {
@@ -25252,7 +25499,7 @@ router51.get(
     sendSuccess(res, result);
   })
 );
-router51.post(
+router52.post(
   "/workflows",
   requirePermission("automation.create"),
   asyncHandler(async (req, res) => {
@@ -25273,7 +25520,7 @@ router51.post(
     sendSuccess(res, { workflow }, 201);
   })
 );
-router51.get(
+router52.get(
   "/workflows/:id",
   requirePermission("automation.read"),
   asyncHandler(async (req, res) => {
@@ -25281,7 +25528,7 @@ router51.get(
     sendSuccess(res, { workflow });
   })
 );
-router51.put(
+router52.put(
   "/workflows/:id",
   requirePermission("automation.edit"),
   asyncHandler(async (req, res) => {
@@ -25304,11 +25551,11 @@ router51.put(
     sendSuccess(res, { workflow: updated });
   })
 );
-router51.post(
+router52.post(
   "/workflows/:id/publish",
   requirePermission("automation.publish"),
   asyncHandler(async (req, res) => {
-    const body = z48.object({ changeSummary: z48.string().optional() }).parse(req.body || {});
+    const body = z49.object({ changeSummary: z49.string().optional() }).parse(req.body || {});
     const published = await automationService.publishWorkflow({
       id: req.params.id,
       organizationId: req.user.organizationId,
@@ -25318,7 +25565,7 @@ router51.post(
     sendSuccess(res, { workflow: published });
   })
 );
-router51.get(
+router52.get(
   "/workflows/:id/versions",
   requirePermission("automation.read"),
   asyncHandler(async (req, res) => {
@@ -25326,7 +25573,7 @@ router51.get(
     sendSuccess(res, { versions });
   })
 );
-router51.post(
+router52.post(
   "/workflows/:id/trigger",
   requirePermission("automation.execute"),
   asyncHandler(async (req, res) => {
@@ -25342,7 +25589,7 @@ router51.post(
     sendSuccess(res, result, 202);
   })
 );
-router51.get(
+router52.get(
   "/executions",
   requirePermission("automation.read"),
   asyncHandler(async (req, res) => {
@@ -25357,7 +25604,7 @@ router51.get(
     sendSuccess(res, result);
   })
 );
-router51.get(
+router52.get(
   "/executions/:id",
   requirePermission("automation.read"),
   asyncHandler(async (req, res) => {
@@ -25365,7 +25612,7 @@ router51.get(
     sendSuccess(res, { execution });
   })
 );
-router51.post(
+router52.post(
   "/executions/:id/retry",
   requirePermission("automation.execute"),
   asyncHandler(async (req, res) => {
@@ -25373,16 +25620,16 @@ router51.post(
     sendSuccess(res, { execution: result });
   })
 );
-router51.post(
+router52.post(
   "/executions/:id/cancel",
   requirePermission("automation.manage"),
   asyncHandler(async (req, res) => {
-    const body = z48.object({ reason: z48.string().optional() }).parse(req.body || {});
+    const body = z49.object({ reason: z49.string().optional() }).parse(req.body || {});
     const result = await automationService.cancelExecution(req.params.id, req.user.organizationId, body.reason);
     sendSuccess(res, { execution: result });
   })
 );
-router51.get(
+router52.get(
   "/approvals",
   requirePermission("automation.read"),
   asyncHandler(async (req, res) => {
@@ -25396,7 +25643,7 @@ router51.get(
     sendSuccess(res, result);
   })
 );
-router51.post(
+router52.post(
   "/approvals/:id/decide",
   requirePermission("automation.approve"),
   asyncHandler(async (req, res) => {
@@ -25412,7 +25659,7 @@ router51.post(
     sendSuccess(res, result);
   })
 );
-router51.get(
+router52.get(
   "/tasks",
   requirePermission("automation.read"),
   asyncHandler(async (req, res) => {
@@ -25428,7 +25675,7 @@ router51.get(
     sendSuccess(res, result);
   })
 );
-router51.post(
+router52.post(
   "/tasks",
   requirePermission("automation.execute"),
   asyncHandler(async (req, res) => {
@@ -25440,7 +25687,7 @@ router51.post(
     sendSuccess(res, { task }, 201);
   })
 );
-router51.patch(
+router52.patch(
   "/tasks/:id",
   requirePermission("automation.execute"),
   asyncHandler(async (req, res) => {
@@ -25454,7 +25701,7 @@ router51.patch(
     sendSuccess(res, { task: updated });
   })
 );
-router51.post(
+router52.post(
   "/tasks/:id/comments",
   requirePermission("automation.execute"),
   asyncHandler(async (req, res) => {
@@ -25468,7 +25715,7 @@ router51.post(
     sendSuccess(res, result, 201);
   })
 );
-router51.get(
+router52.get(
   "/my-work",
   requirePermission("automation.read"),
   asyncHandler(async (req, res) => {
@@ -25476,7 +25723,7 @@ router51.get(
     sendSuccess(res, result);
   })
 );
-router51.get(
+router52.get(
   "/schedules",
   requirePermission("automation.read"),
   asyncHandler(async (req, res) => {
@@ -25491,7 +25738,7 @@ router51.get(
     sendSuccess(res, result);
   })
 );
-router51.post(
+router52.post(
   "/schedules",
   requirePermission("automation.manage"),
   asyncHandler(async (req, res) => {
@@ -25503,16 +25750,16 @@ router51.post(
     sendSuccess(res, { schedule }, 201);
   })
 );
-router51.patch(
+router52.patch(
   "/schedules/:id/toggle",
   requirePermission("automation.manage"),
   asyncHandler(async (req, res) => {
-    const body = z48.object({ isActive: z48.boolean().optional() }).parse(req.body || {});
+    const body = z49.object({ isActive: z49.boolean().optional() }).parse(req.body || {});
     const schedule = await automationService.toggleSchedule(req.params.id, req.user.organizationId, body.isActive);
     sendSuccess(res, { schedule });
   })
 );
-router51.delete(
+router52.delete(
   "/schedules/:id",
   requirePermission("automation.manage"),
   asyncHandler(async (req, res) => {
@@ -25520,7 +25767,7 @@ router51.delete(
     sendSuccess(res, result);
   })
 );
-router51.get(
+router52.get(
   "/events/types",
   requirePermission("automation.read"),
   asyncHandler(async (_req, res) => {
@@ -25528,7 +25775,7 @@ router51.get(
     sendSuccess(res, { types });
   })
 );
-router51.get(
+router52.get(
   "/events",
   requirePermission("automation.read"),
   asyncHandler(async (req, res) => {
@@ -25542,7 +25789,7 @@ router51.get(
     sendSuccess(res, result);
   })
 );
-router51.post(
+router52.post(
   "/events",
   requirePermission("automation.execute"),
   asyncHandler(async (req, res) => {
@@ -25556,7 +25803,7 @@ router51.post(
     sendSuccess(res, { event }, 202);
   })
 );
-router51.get(
+router52.get(
   "/actions",
   requirePermission("automation.read"),
   asyncHandler(async (_req, res) => {
@@ -25564,7 +25811,7 @@ router51.get(
     sendSuccess(res, { actions });
   })
 );
-router51.post(
+router52.post(
   "/actions/execute",
   requirePermission("automation.execute"),
   asyncHandler(async (req, res) => {
@@ -25579,16 +25826,16 @@ router51.post(
     sendSuccess(res, { result });
   })
 );
-var automationRoutes_default = router51;
+var automationRoutes_default = router52;
 
 // server/routes/v1/knowledgeRoutes.ts
-import { Router as Router52 } from "express";
+import { Router as Router53 } from "express";
 import express3 from "express";
 
 // server/schemas/knowledgeSchemas.ts
-import { z as z49 } from "zod";
-var knowledgeAccessPolicySchema = z49.enum(["PUBLIC", "RESTRICTED", "ROLE_BASED", "OWNER_ONLY"]);
-var knowledgeSourceTypeSchema = z49.enum([
+import { z as z50 } from "zod";
+var knowledgeAccessPolicySchema = z50.enum(["PUBLIC", "RESTRICTED", "ROLE_BASED", "OWNER_ONLY"]);
+var knowledgeSourceTypeSchema = z50.enum([
   "UPLOADED_DOCUMENT",
   "MEDIA_ASSET",
   "CMS_CONTENT",
@@ -25600,53 +25847,53 @@ var knowledgeSourceTypeSchema = z49.enum([
   "MANUAL_ENTRY",
   "EXTERNAL_CONNECTOR"
 ]);
-var createCollectionSchema = z49.object({
-  name: z49.string().trim().min(1).max(200),
-  description: z49.string().trim().max(2e3).optional(),
+var createCollectionSchema = z50.object({
+  name: z50.string().trim().min(1).max(200),
+  description: z50.string().trim().max(2e3).optional(),
   accessPolicy: knowledgeAccessPolicySchema.optional(),
-  allowedRoles: z49.array(z49.string().trim().min(1)).max(50).optional(),
-  metadata: z49.record(z49.unknown()).optional()
+  allowedRoles: z50.array(z50.string().trim().min(1)).max(50).optional(),
+  metadata: z50.record(z50.unknown()).optional()
 });
-var registerSourceSchema = z49.object({
-  collectionId: z49.string().trim().uuid().optional(),
-  name: z49.string().trim().min(1).max(200),
+var registerSourceSchema = z50.object({
+  collectionId: z50.string().trim().uuid().optional(),
+  name: z50.string().trim().min(1).max(200),
   sourceType: knowledgeSourceTypeSchema,
-  entityType: z49.string().trim().max(100).optional(),
-  entityId: z49.string().trim().max(200).optional(),
-  config: z49.record(z49.unknown()).optional()
+  entityType: z50.string().trim().max(100).optional(),
+  entityId: z50.string().trim().max(200).optional(),
+  config: z50.record(z50.unknown()).optional()
 });
-var listDocumentsQuerySchema = z49.object({
-  collectionId: z49.string().trim().uuid().optional(),
-  sourceId: z49.string().trim().uuid().optional(),
-  status: z49.enum(["UPLOADED", "PROCESSING", "EXTRACTED", "CHUNKED", "INDEXING", "INDEXED", "FAILED", "ARCHIVED"]).optional()
+var listDocumentsQuerySchema = z50.object({
+  collectionId: z50.string().trim().uuid().optional(),
+  sourceId: z50.string().trim().uuid().optional(),
+  status: z50.enum(["UPLOADED", "PROCESSING", "EXTRACTED", "CHUNKED", "INDEXING", "INDEXED", "FAILED", "ARCHIVED"]).optional()
 });
-var uploadDocumentSchema = z49.object({
-  text: z49.string().max(2e6).optional(),
-  contentBase64: z49.string().max(4e7).optional(),
-  mimeType: z49.string().trim().max(100).optional(),
-  filename: z49.string().trim().max(300).optional(),
-  title: z49.string().trim().max(300).optional(),
-  description: z49.string().trim().max(2e3).optional(),
-  collectionId: z49.string().trim().uuid().optional(),
-  sourceId: z49.string().trim().uuid().optional(),
-  securityScope: z49.string().trim().max(100).optional(),
-  requiredRole: z49.string().trim().max(100).optional(),
-  metadata: z49.record(z49.unknown()).optional()
+var uploadDocumentSchema = z50.object({
+  text: z50.string().max(2e6).optional(),
+  contentBase64: z50.string().max(4e7).optional(),
+  mimeType: z50.string().trim().max(100).optional(),
+  filename: z50.string().trim().max(300).optional(),
+  title: z50.string().trim().max(300).optional(),
+  description: z50.string().trim().max(2e3).optional(),
+  collectionId: z50.string().trim().uuid().optional(),
+  sourceId: z50.string().trim().uuid().optional(),
+  securityScope: z50.string().trim().max(100).optional(),
+  requiredRole: z50.string().trim().max(100).optional(),
+  metadata: z50.record(z50.unknown()).optional()
 }).refine((v) => v.contentBase64 !== void 0 || v.text !== void 0, {
   message: "Either text or contentBase64 is required."
 });
-var searchKnowledgeSchema = z49.object({
-  query: z49.string().trim().min(1).max(2e3),
-  mode: z49.enum(["KEYWORD", "SEMANTIC", "HYBRID"]).optional(),
-  limit: z49.coerce.number().int().positive().max(50).optional(),
-  minScore: z49.coerce.number().min(0).max(1).optional(),
-  filter: z49.record(z49.unknown()).optional()
+var searchKnowledgeSchema = z50.object({
+  query: z50.string().trim().min(1).max(2e3),
+  mode: z50.enum(["KEYWORD", "SEMANTIC", "HYBRID"]).optional(),
+  limit: z50.coerce.number().int().positive().max(50).optional(),
+  minScore: z50.coerce.number().min(0).max(1).optional(),
+  filter: z50.record(z50.unknown()).optional()
 });
 
 // server/routes/v1/knowledgeRoutes.ts
-var router52 = Router52();
-router52.use(authenticateToken);
-router52.get(
+var router53 = Router53();
+router53.use(authenticateToken);
+router53.get(
   "/collections",
   requirePermission("knowledge.read"),
   asyncHandler(async (req, res) => {
@@ -25654,7 +25901,7 @@ router52.get(
     sendSuccess(res, { collections });
   })
 );
-router52.post(
+router53.post(
   "/collections",
   requirePermission("knowledge.create"),
   asyncHandler(async (req, res) => {
@@ -25667,7 +25914,7 @@ router52.post(
     sendSuccess(res, { collection }, 201);
   })
 );
-router52.get(
+router53.get(
   "/collections/:id",
   requirePermission("knowledge.read"),
   asyncHandler(async (req, res) => {
@@ -25675,7 +25922,7 @@ router52.get(
     sendSuccess(res, { collection });
   })
 );
-router52.post(
+router53.post(
   "/sources",
   requirePermission("knowledge.create"),
   asyncHandler(async (req, res) => {
@@ -25687,7 +25934,7 @@ router52.post(
     sendSuccess(res, { source }, 201);
   })
 );
-router52.get(
+router53.get(
   "/sources",
   requirePermission("knowledge.read"),
   asyncHandler(async (req, res) => {
@@ -25701,7 +25948,7 @@ router52.get(
     sendSuccess(res, { sources });
   })
 );
-router52.get(
+router53.get(
   "/documents",
   requirePermission("knowledge.read"),
   asyncHandler(async (req, res) => {
@@ -25723,7 +25970,7 @@ router52.get(
     sendSuccess(res, { documents });
   })
 );
-router52.get(
+router53.get(
   "/documents/:id",
   requirePermission("knowledge.read"),
   asyncHandler(async (req, res) => {
@@ -25742,7 +25989,7 @@ router52.get(
     sendSuccess(res, { document });
   })
 );
-router52.post(
+router53.post(
   "/documents/upload",
   requirePermission("knowledge.upload"),
   express3.json({ limit: "25mb" }),
@@ -25774,7 +26021,7 @@ router52.post(
     sendSuccess(res, result, 201);
   })
 );
-router52.post(
+router53.post(
   "/documents/:id/reindex",
   requirePermission("knowledge.reindex"),
   asyncHandler(async (req, res) => {
@@ -25782,7 +26029,7 @@ router52.post(
     sendSuccess(res, result);
   })
 );
-router52.post(
+router53.post(
   "/search",
   requirePermission("knowledge.search"),
   asyncHandler(async (req, res) => {
@@ -25805,10 +26052,10 @@ router52.post(
     sendSuccess(res, { results, count: results.length });
   })
 );
-var knowledgeRoutes_default = router52;
+var knowledgeRoutes_default = router53;
 
 // server/routes/v1/copilotRoutes.ts
-import { Router as Router53 } from "express";
+import { Router as Router54 } from "express";
 
 // server/services/copilot/CopilotService.ts
 import crypto12 from "crypto";
@@ -25902,19 +26149,20 @@ function checkRateLimit(userId) {
   }
   entry.count += 1;
 }
-async function generateReportSnapshot(organizationId, userQuery) {
-  if (userQuery.includes("invoice") || userQuery.includes("bill") || userQuery.includes("overdue")) {
+async function generateReportSnapshot(organizationId, userQuery, userPermissions) {
+  const can = (perm) => userPermissions.includes("*") || userPermissions.includes(perm);
+  if (can("invoices.read") && (userQuery.includes("invoice") || userQuery.includes("bill") || userQuery.includes("overdue"))) {
     const [total, overdue] = await Promise.all([
       prisma.invoice.count({ where: { organizationId } }),
       prisma.invoice.count({ where: { organizationId, status: "ISSUED", dueDate: { lt: /* @__PURE__ */ new Date() } } })
     ]);
     return { entity: "INVOICES", summary: `${total} invoice(s) total, ${overdue} currently overdue.` };
   }
-  if (userQuery.includes("lead") || userQuery.includes("prospect")) {
+  if (can("leads.read") && (userQuery.includes("lead") || userQuery.includes("prospect"))) {
     const total = await prisma.lead.count({ where: { organizationId } });
     return { entity: "LEADS", summary: `${total} lead(s) on file.` };
   }
-  if (userQuery.includes("client") || userQuery.includes("account") || userQuery.includes("customer")) {
+  if (can("clients.read") && (userQuery.includes("client") || userQuery.includes("account") || userQuery.includes("customer"))) {
     const [total, active] = await Promise.all([
       prisma.client.count({ where: { organizationId } }),
       prisma.client.count({ where: { organizationId, status: "ACTIVE" } })
@@ -26158,6 +26406,7 @@ ${transcript.slice(0, 600)}`;
    */
   static async sendMessage(userContext, options) {
     checkRateLimit(userContext.userId);
+    await aiQuotaService.assertWithinLimits(userContext.organizationId);
     const startTime = Date.now();
     const correlationId = `copilot-${crypto12.randomUUID()}`;
     let conversation;
@@ -26307,12 +26556,12 @@ ${transcript.slice(0, 600)}`;
     }
     if (!actionPreviewData) {
       if (allowedToolsList.includes("generateNaturalLanguageReport") && (userQuery.includes("report") || userQuery.includes("how many") || userQuery.includes("unpaid") || userQuery.includes("overdue") || userQuery.includes("breakdown") || userQuery.includes("statistics"))) {
-        const report = await generateReportSnapshot(userContext.organizationId, userQuery);
+        const report = await generateReportSnapshot(userContext.organizationId, userQuery, userContext.userPermissions);
         if (report) {
           toolExecutionResults.push({ tool: "generateNaturalLanguageReport", result: report });
         }
       }
-      if (allowedToolsList.includes("searchClients") && (userQuery.includes("find client") || userQuery.includes("search client") || userQuery.includes("show client"))) {
+      if (allowedToolsList.includes("searchClients") && (userContext.userPermissions.includes("*") || userContext.userPermissions.includes("clients.read")) && (userQuery.includes("find client") || userQuery.includes("search client") || userQuery.includes("show client"))) {
         const queryTerm = options.content.replace(/find client|search client|show client/gi, "").trim();
         const { rows } = await clientService.listClients(userContext.organizationId, { search: queryTerm || void 0 }, 1, 5, "name", "asc");
         toolExecutionResults.push({ tool: "searchClients", result: { count: rows.length, clients: rows.map((c) => ({ id: c.id, name: c.name, code: c.clientCode, status: c.status })) } });
@@ -26362,7 +26611,8 @@ ${conversationHistoryText}
 
 Assistant:`;
     let assistantResponseText = "";
-    let tokenUsage = { inputTokens: Math.round(fullPrompt.length / 4), outputTokens: 120, totalTokens: Math.round(fullPrompt.length / 4) + 120 };
+    let tokenUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+    let providerFailed = false;
     let modelUsed = defaultAiProvider.defaultModel;
     try {
       const result = await defaultAiProvider.generateText(fullPrompt, {
@@ -26380,7 +26630,9 @@ Assistant:`;
         };
       }
     } catch (modelErr) {
-      logger.warn({ modelErr, correlationId }, "[CopilotService] Provider generation fallback used");
+      logger.warn({ modelErr, correlationId }, "[CopilotService] AI provider unavailable or failed");
+      providerFailed = true;
+      const notice = defaultAiProvider.available ? "The AI provider failed or timed out, so no AI-generated answer is available." : "The AI provider is not configured on this server, so no AI-generated answer is available.";
       if (actionPreviewData) {
         assistantResponseText = `I have prepared the action preview for **${actionPreviewData.actionType}** on ${actionPreviewData.targetEntity}.
 
@@ -26395,17 +26647,20 @@ ${JSON.stringify(firstTool.result, null, 2)}`;
       } else if (citations.length > 0 && citations[0]) {
         assistantResponseText = `Based on your enterprise knowledge base, I found relevant material in *${citations[0].documentTitle}*. See the context below for details.`;
       } else {
-        assistantResponseText = `I have received your request regarding "${options.content}". How would you like me to assist with this in the ${workspace.name}?`;
+        assistantResponseText = notice;
       }
+      if (assistantResponseText !== notice) assistantResponseText = `_${notice}_
+
+${assistantResponseText}`;
     }
     const durationMs = Date.now() - startTime;
-    const estimatedCost = tokenUsage.inputTokens * 1e-6 + tokenUsage.outputTokens * 3e-6;
+    const estimatedCost = providerFailed ? 0 : tokenUsage.inputTokens * 1e-6 + tokenUsage.outputTokens * 3e-6;
     const assistantMessage = await prisma.copilotMessage.create({
       data: {
         conversationId: conversation.id,
         role: "assistant",
         content: assistantResponseText,
-        status: "COMPLETED",
+        status: providerFailed ? "FAILED" : "COMPLETED",
         providerType: defaultAiProvider.code,
         modelName: modelUsed,
         inputTokens: tokenUsage.inputTokens,
@@ -26439,7 +26694,7 @@ ${JSON.stringify(firstTool.result, null, 2)}`;
           totalTokens: tokenUsage.totalTokens,
           durationMs,
           estimatedCost,
-          status: "SUCCESS"
+          status: providerFailed ? "FAILED" : "SUCCESS"
         }
       }),
       auditLogRepository.record({
@@ -26613,54 +26868,54 @@ ${JSON.stringify(executionResult, null, 2)}
 };
 
 // server/schemas/copilotSchemas.ts
-import { z as z50 } from "zod";
-var conversationModeSchema = z50.enum(["ANSWER", "EXPLAIN", "SUMMARIZE", "ANALYZE", "RECOMMEND", "DRAFT", "EXECUTE"]);
-var createWorkspaceSchema = z50.object({
-  name: z50.string().trim().min(1).max(200),
-  slug: z50.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)").optional(),
-  description: z50.string().trim().max(2e3).optional(),
-  icon: z50.string().trim().max(100).optional(),
-  allowedTools: z50.array(z50.string().trim().min(1)).max(100).optional(),
-  allowedModules: z50.array(z50.string().trim().min(1)).max(100).optional(),
-  requiredPermissions: z50.array(z50.string().trim().min(1)).max(100).optional(),
-  systemInstruction: z50.string().trim().max(1e4).optional(),
+import { z as z51 } from "zod";
+var conversationModeSchema = z51.enum(["ANSWER", "EXPLAIN", "SUMMARIZE", "ANALYZE", "RECOMMEND", "DRAFT", "EXECUTE"]);
+var createWorkspaceSchema = z51.object({
+  name: z51.string().trim().min(1).max(200),
+  slug: z51.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)").optional(),
+  description: z51.string().trim().max(2e3).optional(),
+  icon: z51.string().trim().max(100).optional(),
+  allowedTools: z51.array(z51.string().trim().min(1)).max(100).optional(),
+  allowedModules: z51.array(z51.string().trim().min(1)).max(100).optional(),
+  requiredPermissions: z51.array(z51.string().trim().min(1)).max(100).optional(),
+  systemInstruction: z51.string().trim().max(1e4).optional(),
   defaultMode: conversationModeSchema.optional(),
-  temperature: z50.coerce.number().min(0).max(2).optional(),
-  maxTokens: z50.coerce.number().int().positive().max(32e3).optional(),
-  requireCitations: z50.coerce.boolean().optional()
+  temperature: z51.coerce.number().min(0).max(2).optional(),
+  maxTokens: z51.coerce.number().int().positive().max(32e3).optional(),
+  requireCitations: z51.coerce.boolean().optional()
 });
-var createConversationSchema = z50.object({
-  workspaceId: z50.string().trim().uuid().optional(),
-  title: z50.string().trim().max(300).optional(),
-  contextMetadata: z50.record(z50.unknown()).optional()
+var createConversationSchema = z51.object({
+  workspaceId: z51.string().trim().uuid().optional(),
+  title: z51.string().trim().max(300).optional(),
+  contextMetadata: z51.record(z51.unknown()).optional()
 });
-var listConversationsQuerySchema = z50.object({
-  workspaceId: z50.string().trim().uuid().optional(),
-  status: z50.string().trim().max(50).optional(),
-  search: z50.string().trim().max(300).optional(),
-  limit: z50.coerce.number().int().positive().max(100).optional(),
-  offset: z50.coerce.number().int().nonnegative().optional()
+var listConversationsQuerySchema = z51.object({
+  workspaceId: z51.string().trim().uuid().optional(),
+  status: z51.string().trim().max(50).optional(),
+  search: z51.string().trim().max(300).optional(),
+  limit: z51.coerce.number().int().positive().max(100).optional(),
+  offset: z51.coerce.number().int().nonnegative().optional()
 });
-var contextMetadataSchema = z50.object({
-  currentModule: z50.string().trim().max(200).optional(),
-  currentPage: z50.string().trim().max(200).optional(),
-  selectedClientId: z50.string().trim().uuid().optional(),
-  selectedInvoiceId: z50.string().trim().uuid().optional(),
-  selectedDocumentId: z50.string().trim().uuid().optional(),
-  selectedWorkflowId: z50.string().trim().uuid().optional()
-}).catchall(z50.unknown()).optional();
-var sendMessageSchema = z50.object({
-  conversationId: z50.string().trim().uuid().optional(),
-  workspaceId: z50.string().trim().uuid().optional(),
-  content: z50.string().trim().min(1).max(2e4),
+var contextMetadataSchema = z51.object({
+  currentModule: z51.string().trim().max(200).optional(),
+  currentPage: z51.string().trim().max(200).optional(),
+  selectedClientId: z51.string().trim().uuid().optional(),
+  selectedInvoiceId: z51.string().trim().uuid().optional(),
+  selectedDocumentId: z51.string().trim().uuid().optional(),
+  selectedWorkflowId: z51.string().trim().uuid().optional()
+}).catchall(z51.unknown()).optional();
+var sendMessageSchema = z51.object({
+  conversationId: z51.string().trim().uuid().optional(),
+  workspaceId: z51.string().trim().uuid().optional(),
+  content: z51.string().trim().min(1).max(2e4),
   mode: conversationModeSchema.optional(),
   contextMetadata: contextMetadataSchema
 });
 
 // server/routes/v1/copilotRoutes.ts
-var router53 = Router53();
-router53.use(authenticateToken);
-router53.get(
+var router54 = Router54();
+router54.use(authenticateToken);
+router54.get(
   "/workspaces",
   asyncHandler(async (req, res) => {
     const permissions = req.user.role.permissions || [];
@@ -26668,7 +26923,7 @@ router53.get(
     sendSuccess(res, { workspaces });
   })
 );
-router53.post(
+router54.post(
   "/workspaces",
   requirePermission("copilot.manage"),
   asyncHandler(async (req, res) => {
@@ -26677,7 +26932,7 @@ router53.post(
     sendSuccess(res, { workspace }, 201);
   })
 );
-router53.get(
+router54.get(
   "/workspaces/:id",
   asyncHandler(async (req, res) => {
     const permissions = req.user.role.permissions || [];
@@ -26685,7 +26940,7 @@ router53.get(
     sendSuccess(res, { workspace });
   })
 );
-router53.get(
+router54.get(
   "/conversations",
   requirePermission("copilot.read"),
   asyncHandler(async (req, res) => {
@@ -26700,7 +26955,7 @@ router53.get(
     sendSuccess(res, result);
   })
 );
-router53.post(
+router54.post(
   "/conversations",
   requirePermission("copilot.use"),
   asyncHandler(async (req, res) => {
@@ -26709,7 +26964,7 @@ router53.post(
     sendSuccess(res, { conversation }, 201);
   })
 );
-router53.get(
+router54.get(
   "/conversations/:id",
   requirePermission("copilot.read"),
   asyncHandler(async (req, res) => {
@@ -26717,7 +26972,7 @@ router53.get(
     sendSuccess(res, { conversation });
   })
 );
-router53.post(
+router54.post(
   "/conversations/:id/archive",
   requirePermission("copilot.use"),
   asyncHandler(async (req, res) => {
@@ -26725,7 +26980,7 @@ router53.post(
     sendSuccess(res, { conversation: updated });
   })
 );
-router53.delete(
+router54.delete(
   "/conversations/:id",
   requirePermission("copilot.use"),
   asyncHandler(async (req, res) => {
@@ -26733,7 +26988,7 @@ router53.delete(
     sendSuccess(res, result);
   })
 );
-router53.post(
+router54.post(
   "/messages",
   requirePermission("copilot.use"),
   asyncHandler(async (req, res) => {
@@ -26751,7 +27006,7 @@ router53.post(
     sendSuccess(res, result);
   })
 );
-router53.post(
+router54.post(
   "/messages/stream",
   requirePermission("copilot.use"),
   asyncHandler(async (req, res) => {
@@ -26804,7 +27059,7 @@ data: ${JSON.stringify(data)}
     }
   })
 );
-router53.post(
+router54.post(
   "/actions/:id/confirm",
   requirePermission("copilot.use"),
   asyncHandler(async (req, res) => {
@@ -26817,7 +27072,7 @@ router53.post(
     sendSuccess(res, result);
   })
 );
-router53.post(
+router54.post(
   "/actions/:id/reject",
   requirePermission("copilot.use"),
   asyncHandler(async (req, res) => {
@@ -26830,7 +27085,7 @@ router53.post(
     sendSuccess(res, result);
   })
 );
-router53.get(
+router54.get(
   "/dashboard",
   requirePermission("copilot.read"),
   asyncHandler(async (req, res) => {
@@ -26838,11 +27093,11 @@ router53.get(
     sendSuccess(res, stats);
   })
 );
-var copilotRoutes_default = router53;
+var copilotRoutes_default = router54;
 
 // server/routes/v1/adminRoutes.ts
-import { Router as Router54 } from "express";
-import { z as z51 } from "zod";
+import { Router as Router55 } from "express";
+import { z as z52 } from "zod";
 
 // server/services/admin/adminOverviewService.ts
 var SECURITY_EVENT_ACTIONS = [
@@ -26974,12 +27229,12 @@ var adminOverviewService = {
 };
 
 // server/routes/v1/adminRoutes.ts
-var router54 = Router54();
-router54.use(authenticateToken);
-router54.get("/overview", requirePermission("security.read"), asyncHandler(async (req, res) => sendSuccess(res, { overview: await adminOverviewService.overview(req.user) })));
-router54.get("/security/policy", requirePermission("security.read"), (_req, res) => sendSuccess(res, { policy: adminOverviewService.policy() }));
-var pageQuery = z51.object({ page: z51.coerce.number().int().positive().default(1), limit: z51.coerce.number().int().positive().max(100).default(20) });
-router54.get(
+var router55 = Router55();
+router55.use(authenticateToken);
+router55.get("/overview", requirePermission("security.read"), asyncHandler(async (req, res) => sendSuccess(res, { overview: await adminOverviewService.overview(req.user) })));
+router55.get("/security/policy", requirePermission("security.read"), (_req, res) => sendSuccess(res, { policy: adminOverviewService.policy() }));
+var pageQuery = z52.object({ page: z52.coerce.number().int().positive().default(1), limit: z52.coerce.number().int().positive().max(100).default(20) });
+router55.get(
   "/security/events",
   requirePermission("security.read"),
   asyncHandler(async (req, res) => {
@@ -26988,7 +27243,7 @@ router54.get(
     sendSuccess(res, { events: rows.map((r) => ({ ...r, severity: auditSeverity(r) })) }, 200, { page, limit, total });
   })
 );
-router54.get(
+router55.get(
   "/sessions",
   requirePermission("security.read"),
   asyncHandler(async (req, res) => {
@@ -26997,7 +27252,7 @@ router54.get(
     sendSuccess(res, { sessions }, 200, { page, limit, total });
   })
 );
-router54.post(
+router55.post(
   "/sessions/:id/revoke",
   requirePermission("security.manage"),
   sensitiveActionLimiter,
@@ -27006,10 +27261,10 @@ router54.post(
     sendSuccess(res, { message: "Session revoked." });
   })
 );
-var adminRoutes_default = router54;
+var adminRoutes_default = router55;
 
 // server/routes/v1/integrationRoutes.ts
-import { Router as Router55 } from "express";
+import { Router as Router56 } from "express";
 
 // server/services/admin/integrationService.ts
 var INTEGRATION_CATALOG = [
@@ -27384,7 +27639,7 @@ var apiKeyService = {
 // server/routes/v1/integrationRoutes.ts
 var meta2 = (req) => ({ ip: req.ip, userAgent: req.headers["user-agent"] });
 var noStore = (res) => res.setHeader("Cache-Control", "no-store");
-var integrationsRouter = Router55();
+var integrationsRouter = Router56();
 integrationsRouter.use(authenticateToken);
 integrationsRouter.get("/", requirePermission("integrations.read"), asyncHandler(async (req, res) => sendSuccess(res, await integrationService.overview(req.user.organizationId))));
 integrationsRouter.put(
@@ -27408,7 +27663,7 @@ integrationsRouter.delete(
   sensitiveActionLimiter,
   asyncHandler(async (req, res) => sendSuccess(res, { integration: await integrationService.clearSecret(req.user, req.params.provider, meta2(req)) }))
 );
-var webhookEndpointsRouter = Router55();
+var webhookEndpointsRouter = Router56();
 webhookEndpointsRouter.use(authenticateToken);
 webhookEndpointsRouter.get("/events", requirePermission("webhooks.read"), (_req, res) => sendSuccess(res, { events: supportedEvents() }));
 webhookEndpointsRouter.get("/", requirePermission("webhooks.read"), asyncHandler(async (req, res) => sendSuccess(res, { endpoints: await webhookEndpointService.list(req.user.organizationId) })));
@@ -27465,7 +27720,7 @@ webhookEndpointsRouter.post(
   sensitiveActionLimiter,
   asyncHandler(async (req, res) => sendSuccess(res, { delivery: await webhookEndpointService.retryDelivery(req.user, req.params.deliveryId) }))
 );
-var apiKeysRouter = Router55();
+var apiKeysRouter = Router56();
 apiKeysRouter.use(authenticateToken);
 apiKeysRouter.get("/", requirePermission("api_keys.read"), asyncHandler(async (req, res) => sendSuccess(res, { apiKeys: await apiKeyService.list(req.user.organizationId) })));
 apiKeysRouter.post(
@@ -27486,7 +27741,7 @@ apiKeysRouter.post(
 );
 
 // server/routes/v1/externalRoutes.ts
-import { Router as Router56 } from "express";
+import { Router as Router57 } from "express";
 
 // server/middleware/apiKeyAuth.ts
 var authenticateApiKey = asyncHandler(async (req, _res, next) => {
@@ -27499,19 +27754,19 @@ var authenticateApiKey = asyncHandler(async (req, _res, next) => {
 });
 
 // server/routes/v1/externalRoutes.ts
-var router55 = Router56();
-router55.use(generalApiLimiter, authenticateApiKey);
-router55.get(
+var router56 = Router57();
+router56.use(generalApiLimiter, authenticateApiKey);
+router56.get(
   "/whoami",
   asyncHandler(async (req, res) => {
     const org = await prisma.organization.findUnique({ where: { id: req.apiKey.organizationId }, select: { id: true, name: true, slug: true } });
     sendSuccess(res, { organization: org, apiKey: { id: req.apiKey.id, scopes: req.apiKey.scopes } });
   })
 );
-var externalRoutes_default = router55;
+var externalRoutes_default = router56;
 
 // server/routes/v1/analyticsRoutes.ts
-import { Router as Router57 } from "express";
+import { Router as Router58 } from "express";
 
 // server/services/analyticsReportingService.ts
 var DEFAULT_RANGE_DAYS = 30;
@@ -27696,9 +27951,9 @@ var analyticsReportingService = {
 };
 
 // server/routes/v1/analyticsRoutes.ts
-var router56 = Router57();
-router56.use(authenticateToken);
-router56.get(
+var router57 = Router58();
+router57.use(authenticateToken);
+router57.get(
   "/overview",
   requirePermission("analytics.read"),
   asyncHandler(async (req, res) => {
@@ -27707,7 +27962,7 @@ router56.get(
     sendSuccess(res, overview);
   })
 );
-router56.get(
+router57.get(
   "/content/top-pages",
   requirePermission("analytics.read"),
   asyncHandler(async (req, res) => {
@@ -27716,10 +27971,10 @@ router56.get(
     sendSuccess(res, { topPages });
   })
 );
-var analyticsRoutes_default = router56;
+var analyticsRoutes_default = router57;
 
 // server/routes/v1/reportsRoutes.ts
-import { Router as Router58 } from "express";
+import { Router as Router59 } from "express";
 
 // server/utils/csv.ts
 function escapeCsvCell(value) {
@@ -27739,8 +27994,8 @@ function sendCsv(res, filename, csv) {
 }
 
 // server/routes/v1/reportsRoutes.ts
-var router57 = Router58();
-router57.use(authenticateToken);
+var router58 = Router59();
+router58.use(authenticateToken);
 function assertReportType(value) {
   if (REPORT_TYPES.includes(value)) return value;
   throw new NotFoundError("Unknown report type.");
@@ -27761,7 +28016,7 @@ function reportToCsvRows(data) {
   }
   return { header: ["value"], rows: [[data]] };
 }
-router57.get(
+router58.get(
   "/:type",
   requirePermission("reports.read"),
   asyncHandler(async (req, res) => {
@@ -27771,7 +28026,7 @@ router57.get(
     sendSuccess(res, { type, range: { from: query.from ?? null, to: query.to ?? null }, report });
   })
 );
-router57.get(
+router58.get(
   "/:type/export",
   requirePermission("reports.export"),
   asyncHandler(async (req, res) => {
@@ -27782,11 +28037,11 @@ router57.get(
     sendCsv(res, `${type}.csv`, toCsv(header, rows));
   })
 );
-var reportsRoutes_default = router57;
+var reportsRoutes_default = router58;
 
 // server/routes/v1/contentApprovalRoutes.ts
-import { Router as Router59 } from "express";
-import { z as z52 } from "zod";
+import { Router as Router60 } from "express";
+import { z as z53 } from "zod";
 
 // server/services/automation/ContentApprovalService.ts
 import crypto13 from "node:crypto";
@@ -27965,17 +28220,17 @@ var contentApprovalService = {
 };
 
 // server/routes/v1/contentApprovalRoutes.ts
-var router58 = Router59();
-router58.use(authenticateToken);
-var SubmitSchema = z52.object({
-  contentType: z52.enum(["page", "post"]),
-  contentId: z52.string().min(1)
+var router59 = Router60();
+router59.use(authenticateToken);
+var SubmitSchema = z53.object({
+  contentType: z53.enum(["page", "post"]),
+  contentId: z53.string().min(1)
 });
-var DecideSchema = z52.object({
-  decision: z52.enum(["APPROVED", "REJECTED", "CHANGES_REQUESTED"]),
-  reason: z52.string().max(2e3).optional()
+var DecideSchema = z53.object({
+  decision: z53.enum(["APPROVED", "REJECTED", "CHANGES_REQUESTED"]),
+  reason: z53.string().max(2e3).optional()
 });
-router58.get(
+router59.get(
   "/",
   requirePermission("content.update"),
   asyncHandler(async (req, res) => {
@@ -27988,7 +28243,7 @@ router58.get(
     sendSuccess(res, result);
   })
 );
-router58.post(
+router59.post(
   "/",
   requirePermission("content.update"),
   asyncHandler(async (req, res) => {
@@ -27997,7 +28252,7 @@ router58.post(
     sendSuccess(res, result, 201);
   })
 );
-router58.post(
+router59.post(
   "/:id/decide",
   requirePermission("content.publish"),
   asyncHandler(async (req, res) => {
@@ -28006,10 +28261,10 @@ router58.post(
     sendSuccess(res, result);
   })
 );
-var contentApprovalRoutes_default = router58;
+var contentApprovalRoutes_default = router59;
 
 // server/routes/v1/index.ts
-var v1Router = Router60();
+var v1Router = Router61();
 v1Router.use("/auth", authRoutes_default);
 v1Router.use("/webhooks", webhookRoutes_default);
 v1Router.use("/system", systemRoutes_default);
@@ -28054,6 +28309,7 @@ v1Router.use("/invoices", invoiceRoutes_default);
 v1Router.use("/payments", paymentRoutes_default);
 v1Router.use("/portal", portalRoutes_default);
 v1Router.use("/public", publicRoutes_default);
+v1Router.use("/ai", aiHealthRoutes_default);
 v1Router.use("/ai/providers", aiProviderRoutes_default);
 v1Router.use("/ai/tools", aiToolRoutes_default);
 v1Router.use("/ai/prompts", aiPromptRoutes_default);

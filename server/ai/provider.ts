@@ -45,6 +45,15 @@ export interface AiProvider {
 }
 
 const GEMINI_MODEL = "gemini-3.7-flash";
+const AI_TIMEOUT_MS = Math.max(1000, Number(process.env.AI_REQUEST_TIMEOUT_MS) || 30000);
+
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  let timer: NodeJS.Timeout;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new InfrastructureError("AI provider request timed out.")), ms);
+  });
+  return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
+}
 
 class GeminiProvider implements AiProvider {
   public readonly code = "gemini";
@@ -70,16 +79,19 @@ class GeminiProvider implements AiProvider {
     const model = options?.model ?? this.defaultModel;
 
     try {
-      const response = await client.models.generateContent({
-        model,
-        contents: prompt,
-        config: {
-          systemInstruction: options?.systemInstruction,
-          temperature: options?.temperature ?? 0.3,
-          maxOutputTokens: options?.maxOutputTokens ?? 2048,
-          responseMimeType: options?.responseMimeType,
-        },
-      });
+      const response = await withTimeout(
+        client.models.generateContent({
+          model,
+          contents: prompt,
+          config: {
+            systemInstruction: options?.systemInstruction,
+            temperature: options?.temperature ?? 0.3,
+            maxOutputTokens: options?.maxOutputTokens ?? 2048,
+            responseMimeType: options?.responseMimeType,
+          },
+        }),
+        AI_TIMEOUT_MS,
+      );
 
       const text = response.text;
       if (!text) {

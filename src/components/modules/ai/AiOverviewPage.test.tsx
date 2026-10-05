@@ -12,6 +12,7 @@ vi.mock("../../../lib/aiApi", () => ({
   aiApprovalsApi: { list: (...args: unknown[]) => listApprovalsMock(...args) },
   aiUsageApi: { summary: (...args: unknown[]) => summaryMock(...args) },
 }));
+vi.mock("./AiHealthPanel", () => ({ AiHealthPanel: () => null }));
 
 let permissions: string[] = [];
 vi.mock("../../../context/AuthContext", () => ({

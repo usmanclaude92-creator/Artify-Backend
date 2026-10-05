@@ -25,7 +25,7 @@ export class HybridSearchEngine {
     context: SearchContext
   ): Promise<SearchResultItem[]> {
     const startTime = Date.now();
-    const mode = request.mode || "HYBRID";
+    let mode = request.mode || "HYBRID";
     const limit = Math.min(request.limit || 10, 50);
     const minScore = request.minScore ?? 0.15;
 
@@ -110,7 +110,9 @@ export class HybridSearchEngine {
     // Vector search query vector
     let queryVector: number[] = [];
     if (mode === "SEMANTIC" || mode === "HYBRID") {
-      queryVector = await EmbeddingService.generateEmbedding(request.query);
+      const qv = await EmbeddingService.tryGenerateEmbedding(request.query);
+      if (qv) queryVector = qv;
+      else mode = "KEYWORD"; // embeddings unavailable: degrade honestly to lexical retrieval
     }
 
     const queryTerms = request.query

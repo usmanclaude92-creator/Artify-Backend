@@ -74,7 +74,10 @@ describe("Copilot workspaces, conversations, actions", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.data.assistantMessage.content.length).toBeGreaterThan(0);
-    expect(res.body.data.assistantMessage.status).toBe("COMPLETED");
+    // Provider is unavailable: the reply must be an honest notice, flagged FAILED, with no invented usage.
+    expect(res.body.data.assistantMessage.status).toBe("FAILED");
+    expect(res.body.data.assistantMessage.content).toMatch(/not configured/i);
+    expect(res.body.data.assistantMessage.totalTokens).toBe(0);
   });
 
   it("rejects sending an empty message", async () => {

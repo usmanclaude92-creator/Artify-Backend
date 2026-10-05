@@ -245,8 +245,8 @@ export class KnowledgeService {
           },
         });
 
-        const vector = await EmbeddingService.generateEmbedding(ch.content);
-        await EmbeddingService.storeEmbedding(createdChunk.id, vector);
+        const vector = await EmbeddingService.tryGenerateEmbedding(ch.content);
+        if (vector) await EmbeddingService.storeEmbedding(createdChunk.id, vector);
       }
 
       // 5. Finalize Job & Document Status
@@ -342,8 +342,8 @@ export class KnowledgeService {
         },
       });
 
-      const vector = await EmbeddingService.generateEmbedding(ch.content);
-      await EmbeddingService.storeEmbedding(createdChunk.id, vector);
+      const vector = await EmbeddingService.tryGenerateEmbedding(ch.content);
+      if (vector) await EmbeddingService.storeEmbedding(createdChunk.id, vector);
     }
 
     await prisma.knowledgeDocument.update({

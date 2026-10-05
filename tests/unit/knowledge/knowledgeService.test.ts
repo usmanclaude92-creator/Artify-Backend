@@ -123,9 +123,9 @@ In case of P1 outages, page on-call SRE immediately.
     });
 
     it("generates and compares deterministic normalized embeddings", async () => {
-      const vec1 = await EmbeddingService.generateEmbedding("Cloud infrastructure deployment guide");
-      const vec2 = await EmbeddingService.generateEmbedding("Cloud infrastructure deployment guide");
-      const vec3 = await EmbeddingService.generateEmbedding("Culinary recipes for Italian pasta");
+      const vec1 = (await EmbeddingService.tryGenerateEmbedding("Cloud infrastructure deployment guide"))!;
+      const vec2 = (await EmbeddingService.tryGenerateEmbedding("Cloud infrastructure deployment guide"))!;
+      const vec3 = (await EmbeddingService.tryGenerateEmbedding("Culinary recipes for Italian pasta"))!;
 
       expect(vec1.length).toBe(768);
       // Identical text produces identical vectors (cosine similarity 1.0)

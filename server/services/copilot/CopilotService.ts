@@ -21,6 +21,7 @@
  * (server/ai/provider.ts) instead of the source's AdapterFactory, for the
  * same reason — one AI-provider entry point, not two.
  */
+import { aiQuotaService } from "../aiQuotaService";
 import { prisma } from "../../db/prisma";
 import { defaultAiProvider } from "../../ai/provider";
 import { clientService } from "../clientService";
@@ -161,19 +162,20 @@ function checkRateLimit(userId: string): void {
 }
 
 /** Read-only counts report — replaces the source repo's (unregistered, non-functional) "generateNaturalLanguageReport" tool with a real, bounded, tenant-scoped Prisma read. */
-async function generateReportSnapshot(organizationId: string, userQuery: string): Promise<{ entity: string; summary: string } | null> {
-  if (userQuery.includes("invoice") || userQuery.includes("bill") || userQuery.includes("overdue")) {
+async function generateReportSnapshot(organizationId: string, userQuery: string, userPermissions: readonly string[]): Promise<{ entity: string; summary: string } | null> {
+  const can = (perm: string) => userPermissions.includes("*") || userPermissions.includes(perm);
+  if (can("invoices.read") && (userQuery.includes("invoice") || userQuery.includes("bill") || userQuery.includes("overdue"))) {
     const [total, overdue] = await Promise.all([
       prisma.invoice.count({ where: { organizationId } }),
       prisma.invoice.count({ where: { organizationId, status: "ISSUED", dueDate: { lt: new Date() } } }),
     ]);
     return { entity: "INVOICES", summary: `${total} invoice(s) total, ${overdue} currently overdue.` };
   }
-  if (userQuery.includes("lead") || userQuery.includes("prospect")) {
+  if (can("leads.read") && (userQuery.includes("lead") || userQuery.includes("prospect"))) {
     const total = await prisma.lead.count({ where: { organizationId } });
     return { entity: "LEADS", summary: `${total} lead(s) on file.` };
   }
-  if (userQuery.includes("client") || userQuery.includes("account") || userQuery.includes("customer")) {
+  if (can("clients.read") && (userQuery.includes("client") || userQuery.includes("account") || userQuery.includes("customer"))) {
     const [total, active] = await Promise.all([
       prisma.client.count({ where: { organizationId } }),
       prisma.client.count({ where: { organizationId, status: "ACTIVE" } }),
@@ -486,6 +488,7 @@ export class CopilotService {
    */
   public static async sendMessage(userContext: CopilotUserContext, options: SendMessageOptions) {
     checkRateLimit(userContext.userId);
+    await aiQuotaService.assertWithinLimits(userContext.organizationId);
 
     const startTime = Date.now();
     const correlationId = `copilot-${crypto.randomUUID()}`;
@@ -687,13 +690,13 @@ export class CopilotService {
         allowedToolsList.includes("generateNaturalLanguageReport") &&
         (userQuery.includes("report") || userQuery.includes("how many") || userQuery.includes("unpaid") || userQuery.includes("overdue") || userQuery.includes("breakdown") || userQuery.includes("statistics"))
       ) {
-        const report = await generateReportSnapshot(userContext.organizationId, userQuery);
+        const report = await generateReportSnapshot(userContext.organizationId, userQuery, userContext.userPermissions);
         if (report) {
           toolExecutionResults.push({ tool: "generateNaturalLanguageReport", result: report });
         }
       }
 
-      if (allowedToolsList.includes("searchClients") && (userQuery.includes("find client") || userQuery.includes("search client") || userQuery.includes("show client"))) {
+      if (allowedToolsList.includes("searchClients") && (userContext.userPermissions.includes("*") || userContext.userPermissions.includes("clients.read")) && (userQuery.includes("find client") || userQuery.includes("search client") || userQuery.includes("show client"))) {
         const queryTerm = options.content.replace(/find client|search client|show client/gi, "").trim();
         const { rows } = await clientService.listClients(userContext.organizationId, { search: queryTerm || undefined }, 1, 5, "name", "asc");
         toolExecutionResults.push({ tool: "searchClients", result: { count: rows.length, clients: rows.map((c) => ({ id: c.id, name: c.name, code: c.clientCode, status: c.status })) } });
@@ -725,7 +728,9 @@ SECURITY AND INTEGRITY RULES:
     const fullPrompt = `${systemPrompt}\n\n${contextSection}\n\n${conversationHistoryText}\n\nAssistant:`;
 
     let assistantResponseText = "";
-    let tokenUsage = { inputTokens: Math.round(fullPrompt.length / 4), outputTokens: 120, totalTokens: Math.round(fullPrompt.length / 4) + 120 };
+    // Usage is recorded only when the provider reports it; never estimated or invented.
+    let tokenUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+    let providerFailed = false;
     let modelUsed = defaultAiProvider.defaultModel;
 
     try {
@@ -744,7 +749,11 @@ SECURITY AND INTEGRITY RULES:
         };
       }
     } catch (modelErr) {
-      logger.warn({ modelErr, correlationId }, "[CopilotService] Provider generation fallback used");
+      logger.warn({ modelErr, correlationId }, "[CopilotService] AI provider unavailable or failed");
+      providerFailed = true;
+      const notice = defaultAiProvider.available
+        ? "The AI provider failed or timed out, so no AI-generated answer is available."
+        : "The AI provider is not configured on this server, so no AI-generated answer is available.";
       if (actionPreviewData) {
         assistantResponseText = `I have prepared the action preview for **${actionPreviewData.actionType}** on ${actionPreviewData.targetEntity}.\n\n**Proposed Changes:** ${actionPreviewData.changesSummary}\n\nPlease review the details in the action card below and select **Confirm** or **Cancel** to proceed.`;
       } else if (toolExecutionResults.length > 0 && toolExecutionResults[0]) {
@@ -753,12 +762,13 @@ SECURITY AND INTEGRITY RULES:
       } else if (citations.length > 0 && citations[0]) {
         assistantResponseText = `Based on your enterprise knowledge base, I found relevant material in *${citations[0].documentTitle}*. See the context below for details.`;
       } else {
-        assistantResponseText = `I have received your request regarding "${options.content}". How would you like me to assist with this in the ${workspace.name}?`;
+        assistantResponseText = notice;
       }
+      if (assistantResponseText !== notice) assistantResponseText = `_${notice}_\n\n${assistantResponseText}`;
     }
 
     const durationMs = Date.now() - startTime;
-    const estimatedCost = tokenUsage.inputTokens * 0.000001 + tokenUsage.outputTokens * 0.000003;
+    const estimatedCost = providerFailed ? 0 : tokenUsage.inputTokens * 0.000001 + tokenUsage.outputTokens * 0.000003;
 
     // 9. Save Assistant Message
     const assistantMessage = await prisma.copilotMessage.create({
@@ -766,7 +776,7 @@ SECURITY AND INTEGRITY RULES:
         conversationId: conversation.id,
         role: "assistant",
         content: assistantResponseText,
-        status: "COMPLETED",
+        status: providerFailed ? "FAILED" : "COMPLETED",
         providerType: defaultAiProvider.code,
         modelName: modelUsed,
         inputTokens: tokenUsage.inputTokens,
@@ -804,7 +814,7 @@ SECURITY AND INTEGRITY RULES:
           totalTokens: tokenUsage.totalTokens,
           durationMs,
           estimatedCost,
-          status: "SUCCESS",
+          status: providerFailed ? "FAILED" : "SUCCESS",
         },
       }),
       auditLogRepository.record({

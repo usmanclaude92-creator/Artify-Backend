@@ -282,3 +282,48 @@ export const aiApprovalsApi = {
   decide: (id: string, decision: "APPROVE" | "REJECT", rejectionReason?: string) =>
     apiClient.post<{ approval: AiApprovalRequest }>(`/ai/approvals/${id}/decide`, { decision, rejectionReason }),
 };
+
+// ---- Health & limits (Phase 18) -------------------------------------------------
+
+export interface AiHealth {
+  generatedAt: string;
+  provider: {
+    active: string;
+    configured: boolean;
+    state: "CONFIGURED" | "NOT_CONFIGURED_KEY_MISSING" | "DISABLED";
+    label: string;
+    defaultModel: string | null;
+    embeddingsAvailable: boolean;
+    capabilities: Record<string, boolean>;
+  };
+  catalog: { code: string; name: string; status: string; isDefault: boolean; models: number; activeModels: number }[];
+  usage: {
+    window: string;
+    copilotRequests: number;
+    copilotFailures: number;
+    copilotRequests24h: number;
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+    estimatedCost: number;
+    avgLatencyMs: number | null;
+    byModel: { provider: string; model: string; requests: number; tokens: number }[];
+    governedExecutions: { status: string; count: number }[];
+    governedUsage: { records: number; tokens: number; estimatedCost: number };
+  };
+  limits: { dailyRequests: number; dailyTokens: number; usedToday: { requests: number; tokens: number } };
+  recentActivity: { id: string; providerType: string; modelName: string; totalTokens: number; durationMs: number; status: string; createdAt: string }[];
+  recentErrors: { id: string; category: string | null; message: string; at: string }[];
+  knowledge: {
+    documents: { status: string; count: number }[];
+    chunks: number;
+    embeddedChunks: number;
+    failedIngestionJobs: number;
+    retrievalMode: "HYBRID" | "KEYWORD_ONLY";
+  };
+}
+
+export const aiHealthApi = {
+  get: () => apiClient.get<{ health: AiHealth }>("/ai/health"),
+  setLimits: (limits: { dailyRequests: number; dailyTokens: number }) => apiClient.put<{ limits: { dailyRequests: number; dailyTokens: number } }>("/ai/limits", limits),
+};

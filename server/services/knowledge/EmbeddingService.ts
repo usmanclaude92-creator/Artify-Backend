@@ -7,6 +7,7 @@
 import { prisma } from "../../db/prisma";
 import { getAdapter } from "../../ai/adapters";
 import { logger } from "../../core/logger";
+import { config } from "../../config/env";
 
 export interface VectorItem {
   id: string;
@@ -17,29 +18,29 @@ export interface VectorItem {
 
 export class EmbeddingService {
   /**
-   * Generates embedding vector for a piece of text using the active AI adapter.
+   * Returns an embedding from the configured AI provider, or null when no
+   * provider is configured or the call fails. Never fabricates vectors outside
+   * the test runner, so callers must degrade to keyword retrieval on null.
    */
-  public static async generateEmbedding(text: string, modelName = "text-embedding-004"): Promise<number[]> {
-    const adapter = getAdapter();
-    if (adapter.generateEmbedding) {
-      try {
-        return await adapter.generateEmbedding({ text, modelName, dimension: 768 });
-      } catch (err) {
-        logger.warn({ err }, "[EmbeddingService] Adapter embedding failed, calculating deterministic vector");
-      }
+  public static async tryGenerateEmbedding(text: string, modelName = "text-embedding-004"): Promise<number[] | null> {
+    let adapter;
+    try {
+      adapter = getAdapter();
+    } catch {
+      return null;
     }
+    if (!adapter.generateEmbedding) return null;
+    try {
+      return await adapter.generateEmbedding({ text, modelName, dimension: 768 });
+    } catch (err) {
+      logger.warn({ err }, "[EmbeddingService] Provider embedding failed");
+      return null;
+    }
+  }
 
-    // High quality deterministic fallback embedding (768 dimensions)
-    const dim = 768;
-    const lower = text.toLowerCase();
-    const vec = new Array(dim).fill(0);
-    for (let i = 0; i < lower.length; i++) {
-      const code = lower.charCodeAt(i);
-      const idx = (code * 31 + i * 17) % dim;
-      vec[idx] = (vec[idx] + (code / 255.0)) % 1.0;
-    }
-    const norm = Math.sqrt(vec.reduce((sum, v) => sum + v * v, 0)) || 1;
-    return vec.map((v) => Number((v / norm).toFixed(6)));
+  /** True when a real (non-mock) embedding provider is configured. */
+  public static isAvailable(): boolean {
+    return process.env.NODE_ENV === "test" || config.geminiApiKey.length > 0;
   }
 
   /**
@@ -66,11 +67,10 @@ export class EmbeddingService {
    * Stores embedding for a chunk in the database.
    */
   public static async storeEmbedding(chunkId: string, vector: number[], modelName = "text-embedding-004"): Promise<void> {
-    const adapter = getAdapter();
     await prisma.knowledgeEmbedding.create({
       data: {
         chunkId,
-        providerType: adapter.providerType,
+        providerType: getAdapter().providerType,
         modelName,
         dimension: vector.length,
         vector: vector as any,

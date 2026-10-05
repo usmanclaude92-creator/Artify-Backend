@@ -6,6 +6,7 @@ import type { AiModelAdapter } from "./types";
 import { GeminiAdapter } from "./geminiAdapter";
 import { MockAdapter } from "./mockAdapter";
 import { config } from "../../config/env";
+import { InfrastructureError } from "../../core/errors";
 
 export class AdapterFactory {
   private static mockInstance = new MockAdapter();
@@ -19,10 +20,11 @@ export class AdapterFactory {
     }
 
     if (normalized === "GEMINI") {
-      // If Gemini API key is missing, provide safe mock fallback in development
       const key = apiKey || config.geminiApiKey;
       if (!key || key.length === 0) {
-        return this.mockInstance;
+        // Never fabricate AI output outside the test runner.
+        if (process.env.NODE_ENV === "test") return this.mockInstance;
+        throw new InfrastructureError("AI provider is not configured");
       }
       if (!this.geminiInstance || apiKey) {
         const adapter = new GeminiAdapter(key);
@@ -32,7 +34,8 @@ export class AdapterFactory {
       return this.geminiInstance;
     }
 
-    // Default to mock for unimplemented third-party types (OPENAI, ANTHROPIC, CUSTOM)
-    return this.mockInstance;
+    // Third-party adapters (OPENAI, ANTHROPIC, CUSTOM) are not implemented.
+    if (process.env.NODE_ENV === "test") return this.mockInstance;
+    throw new InfrastructureError(`AI provider adapter "${normalized}" is not implemented`);
   }
 }
