@@ -6,9 +6,10 @@
 import { PrismaClient } from "@prisma/client";
 import { config } from "../config/env";
 import { logger } from "../core/logger";
+import { tuneDatabaseUrl } from "./databaseUrl";
 
 export const prisma = new PrismaClient({
-  datasourceUrl: config.databaseUrl,
+  datasourceUrl: tuneDatabaseUrl(config.databaseUrl, { serverless: !!process.env.VERCEL }),
   log: config.nodeEnv === "development" ? ["warn", "error"] : ["error"],
 });
 

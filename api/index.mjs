@@ -292,9 +292,26 @@ var logger = pino({
   timestamp: pino.stdTimeFunctions.isoTime
 });
 
+// server/db/databaseUrl.ts
+function tuneDatabaseUrl(raw, opts) {
+  let url;
+  try {
+    url = new URL(raw);
+  } catch {
+    return raw;
+  }
+  if (url.port !== "6543") return raw;
+  const p = url.searchParams;
+  if (!p.has("pgbouncer")) p.set("pgbouncer", "true");
+  if (!p.has("connection_limit")) p.set("connection_limit", opts.serverless ? "3" : "10");
+  if (!p.has("pool_timeout")) p.set("pool_timeout", "20");
+  if (!p.has("connect_timeout")) p.set("connect_timeout", "15");
+  return url.toString();
+}
+
 // server/db/prisma.ts
 var prisma = new PrismaClient({
-  datasourceUrl: config.databaseUrl,
+  datasourceUrl: tuneDatabaseUrl(config.databaseUrl, { serverless: !!process.env.VERCEL }),
   log: config.nodeEnv === "development" ? ["warn", "error"] : ["error"]
 });
 
