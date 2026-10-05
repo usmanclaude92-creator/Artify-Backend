@@ -6,12 +6,16 @@
 import { opportunityRepository, type OpportunityFilters, type OpportunityWithRelations } from "../repositories/opportunityRepository";
 import { clientRepository } from "../repositories/clientRepository";
 import { leadRepository } from "../repositories/leadRepository";
+import { productRepository } from "../repositories/productRepository";
 import { auditLogRepository } from "../repositories/auditLogRepository";
+import { auditLogQueryRepository } from "../repositories/auditLogQueryRepository";
 import { notificationService } from "./notificationService";
+import { eventEngine } from "./automation/EventEngine";
+import { analyticsEventService } from "./analyticsEventService";
 import { toMoney, DEFAULT_CURRENCY } from "../utils/money";
 import { ConflictError, NotFoundError, ValidationError } from "../core/errors";
 import type { SanitizedUser } from "../types/domain";
-import type { CreateOpportunityInput, UpdateOpportunityInput, LoseOpportunityInput } from "../schemas/opportunitySchemas";
+import type { CreateOpportunityInput, UpdateOpportunityInput, LoseOpportunityInput, LinkClientInput } from "../schemas/opportunitySchemas";
 import type { RequestMeta } from "./authService";
 
 /**
@@ -39,6 +43,38 @@ async function loadOpportunityOrThrow(id: string, organizationId: string): Promi
   const opportunity = await opportunityRepository.findByIdInOrg(id, organizationId);
   if (!opportunity) throw new NotFoundError("Opportunity not found.");
   return opportunity;
+}
+
+/**
+ * Phase 14 — real automation trigger: an ACTIVE workflow with triggerType
+ * EVENT / triggerConfig.eventType "opportunity.stage_changed" fires from
+ * this. Best-effort: a dispatch failure never breaks the stage change
+ * that triggered it.
+ */
+async function emitStageChangedEvent(organizationId: string, opportunityId: string, actorId: string, fromStage: string, toStage: string): Promise<void> {
+  try {
+    await eventEngine.emit({
+      eventType: "opportunity.stage_changed",
+      entityType: "opportunity",
+      entityId: opportunityId,
+      organizationId,
+      actorId,
+      actorType: "USER",
+      sourceModule: "CRM",
+      payload: { fromStage, toStage },
+    });
+  } catch {
+    // best-effort — see comment above.
+  }
+  // Phase 15 — real analytics event (never fabricated): a genuine stage
+  // transition on a real opportunity.
+  await analyticsEventService.recordBusinessEvent({
+    organizationId,
+    eventType: "opportunity_stage_changed",
+    entityType: "opportunity",
+    entityId: opportunityId,
+    metadata: { fromStage, toStage },
+  });
 }
 
 /** Notifies the assignee and creator (deduped, excluding whoever just performed the close) that a deal closed. */
@@ -69,18 +105,34 @@ export const opportunityService = {
   async createOpportunity(caller: SanitizedUser, input: CreateOpportunityInput, meta: RequestMeta = {}): Promise<OpportunityWithRelations> {
     const organizationId = caller.organizationId;
 
-    const client = await clientRepository.findByIdInOrg(input.clientId, organizationId);
-    if (!client) throw new ValidationError("clientId does not belong to this organization.");
+    if (input.clientId) {
+      const client = await clientRepository.findByIdInOrg(input.clientId, organizationId);
+      if (!client) throw new ValidationError("clientId does not belong to this organization.");
+    }
 
+    // Phase 14 — a deal opened against a Lead automatically inherits that
+    // Lead's own campaignId (its real attribution history), rather than
+    // trusting a caller-supplied campaignId to possibly disagree with it.
+    let campaignId = input.campaignId;
     if (input.leadId) {
       const lead = await leadRepository.findByIdInOrg(input.leadId, organizationId);
       if (!lead) throw new ValidationError("leadId does not belong to this organization.");
+      campaignId = lead.campaignId ?? undefined;
+    }
+
+    if (input.productId) {
+      const product = await productRepository.findById(input.productId);
+      if (!product) throw new ValidationError("productId does not refer to a real product/service/solution.");
     }
 
     const opportunity = await opportunityRepository.create({
       organizationId,
       clientId: input.clientId,
       leadId: input.leadId,
+      productId: input.productId,
+      campaignId,
+      source: input.source,
+      probability: input.probability,
       name: input.name,
       stage: input.stage,
       value: toMoney(input.value),
@@ -98,10 +150,39 @@ export const opportunityService = {
       action: "OPPORTUNITY_CREATED",
       resourceType: "opportunity",
       resourceId: opportunity.id,
-      afterData: { name: opportunity.name, stage: opportunity.stage, clientId: opportunity.clientId, value: opportunity.value.toString() },
+      afterData: { name: opportunity.name, stage: opportunity.stage, clientId: opportunity.clientId, leadId: opportunity.leadId, value: opportunity.value.toString() },
       ipAddress: meta.ip,
       userAgent: meta.userAgent,
     });
+
+    // Phase 15 — real analytics event (never fabricated): a genuine
+    // opportunity just opened, carrying its real campaign attribution and value.
+    await analyticsEventService.recordBusinessEvent({
+      organizationId,
+      eventType: "opportunity_created",
+      entityType: "opportunity",
+      entityId: opportunity.id,
+      campaignId: opportunity.campaignId ?? undefined,
+      metadata: { stage: opportunity.stage, value: opportunity.value.toString(), currency: opportunity.currency },
+    });
+
+    // Phase 16 — real automation trigger: an ACTIVE workflow with
+    // triggerType EVENT / triggerConfig.eventType "opportunity.created"
+    // fires from this. Best-effort: never blocks or fails opportunity creation.
+    try {
+      await eventEngine.emit({
+        eventType: "opportunity.created",
+        entityType: "opportunity",
+        entityId: opportunity.id,
+        organizationId,
+        actorId: caller.id,
+        actorType: "USER",
+        sourceModule: "CRM",
+        payload: { name: opportunity.name, stage: opportunity.stage, clientId: opportunity.clientId, leadId: opportunity.leadId, value: opportunity.value.toString() },
+      });
+    } catch {
+      // best-effort — see comment above.
+    }
 
     if (opportunity.assignedTo && opportunity.assignedTo !== caller.id) {
       await notificationService.notify({
@@ -126,6 +207,11 @@ export const opportunityService = {
       throw new ConflictError("This opportunity is closed and can no longer be edited.");
     }
 
+    if (input.productId) {
+      const product = await productRepository.findById(input.productId);
+      if (!product) throw new ValidationError("productId does not refer to a real product/service/solution.");
+    }
+
     const patch: Record<string, unknown> = {};
     if (input.name !== undefined) patch.name = input.name;
     if (input.stage !== undefined) patch.stage = input.stage;
@@ -134,6 +220,9 @@ export const opportunityService = {
     if (input.expectedCloseDate !== undefined) patch.expectedCloseDate = input.expectedCloseDate;
     if (input.notes !== undefined) patch.notes = input.notes;
     if (input.assignedTo !== undefined) patch.assignedTo = input.assignedTo;
+    if (input.productId !== undefined) patch.productId = input.productId;
+    if (input.source !== undefined) patch.source = input.source;
+    if (input.probability !== undefined) patch.probability = input.probability;
 
     const updated = await opportunityRepository.update(id, organizationId, patch);
 
@@ -149,6 +238,10 @@ export const opportunityService = {
       ipAddress: meta.ip,
       userAgent: meta.userAgent,
     });
+
+    if (input.stage !== undefined && input.stage !== existing.stage) {
+      await emitStageChangedEvent(organizationId, id, caller.id, existing.stage, input.stage);
+    }
 
     return updated;
   },
@@ -176,6 +269,14 @@ export const opportunityService = {
     if (TERMINAL_STAGES.has(existing.stage)) {
       throw new ConflictError("This opportunity is already closed.");
     }
+    // Phase 12 — a deal opened directly against a Lead (no client yet)
+    // must be linked to a real Client (see linkClient()) before it can be
+    // marked won: a won deal with nothing to bill is a contradiction, and
+    // this is exactly the "Opportunity -> Client" step of the brief's
+    // Lead -> Qualified Lead -> Opportunity -> Client handoff.
+    if (!existing.clientId) {
+      throw new ValidationError("This opportunity must be linked to a client (see POST /opportunities/:id/link-client) before it can be marked as won.");
+    }
 
     const updated = await opportunityRepository.update(id, organizationId, { stage: "CLOSED_WON", actualCloseDate: new Date() });
 
@@ -201,6 +302,8 @@ export const opportunityService = {
       title: "Opportunity won",
       message: `${existing.name} was marked as won.`,
     });
+
+    await emitStageChangedEvent(organizationId, id, caller.id, existing.stage, "CLOSED_WON");
 
     return updated;
   },
@@ -241,6 +344,8 @@ export const opportunityService = {
       message: `${existing.name} was marked as lost.`,
     });
 
+    await emitStageChangedEvent(organizationId, id, caller.id, existing.stage, "CLOSED_LOST");
+
     return updated;
   },
 
@@ -250,5 +355,50 @@ export const opportunityService = {
       opportunityRepository.recentForOrg(organizationId, 5),
     ]);
     return { byStage, recent };
+  },
+
+  /**
+   * Phase 12 — the "Opportunity -> Client" step of the Lead -> Qualified
+   * Lead -> Opportunity -> Client handoff: attaches an existing Client to
+   * a deal that was opened directly against a Lead. Never creates or
+   * converts anything itself (reuse leadService.convertLead for that) —
+   * this only links two already-real records together.
+   */
+  async linkClient(caller: SanitizedUser, id: string, input: LinkClientInput, meta: RequestMeta = {}): Promise<OpportunityWithRelations> {
+    const organizationId = caller.organizationId;
+    const existing = await loadOpportunityOrThrow(id, organizationId);
+    if (TERMINAL_STAGES.has(existing.stage)) {
+      throw new ConflictError("This opportunity is closed and can no longer be changed.");
+    }
+    if (existing.clientId) {
+      throw new ConflictError("This opportunity is already linked to a client.");
+    }
+
+    const client = await clientRepository.findByIdInOrg(input.clientId, organizationId);
+    if (!client) throw new ValidationError("clientId does not belong to this organization.");
+
+    const updated = await opportunityRepository.update(id, organizationId, { clientId: input.clientId });
+
+    await auditLogRepository.record({
+      organizationId,
+      actorUserId: caller.id,
+      actorType: "USER",
+      action: "OPPORTUNITY_CLIENT_LINKED",
+      resourceType: "opportunity",
+      resourceId: id,
+      beforeData: { clientId: null },
+      afterData: { clientId: input.clientId },
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent,
+    });
+
+    return updated;
+  },
+
+  /** Phase 12 — unified activity timeline for one opportunity, drawn entirely from the existing audit trail (never a parallel "activity" table). */
+  async getActivity(organizationId: string, id: string) {
+    await loadOpportunityOrThrow(id, organizationId);
+    const { rows } = await auditLogQueryRepository.list({ organizationId, resourceType: "opportunity", resourceId: id }, 1, 100);
+    return rows;
   },
 };

@@ -130,6 +130,14 @@ const envSchema = z
     // report "not configured" (empty content, lead intake disabled) rather
     // than fabricating or guessing an organization.
     PUBLIC_WEBSITE_ORGANIZATION_ID: z.string().optional().default(""),
+
+    // Phase 14 — Marketing Campaigns (docs/MARKETING_ARCHITECTURE.md). The
+    // public website's own base URL (e.g. "https://artifysolscom.com"),
+    // needed only to compose an absolute, previewable campaign landing-
+    // page URL with its UTM parameters appended. Left unset, campaign
+    // preview reports the landing page's real slug/status but no
+    // absolute URL, rather than guessing a domain.
+    PUBLIC_SITE_BASE_URL: z.string().optional().default(""),
   })
   .superRefine((val, ctx) => {
     const isProdLike = val.NODE_ENV === "production" || val.NODE_ENV === "staging";
@@ -269,6 +277,7 @@ export type AppConfig = Readonly<{
   passwordMinLength: number;
   invitationTokenTtlHours: number;
   publicWebsiteOrganizationId: string;
+  publicSiteBaseUrl: string;
   cronSecret: string;
   redisUrl: string;
 }>;
@@ -332,6 +341,7 @@ export function validateEnv(raw: NodeJS.ProcessEnv | Record<string, string | und
       passwordMinLength: env.PASSWORD_MIN_LENGTH,
       invitationTokenTtlHours: env.INVITATION_TOKEN_TTL_HOURS,
       publicWebsiteOrganizationId: env.PUBLIC_WEBSITE_ORGANIZATION_ID,
+      publicSiteBaseUrl: env.PUBLIC_SITE_BASE_URL,
       cronSecret: env.CRON_SECRET,
       redisUrl: env.REDIS_URL,
     }),

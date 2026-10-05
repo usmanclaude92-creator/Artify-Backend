@@ -31,11 +31,12 @@ import {
   UploadCloud,
   Target,
   ClipboardList,
+  Award,
 } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
 import { useRouter } from "../../lib/router";
 import { hasPermission, visibleNavItems } from "../../lib/permissions";
-import { postsApi, pagesApi, leadsApi, clientsApi, productsApi, mediaApi, opportunitiesApi, formsApi } from "../../lib/api";
+import { postsApi, pagesApi, leadsApi, clientsApi, productsApi, mediaApi, opportunitiesApi, formsApi, caseStudiesApi } from "../../lib/api";
 
 interface CommandPaletteProps {
   open: boolean;
@@ -65,6 +66,7 @@ interface QuickAction {
 const QUICK_ACTIONS: QuickAction[] = [
   { id: "new-post", label: "New Post", permission: "content.create", path: "/cms/posts?new=1", icon: Newspaper },
   { id: "new-page", label: "New Page", permission: "content.create", path: "/cms/pages?new=1", icon: FileText },
+  { id: "new-case-study", label: "New Case Study", permission: "content.create", path: "/cms/case-studies?new=1", icon: Award },
   { id: "new-lead", label: "New Lead", permission: "leads.create", path: "/crm/leads?new=1", icon: Briefcase },
   { id: "new-client", label: "New Client", permission: "clients.create", path: "/crm/clients?new=1", icon: Building2 },
   { id: "new-opportunity", label: "New Opportunity", permission: "opportunities.create", path: "/crm/opportunities?new=1", icon: Target },
@@ -100,6 +102,17 @@ const ENTITY_SEARCHERS: {
     search: async (query) => {
       const { items } = await pagesApi.list({ search: query, limit: 5 });
       return items.map((p) => ({ id: p.id, label: p.title, sublabel: p.status }));
+    },
+  },
+  {
+    id: "case-studies",
+    group: "Case Studies",
+    permission: "content.read",
+    icon: Award,
+    navPath: "/cms/case-studies",
+    search: async (query) => {
+      const { items } = await caseStudiesApi.list({ search: query, limit: 5 });
+      return items.map((c) => ({ id: c.id, label: c.title, sublabel: c.status }));
     },
   },
   {

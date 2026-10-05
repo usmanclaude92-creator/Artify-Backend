@@ -44,6 +44,15 @@ export const redirectRepository = {
     return prisma.redirect.findFirst({ where: { id, organizationId } });
   },
 
+  /** Phase 15 — SEO reporting: real redirect counts, never fabricated. */
+  async count(organizationId: string): Promise<{ total: number; active: number }> {
+    const [total, active] = await Promise.all([
+      prisma.redirect.count({ where: { organizationId } }),
+      prisma.redirect.count({ where: { organizationId, isActive: true } }),
+    ]);
+    return { total, active };
+  },
+
   async findByFromPathInOrg(organizationId: string, fromPath: string): Promise<Redirect | null> {
     return prisma.redirect.findUnique({ where: { organizationId_fromPath: { organizationId, fromPath } } });
   },

@@ -32,7 +32,7 @@ export const notificationRepository = {
     return prisma.notification.findFirst({ where: { id, userId } });
   },
 
-  async create(data: { organizationId?: string; userId: string; type: string; title: string; message: string }): Promise<Notification> {
+  async create(data: { organizationId?: string; userId: string; type: string; title: string; message: string; entityType?: string; entityId?: string }): Promise<Notification> {
     return prisma.notification.create({ data });
   },
 

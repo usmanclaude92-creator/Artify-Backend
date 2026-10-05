@@ -13,6 +13,7 @@ import { assertFeaturedMediaUsable } from "./mediaService";
 import { sanitizeContentHtml } from "../utils/sanitizeHtml";
 import { redirectService } from "./redirectService";
 import { notificationService } from "./notificationService";
+import { eventEngine } from "./automation/EventEngine";
 import { prisma } from "../db/prisma";
 import { ConflictError, NotFoundError, ValidationError } from "../core/errors";
 import type { SanitizedUser } from "../types/domain";
@@ -328,6 +329,22 @@ export const postService = {
       ipAddress: meta.ip,
       userAgent: meta.userAgent,
     });
+
+    // Phase 16 — real automation trigger (mirrors pageService.submitForReview).
+    try {
+      await eventEngine.emit({
+        eventType: "content.submitted_for_review",
+        entityType: "post",
+        entityId: id,
+        organizationId,
+        actorId: caller.id,
+        actorType: "USER",
+        sourceModule: "CMS",
+        payload: { title: existing.title, slug: existing.slug },
+      });
+    } catch {
+      // best-effort — see pageService.submitForReview's comment.
+    }
 
     return loadPostOrThrow(id, organizationId);
   },

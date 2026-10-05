@@ -9,7 +9,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import request from "supertest";
 import { createApp, finalizeApp } from "../../server/app/app";
-import { disconnectPrisma } from "../../server/db/prisma";
+import { disconnectPrisma, prisma } from "../../server/db/prisma";
 import { resetDb } from "../helpers/db";
 
 describe("Automation workflows, actions, approvals", () => {
@@ -293,5 +293,165 @@ describe("Automation workflows, actions, approvals", () => {
     const ids = res.body.data.actions.map((a: { id: string }) => a.id);
     expect(ids).toContain("assign_user");
     expect(ids).toContain("create_task");
+    // Phase 14 — new business actions.
+    expect(ids).toContain("create_lead");
+    expect(ids).toContain("update_lead_status");
+  });
+
+  // Phase 14 — create_lead creates a real, persisted Lead (never fabricated).
+  it("create_lead creates a real Lead via a BUSINESS_ACTION step", async () => {
+    const createRes = await request(app)
+      .post("/api/v1/automation/workflows")
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({
+        name: "Create Lead Workflow",
+        triggerType: "MANUAL",
+        steps: [
+          {
+            id: "create_lead_step",
+            name: "Create a lead",
+            type: "BUSINESS_ACTION",
+            actionId: "create_lead",
+            parameters: { companyName: "Automation-Created Co", email: "automation-created@example.com", source: "automation-test" },
+          },
+        ],
+      });
+    expect(createRes.status).toBe(201);
+    const workflowId = createRes.body.data.workflow.id;
+    await request(app).post(`/api/v1/automation/workflows/${workflowId}/publish`).set("Authorization", `Bearer ${adminToken}`).send({});
+    const triggerRes = await request(app).post(`/api/v1/automation/workflows/${workflowId}/trigger`).set("Authorization", `Bearer ${adminToken}`).send({});
+    const executionId = triggerRes.body.data.executionId;
+
+    let execution: { status: string } = { status: "QUEUED" };
+    for (let i = 0; i < 20; i++) {
+      const execRes = await request(app).get(`/api/v1/automation/executions/${executionId}`).set("Authorization", `Bearer ${adminToken}`);
+      execution = execRes.body.data.execution;
+      if (execution.status === "COMPLETED" || execution.status === "FAILED") break;
+      await new Promise((r) => setTimeout(r, 150));
+    }
+    expect(execution.status).toBe("COMPLETED");
+
+    const lead = await prisma.lead.findFirst({ where: { email: "automation-created@example.com" } });
+    expect(lead).not.toBeNull();
+    expect(lead!.source).toBe("automation-test");
+    const audit = await prisma.auditLog.findFirst({ where: { action: "LEAD_CREATED", resourceId: lead!.id } });
+    expect(audit).not.toBeNull();
+  });
+
+  // Phase 14 — update_lead_status moves a real Lead, and refuses to touch a CONVERTED one.
+  it("update_lead_status updates a real Lead's status and rejects a CONVERTED lead", async () => {
+    const targetLead = await request(app)
+      .post("/api/v1/leads")
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({ companyName: "Status Update Target Co" });
+    const targetLeadId = targetLead.body.data.lead.id;
+
+    const createRes = await request(app)
+      .post("/api/v1/automation/workflows")
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({
+        name: "Update Lead Status Workflow",
+        triggerType: "MANUAL",
+        steps: [
+          { id: "update_status_step", name: "Qualify the lead", type: "BUSINESS_ACTION", actionId: "update_lead_status", parameters: { leadId: targetLeadId, status: "QUALIFIED" } },
+        ],
+      });
+    const workflowId = createRes.body.data.workflow.id;
+    await request(app).post(`/api/v1/automation/workflows/${workflowId}/publish`).set("Authorization", `Bearer ${adminToken}`).send({});
+    const triggerRes = await request(app).post(`/api/v1/automation/workflows/${workflowId}/trigger`).set("Authorization", `Bearer ${adminToken}`).send({});
+    const executionId = triggerRes.body.data.executionId;
+
+    let execution: { status: string } = { status: "QUEUED" };
+    for (let i = 0; i < 20; i++) {
+      const execRes = await request(app).get(`/api/v1/automation/executions/${executionId}`).set("Authorization", `Bearer ${adminToken}`);
+      execution = execRes.body.data.execution;
+      if (execution.status === "COMPLETED" || execution.status === "FAILED") break;
+      await new Promise((r) => setTimeout(r, 150));
+    }
+    expect(execution.status).toBe("COMPLETED");
+
+    const reloaded = await prisma.lead.findUniqueOrThrow({ where: { id: targetLeadId } });
+    expect(reloaded.status).toBe("QUALIFIED");
+
+    // Now convert it, and re-run the same action against the now-CONVERTED lead — must fail cleanly, never silently succeed.
+    await request(app)
+      .post(`/api/v1/leads/${targetLeadId}/convert`)
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({ clientCode: "STATUS-UPDATE-CLIENT" });
+
+    const secondTrigger = await request(app).post(`/api/v1/automation/workflows/${workflowId}/trigger`).set("Authorization", `Bearer ${adminToken}`).send({});
+    const secondExecutionId = secondTrigger.body.data.executionId;
+    let secondExecution: { status: string } = { status: "QUEUED" };
+    for (let i = 0; i < 20; i++) {
+      const execRes = await request(app).get(`/api/v1/automation/executions/${secondExecutionId}`).set("Authorization", `Bearer ${adminToken}`);
+      secondExecution = execRes.body.data.execution;
+      if (secondExecution.status === "COMPLETED" || secondExecution.status === "FAILED") break;
+      await new Promise((r) => setTimeout(r, 150));
+    }
+    expect(secondExecution.status).toBe("FAILED");
+  });
+
+  // Phase 14 — THE critical gap-fix proof: EventEngine existed but nothing
+  // in the platform ever called eventEngine.emit() outside the automation
+  // module itself before this phase. Proves a real business action
+  // (creating a Lead via the authenticated API) now fires a real
+  // EVENT-triggered ACTIVE workflow end-to-end, with no manual trigger
+  // involved at all.
+  it("a real lead.created business event (fired by creating a Lead through the normal CRM API) automatically triggers a matching ACTIVE EVENT workflow", async () => {
+    const assignee2 = await request(app)
+      .post("/api/v1/users")
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({ email: "automation-event-assignee@example.com", password: "UserPassword123", firstName: "Ev", lastName: "Assignee", roleKey: "USER" });
+    const assigneeId2 = assignee2.body.data.user.id;
+
+    const createRes = await request(app)
+      .post("/api/v1/automation/workflows")
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({
+        name: "New Lead Auto-Assign Workflow",
+        triggerType: "EVENT",
+        triggerConfig: { eventType: "lead.created" },
+        steps: [
+          {
+            id: "create_task_step",
+            name: "Create follow-up task",
+            type: "BUSINESS_ACTION",
+            actionId: "create_task",
+            parameters: { title: "Follow up with new lead", assignedUserId: assigneeId2, isAiGenerated: false },
+          },
+        ],
+      });
+    expect(createRes.status).toBe(201);
+    const workflowId = createRes.body.data.workflow.id;
+    const publishRes = await request(app).post(`/api/v1/automation/workflows/${workflowId}/publish`).set("Authorization", `Bearer ${adminToken}`).send({});
+    expect(publishRes.body.data.workflow.status).toBe("ACTIVE");
+
+    // No manual /trigger call at all — this creates a Lead through the
+    // ordinary authenticated API, exactly like a real sales rep would.
+    const leadRes = await request(app)
+      .post("/api/v1/leads")
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({ companyName: "Event-Triggered Lead Co" });
+    expect(leadRes.status).toBe(201);
+    const newLeadId = leadRes.body.data.lead.id;
+
+    // Poll for an execution of this workflow correlated to the real event to appear and complete.
+    let matched: { id: string; status: string } | null = null;
+    for (let i = 0; i < 30; i++) {
+      const listRes = await request(app)
+        .get("/api/v1/automation/executions")
+        .set("Authorization", `Bearer ${adminToken}`)
+        .query({ workflowId });
+      const rows = listRes.body.data.rows as Array<{ id: string; status: string; entityId: string | null }>;
+      matched = rows.find((r) => r.entityId === newLeadId) ?? null;
+      if (matched && (matched.status === "COMPLETED" || matched.status === "FAILED")) break;
+      await new Promise((r) => setTimeout(r, 150));
+    }
+
+    expect(matched).not.toBeNull();
+    expect(matched!.status).toBe("COMPLETED");
+
+    const task = await prisma.automationTask.findFirst({ where: { title: "Follow up with new lead", assignedUserId: assigneeId2 } });
+    expect(task).not.toBeNull();
   });
 });

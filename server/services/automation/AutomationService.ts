@@ -30,6 +30,9 @@ import {
   WorkflowTriggerType,
 } from "./types";
 
+/** Phase 16 (Automation Safety §7) — see initEventListeners' recursion-guard comment. */
+const MAX_EVENT_CHAIN_DEPTH = 25;
+
 export class AutomationService {
   private static instance: AutomationService;
 
@@ -51,6 +54,28 @@ export class AutomationService {
   private initEventListeners(): void {
     eventEngine.subscribe(async (event: BusinessEventPayload) => {
       try {
+        // Phase 16 (Automation Safety, docs/AUTOMATION_ARCHITECTURE.md §7) —
+        // recursion/runaway-chain protection. Every execution spawned from
+        // an event (directly or via a step's own emitted event, e.g.
+        // "workflow.completed" triggering another workflow) carries the
+        // SAME correlationId as its root trigger (WorkflowEngine passes
+        // `execution.correlationId` straight through to every event it
+        // emits) — so counting existing executions sharing this one
+        // correlationId is an exact causal-chain-length check, not an
+        // approximation. A chain this long is never a legitimate single
+        // business operation; it's workflows triggering each other in a
+        // loop (A completes -> triggers B -> completes -> triggers A...).
+        const chainLength = await prisma.automationExecution.count({
+          where: { organizationId: event.organizationId, correlationId: event.correlationId },
+        });
+        if (chainLength >= MAX_EVENT_CHAIN_DEPTH) {
+          logger.error(
+            { eventType: event.eventType, correlationId: event.correlationId, chainLength },
+            "[AutomationService] Event chain depth limit reached — refusing to trigger further workflows (recursion guard)"
+          );
+          return;
+        }
+
         const workflows = await prisma.automationWorkflow.findMany({
           where: {
             organizationId: event.organizationId,
@@ -585,6 +610,10 @@ export class AutomationService {
     return taskManager.updateTask(params);
   }
 
+  public async addTaskComment(params: { taskId: string; organizationId: string; userId: string; text: string }) {
+    return taskManager.addComment(params);
+  }
+
   // ---------------------------------------------------------------------------
   // Schedules
   // ---------------------------------------------------------------------------
@@ -697,6 +726,55 @@ export class AutomationService {
   }
 
   // ---------------------------------------------------------------------------
+  // My Work (Phase 16)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Aggregates one user's own corner of the automation surface: their
+   * open tasks (split into overdue/upcoming/all), the approvals they're
+   * actually eligible to decide (role-matched, same rule
+   * ApprovalEngine.decideApproval itself enforces — ADMIN/SUPER_ADMIN see
+   * every pending approval; everyone else only ones whose requiredRole
+   * matches their own role), and their own recent workflow activity.
+   * Every section is a real, scoped query — never another user's data,
+   * never a fabricated count.
+   */
+  public async getMyWork(organizationId: string, userId: string, userRole: string) {
+    const isUniversalApprover = userRole === "ADMIN" || userRole === "SUPER_ADMIN";
+
+    const [myTasks, pendingApprovals, recentExecutions, recentlyCompletedTasks] = await Promise.all([
+      taskManager.getMyTasks(organizationId, userId),
+      prisma.automationApproval.findMany({
+        where: {
+          organizationId,
+          status: "PENDING",
+          ...(isUniversalApprover ? {} : { requiredRole: userRole }),
+        },
+        orderBy: { requestedAt: "desc" },
+        take: 50,
+        include: { workflow: { select: { id: true, name: true, category: true } } },
+      }),
+      prisma.automationExecution.findMany({
+        where: { organizationId, initiatedById: userId },
+        orderBy: { createdAt: "desc" },
+        take: 10,
+        include: { workflow: { select: { id: true, name: true, category: true } } },
+      }),
+      prisma.automationTask.findMany({
+        where: { organizationId, assignedUserId: userId, status: "COMPLETED" },
+        orderBy: { completedAt: "desc" },
+        take: 10,
+      }),
+    ]);
+
+    return {
+      tasks: myTasks,
+      pendingApprovals,
+      recentActivity: { executions: recentExecutions, completedTasks: recentlyCompletedTasks },
+    };
+  }
+
+  // ---------------------------------------------------------------------------
   // Dashboard & Analytics
   // ---------------------------------------------------------------------------
 
@@ -761,10 +839,11 @@ export class AutomationService {
    * `tick()` and `processQueue()` are already idempotent single-flight
    * guarded (`isProcessing`/`isProcessingQueue`).
    */
-  public async runCronTick(): Promise<{ schedulesTriggered: number; queuedExecutionsProcessed: number }> {
+  public async runCronTick(): Promise<{ schedulesTriggered: number; queuedExecutionsProcessed: number; dueSoonNotified: number; overdueNotified: number }> {
     const schedulesTriggered = await schedulerEngine.tick();
     const queuedExecutionsProcessed = await workflowEngine.processQueue();
-    return { schedulesTriggered, queuedExecutionsProcessed };
+    const { dueSoonNotified, overdueNotified } = await taskManager.checkDueDates();
+    return { schedulesTriggered, queuedExecutionsProcessed, dueSoonNotified, overdueNotified };
   }
 }
 

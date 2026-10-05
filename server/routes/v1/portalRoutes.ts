@@ -92,4 +92,23 @@ router.get(
   })
 );
 
+router.get(
+  "/documents",
+  requirePermission("portal.documents.read"),
+  asyncHandler(async (req, res) => {
+    const query = pageQuerySchema.parse(req.query);
+    const { rows, total } = await clientPortalService.listDocuments(req.user!, query.page, query.limit);
+    sendSuccess(res, { documents: rows }, 200, { page: query.page, limit: query.limit, total });
+  })
+);
+
+router.get(
+  "/onboarding",
+  requirePermission("portal.onboarding.read"),
+  asyncHandler(async (req, res) => {
+    const onboarding = await clientPortalService.getOnboarding(req.user!);
+    sendSuccess(res, { onboarding });
+  })
+);
+
 export default router;

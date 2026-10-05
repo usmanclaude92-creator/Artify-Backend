@@ -43,6 +43,8 @@ export async function resetDb(): Promise<void> {
   // turn points back via pageId/postId) before deleting either side.
   await prisma.page.updateMany({ data: { currentRevisionId: null } });
   await prisma.post.updateMany({ data: { currentRevisionId: null } });
+  // Phase 11 — same currentRevisionId <-> content_revisions cycle for CaseStudy.
+  await prisma.caseStudy.updateMany({ data: { currentRevisionId: null } });
   // Phase 1 (Website module) — same currentRevisionId <-> revisions cycle
   // as pages/posts above, broken the same way before either side is deleted.
   await prisma.template.updateMany({ data: { currentRevisionId: null } });
@@ -111,6 +113,15 @@ export async function resetDb(): Promise<void> {
   await prisma.client.deleteMany();
   await prisma.lead.deleteMany();
 
+  // Phase 11 — case_study_products/case_study_related_pages/case_study_related_posts
+  // all Cascade off CaseStudy/Product/Page/Post, but delete explicitly for
+  // clarity before any of those four are deleted (same rationale as the
+  // workspace_invitation comment above).
+  await prisma.caseStudyProduct.deleteMany();
+  await prisma.caseStudyRelatedPage.deleteMany();
+  await prisma.caseStudyRelatedPost.deleteMany();
+  await prisma.caseStudy.deleteMany();
+
   await prisma.contentRevision.deleteMany();
   await prisma.postTag.deleteMany();
   await prisma.post.deleteMany();
@@ -177,6 +188,20 @@ export async function resetDb(): Promise<void> {
   await prisma.copilotActionPreview.deleteMany();
   await prisma.copilotConversation.deleteMany();
   await prisma.copilotWorkspace.deleteMany();
+
+  // Phase 15 — analytics_events.organization_id RESTRICTs (same convention
+  // as campaigns below); campaign_id is SetNull, so order relative to
+  // Campaign doesn't matter, but it must go before organization.deleteMany()
+  // below.
+  await prisma.analyticsEvent.deleteMany();
+
+  // Phase 14 — Campaign.organizationId is Restrict (same convention as
+  // every other CRM table); its own join tables Cascade from Campaign, so
+  // deleting Campaign alone is enough, but it must happen after every
+  // table it references (Lead/Opportunity/Client/Form/FormSubmission/
+  // Page/Post/Product/CaseStudy/MediaAsset, all already gone above) and
+  // before organization.deleteMany() below.
+  await prisma.campaign.deleteMany();
 
   await prisma.webhookEvent.deleteMany();
   await prisma.auditLog.deleteMany();

@@ -9,6 +9,7 @@ import { sendSuccess } from "../../core/apiResponse";
 import { createClientSchema, listClientsQuerySchema, updateClientSchema } from "../../schemas/clientSchemas";
 import { createContactSchema, listContactsQuerySchema } from "../../schemas/contactSchemas";
 import { provisionWorkspaceSchema } from "../../schemas/workspaceSchemas";
+import { startOnboardingSchema } from "../../schemas/onboardingSchemas";
 
 const router = Router();
 
@@ -41,6 +42,15 @@ router.get(
   asyncHandler(async (req, res) => {
     const client = await clientService.getClient(req.user!.organizationId, req.params.id!);
     sendSuccess(res, { client });
+  })
+);
+
+router.get(
+  "/:id/activity",
+  requirePermission("clients.read"),
+  asyncHandler(async (req, res) => {
+    const activity = await clientService.getActivity(req.user!.organizationId, req.params.id!);
+    sendSuccess(res, { activity });
   })
 );
 
@@ -102,7 +112,8 @@ router.post(
   "/:clientId/onboarding/start",
   requirePermission("onboarding.create"),
   asyncHandler(async (req, res) => {
-    const record = await onboardingService.startOnboarding(req.user!, req.params.clientId!, requestMeta(req));
+    const input = startOnboardingSchema.parse(req.body ?? {});
+    const record = await onboardingService.startOnboarding(req.user!, req.params.clientId!, input, requestMeta(req));
     sendSuccess(res, { onboarding: record }, 201);
   })
 );

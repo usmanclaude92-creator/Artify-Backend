@@ -87,6 +87,7 @@ model Organization {
   payments                   Payment[]
   pages                      Page[]
   posts                      Post[]
+  caseStudies                CaseStudy[]
   categories                 Category[]
   tags                       Tag[]
   mediaAssets                MediaAsset[]
@@ -97,6 +98,10 @@ model Organization {
   opportunities              Opportunity[]
   forms                      Form[]
   formSubmissions            FormSubmission[]
+  // Phase 14 — Marketing + Campaigns + Automation (docs/MARKETING_ARCHITECTURE.md).
+  campaigns                  Campaign[]
+  // Phase 15 — Analytics + Reporting (docs/ANALYTICS_ARCHITECTURE.md).
+  analyticsEvents            AnalyticsEvent[]
   mediaUploadSessions        MediaUploadSession[]
   notifications              Notification[]
   systemSettings             SystemSetting[]
@@ -181,8 +186,11 @@ model User {
   assignedOpportunities          Opportunity[]               @relation("OpportunityAssignee")
   createdOpportunities           Opportunity[]               @relation("OpportunityCreatedBy")
   createdForms                   Form[]                      @relation("FormCreatedBy")
+  ownedCampaigns                 Campaign[]                  @relation("CampaignOwner")
+  createdCampaigns               Campaign[]                  @relation("CampaignCreatedBy")
   createdPages                   Page[]                      @relation("PageCreatedBy")
   createdPosts                   Post[]                      @relation("PostCreatedBy")
+  createdCaseStudies             CaseStudy[]                 @relation("CaseStudyCreatedBy")
   createdRedirects               Redirect[]                  @relation("RedirectCreatedBy")
   createdRevisions               ContentRevision[]           @relation("RevisionCreatedBy")
   createdTemplates               Template[]                  @relation("TemplateCreatedBy")
@@ -199,6 +207,7 @@ model User {
   auditLogs                      AuditLog[]                  @relation("AuditActor")
   createdOnboardings             ClientOnboarding[]          @relation("OnboardingCreatedBy")
   completedOnboardings           ClientOnboarding[]          @relation("OnboardingCompletedBy")
+  ownedOnboardings               ClientOnboarding[]          @relation("OnboardingOwner")
   sentInvitations                WorkspaceInvitation[]       @relation("InvitationInvitedBy")
   acceptedInvitations            WorkspaceInvitation[]       @relation("InvitationAcceptedUser")
   createdProducts                Product[]                   @relation("ProductCreatedBy")
@@ -491,9 +500,33 @@ model Lead {
   updatedAt         DateTime   @updatedAt @map("updated_at")
   deletedAt         DateTime?  @map("deleted_at")
 
+  // Phase 12 (CRM Integration + Business Relationship Management) —
+  // real, structured attribution instead of free-text buried in `notes`
+  // (the only place UTM/landing-page/consent data lived before this
+  // phase — see publicFormService.ts's buildNotes). Additive/nullable:
+  // every existing lead reads null/no-op on all of these.
+  utmSource       String?  @map("utm_source")
+  utmMedium       String?  @map("utm_medium")
+  utmCampaign     String?  @map("utm_campaign")
+  utmTerm         String?  @map("utm_term")
+  utmContent      String?  @map("utm_content")
+  landingPagePath String?  @map("landing_page_path")
+  referrer        String?
+  consentGiven    Boolean? @map("consent_given")
+  formId          String?  @map("form_id")
+  // Phase 14 (Marketing + Campaigns + Automation) — resolved automatically
+  // at intake time (publicFormService/publicLeadService) by matching the
+  // submitted utm_campaign against a real Campaign's own utmCampaign in
+  // this organization (campaignAttributionService) — never fabricated,
+  // null when no campaign matches or none was tagged. Also settable
+  // directly by staff as a manual attribution override.
+  campaignId      String?  @map("campaign_id")
+
   organization    Organization     @relation(fields: [organizationId], references: [id], onDelete: Restrict)
   assignee        User?            @relation("LeadAssignee", fields: [assignedTo], references: [id], onDelete: SetNull)
   convertedClient Client?          @relation("LeadConvertedClient", fields: [convertedClientId], references: [id], onDelete: SetNull)
+  form            Form?            @relation("LeadOriginatingForm", fields: [formId], references: [id], onDelete: SetNull)
+  campaign        Campaign?        @relation("LeadCampaign", fields: [campaignId], references: [id], onDelete: SetNull)
   opportunities   Opportunity[]    @relation("LeadOpportunities")
   formSubmissions FormSubmission[] @relation("FormSubmissionLead")
 
@@ -502,6 +535,8 @@ model Lead {
   @@index([assignedTo])
   @@index([createdAt])
   @@index([email])
+  @@index([formId])
+  @@index([campaignId])
   @@map("leads")
 }
 
@@ -532,11 +567,33 @@ enum OpportunityStage {
 // their own service methods (never the generic update), matching the
 // Lead.CONVERTED precedent; a lost deal is reopened by creating a new
 // Opportunity, not by un-terminating this one.
+// Phase 12 — `clientId` is now nullable so a deal can exist in the
+// pipeline directly against a Lead, before that Lead has converted to a
+// Client ("Lead -> Qualified Lead -> Opportunity -> Client" — the brief's
+// own handoff diagram). Exactly one of clientId/leadId must be set, never
+// both null, enforced by the hand-written CHECK below (same convention as
+// ContentRevision's exactly-one-parent constraint). `winOpportunity`
+// (opportunityService.ts) additionally requires clientId at the
+// application layer before a deal can be marked CLOSED_WON — a deal
+// cannot be "won" without a real client to bill, but it can live in
+// PROSPECTING/QUALIFICATION/PROPOSAL/NEGOTIATION against just a Lead.
 model Opportunity {
   id                String           @id @default(uuid())
   organizationId    String           @map("organization_id")
-  clientId          String           @map("client_id")
+  clientId          String?          @map("client_id")
   leadId            String?          @map("lead_id")
+  // Phase 12 — the Product/Service/Solution (Phase 10's global catalog)
+  // this deal is for, and a free-text provenance tag mirroring Lead.source
+  // for a deal with no originating Lead. `probability` is an optional
+  // 0-100 sales-stage confidence a rep may set — null means "not
+  // estimated," never a fabricated default.
+  productId         String?          @map("product_id")
+  source            String?
+  probability       Int?
+  // Phase 14 — inherited automatically from the originating Lead's own
+  // campaignId when this deal is created lead-first; settable directly
+  // when a deal is opened with no originating Lead.
+  campaignId        String?          @map("campaign_id")
   name              String
   stage             OpportunityStage @default(PROSPECTING)
   value             Decimal          @db.Decimal(18, 3)
@@ -552,14 +609,19 @@ model Opportunity {
   deletedAt         DateTime?        @map("deleted_at")
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  client       Client       @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  client       Client?      @relation(fields: [clientId], references: [id], onDelete: Restrict)
   lead         Lead?        @relation("LeadOpportunities", fields: [leadId], references: [id], onDelete: SetNull)
+  product      Product?     @relation(fields: [productId], references: [id], onDelete: SetNull)
+  campaign     Campaign?    @relation("OpportunityCampaign", fields: [campaignId], references: [id], onDelete: SetNull)
   assignee     User?        @relation("OpportunityAssignee", fields: [assignedTo], references: [id], onDelete: SetNull)
   createdBy    User?        @relation("OpportunityCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
 
   @@index([organizationId])
   @@index([stage])
   @@index([clientId])
+  @@index([leadId])
+  @@index([productId])
+  @@index([campaignId])
   @@index([assignedTo])
   @@index([createdAt])
   @@map("opportunities")
@@ -598,9 +660,11 @@ model Form {
   updatedAt      DateTime   @updatedAt @map("updated_at")
   deletedAt      DateTime?  @map("deleted_at")
 
-  organization Organization     @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  createdBy    User?            @relation("FormCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
-  submissions  FormSubmission[]
+  organization    Organization     @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  createdBy       User?            @relation("FormCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  submissions     FormSubmission[]
+  originatedLeads Lead[]           @relation("LeadOriginatingForm")
+  campaigns       Campaign[]       @relation("CampaignForm")
 
   @@unique([organizationId, slug])
   @@index([organizationId])
@@ -640,15 +704,19 @@ model FormSubmission {
   consentGiven    Boolean? @map("consent_given")
   landingPagePath String?  @map("landing_page_path")
   referrer        String?
+  // Phase 14 — same campaignAttributionService resolution as Lead.campaignId.
+  campaignId      String?  @map("campaign_id")
   createdAt       DateTime @default(now()) @map("created_at")
 
   form         Form         @relation(fields: [formId], references: [id], onDelete: Cascade)
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
   lead         Lead?        @relation("FormSubmissionLead", fields: [leadId], references: [id], onDelete: SetNull)
+  campaign     Campaign?    @relation("FormSubmissionCampaign", fields: [campaignId], references: [id], onDelete: SetNull)
 
   @@index([organizationId])
   @@index([formId])
   @@index([createdAt])
+  @@index([campaignId])
   @@map("form_submissions")
 }
 
@@ -683,14 +751,26 @@ model Client {
   address                 String?
   accountManager          String?      @map("account_manager")
   notes                   String?
+  // Phase 13 (Client Management) — source mirrors Lead.source (free text,
+  // e.g. "referral", "converted_lead"); industryId reuses the existing
+  // Industry catalog (Phase 11, shared with Product/CaseStudy) rather than
+  // inventing a second industry taxonomy.
+  source                  String?      @map("source")
+  industryId              String?      @map("industry_id")
   workspaceOrganizationId String?      @unique @map("workspace_organization_id")
+  // Phase 14 — carried over from the converting Lead's own campaignId at
+  // conversion time (leadService.convertLead), preserving the complete
+  // source/attribution history all the way to Client (§6/§3).
+  campaignId              String?      @map("campaign_id")
   createdAt               DateTime     @default(now()) @map("created_at")
   updatedAt               DateTime     @updatedAt @map("updated_at")
   deletedAt               DateTime?    @map("deleted_at")
 
   organization          Organization      @relation(fields: [organizationId], references: [id], onDelete: Restrict)
   manager               User?             @relation("ClientAccountManager", fields: [accountManager], references: [id], onDelete: SetNull)
+  industry              Industry?         @relation(fields: [industryId], references: [id], onDelete: SetNull)
   workspaceOrganization Organization?     @relation("ClientWorkspace", fields: [workspaceOrganizationId], references: [id], onDelete: SetNull)
+  campaign              Campaign?         @relation("ClientCampaign", fields: [campaignId], references: [id], onDelete: SetNull)
   contacts              Contact[]
   convertedLeads        Lead[]            @relation("LeadConvertedClient")
   contracts             Contract[]
@@ -698,13 +778,215 @@ model Client {
   invoices              Invoice[]
   onboarding            ClientOnboarding?
   opportunities         Opportunity[]
+  documents             MediaAsset[]      @relation("ClientDocuments")
 
   @@unique([organizationId, clientCode])
   @@index([organizationId])
   @@index([status])
   @@index([createdAt])
   @@index([email])
+  @@index([industryId])
+  @@index([campaignId])
   @@map("clients")
+}
+
+enum CampaignStatus {
+  DRAFT
+  ACTIVE
+  PAUSED
+  ARCHIVED
+}
+
+enum CampaignChannel {
+  EMAIL
+  SOCIAL
+  PAID_SEARCH
+  PAID_SOCIAL
+  CONTENT
+  EVENT
+  REFERRAL
+  DIRECT
+  OTHER
+}
+
+// Phase 14 (Marketing + Campaigns + Automation, docs/MARKETING_ARCHITECTURE.md).
+// Organization-scoped like every other CRM record (Lead/Client/Opportunity) —
+// never a parallel, CRM-disconnected marketing system. A Campaign is the
+// attribution anchor: its own utm* fields are the "standard" values this
+// campaign's outbound links should carry, matched case-insensitively
+// against a Lead/FormSubmission's own captured utmCampaign at intake time
+// (campaignAttributionService) to set campaignId — never required, never
+// fabricated when nothing matches. `landingPageId`/`formId` point at the
+// *existing* Phase 9 Page(pageType=LANDING)/Form records (no parallel
+// landing-page or form system); `targetAudience`/`notes` are free text,
+// same shape as every other CRM free-text field (Lead.notes, etc.).
+// DRAFT -> ACTIVE <-> PAUSED -> ARCHIVED (terminal), validated server-side
+// (campaignService.ts) — soft-deleted via `deletedAt` like every other
+// CRM record, never a physical delete (Lead/FormSubmission/Opportunity/
+// Client attribution history must keep resolving).
+model Campaign {
+  id             String          @id @default(uuid())
+  organizationId String          @map("organization_id")
+  name           String
+  description    String?
+  status         CampaignStatus  @default(DRAFT)
+  channel        CampaignChannel @default(OTHER)
+  startDate      DateTime?       @map("start_date") @db.Date
+  endDate        DateTime?       @map("end_date") @db.Date
+  ownerId        String?         @map("owner_id")
+  budget         Decimal?        @db.Decimal(18, 3)
+  currency       String?         @db.Char(3)
+  landingPageId  String?         @map("landing_page_id")
+  formId         String?         @map("form_id")
+  utmSource      String?         @map("utm_source")
+  utmMedium      String?         @map("utm_medium")
+  utmCampaign    String?         @map("utm_campaign")
+  utmTerm        String?         @map("utm_term")
+  utmContent     String?         @map("utm_content")
+  targetAudience String?         @map("target_audience")
+  notes          String?
+  createdById    String?         @map("created_by")
+  createdAt      DateTime        @default(now()) @map("created_at")
+  updatedAt      DateTime        @updatedAt @map("updated_at")
+  deletedAt      DateTime?       @map("deleted_at")
+
+  organization       Organization               @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  owner              User?                      @relation("CampaignOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  createdBy          User?                      @relation("CampaignCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  landingPage        Page?                      @relation("CampaignLandingPage", fields: [landingPageId], references: [id], onDelete: SetNull)
+  form               Form?                      @relation("CampaignForm", fields: [formId], references: [id], onDelete: SetNull)
+  products           CampaignProduct[]
+  relatedPages       CampaignRelatedPage[]
+  relatedPosts       CampaignRelatedPost[]
+  relatedCaseStudies CampaignRelatedCaseStudy[]
+  media              CampaignMedia[]
+  leads              Lead[]                     @relation("LeadCampaign")
+  formSubmissions    FormSubmission[]           @relation("FormSubmissionCampaign")
+  opportunities      Opportunity[]              @relation("OpportunityCampaign")
+  clients            Client[]                   @relation("ClientCampaign")
+  analyticsEvents    AnalyticsEvent[]
+
+  @@index([organizationId, status])
+  @@index([organizationId, utmCampaign])
+  @@index([ownerId])
+  @@index([landingPageId])
+  @@index([formId])
+  @@map("campaigns")
+}
+
+// Campaign <-> Product/Service/Solution (all `Product` rows differentiated
+// by `type`, same reasoning as CaseStudyProduct).
+model CampaignProduct {
+  campaignId String @map("campaign_id")
+  productId  String @map("product_id")
+
+  campaign Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  product  Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@id([campaignId, productId])
+  @@index([productId])
+  @@map("campaign_products")
+}
+
+// Campaign <-> related Page (manually curated, mirrors CaseStudyRelatedPage).
+model CampaignRelatedPage {
+  campaignId String @map("campaign_id")
+  pageId     String @map("page_id")
+
+  campaign Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  page     Page     @relation(fields: [pageId], references: [id], onDelete: Cascade)
+
+  @@id([campaignId, pageId])
+  @@index([pageId])
+  @@map("campaign_related_pages")
+}
+
+// Campaign <-> related Post (manually curated, mirrors CaseStudyRelatedPost).
+model CampaignRelatedPost {
+  campaignId String @map("campaign_id")
+  postId     String @map("post_id")
+
+  campaign Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  post     Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  @@id([campaignId, postId])
+  @@index([postId])
+  @@map("campaign_related_posts")
+}
+
+// Campaign <-> related Case Study (manually curated).
+model CampaignRelatedCaseStudy {
+  campaignId  String @map("campaign_id")
+  caseStudyId String @map("case_study_id")
+
+  campaign  Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  caseStudy CaseStudy @relation(fields: [caseStudyId], references: [id], onDelete: Cascade)
+
+  @@id([campaignId, caseStudyId])
+  @@index([caseStudyId])
+  @@map("campaign_related_case_studies")
+}
+
+// Campaign <-> Media Library asset (creative assets attached to a campaign).
+model CampaignMedia {
+  campaignId String @map("campaign_id")
+  mediaId    String @map("media_id")
+
+  campaign Campaign   @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  media    MediaAsset @relation(fields: [mediaId], references: [id], onDelete: Cascade)
+
+  @@id([campaignId, mediaId])
+  @@index([mediaId])
+  @@map("campaign_media")
+}
+
+// Phase 15 (Analytics + Reporting, docs/ANALYTICS_ARCHITECTURE.md). The
+// platform's own first-party event store — not a parallel system, since
+// nothing resembling it existed before this phase (no analytics
+// provider/SDK was integrated anywhere). `eventType` is a free string
+// (same convention as AuditLog.action) rather than a rigid enum, so new
+// event kinds never require a migration — "avoid excessive tracking" per
+// the brief, so only a small, deliberate set of event types is actually
+// emitted (see analyticsEventService.ts). `organizationId` is always a
+// real tenant — for anonymous public-website traffic this is
+// config.publicWebsiteOrganizationId, exactly like Lead/FormSubmission's
+// own public-intake convention; never a caller-supplied value.
+// `sessionId` is a random, client-generated, non-identifying token (no
+// cookie, no fingerprinting, no IP/user-agent stored raw) — rotated per
+// browser tab session, so this never becomes a persistent cross-session
+// visitor identity. `campaignId` mirrors Lead/FormSubmission's own
+// UTM->Campaign attribution resolution (campaignAttributionService).
+// `entityType`/`entityId` optionally link an event to the real CRM/CMS
+// record it concerns (e.g. a form_submission event -> that FormSubmission
+// row) without a dedicated FK per entity type. Never user-deletable
+// individually; aggregated and never surfaced as a flat feed of raw rows
+// to any UI beyond the organization's own admins (RBAC: analytics.read).
+model AnalyticsEvent {
+  id             String   @id @default(uuid())
+  organizationId String   @map("organization_id")
+  eventType      String   @map("event_type")
+  path           String?
+  referrer       String?
+  sessionId      String?  @map("session_id")
+  utmSource      String?  @map("utm_source")
+  utmMedium      String?  @map("utm_medium")
+  utmCampaign    String?  @map("utm_campaign")
+  utmTerm        String?  @map("utm_term")
+  utmContent     String?  @map("utm_content")
+  campaignId     String?  @map("campaign_id")
+  entityType     String?  @map("entity_type")
+  entityId       String?  @map("entity_id")
+  metadata       Json     @default("{}")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  campaign     Campaign?    @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, eventType, createdAt])
+  @@index([organizationId, path])
+  @@index([campaignId])
+  @@index([sessionId])
+  @@map("analytics_events")
 }
 
 enum ContactStatus {
@@ -780,6 +1062,12 @@ model ClientOnboarding {
   cancelledAt    DateTime?        @map("cancelled_at")
   createdById    String?          @map("created_by")
   completedById  String?          @map("completed_by")
+  // Phase 13 — overall onboarding owner/target date, distinct from each
+  // checklist item's own (JSON-stored) assignee/dueDate: these are the
+  // record-level fields the dashboard's "pending actions"/"overdue
+  // onboarding" counts filter on, so they're real columns, not JSON.
+  ownerId        String?          @map("owner_id")
+  dueDate        DateTime?        @map("due_date")
   createdAt      DateTime         @default(now()) @map("created_at")
   updatedAt      DateTime         @updatedAt @map("updated_at")
 
@@ -787,9 +1075,13 @@ model ClientOnboarding {
   client       Client       @relation(fields: [clientId], references: [id], onDelete: Restrict)
   createdBy    User?        @relation("OnboardingCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
   completedBy  User?        @relation("OnboardingCompletedBy", fields: [completedById], references: [id], onDelete: SetNull)
+  owner        User?        @relation("OnboardingOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  documents    MediaAsset[]
 
   @@index([organizationId])
   @@index([status])
+  @@index([ownerId])
+  @@index([dueDate])
   @@map("client_onboarding")
 }
 
@@ -901,16 +1193,19 @@ model Product {
   categoryId        String? @map("category_id")
   currentRevisionId String? @unique @map("current_revision_id")
 
-  createdBy       User?             @relation("ProductCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
-  updatedBy       User?             @relation("ProductUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
-  category        ProductCategory?  @relation(fields: [categoryId], references: [id], onDelete: SetNull)
-  currentRevision ProductRevision?  @relation("ProductCurrentRevision", fields: [currentRevisionId], references: [id], onDelete: SetNull)
-  revisions       ProductRevision[] @relation("ProductRevisions")
+  createdBy       User?              @relation("ProductCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy       User?              @relation("ProductUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  category        ProductCategory?   @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  currentRevision ProductRevision?   @relation("ProductCurrentRevision", fields: [currentRevisionId], references: [id], onDelete: SetNull)
+  revisions       ProductRevision[]  @relation("ProductRevisions")
   modules         ProductModule[]
   subscriptions   Subscription[]
   industries      ProductIndustry[]
-  relatedFrom     ProductRelation[] @relation("ProductRelationFrom")
-  relatedTo       ProductRelation[] @relation("ProductRelationTo")
+  relatedFrom     ProductRelation[]  @relation("ProductRelationFrom")
+  relatedTo       ProductRelation[]  @relation("ProductRelationTo")
+  caseStudies     CaseStudyProduct[]
+  opportunities   Opportunity[]
+  campaigns       CampaignProduct[]
 
   @@index([status])
   @@index([type])
@@ -995,7 +1290,9 @@ model Industry {
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at")
 
-  products ProductIndustry[]
+  products    ProductIndustry[]
+  caseStudies CaseStudy[]
+  clients     Client[]
 
   @@map("industries")
 }
@@ -1506,14 +1803,17 @@ model Page {
   // deleting or orphaning its children's own content.
   parentId String? @map("parent_id")
 
-  organization    Organization      @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  createdBy       User?             @relation("PageCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
-  currentRevision ContentRevision?  @relation("PageCurrentRevision", fields: [currentRevisionId], references: [id], onDelete: SetNull)
-  revisions       ContentRevision[] @relation("PageRevisions")
-  featuredMedia   MediaAsset?       @relation("PageFeaturedMedia", fields: [featuredMediaId], references: [id], onDelete: SetNull)
-  template        Template?         @relation("PageTemplate", fields: [templateId], references: [id], onDelete: SetNull)
-  parent          Page?             @relation("PageHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
-  children        Page[]            @relation("PageHierarchy")
+  organization    Organization           @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  createdBy       User?                  @relation("PageCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  currentRevision ContentRevision?       @relation("PageCurrentRevision", fields: [currentRevisionId], references: [id], onDelete: SetNull)
+  revisions       ContentRevision[]      @relation("PageRevisions")
+  featuredMedia   MediaAsset?            @relation("PageFeaturedMedia", fields: [featuredMediaId], references: [id], onDelete: SetNull)
+  template        Template?              @relation("PageTemplate", fields: [templateId], references: [id], onDelete: SetNull)
+  parent          Page?                  @relation("PageHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
+  children        Page[]                 @relation("PageHierarchy")
+  caseStudies     CaseStudyRelatedPage[]
+  campaigns       Campaign[]             @relation("CampaignLandingPage")
+  campaignRelated CampaignRelatedPage[]
 
   @@unique([organizationId, slug])
   @@index([organizationId, status])
@@ -1539,14 +1839,16 @@ model Post {
   updatedAt         DateTime      @updatedAt @map("updated_at")
   deletedAt         DateTime?     @map("deleted_at")
 
-  organization    Organization      @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  category        Category?         @relation(fields: [categoryId], references: [id], onDelete: SetNull)
-  author          Author?           @relation(fields: [authorId], references: [id], onDelete: SetNull)
-  createdBy       User?             @relation("PostCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
-  currentRevision ContentRevision?  @relation("PostCurrentRevision", fields: [currentRevisionId], references: [id], onDelete: SetNull)
-  revisions       ContentRevision[] @relation("PostRevisions")
+  organization    Organization           @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  category        Category?              @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  author          Author?                @relation(fields: [authorId], references: [id], onDelete: SetNull)
+  createdBy       User?                  @relation("PostCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  currentRevision ContentRevision?       @relation("PostCurrentRevision", fields: [currentRevisionId], references: [id], onDelete: SetNull)
+  revisions       ContentRevision[]      @relation("PostRevisions")
   tags            PostTag[]
-  featuredMedia   MediaAsset?       @relation("PostFeaturedMedia", fields: [featuredMediaId], references: [id], onDelete: SetNull)
+  featuredMedia   MediaAsset?            @relation("PostFeaturedMedia", fields: [featuredMediaId], references: [id], onDelete: SetNull)
+  caseStudies     CaseStudyRelatedPost[]
+  campaigns       CampaignRelatedPost[]
 
   @@unique([organizationId, slug])
   @@index([organizationId, status])
@@ -1565,6 +1867,90 @@ model PostTag {
   @@id([postId, tagId])
   @@index([tagId])
   @@map("post_tags")
+}
+
+// Phase 11 (Case Studies + Content Relationships) — mirrors Post's own
+// draft/review/schedule/publish/archive + ContentRevision pattern exactly
+// (see postService.ts), so it gets the Site Editor/editorBlocks integration
+// and the existing content.* RBAC permissions for free, with zero new
+// permission keys. `clientName`/`industryId` are the only fields that
+// don't exist on Post; everything else structured (challenge, solution,
+// implementation, results, testimonial, technologies, gallery, CTA form)
+// lives in ContentRevision.metadata via caseStudyContentSchema, the same
+// place Page/Post already keep their SEO metadata.
+model CaseStudy {
+  id                String        @id @default(uuid())
+  organizationId    String        @map("organization_id")
+  slug              String
+  title             String
+  status            ContentStatus @default(DRAFT)
+  clientName        String?       @map("client_name")
+  industryId        String?       @map("industry_id")
+  currentRevisionId String?       @unique @map("current_revision_id")
+  featuredMediaId   String?       @map("featured_media_id")
+  createdById       String?       @map("created_by")
+  publishedAt       DateTime?     @map("published_at")
+  scheduledAt       DateTime?     @map("scheduled_at")
+  createdAt         DateTime      @default(now()) @map("created_at")
+  updatedAt         DateTime      @updatedAt @map("updated_at")
+  deletedAt         DateTime?     @map("deleted_at")
+
+  organization    Organization               @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  industry        Industry?                  @relation(fields: [industryId], references: [id], onDelete: SetNull)
+  createdBy       User?                      @relation("CaseStudyCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  currentRevision ContentRevision?           @relation("CaseStudyCurrentRevision", fields: [currentRevisionId], references: [id], onDelete: SetNull)
+  revisions       ContentRevision[]          @relation("CaseStudyRevisions")
+  featuredMedia   MediaAsset?                @relation("CaseStudyFeaturedMedia", fields: [featuredMediaId], references: [id], onDelete: SetNull)
+  products        CaseStudyProduct[]
+  relatedPages    CaseStudyRelatedPage[]
+  relatedPosts    CaseStudyRelatedPost[]
+  campaigns       CampaignRelatedCaseStudy[]
+
+  @@unique([organizationId, slug])
+  @@index([organizationId, status])
+  @@index([industryId])
+  @@map("case_studies")
+}
+
+// Case Study <-> Product/Service/Solution. All three are `Product` rows
+// differentiated by `type` (see Phase 10), so one join table covers all
+// three relationships the brief asks for.
+model CaseStudyProduct {
+  caseStudyId String @map("case_study_id")
+  productId   String @map("product_id")
+
+  caseStudy CaseStudy @relation(fields: [caseStudyId], references: [id], onDelete: Cascade)
+  product   Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@id([caseStudyId, productId])
+  @@index([productId])
+  @@map("case_study_products")
+}
+
+// Case Study <-> related Page (manually curated "related content").
+model CaseStudyRelatedPage {
+  caseStudyId String @map("case_study_id")
+  pageId      String @map("page_id")
+
+  caseStudy CaseStudy @relation(fields: [caseStudyId], references: [id], onDelete: Cascade)
+  page      Page      @relation(fields: [pageId], references: [id], onDelete: Cascade)
+
+  @@id([caseStudyId, pageId])
+  @@index([pageId])
+  @@map("case_study_related_pages")
+}
+
+// Case Study <-> related Post (manually curated "related content").
+model CaseStudyRelatedPost {
+  caseStudyId String @map("case_study_id")
+  postId      String @map("post_id")
+
+  caseStudy CaseStudy @relation(fields: [caseStudyId], references: [id], onDelete: Cascade)
+  post      Post      @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  @@id([caseStudyId, postId])
+  @@index([postId])
+  @@map("case_study_related_posts")
 }
 
 // Phase 5 — SEO Control Center (docs/SEO_ARCHITECTURE.md). A redirect is a
@@ -1609,6 +1995,10 @@ model ContentRevision {
   id           String        @id @default(uuid())
   pageId       String?       @map("page_id")
   postId       String?       @map("post_id")
+  // Phase 11 — additive third parent. The exactly-one-parent CHECK
+  // constraint (content_revisions_exactly_one_parent) is widened in the
+  // Phase 11 migration to num_nonnulls(page_id, post_id, case_study_id) = 1.
+  caseStudyId  String?       @map("case_study_id")
   version      Int
   status       ContentStatus
   title        String
@@ -1625,14 +2015,17 @@ model ContentRevision {
   createdAt    DateTime      @default(now()) @map("created_at")
   publishedAt  DateTime?     @map("published_at")
 
-  page           Page? @relation("PageRevisions", fields: [pageId], references: [id], onDelete: Cascade)
-  post           Post? @relation("PostRevisions", fields: [postId], references: [id], onDelete: Cascade)
-  createdBy      User? @relation("RevisionCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
-  pageCurrentFor Page? @relation("PageCurrentRevision")
-  postCurrentFor Post? @relation("PostCurrentRevision")
+  page                Page?      @relation("PageRevisions", fields: [pageId], references: [id], onDelete: Cascade)
+  post                Post?      @relation("PostRevisions", fields: [postId], references: [id], onDelete: Cascade)
+  caseStudy           CaseStudy? @relation("CaseStudyRevisions", fields: [caseStudyId], references: [id], onDelete: Cascade)
+  createdBy           User?      @relation("RevisionCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  pageCurrentFor      Page?      @relation("PageCurrentRevision")
+  postCurrentFor      Post?      @relation("PostCurrentRevision")
+  caseStudyCurrentFor CaseStudy? @relation("CaseStudyCurrentRevision")
 
   @@index([pageId])
   @@index([postId])
+  @@index([caseStudyId])
   @@map("content_revisions")
 }
 
@@ -1864,17 +2257,34 @@ model MediaAsset {
   visibility       MediaVisibility @default(PRIVATE)
   status           MediaStatus     @default(PENDING)
   uploadedById     String?         @map("uploaded_by")
+  // Phase 13 (Client Documents) — reuses this same Media Library/storage
+  // pipeline rather than a second document system. clientId/onboardingId
+  // are both optional: a document can belong to a client generally or to
+  // one specific onboarding record (or neither, for ordinary CMS media).
+  // `isClientVisible` is the Client Portal visibility gate — separate from
+  // `visibility` (PRIVATE/PUBLIC), which governs the public *website*; a
+  // client document is never PUBLIC but can still be client-visible.
+  clientId         String?         @map("client_id")
+  onboardingId     String?         @map("onboarding_id")
+  documentCategory String?         @map("document_category")
+  isClientVisible  Boolean         @default(false) @map("is_client_visible")
   createdAt        DateTime        @default(now()) @map("created_at")
   updatedAt        DateTime        @updatedAt @map("updated_at")
   deletedAt        DateTime?       @map("deleted_at")
 
-  organization     Organization        @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  uploadedBy       User?               @relation("MediaUploadedBy", fields: [uploadedById], references: [id], onDelete: SetNull)
-  uploadSession    MediaUploadSession?
-  featuredForPages Page[]              @relation("PageFeaturedMedia")
-  featuredForPosts Post[]              @relation("PostFeaturedMedia")
+  organization           Organization        @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  uploadedBy             User?               @relation("MediaUploadedBy", fields: [uploadedById], references: [id], onDelete: SetNull)
+  client                 Client?             @relation("ClientDocuments", fields: [clientId], references: [id], onDelete: SetNull)
+  onboarding             ClientOnboarding?   @relation(fields: [onboardingId], references: [id], onDelete: SetNull)
+  uploadSession          MediaUploadSession?
+  featuredForPages       Page[]              @relation("PageFeaturedMedia")
+  featuredForPosts       Post[]              @relation("PostFeaturedMedia")
+  featuredForCaseStudies CaseStudy[]         @relation("CaseStudyFeaturedMedia")
+  campaigns              CampaignMedia[]
 
   @@index([organizationId, status])
+  @@index([clientId])
+  @@index([onboardingId])
   @@map("media_assets")
 }
 
@@ -1924,6 +2334,16 @@ model Notification {
   title          String
   message        String
   status         NotificationStatus @default(UNREAD)
+  // Phase 16 (Workflow + Approvals + Tasks + Notifications,
+  // docs/AUTOMATION_ARCHITECTURE.md) — optional link to the real record
+  // this notification concerns (e.g. entityType="automation_task",
+  // entityId=<task id>), letting the Notification Center deep-link to it.
+  // Free string, same convention as AuditLog.resourceType/AnalyticsEvent.
+  // entityType — never a rigid enum, so a new source never needs a
+  // migration. Absent (both null) for a notification with no single
+  // underlying record (e.g. a generic system message).
+  entityType     String?            @map("entity_type")
+  entityId       String?            @map("entity_id")
   readAt         DateTime?          @map("read_at")
   createdAt      DateTime           @default(now()) @map("created_at")
 
@@ -2444,6 +2864,10 @@ enum AutomationApprovalStatus {
   PENDING
   APPROVED
   REJECTED
+  // Phase 16 — a reviewer can ask for edits without a hard rejection; the
+  // requester resubmits (a fresh PENDING approval) rather than this one
+  // flipping back to PENDING itself, keeping approval history append-only.
+  CHANGES_REQUESTED
   EXPIRED
   CANCELLED
 }

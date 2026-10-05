@@ -135,6 +135,11 @@ export const PERMISSION_KEYS = [
   "navigation_menus.delete",
   "reports.read",
   "reports.export",
+  // Phase 15 — Analytics Dashboard read access (docs/ANALYTICS_ARCHITECTURE.md).
+  // Separate from reports.read: the dashboard is a live, real-time-ish
+  // overview, while reports.read/reports.export gate the Reports area's
+  // generated/exportable report documents.
+  "analytics.read",
   "settings.read",
   "settings.manage",
   "audit.read",
@@ -239,6 +244,10 @@ export const PERMISSION_KEYS = [
   "portal.subscriptions.read",
   "portal.invoices.read",
   "portal.payments.read",
+  // Phase 13 — same reasoning as the portal keys above, extended to
+  // onboarding progress and client-visible documents.
+  "portal.onboarding.read",
+  "portal.documents.read",
   // Phase 5 (SEO Control Center, docs/SEO_ARCHITECTURE.md) — redirects
   // and the rule-based SEO audit are their own permission domain rather
   // than folded into content.*, since a redirect isn't itself content
@@ -257,6 +266,16 @@ export const PERMISSION_KEYS = [
   "forms.create",
   "forms.update",
   "forms.delete",
+  // Phase 14 (Marketing + Campaigns + Automation, docs/MARKETING_ARCHITECTURE.md).
+  // "publish" mirrors content.*/templates.*'s own publish-is-separate-
+  // from-update convention (activating live traffic attribution is a
+  // bigger blast radius than editing draft fields); "archive" is the
+  // terminal action, same shape as products.archive.
+  "campaigns.read",
+  "campaigns.create",
+  "campaigns.update",
+  "campaigns.publish",
+  "campaigns.archive",
 ] as const;
 
 export type PermissionKey = (typeof PERMISSION_KEYS)[number];

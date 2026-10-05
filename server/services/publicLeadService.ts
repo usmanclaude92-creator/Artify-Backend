@@ -8,6 +8,9 @@
  */
 import { leadRepository } from "../repositories/leadRepository";
 import { auditLogRepository } from "../repositories/auditLogRepository";
+import { campaignAttributionService } from "./campaignAttributionService";
+import { analyticsEventService } from "./analyticsEventService";
+import { eventEngine } from "./automation/EventEngine";
 import { config } from "../config/env";
 import { InfrastructureError } from "../core/errors";
 import type { CreatePublicLeadInput } from "../schemas/publicSchemas";
@@ -40,6 +43,7 @@ export const publicLeadService = {
       throw new InfrastructureError("Public lead intake is not configured.");
     }
 
+    const campaignId = await campaignAttributionService.resolveCampaignId(organizationId, input.utmCampaign);
     const lead = await leadRepository.create({
       organizationId,
       companyName: input.company || input.name,
@@ -48,6 +52,15 @@ export const publicLeadService = {
       phone: input.phone,
       source: `website:${input.source}`,
       notes: buildNotes(input),
+      utmSource: input.utmSource,
+      utmMedium: input.utmMedium,
+      utmCampaign: input.utmCampaign,
+      utmTerm: input.utmTerm,
+      utmContent: input.utmContent,
+      landingPagePath: input.landingPagePath,
+      referrer: meta.referrer,
+      consentGiven: true,
+      campaignId,
     });
 
     await auditLogRepository.record({
@@ -60,6 +73,41 @@ export const publicLeadService = {
       afterData: { companyName: lead.companyName, source: lead.source },
       ipAddress: meta.ip,
       userAgent: meta.userAgent,
+    });
+
+    // Phase 14 — real automation trigger: an ACTIVE workflow with
+    // triggerType EVENT / triggerConfig.eventType "lead.created" fires
+    // from this. Best-effort, same reasoning as publicFormService.submit.
+    try {
+      await eventEngine.emit({
+        eventType: "lead.created",
+        entityType: "lead",
+        entityId: lead.id,
+        organizationId,
+        actorType: "SYSTEM",
+        sourceModule: "CRM",
+        payload: { companyName: lead.companyName, source: lead.source, campaignId: campaignId ?? null },
+      });
+    } catch {
+      // best-effort — see comment above.
+    }
+
+    // Phase 15 — real analytics event (never fabricated): a genuine lead
+    // just landed, carrying the same real UTM/campaign attribution the
+    // lead row itself carries.
+    await analyticsEventService.recordBusinessEvent({
+      organizationId,
+      eventType: "lead_created",
+      entityType: "lead",
+      entityId: lead.id,
+      utmSource: input.utmSource,
+      utmMedium: input.utmMedium,
+      utmCampaign: input.utmCampaign,
+      utmTerm: input.utmTerm,
+      utmContent: input.utmContent,
+      campaignId,
+      path: input.landingPagePath,
+      referrer: meta.referrer,
     });
 
     return lead;

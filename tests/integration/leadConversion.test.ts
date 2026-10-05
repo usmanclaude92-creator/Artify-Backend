@@ -11,6 +11,7 @@ describe("lead conversion", () => {
 
   let adminToken: string;
   let orgId: string;
+  let adminUserId: string;
   let viewerToken: string;
 
   beforeAll(async () => {
@@ -24,6 +25,7 @@ describe("lead conversion", () => {
     });
     adminToken = reg.body.data.session.token;
     orgId = reg.body.data.user.organizationId;
+    adminUserId = reg.body.data.user.id;
 
     await request(app)
       .post("/api/v1/users")
@@ -169,5 +171,64 @@ describe("lead conversion", () => {
 
     const clientCount = await prisma.client.count({ where: { organizationId: orgId, clientCode: "COLLIDE-01" } });
     expect(clientCount).toBe(1); // only the pre-existing one
+  });
+
+  // Phase 13 — convertLead creates its own Client row directly (not via
+  // clientService.createClient), so the case-insensitive name-dedup guard
+  // has to be asserted here specifically, not assumed from clients.test.ts.
+  it("prevents duplicate client creation: rejects conversion when a client with the same name already exists (case-insensitive)", async () => {
+    await request(app).post("/api/v1/clients").set("Authorization", `Bearer ${adminToken}`).send({ clientCode: "NAMECOLLIDE-01", name: "Acme Duplicate Inc" });
+
+    const lead = await request(app)
+      .post("/api/v1/leads")
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({ companyName: "acme DUPLICATE inc" });
+    const leadId = lead.body.data.lead.id;
+
+    const res = await request(app)
+      .post(`/api/v1/leads/${leadId}/convert`)
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({ clientCode: "NAMECOLLIDE-02" });
+    expect(res.status).toBe(409);
+
+    const reloadedLead = await prisma.lead.findUniqueOrThrow({ where: { id: leadId } });
+    expect(reloadedLead.status).not.toBe("CONVERTED");
+    const clientCount = await prisma.client.count({ where: { organizationId: orgId, clientCode: "NAMECOLLIDE-02" } });
+    expect(clientCount).toBe(0);
+  });
+
+  it("assigns owner/industry at conversion, defaulting accountManager/source to the lead's own assignedTo/source when not provided", async () => {
+    const industry = await prisma.industry.create({ data: { slug: "convert-test-industry", name: "Convert Test Industry" } });
+
+    const assignedLead = await request(app)
+      .post("/api/v1/leads")
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({ companyName: "Owner Default Co", source: "referral", assignedTo: adminUserId });
+    const leadId = assignedLead.body.data.lead.id;
+
+    const res = await request(app)
+      .post(`/api/v1/leads/${leadId}/convert`)
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({ clientCode: "OWNER-DEFAULT-01", industryId: industry.id });
+    expect(res.status).toBe(201);
+
+    const client = await prisma.client.findUniqueOrThrow({ where: { id: res.body.data.client.id } });
+    expect(client.accountManager).toBe(adminUserId);
+    expect(client.industryId).toBe(industry.id);
+    expect(client.source).toBe("referral");
+  });
+
+  it("rejects conversion with an unknown industryId (400, not a raw FK error)", async () => {
+    const lead = await request(app)
+      .post("/api/v1/leads")
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({ companyName: "Bad Industry Co" });
+    const leadId = lead.body.data.lead.id;
+
+    const res = await request(app)
+      .post(`/api/v1/leads/${leadId}/convert`)
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({ clientCode: "BAD-INDUSTRY-01", industryId: "00000000-0000-0000-0000-000000000000" });
+    expect(res.status).toBe(400);
   });
 });

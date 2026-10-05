@@ -10,6 +10,7 @@ describe("client onboarding", () => {
   finalizeApp(app);
 
   let adminToken: string;
+  let adminUserId: string;
   let viewerToken: string;
 
   beforeAll(async () => {
@@ -22,6 +23,7 @@ describe("client onboarding", () => {
       organizationName: "Onboarding Co",
     });
     adminToken = reg.body.data.session.token;
+    adminUserId = reg.body.data.user.id;
 
     await request(app)
       .post("/api/v1/users")
@@ -214,5 +216,131 @@ describe("client onboarding", () => {
     const reloaded = await request(app).get(`/api/v1/onboarding/${onboardingId}`).set("Authorization", `Bearer ${adminToken}`);
     const step = reloaded.body.data.onboarding.checklist.find((c: { key: string }) => c.key === "WORKSPACE_CREATED");
     expect(step.completed).toBe(true);
+  });
+
+  // Phase 13 — configurable onboarding checklist templates.
+  it("GET /onboarding/template returns the system default (7 steps) when the organization hasn't customized it, and isCustom is false", async () => {
+    const res = await request(app).get("/api/v1/onboarding/template").set("Authorization", `Bearer ${adminToken}`);
+    expect(res.status).toBe(200);
+    expect(res.body.data.isCustom).toBe(false);
+    expect(res.body.data.steps).toHaveLength(7);
+  });
+
+  it("PUT /onboarding/template saves a custom template, audits ONBOARDING_TEMPLATE_UPDATED, and new onboarding uses it instead of the system default", async () => {
+    const customSteps = [
+      { key: "BRAND_KIT_COLLECTED", label: "Brand kit collected", requiresDocument: true },
+      { key: "KICKOFF_CALL_HELD", label: "Kickoff call held", requiresDocument: false },
+    ];
+    const put = await request(app).put("/api/v1/onboarding/template").set("Authorization", `Bearer ${adminToken}`).send(customSteps);
+    expect(put.status).toBe(200);
+    expect(put.body.data.isCustom).toBe(true);
+    expect(put.body.data.steps).toHaveLength(2);
+
+    const audit = await prisma.auditLog.findFirst({ where: { action: "ONBOARDING_TEMPLATE_UPDATED" } });
+    expect(audit).not.toBeNull();
+
+    const get = await request(app).get("/api/v1/onboarding/template").set("Authorization", `Bearer ${adminToken}`);
+    expect(get.body.data.isCustom).toBe(true);
+    expect(get.body.data.steps.map((s: { key: string }) => s.key)).toEqual(["BRAND_KIT_COLLECTED", "KICKOFF_CALL_HELD"]);
+
+    const clientId = await createClient("Custom Template Co", "ONB-10");
+    const start = await request(app).post(`/api/v1/clients/${clientId}/onboarding/start`).set("Authorization", `Bearer ${adminToken}`).send({});
+    expect(start.status).toBe(201);
+    expect(start.body.data.onboarding.checklist).toHaveLength(2);
+    expect(start.body.data.onboarding.checklist[0].key).toBe("BRAND_KIT_COLLECTED");
+    expect(start.body.data.onboarding.currentStep).toBe("BRAND_KIT_COLLECTED");
+
+    // A custom template that drops the system WORKSPACE_CREATED key never
+    // breaks workspace provisioning — the automatic completion call simply
+    // no-ops instead of erroring (completeStepForClient's documented
+    // graceful-degradation contract).
+    const provision = await request(app).post(`/api/v1/clients/${clientId}/workspace/provision`).set("Authorization", `Bearer ${adminToken}`).send({});
+    expect(provision.status).toBe(201);
+
+    // Restore the system default for subsequent tests in this file.
+    const { ONBOARDING_CHECKLIST_KEYS } = await import("../../server/schemas/onboardingSchemas");
+    const STEP_LABELS: Record<string, string> = {
+      CLIENT_VERIFIED: "Client verified",
+      WORKSPACE_CREATED: "Workspace created",
+      PRIMARY_CONTACT_CONFIRMED: "Primary contact confirmed",
+      ADMINISTRATOR_INVITED: "Administrator invited",
+      ADMINISTRATOR_ACCEPTED: "Administrator accepted",
+      WORKSPACE_CONFIGURED: "Workspace configured",
+      ONBOARDING_COMPLETED: "Onboarding completed",
+    };
+    await request(app)
+      .put("/api/v1/onboarding/template")
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send(ONBOARDING_CHECKLIST_KEYS.map((key) => ({ key, label: STEP_LABELS[key], requiresDocument: false })));
+  });
+
+  it("rejects a template with duplicate step keys, and rejects template management by a caller without onboarding.update", async () => {
+    const dup = await request(app)
+      .put("/api/v1/onboarding/template")
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send([
+        { key: "STEP_A", label: "A", requiresDocument: false },
+        { key: "STEP_A", label: "A again", requiresDocument: false },
+      ]);
+    expect(dup.status).toBe(400);
+
+    const forbidden = await request(app)
+      .put("/api/v1/onboarding/template")
+      .set("Authorization", `Bearer ${viewerToken}`)
+      .send([{ key: "STEP_A", label: "A", requiresDocument: false }]);
+    expect(forbidden.status).toBe(403);
+  });
+
+  // Phase 13 — per-step due date/assignee/notes/document, and record-level owner/dueDate.
+  it("sets a step's due date/assignee/notes, and the record's own owner/dueDate, auditing both", async () => {
+    const clientId = await createClient("Step Detail Co", "ONB-11");
+    const start = await request(app).post(`/api/v1/clients/${clientId}/onboarding/start`).set("Authorization", `Bearer ${adminToken}`).send({});
+    const onboardingId = start.body.data.onboarding.id;
+
+    const stepRes = await request(app)
+      .patch(`/api/v1/onboarding/${onboardingId}/steps/CLIENT_VERIFIED`)
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({ dueDate: "2026-12-01", notes: "Waiting on signed contract." });
+    expect(stepRes.status).toBe(200);
+    const step = stepRes.body.data.onboarding.checklist.find((c: { key: string }) => c.key === "CLIENT_VERIFIED");
+    expect(step.dueDate.slice(0, 10)).toBe("2026-12-01");
+    expect(step.notes).toBe("Waiting on signed contract.");
+
+    const stepAudit = await prisma.auditLog.findFirst({ where: { action: "ONBOARDING_STEP_UPDATED", resourceId: onboardingId } });
+    expect(stepAudit).not.toBeNull();
+
+    const ownerRes = await request(app)
+      .patch(`/api/v1/onboarding/${onboardingId}`)
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({ ownerId: adminUserId, dueDate: "2026-12-15" });
+    expect(ownerRes.status).toBe(200);
+    expect(ownerRes.body.data.onboarding.ownerId).toBe(adminUserId);
+    expect(ownerRes.body.data.onboarding.dueDate.slice(0, 10)).toBe("2026-12-15");
+  });
+
+  it("rejects attaching a document from a different organization to a step (400, not a cross-tenant leak)", async () => {
+    const clientId = await createClient("Cross Tenant Doc Co", "ONB-12");
+    const start = await request(app).post(`/api/v1/clients/${clientId}/onboarding/start`).set("Authorization", `Bearer ${adminToken}`).send({});
+    const onboardingId = start.body.data.onboarding.id;
+
+    const fakeMediaId = "00000000-0000-0000-0000-000000000000";
+    const res = await request(app)
+      .patch(`/api/v1/onboarding/${onboardingId}/steps/CLIENT_VERIFIED`)
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({ documentMediaId: fakeMediaId });
+    expect(res.status).toBe(400);
+  });
+
+  it("exposes a real activity timeline via GET /onboarding/:id/activity, scoped to the caller's organization", async () => {
+    const clientId = await createClient("Onboarding Activity Co", "ONB-13");
+    const start = await request(app).post(`/api/v1/clients/${clientId}/onboarding/start`).set("Authorization", `Bearer ${adminToken}`).send({});
+    const onboardingId = start.body.data.onboarding.id;
+    await request(app).patch(`/api/v1/onboarding/${onboardingId}`).set("Authorization", `Bearer ${adminToken}`).send({ completeStep: "CLIENT_VERIFIED" });
+
+    const activity = await request(app).get(`/api/v1/onboarding/${onboardingId}/activity`).set("Authorization", `Bearer ${adminToken}`);
+    expect(activity.status).toBe(200);
+    const actions = activity.body.data.activity.map((a: { action: string }) => a.action);
+    expect(actions).toContain("CLIENT_ONBOARDING_STARTED");
+    expect(actions).toContain("ONBOARDING_STEP_COMPLETED");
   });
 });

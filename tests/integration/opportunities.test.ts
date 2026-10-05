@@ -204,4 +204,63 @@ describe("CRM opportunities", () => {
     expect(typeof adminSummary.body.data.opportunities.openValue).toBe("string");
     expect(adminSummary.body.data.opportunities.byStage).toBeDefined();
   });
+
+  // Phase 12 — a deal may now be opened directly against a Lead, before it
+  // has converted to a Client ("Lead -> Qualified Lead -> Opportunity ->
+  // Client"). These cover the new lead-first pipeline shape end to end.
+  it("opens a deal directly against a lead (no client yet), rejects a win attempt, then wins only after linking a client", async () => {
+    const created = await request(app)
+      .post("/api/v1/opportunities")
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({ leadId, name: "Lead-First Deal", value: 4000, source: "Outbound", probability: 60 });
+    expect(created.status).toBe(201);
+    expect(created.body.data.opportunity.clientId).toBeNull();
+    expect(created.body.data.opportunity.leadId).toBe(leadId);
+    expect(created.body.data.opportunity.source).toBe("Outbound");
+    expect(created.body.data.opportunity.probability).toBe(60);
+    const id = created.body.data.opportunity.id;
+
+    const prematureWin = await request(app).post(`/api/v1/opportunities/${id}/win`).set("Authorization", `Bearer ${adminToken}`).send();
+    expect(prematureWin.status).toBe(400);
+
+    const link = await request(app)
+      .post(`/api/v1/opportunities/${id}/link-client`)
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({ clientId });
+    expect(link.status).toBe(200);
+    expect(link.body.data.opportunity.clientId).toBe(clientId);
+
+    const relink = await request(app)
+      .post(`/api/v1/opportunities/${id}/link-client`)
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({ clientId });
+    expect(relink.status).toBe(409);
+
+    const won = await request(app).post(`/api/v1/opportunities/${id}/win`).set("Authorization", `Bearer ${adminToken}`).send();
+    expect(won.status).toBe(200);
+    expect(won.body.data.opportunity.stage).toBe("CLOSED_WON");
+
+    const linkAudit = await prisma.auditLog.findFirst({ where: { action: "OPPORTUNITY_CLIENT_LINKED", resourceId: id } });
+    expect(linkAudit).not.toBeNull();
+  });
+
+  it("rejects creating an opportunity with neither clientId nor leadId", async () => {
+    const res = await request(app).post("/api/v1/opportunities").set("Authorization", `Bearer ${adminToken}`).send({ name: "Orphan Deal", value: 1 });
+    expect(res.status).toBe(400);
+  });
+
+  it("exposes a real activity timeline via GET /opportunities/:id/activity, scoped to the caller's organization", async () => {
+    const created = await request(app).post("/api/v1/opportunities").set("Authorization", `Bearer ${adminToken}`).send({ clientId, name: "Activity Deal", value: 777 });
+    const id = created.body.data.opportunity.id;
+    await request(app).post(`/api/v1/opportunities/${id}/win`).set("Authorization", `Bearer ${adminToken}`).send();
+
+    const activity = await request(app).get(`/api/v1/opportunities/${id}/activity`).set("Authorization", `Bearer ${adminToken}`);
+    expect(activity.status).toBe(200);
+    const actions = activity.body.data.activity.map((a: { action: string }) => a.action);
+    expect(actions).toContain("OPPORTUNITY_CREATED");
+    expect(actions).toContain("OPPORTUNITY_WON");
+
+    const crossOrg = await request(app).get(`/api/v1/opportunities/${id}/activity`).set("Authorization", `Bearer ${otherOrgAdminToken}`);
+    expect(crossOrg.status).toBe(404);
+  });
 });

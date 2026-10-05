@@ -10,9 +10,11 @@
  */
 import { pageRepository, type PageWithPublicRelations } from "../repositories/pageRepository";
 import { postRepository, type PostWithPublicRelations } from "../repositories/postRepository";
+import { caseStudyRepository, type CaseStudyWithPublicRelations } from "../repositories/caseStudyRepository";
 import { categoryRepository } from "../repositories/categoryRepository";
 import { tagRepository } from "../repositories/tagRepository";
 import { productRepository } from "../repositories/productRepository";
+import { industryRepository } from "../repositories/industryRepository";
 import { navigationMenuRepository } from "../repositories/navigationMenuRepository";
 import { redirectRepository } from "../repositories/redirectRepository";
 import { mediaRepository } from "../repositories/mediaRepository";
@@ -21,6 +23,7 @@ import { normalizeRegions } from "../utils/templateStructure";
 import type { MenuItemInput } from "../schemas/navigationMenuSchemas";
 import { siteSettingsService } from "./siteSettingsService";
 import { SITE_IDENTITY_MEDIA_FIELDS } from "../schemas/siteSettingsSchemas";
+import { publicFormService } from "./publicFormService";
 import { getStorageProvider } from "../storage";
 import { config } from "../config/env";
 import { NotFoundError } from "../core/errors";
@@ -278,6 +281,86 @@ async function projectPost(post: PostWithPublicRelations) {
 }
 
 /**
+ * Phase 11 (Case Studies + Content Relationships) — same "degrade to no
+ * CTA, never a 500" contract as publicProductService's projectCtaForm: a
+ * CTA referencing a form that's since been archived/deleted is treated as
+ * "no CTA", never surfaced as an error.
+ */
+async function projectCaseStudyCtaForm(ctaFormId: string | undefined | null) {
+  if (!ctaFormId) return null;
+  try {
+    return await publicFormService.getFormForRender({ id: ctaFormId });
+  } catch (err) {
+    if (err instanceof NotFoundError) return null;
+    throw err;
+  }
+}
+
+/**
+ * Only an ACTIVE related Product/Page/Post (and, for pages/posts, a
+ * PUBLISHED one) is ever surfaced — a related item that's since been
+ * unpublished or archived is silently omitted from the public payload,
+ * never surfaced as a broken reference. Mirrors publicProductService's
+ * own relatedProducts filter.
+ */
+async function projectCaseStudy(caseStudy: CaseStudyWithPublicRelations) {
+  const revision = caseStudy.currentRevision;
+  const content = (revision?.metadata ?? {}) as Record<string, unknown> & {
+    challenge?: string;
+    solutionApproach?: string;
+    implementation?: string;
+    results?: string;
+    testimonialQuote?: string;
+    testimonialAuthorName?: string;
+    testimonialAuthorTitle?: string;
+    technologies?: string[];
+    galleryMediaIds?: string[];
+    ctaFormId?: string;
+  };
+  const [featuredMedia, gallery, ctaForm] = await Promise.all([
+    projectPublicMedia(caseStudy.featuredMedia),
+    Promise.all((content.galleryMediaIds ?? []).map((id) => mediaRepository.findByIdInOrg(id, caseStudy.organizationId).then(projectPublicMedia))),
+    projectCaseStudyCtaForm(content.ctaFormId),
+  ]);
+
+  return {
+    slug: caseStudy.slug,
+    title: caseStudy.title,
+    clientName: caseStudy.clientName,
+    industry: caseStudy.industry ? { slug: caseStudy.industry.slug, name: caseStudy.industry.name } : null,
+    body: revision?.body ?? "",
+    excerpt: revision?.excerpt ?? null,
+    editorBlocks: revision?.editorBlocks ?? null,
+    challenge: content.challenge ?? null,
+    solutionApproach: content.solutionApproach ?? null,
+    implementation: content.implementation ?? null,
+    results: content.results ?? null,
+    testimonial: content.testimonialQuote
+      ? { quote: content.testimonialQuote, authorName: content.testimonialAuthorName ?? null, authorTitle: content.testimonialAuthorTitle ?? null }
+      : null,
+    technologies: content.technologies ?? [],
+    gallery: gallery.filter((m): m is PublicMedia => m !== null),
+    seo: await applySeoDefaults(content, caseStudy.organizationId, !!featuredMedia),
+    featuredMedia,
+    ctaForm,
+    relatedProducts: caseStudy.products
+      .map((p) => p.product)
+      .filter((p) => p.status === "ACTIVE")
+      .map((p) => ({ slug: p.slug, name: p.name, type: p.type, shortDescription: p.shortDescription })),
+    relatedPages: caseStudy.relatedPages
+      .map((r) => r.page)
+      .filter((p) => p.status === "PUBLISHED")
+      .map((p) => ({ slug: p.slug, title: p.title })),
+    relatedPosts: caseStudy.relatedPosts
+      .map((r) => r.post)
+      .filter((p) => p.status === "PUBLISHED")
+      .map((p) => ({ slug: p.slug, title: p.title })),
+    publishedAt: caseStudy.publishedAt,
+    updatedAt: caseStudy.updatedAt,
+  };
+}
+
+/**
  * Phase 3 (Site Identity) — resolves each `*MediaId` reference to the same
  * public-safe projection (`url`/`altText`/`caption`/dimensions, ACTIVE +
  * PUBLIC only) every other public media field already uses, rather than
@@ -410,6 +493,41 @@ export const publicSiteService = {
     const post = await postRepository.findPublishedBySlugWithMedia(config.publicWebsiteOrganizationId, slug);
     if (!post) throw new NotFoundError("Post not found.");
     return projectPost(post);
+  },
+
+  /** Phase 11 — Case Studies index. `productSlug`/`industrySlug` resolve through the same global catalog/industry lookups publicProductService uses. */
+  async listCaseStudies(
+    filters: { search?: string; industrySlug?: string; productSlug?: string },
+    page: number,
+    limit: number,
+    sort: string,
+    order: "asc" | "desc"
+  ) {
+    if (!hasPublicWebsiteOrganization()) return { rows: [], total: 0 };
+    const organizationId = config.publicWebsiteOrganizationId;
+
+    let industryId: string | undefined;
+    if (filters.industrySlug) {
+      const industry = await industryRepository.findBySlug(filters.industrySlug);
+      if (!industry) return { rows: [], total: 0 };
+      industryId = industry.id;
+    }
+    let productId: string | undefined;
+    if (filters.productSlug) {
+      const product = await productRepository.findBySlug(filters.productSlug);
+      if (!product) return { rows: [], total: 0 };
+      productId = product.id;
+    }
+
+    const { rows, total } = await caseStudyRepository.listPublished(organizationId, { search: filters.search, industryId, productId }, page, limit, sort, order);
+    return { rows: await Promise.all(rows.map(projectCaseStudy)), total };
+  },
+
+  async getCaseStudyBySlug(slug: string) {
+    if (!hasPublicWebsiteOrganization()) throw new NotFoundError("Case study not found.");
+    const caseStudy = await caseStudyRepository.findPublishedBySlugWithMedia(config.publicWebsiteOrganizationId, slug);
+    if (!caseStudy) throw new NotFoundError("Case study not found.");
+    return projectCaseStudy(caseStudy);
   },
 
   async listCategories() {

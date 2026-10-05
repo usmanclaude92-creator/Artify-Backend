@@ -80,6 +80,16 @@ export const leadRepository = {
     status?: string;
     notes?: string;
     assignedTo?: string;
+    utmSource?: string;
+    utmMedium?: string;
+    utmCampaign?: string;
+    utmTerm?: string;
+    utmContent?: string;
+    landingPagePath?: string;
+    referrer?: string;
+    consentGiven?: boolean;
+    formId?: string;
+    campaignId?: string;
   }): Promise<Lead> {
     return prisma.lead.create({
       data: {
@@ -92,6 +102,16 @@ export const leadRepository = {
         status: (data.status as Lead["status"]) ?? "NEW",
         notes: data.notes,
         assignedTo: data.assignedTo,
+        utmSource: data.utmSource,
+        utmMedium: data.utmMedium,
+        utmCampaign: data.utmCampaign,
+        utmTerm: data.utmTerm,
+        utmContent: data.utmContent,
+        landingPagePath: data.landingPagePath,
+        referrer: data.referrer,
+        consentGiven: data.consentGiven,
+        formId: data.formId,
+        campaignId: data.campaignId,
       },
     });
   },
@@ -113,6 +133,54 @@ export const leadRepository = {
     const result: Record<string, number> = {};
     for (const row of rows) result[row.status] = row._count._all;
     return result;
+  },
+
+  /** Phase 14 — marketing dashboard: how many of this org's (non-deleted) leads carry a real campaign attribution vs none at all. */
+  async countAttribution(organizationId: string): Promise<{ total: number; attributed: number }> {
+    const [total, attributed] = await Promise.all([
+      prisma.lead.count({ where: { organizationId, deletedAt: null } }),
+      prisma.lead.count({ where: { organizationId, deletedAt: null, campaignId: { not: null } } }),
+    ]);
+    return { total, attributed };
+  },
+
+  /** Phase 14 — marketing dashboard: real source breakdown (never fabricated), only sources actually present on a lead. */
+  async countBySource(organizationId: string): Promise<Array<{ source: string; count: number }>> {
+    const rows = await prisma.lead.groupBy({
+      by: ["source"],
+      where: { organizationId, deletedAt: null, source: { not: null } },
+      _count: { _all: true },
+      orderBy: { _count: { source: "desc" } },
+      take: 20,
+    });
+    return rows.filter((r) => r.source).map((r) => ({ source: r.source as string, count: r._count._all }));
+  },
+
+  /** Phase 15 — analytics/reporting: real lead counts within a date range (never fabricated). */
+  async countInRange(organizationId: string, range: { from: Date; to: Date }): Promise<number> {
+    return prisma.lead.count({ where: { organizationId, deletedAt: null, createdAt: { gte: range.from, lte: range.to } } });
+  },
+
+  async countBySourceInRange(organizationId: string, range: { from: Date; to: Date }): Promise<Array<{ source: string; count: number }>> {
+    const rows = await prisma.lead.groupBy({
+      by: ["source"],
+      where: { organizationId, deletedAt: null, source: { not: null }, createdAt: { gte: range.from, lte: range.to } },
+      _count: { _all: true },
+      orderBy: { _count: { source: "desc" } },
+      take: 20,
+    });
+    return rows.filter((r) => r.source).map((r) => ({ source: r.source as string, count: r._count._all }));
+  },
+
+  async countByCampaignInRange(organizationId: string, range: { from: Date; to: Date }): Promise<Array<{ campaignId: string; count: number }>> {
+    const rows = await prisma.lead.groupBy({
+      by: ["campaignId"],
+      where: { organizationId, deletedAt: null, campaignId: { not: null }, createdAt: { gte: range.from, lte: range.to } },
+      _count: { _all: true },
+      orderBy: { _count: { campaignId: "desc" } },
+      take: 20,
+    });
+    return rows.filter((r) => r.campaignId).map((r) => ({ campaignId: r.campaignId as string, count: r._count._all }));
   },
 
   async recentForOrg(organizationId: string, limit: number): Promise<Lead[]> {

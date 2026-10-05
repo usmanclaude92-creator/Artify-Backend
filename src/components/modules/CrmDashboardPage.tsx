@@ -1,6 +1,6 @@
 /** Phase 5 §21 — CRM dashboard, real counts only via /crm/summary. Cards degrade when a metric's permission is missing. */
 import React, { useEffect, useState } from "react";
-import { TrendingUp, Briefcase, Building2, Target } from "lucide-react";
+import { TrendingUp, Briefcase, Building2, Target, ClipboardCheck } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
 import { crmApi, type CrmSummary } from "../../lib/api";
 import { Card, Badge, LoadingState, ErrorState } from "../ui/ui";
@@ -53,6 +53,7 @@ export const CrmDashboardPage: React.FC = () => {
   const leads = summary?.leads;
   const clients = summary?.clients;
   const opportunities = summary?.opportunities;
+  const onboarding = summary?.onboarding;
 
   return (
     <div className="space-y-6">
@@ -106,6 +107,21 @@ export const CrmDashboardPage: React.FC = () => {
             <StatCard icon={Building2} label="Active" value={clients.active} />
             <StatCard icon={Building2} label="Inactive" value={clients.inactive} />
             <StatCard icon={Building2} label="Archived" value={clients.archived} />
+          </div>
+        </div>
+      )}
+
+      {onboarding && (
+        <div>
+          <h2 className="text-xs font-bold uppercase tracking-wide mb-2" style={{ color: "var(--text-muted)" }}>
+            Onboarding
+          </h2>
+          <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+            <StatCard icon={ClipboardCheck} label="Active" value={onboarding.active} />
+            <StatCard icon={ClipboardCheck} label="In progress" value={onboarding.inProgress} />
+            <StatCard icon={ClipboardCheck} label="Overdue" value={onboarding.overdue} />
+            <StatCard icon={ClipboardCheck} label="My pending actions" value={onboarding.pendingForCaller} />
+            <StatCard icon={ClipboardCheck} label="Documents awaiting" value={onboarding.documentsAwaiting} />
           </div>
         </div>
       )}
@@ -190,7 +206,31 @@ export const CrmDashboardPage: React.FC = () => {
         )}
       </div>
 
-      {!leads && !clients && !opportunities && (
+      {summary?.recentActivity && (
+        <Card>
+          <div className="px-4 py-3 border-b" style={{ borderColor: "var(--border)" }}>
+            <h2 className="text-sm font-bold" style={{ color: "var(--text-primary)" }}>
+              Recent activity
+            </h2>
+          </div>
+          {summary.recentActivity.length === 0 ? (
+            <p className="p-4 text-xs" style={{ color: "var(--text-muted)" }}>
+              No activity yet.
+            </p>
+          ) : (
+            <ul className="divide-y" style={{ borderColor: "var(--border)" }}>
+              {summary.recentActivity.map((entry) => (
+                <li key={entry.id} className="px-4 py-2.5 text-xs flex items-center justify-between gap-3">
+                  <span style={{ color: "var(--text-primary)" }}>{entry.action.replace(/_/g, " ").toLowerCase()}</span>
+                  <span style={{ color: "var(--text-muted)" }}>{new Date(entry.createdAt).toLocaleString()}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Card>
+      )}
+
+      {!leads && !clients && !opportunities && !onboarding && (
         <Card className="p-8 text-center">
           <p className="text-sm" style={{ color: "var(--text-muted)" }}>
             You don't have permission to view lead or client metrics.

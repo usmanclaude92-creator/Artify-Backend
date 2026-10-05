@@ -15,6 +15,9 @@ export interface AuditLogFilters {
   actorUserId?: string;
   action?: string;
   resourceType?: string;
+  /** Phase 12 (CRM activity timeline) — matches any of several resource types at once, for a combined feed (e.g. lead + opportunity + client + form_submission) without widening the single-type `resourceType` filter every other caller relies on. */
+  resourceTypes?: string[];
+  resourceId?: string;
   result?: AuditResult;
   actorType?: AuditActorType;
   dateFrom?: Date;
@@ -27,7 +30,8 @@ export const auditLogQueryRepository = {
       organizationId: filters.organizationId,
       actorUserId: filters.actorUserId,
       action: filters.action,
-      resourceType: filters.resourceType,
+      resourceType: filters.resourceTypes ? { in: filters.resourceTypes } : filters.resourceType,
+      resourceId: filters.resourceId,
       result: filters.result,
       actorType: filters.actorType,
     };

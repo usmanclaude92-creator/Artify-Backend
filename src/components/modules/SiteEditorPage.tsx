@@ -44,12 +44,14 @@ import {
   pagesApi,
   templatesApi,
   templatePartsApi,
+  caseStudiesApi,
   navigationMenusApi,
   formsApi,
   siteSettingsApi,
   mediaApi,
   normalizeTemplateRegions,
   type CmsPage,
+  type CmsCaseStudy,
   type EditorDocument,
   type EditorBlock,
   type BlockType,
@@ -1169,15 +1171,16 @@ const TemplateStructureEditor: React.FC<{ templateId: string }> = ({ templateId 
 // ---------------------------------------------------------------------------
 
 /**
- * Phase 4 — the Site Editor now opens three kinds of subject, picked by
+ * Phase 4 — the Site Editor opens several kinds of subject, picked by
  * which query param is present: `?pageId=` (Page, unchanged since Phase 2),
  * `?templatePartId=` (a Template Part's own content — the exact same
  * canvas/doc editing machinery as a Page, just persisted through
- * templatePartsApi instead of pagesApi), or `?templateId=` (a Template's
- * region assignments — a different, much simpler editor; see
- * TemplateStructureEditor below, since a Template has no canvas content of
- * its own in this architecture, only a list of region -> Template Part
- * assignments).
+ * templatePartsApi instead of pagesApi), `?caseStudyId=` (Phase 11 — a
+ * Case Study's editorBlocks, same canvas, persisted through
+ * caseStudiesApi), or `?templateId=` (a Template's region assignments — a
+ * different, much simpler editor; see TemplateStructureEditor below, since
+ * a Template has no canvas content of its own in this architecture, only a
+ * list of region -> Template Part assignments).
  */
 export const SiteEditorPage: React.FC = () => {
   const templateId = new URLSearchParams(window.location.search).get("templateId");
@@ -1192,13 +1195,15 @@ const PageOrPartEditor: React.FC = () => {
 
   const [pageId, setPageId] = useState<string | null>(() => new URLSearchParams(window.location.search).get("pageId"));
   const [templatePartId] = useState<string | null>(() => new URLSearchParams(window.location.search).get("templatePartId"));
-  const subjectKind: "page" | "templatePart" = templatePartId ? "templatePart" : "page";
+  const [caseStudyId] = useState<string | null>(() => new URLSearchParams(window.location.search).get("caseStudyId"));
+  const subjectKind: "page" | "templatePart" | "caseStudy" = templatePartId ? "templatePart" : caseStudyId ? "caseStudy" : "page";
 
   const canUpdate = hasPermission(user?.role.permissions, subjectKind === "templatePart" ? "template_parts.update" : "content.update");
   const canPublish = hasPermission(user?.role.permissions, subjectKind === "templatePart" ? "template_parts.publish" : "content.publish");
 
   const [page, setPage] = useState<CmsPage | null>(null);
   const [part, setPart] = useState<TemplatePart | null>(null);
+  const [caseStudy, setCaseStudy] = useState<CmsCaseStudy | null>(null);
   const [partUsage, setPartUsage] = useState<{ templates: { id: string; name: string; status: string }[]; pages: { id: string; title: string; status: string }[] } | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -1276,10 +1281,28 @@ const PageOrPartEditor: React.FC = () => {
     }
   }, []);
 
+  const loadCaseStudy = useCallback(async (id: string) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await caseStudiesApi.get(id);
+      setCaseStudy(res.caseStudy);
+      const loadedDoc = res.caseStudy.currentRevision?.editorBlocks ?? EMPTY_DOC;
+      setSavedDoc(loadedDoc);
+      setDoc(loadedDoc);
+      setSelectedId(null);
+    } catch (err) {
+      setError(err instanceof ApiClientError ? err.message : "Failed to load case study.");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     if (subjectKind === "templatePart" && templatePartId) void loadPart(templatePartId);
+    else if (subjectKind === "caseStudy" && caseStudyId) void loadCaseStudy(caseStudyId);
     else if (pageId) void loadPage(pageId);
-  }, [pageId, templatePartId, subjectKind, loadPage, loadPart]);
+  }, [pageId, templatePartId, caseStudyId, subjectKind, loadPage, loadPart, loadCaseStudy]);
 
   // Resolve the page's assigned Template (if any) so its Header/Footer
   // regions can be shown read-only for context (requirement: "show
@@ -1395,8 +1418,8 @@ const PageOrPartEditor: React.FC = () => {
   const handleChangeProps = (id: string, patch: Record<string, unknown>) => mutate((d) => updateBlockProps(d, id, patch));
 
   const save = async (): Promise<boolean> => {
-    const subjectId = subjectKind === "page" ? page?.id : part?.id;
-    const expectedUpdatedAt = subjectKind === "page" ? page?.updatedAt : part?.updatedAt;
+    const subjectId = subjectKind === "page" ? page?.id : subjectKind === "caseStudy" ? caseStudy?.id : part?.id;
+    const expectedUpdatedAt = subjectKind === "page" ? page?.updatedAt : subjectKind === "caseStudy" ? caseStudy?.updatedAt : part?.updatedAt;
     if (!subjectId) return false;
     setSaving(true);
     try {
@@ -1405,6 +1428,13 @@ const PageOrPartEditor: React.FC = () => {
         const res = await pagesApi.update(subjectId, { editorBlocks: doc, body, expectedUpdatedAt });
         setPage(res.page);
         const nextDoc = res.page.currentRevision?.editorBlocks ?? doc;
+        setSavedDoc(nextDoc);
+        setDoc(nextDoc);
+      } else if (subjectKind === "caseStudy") {
+        const body = blocksToPlainHtml(doc, mediaCache);
+        const res = await caseStudiesApi.update(subjectId, { editorBlocks: doc, body, expectedUpdatedAt });
+        setCaseStudy(res.caseStudy);
+        const nextDoc = res.caseStudy.currentRevision?.editorBlocks ?? doc;
         setSavedDoc(nextDoc);
         setDoc(nextDoc);
       } else {
@@ -1416,7 +1446,8 @@ const PageOrPartEditor: React.FC = () => {
       }
       return true;
     } catch (err) {
-      notify(err instanceof ApiClientError ? err.message : `Could not save the ${subjectKind === "page" ? "page" : "template part"}.`, "error");
+      const label = subjectKind === "page" ? "page" : subjectKind === "caseStudy" ? "case study" : "template part";
+      notify(err instanceof ApiClientError ? err.message : `Could not save the ${label}.`, "error");
       return false;
     } finally {
       setSaving(false);
@@ -1428,7 +1459,7 @@ const PageOrPartEditor: React.FC = () => {
   };
 
   const handlePublish = async () => {
-    const subjectId = subjectKind === "page" ? page?.id : part?.id;
+    const subjectId = subjectKind === "page" ? page?.id : subjectKind === "caseStudy" ? caseStudy?.id : part?.id;
     if (!subjectId) return;
     if (dirty && !(await save())) return;
     setPublishing(true);
@@ -1436,11 +1467,15 @@ const PageOrPartEditor: React.FC = () => {
       if (subjectKind === "page") {
         const res = await pagesApi.publish(subjectId);
         setPage(res.page);
+      } else if (subjectKind === "caseStudy") {
+        const res = await caseStudiesApi.publish(subjectId);
+        setCaseStudy(res.caseStudy);
       } else {
         const res = await templatePartsApi.publish(subjectId);
         setPart(res.templatePart);
       }
-      notify(`${subjectKind === "page" ? "Page" : "Template part"} published.`, "success");
+      const label = subjectKind === "page" ? "Page" : subjectKind === "caseStudy" ? "Case study" : "Template part";
+      notify(`${label} published.`, "success");
     } catch (err) {
       notify(err instanceof ApiClientError ? err.message : "Could not publish.", "error");
     } finally {
@@ -1449,6 +1484,17 @@ const PageOrPartEditor: React.FC = () => {
   };
 
   const handleUnpublish = async () => {
+    if (subjectKind === "caseStudy") {
+      if (!caseStudy) return;
+      try {
+        const res = await caseStudiesApi.update(caseStudy.id, { status: "DRAFT" });
+        setCaseStudy(res.caseStudy);
+        notify("Case study moved back to draft.", "success");
+      } catch (err) {
+        notify(err instanceof ApiClientError ? err.message : "Could not update the case study.", "error");
+      }
+      return;
+    }
     if (!page) return;
     try {
       const res = await pagesApi.update(page.id, { status: "DRAFT" });
@@ -1460,11 +1506,12 @@ const PageOrPartEditor: React.FC = () => {
   };
 
   const loadRevisions = async () => {
-    const subjectId = subjectKind === "page" ? page?.id : part?.id;
+    const subjectId = subjectKind === "page" ? page?.id : subjectKind === "caseStudy" ? caseStudy?.id : part?.id;
     if (!subjectId) return;
     setRevisionsLoading(true);
     try {
-      const res = subjectKind === "page" ? await pagesApi.revisions(subjectId) : await templatePartsApi.revisions(subjectId);
+      const res =
+        subjectKind === "page" ? await pagesApi.revisions(subjectId) : subjectKind === "caseStudy" ? await caseStudiesApi.revisions(subjectId) : await templatePartsApi.revisions(subjectId);
       setRevisions(res.revisions);
     } finally {
       setRevisionsLoading(false);
@@ -1472,13 +1519,19 @@ const PageOrPartEditor: React.FC = () => {
   };
 
   const handleRevert = async (revisionId: string) => {
-    const subjectId = subjectKind === "page" ? page?.id : part?.id;
+    const subjectId = subjectKind === "page" ? page?.id : subjectKind === "caseStudy" ? caseStudy?.id : part?.id;
     if (!subjectId) return;
     try {
       if (subjectKind === "page") {
         const res = await pagesApi.revert(subjectId, revisionId);
         setPage(res.page);
         const nextDoc = res.page.currentRevision?.editorBlocks ?? EMPTY_DOC;
+        setSavedDoc(nextDoc);
+        setDoc(nextDoc);
+      } else if (subjectKind === "caseStudy") {
+        const res = await caseStudiesApi.revert(subjectId, revisionId);
+        setCaseStudy(res.caseStudy);
+        const nextDoc = res.caseStudy.currentRevision?.editorBlocks ?? EMPTY_DOC;
         setSavedDoc(nextDoc);
         setDoc(nextDoc);
       } else {
@@ -1495,7 +1548,7 @@ const PageOrPartEditor: React.FC = () => {
     }
   };
 
-  const backPath = subjectKind === "templatePart" ? "/website/template-parts" : "/cms/pages";
+  const backPath = subjectKind === "templatePart" ? "/website/template-parts" : subjectKind === "caseStudy" ? "/cms/case-studies" : "/cms/pages";
   const handleBack = () => {
     if (dirty) {
       setLeaveConfirmOpen(true);
@@ -1504,7 +1557,7 @@ const PageOrPartEditor: React.FC = () => {
     navigate(backPath);
   };
 
-  if (!pageId && !templatePartId) {
+  if (!pageId && !templatePartId && !caseStudyId) {
     return (
       <PagePicker
         onOpen={(id) => {
@@ -1515,11 +1568,12 @@ const PageOrPartEditor: React.FC = () => {
     );
   }
 
-  const subject = subjectKind === "page" ? page : part;
-  if (loading) return <LoadingState label={subjectKind === "page" ? "Loading page…" : "Loading template part…"} />;
-  if (error || !subject) return <ErrorState message={error ?? (subjectKind === "page" ? "Page not found." : "Template part not found.")} />;
+  const subjectKindLabel = subjectKind === "page" ? "page" : subjectKind === "caseStudy" ? "case study" : "template part";
+  const subject = subjectKind === "page" ? page : subjectKind === "caseStudy" ? caseStudy : part;
+  if (loading) return <LoadingState label={`Loading ${subjectKindLabel}…`} />;
+  if (error || !subject) return <ErrorState message={error ?? `${subjectKindLabel === "page" ? "Page" : subjectKindLabel === "case study" ? "Case study" : "Template part"} not found.`} />;
 
-  const subjectTitle = subjectKind === "page" ? page!.title : part!.name;
+  const subjectTitle = subjectKind === "page" ? page!.title : subjectKind === "caseStudy" ? caseStudy!.title : part!.name;
   const subjectStatus = subject.status;
 
   return (
@@ -1528,7 +1582,7 @@ const PageOrPartEditor: React.FC = () => {
       <Card className="p-2.5 flex items-center justify-between gap-2 flex-wrap sticky top-0 z-10">
         <div className="flex items-center gap-2 min-w-0">
           <Button variant="ghost" onClick={handleBack}>
-            <ArrowLeft className="w-4 h-4" /> {subjectKind === "page" ? "Pages" : "Template Parts"}
+            <ArrowLeft className="w-4 h-4" /> {subjectKind === "page" ? "Pages" : subjectKind === "caseStudy" ? "Case Studies" : "Template Parts"}
           </Button>
           <div className="min-w-0">
             <p className="text-sm font-bold truncate" style={{ color: "var(--text-primary)" }}>
@@ -1574,7 +1628,7 @@ const PageOrPartEditor: React.FC = () => {
               <Rocket className="w-3.5 h-3.5" /> {publishing ? "Publishing…" : "Publish"}
             </Button>
           )}
-          {subjectKind === "page" && canUpdate && subjectStatus === "PUBLISHED" && (
+          {(subjectKind === "page" || subjectKind === "caseStudy") && canUpdate && subjectStatus === "PUBLISHED" && (
             <Button variant="secondary" onClick={() => void handleUnpublish()}>
               Move to draft
             </Button>
@@ -1584,7 +1638,7 @@ const PageOrPartEditor: React.FC = () => {
 
       {subjectStatus === "ARCHIVED" && (
         <div className="flex items-center gap-2 text-xs rounded-lg px-3 py-2 bg-amber-500/10 text-amber-600 border border-amber-500/30">
-          <AlertTriangle className="w-3.5 h-3.5" /> This {subjectKind === "page" ? "page" : "template part"} is archived and read-only. Restore it to edit again.
+          <AlertTriangle className="w-3.5 h-3.5" /> This {subjectKindLabel} is archived and read-only. Restore it to edit again.
         </div>
       )}
 

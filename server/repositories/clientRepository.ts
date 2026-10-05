@@ -2,7 +2,7 @@
 import type { Client, Prisma } from "@prisma/client";
 import { prisma } from "../db/prisma";
 
-const clientWithWorkspace = { include: { workspaceOrganization: true } } as const;
+const clientWithWorkspace = { include: { workspaceOrganization: true, industry: true } } as const;
 export type ClientWithWorkspace = Prisma.ClientGetPayload<typeof clientWithWorkspace>;
 
 export interface ClientFilters {
@@ -92,6 +92,8 @@ export const clientRepository = {
     address?: string;
     accountManager?: string;
     notes?: string;
+    source?: string;
+    industryId?: string;
   }): Promise<Client> {
     return prisma.client.create({
       data: {
@@ -106,6 +108,8 @@ export const clientRepository = {
         address: data.address,
         accountManager: data.accountManager,
         notes: data.notes,
+        source: data.source,
+        industryId: data.industryId,
       },
     });
   },
@@ -127,6 +131,20 @@ export const clientRepository = {
     const result: Record<string, number> = {};
     for (const row of rows) result[row.status] = row._count._all;
     return result;
+  },
+
+  /** Phase 14 — marketing dashboard "conversions": real clients created from a campaign-attributed lead (never fabricated). */
+  async countAttributedConversions(organizationId: string): Promise<number> {
+    return prisma.client.count({ where: { organizationId, deletedAt: null, campaignId: { not: null } } });
+  },
+
+  /** Phase 15 — client acquisition reporting: real clients created within a date range (never fabricated). */
+  async countCreatedInRange(organizationId: string, range: { from: Date; to: Date }): Promise<number> {
+    return prisma.client.count({ where: { organizationId, deletedAt: null, createdAt: { gte: range.from, lte: range.to } } });
+  },
+
+  async countAttributedConversionsInRange(organizationId: string, range: { from: Date; to: Date }): Promise<number> {
+    return prisma.client.count({ where: { organizationId, deletedAt: null, campaignId: { not: null }, createdAt: { gte: range.from, lte: range.to } } });
   },
 
   async recentForOrg(organizationId: string, limit: number): Promise<Client[]> {

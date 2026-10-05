@@ -57,6 +57,12 @@ export const pageRepository = {
     return prisma.page.findFirst({ where: { organizationId, slug, deletedAt: null } });
   },
 
+  /** Phase 11 — bulk existence check for Case Study "related pages" selection, org-scoped. */
+  async findByIdsInOrg(ids: string[], organizationId: string): Promise<Page[]> {
+    if (ids.length === 0) return [];
+    return prisma.page.findMany({ where: { id: { in: ids }, organizationId, deletedAt: null } });
+  },
+
   /** Phase 11 public projection — PUBLISHED only, with the revision content and featured media needed to render the page (docs/PUBLIC_API_ARCHITECTURE.md). Never returns DRAFT/IN_REVIEW/SCHEDULED/ARCHIVED. */
   async findPublishedBySlugWithMedia(organizationId: string, slug: string): Promise<PageWithPublicRelations | null> {
     return prisma.page.findFirst({ where: { organizationId, slug, status: "PUBLISHED", deletedAt: null }, ...withPublicRelations });
@@ -152,5 +158,23 @@ export const pageRepository = {
 
   async restore(id: string): Promise<void> {
     await prisma.page.update({ where: { id }, data: { deletedAt: null } });
+  },
+
+  /** Phase 14 — marketing dashboard: real landing-page counts (pageType=LANDING), never fabricated. */
+  async countLandingPages(organizationId: string): Promise<{ total: number; published: number }> {
+    const [total, published] = await Promise.all([
+      prisma.page.count({ where: { organizationId, deletedAt: null, pageType: "LANDING" } }),
+      prisma.page.count({ where: { organizationId, deletedAt: null, pageType: "LANDING", status: "PUBLISHED" } }),
+    ]);
+    return { total, published };
+  },
+
+  /** Phase 15 — content analytics inventory: real page counts, never fabricated. */
+  async countForContentInventory(organizationId: string): Promise<{ total: number; published: number }> {
+    const [total, published] = await Promise.all([
+      prisma.page.count({ where: { organizationId, deletedAt: null } }),
+      prisma.page.count({ where: { organizationId, deletedAt: null, status: "PUBLISHED" } }),
+    ]);
+    return { total, published };
   },
 };

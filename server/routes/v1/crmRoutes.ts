@@ -3,6 +3,8 @@ import { Router } from "express";
 import { leadService } from "../../services/leadService";
 import { clientService } from "../../services/clientService";
 import { opportunityService } from "../../services/opportunityService";
+import { onboardingService } from "../../services/onboardingService";
+import { auditLogQueryRepository } from "../../repositories/auditLogQueryRepository";
 import { authenticateToken } from "../../middleware/auth";
 import { asyncHandler } from "../../utils/asyncHandler";
 import { sendSuccess } from "../../core/apiResponse";
@@ -17,13 +19,29 @@ router.get(
     const permissions = req.user!.role.permissions;
     const organizationId = req.user!.organizationId;
 
-    const [leadCounts, leadRecent, clientCounts, clientRecent, opportunityStats] = await Promise.all([
+    const [leadCounts, leadRecent, clientCounts, clientRecent, opportunityStats, onboardingStats] = await Promise.all([
       permissions.includes("leads.read") ? leadService.dashboardCounts(organizationId) : Promise.resolve(null),
       permissions.includes("leads.read") ? leadService.recent(organizationId, 5) : Promise.resolve([]),
       permissions.includes("clients.read") ? clientService.dashboardCounts(organizationId) : Promise.resolve(null),
       permissions.includes("clients.read") ? clientService.recent(organizationId, 5) : Promise.resolve([]),
       permissions.includes("opportunities.read") ? opportunityService.dashboardStats(organizationId) : Promise.resolve(null),
+      permissions.includes("onboarding.read") ? onboardingService.dashboardStats(organizationId, req.user!.id) : Promise.resolve(null),
     ]);
+
+    // Unified activity feed (§21) — only the resource types the caller can
+    // read are included, same degrade-gracefully pattern as the counts
+    // above; a caller with none of these permissions gets null, not an
+    // empty array (distinguishing "no access" from "no activity yet").
+    const activityResourceTypes: string[] = [];
+    if (permissions.includes("leads.read")) activityResourceTypes.push("lead");
+    if (permissions.includes("opportunities.read")) activityResourceTypes.push("opportunity");
+    if (permissions.includes("clients.read")) activityResourceTypes.push("client");
+    if (permissions.includes("forms.read")) activityResourceTypes.push("form_submission");
+    if (permissions.includes("onboarding.read")) activityResourceTypes.push("client_onboarding");
+    if (permissions.includes("media.read")) activityResourceTypes.push("media");
+    const recentActivity = activityResourceTypes.length
+      ? (await auditLogQueryRepository.list({ organizationId, resourceTypes: activityResourceTypes }, 1, 20)).rows
+      : null;
 
     const OPEN_STAGES = ["PROSPECTING", "QUALIFICATION", "PROPOSAL", "NEGOTIATION"] as const;
     const byStage = opportunityStats?.byStage ?? {};
@@ -55,6 +73,8 @@ router.get(
         byStage,
         recent: opportunityStats.recent,
       },
+      onboarding: onboardingStats,
+      recentActivity,
     });
   })
 );

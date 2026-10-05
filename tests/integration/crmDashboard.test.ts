@@ -49,6 +49,9 @@ describe("GET /api/v1/crm/summary", () => {
     expect(res.body.data.clients.prospect).toBe(1);
     expect(Array.isArray(res.body.data.leads.recent)).toBe(true);
     expect(Array.isArray(res.body.data.clients.recent)).toBe(true);
+    // Phase 12 — unified activity feed, real audit rows only.
+    expect(Array.isArray(res.body.data.recentActivity)).toBe(true);
+    expect(res.body.data.recentActivity.some((a: { action: string }) => a.action === "LEAD_CREATED")).toBe(true);
   });
 
   it("a caller without leads.read sees clients but not lead counts (degrades per-permission, never fabricates)", async () => {
@@ -92,6 +95,10 @@ describe("GET /api/v1/crm/summary", () => {
       expect(res.status).toBe(200);
       expect(res.body.data.clients).not.toBeNull();
       expect(res.body.data.leads).toBeNull();
+      // clients.read alone is enough to see the activity feed (scoped to
+      // the client resource type only) — never null just because another
+      // section's permission is missing.
+      expect(Array.isArray(res.body.data.recentActivity)).toBe(true);
     } finally {
       if (newUserId) {
         await prisma.session.deleteMany({ where: { userId: newUserId } });

@@ -120,6 +120,10 @@ const UpdateTaskSchema = z.object({
   dueDate: z.string().optional(),
 });
 
+const AddTaskCommentSchema = z.object({
+  text: z.string().trim().min(1).max(4000),
+});
+
 const CreateScheduleSchema = z.object({
   workflowId: z.string().uuid(),
   name: z.string().min(1),
@@ -405,6 +409,34 @@ router.patch(
       ...body,
     });
     sendSuccess(res, { task: updated });
+  })
+);
+
+router.post(
+  "/tasks/:id/comments",
+  requirePermission("automation.execute"),
+  asyncHandler(async (req, res) => {
+    const body = AddTaskCommentSchema.parse(req.body);
+    const result = await automationService.addTaskComment({
+      taskId: req.params.id!,
+      organizationId: req.user!.organizationId,
+      userId: req.user!.id,
+      text: body.text,
+    });
+    sendSuccess(res, result, 201);
+  })
+);
+
+// -----------------------------------------------------------------------------
+// Routes: My Work
+// -----------------------------------------------------------------------------
+
+router.get(
+  "/my-work",
+  requirePermission("automation.read"),
+  asyncHandler(async (req, res) => {
+    const result = await automationService.getMyWork(req.user!.organizationId, req.user!.id, req.user!.role.key);
+    sendSuccess(res, result);
   })
 );
 

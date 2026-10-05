@@ -184,6 +184,31 @@ describe("leads", () => {
     expect(stillIntact.deletedAt).toBeNull();
   });
 
+  it("exposes a real activity timeline via GET /leads/:id/activity, scoped to the caller's organization", async () => {
+    const created = await request(app)
+      .post("/api/v1/leads")
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({ companyName: "Activity Lead Co" });
+    const id = created.body.data.lead.id;
+    await request(app).patch(`/api/v1/leads/${id}`).set("Authorization", `Bearer ${adminToken}`).send({ status: "CONTACTED" });
+
+    const activity = await request(app).get(`/api/v1/leads/${id}/activity`).set("Authorization", `Bearer ${adminToken}`);
+    expect(activity.status).toBe(200);
+    const actions = activity.body.data.activity.map((a: { action: string }) => a.action);
+    expect(actions).toContain("LEAD_CREATED");
+    expect(actions).toContain("LEAD_UPDATED");
+
+    const other = await request(app).post("/api/v1/auth/register").send({
+      email: "leads-activity-other@example.com",
+      password: "OriginalPassword123",
+      firstName: "A",
+      lastName: "O",
+      organizationName: "Activity Other Co",
+    });
+    const crossOrg = await request(app).get(`/api/v1/leads/${id}/activity`).set("Authorization", `Bearer ${other.body.data.session.token}`);
+    expect(crossOrg.status).toBe(404);
+  });
+
   it("a list request never returns another organization's leads", async () => {
     const other = await request(app).post("/api/v1/auth/register").send({
       email: "leads-list-other@example.com",

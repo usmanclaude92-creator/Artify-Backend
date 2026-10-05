@@ -13,6 +13,10 @@ export const listMediaQuerySchema = z.object({
   uploadedById: z.string().trim().uuid().optional(),
   dateFrom: z.coerce.date().optional(),
   dateTo: z.coerce.date().optional(),
+  // Phase 13 — Client Documents: filter the same Media Library by the
+  // client/onboarding record a document was uploaded against.
+  clientId: z.string().trim().uuid().optional(),
+  onboardingId: z.string().trim().uuid().optional(),
   sort: z.enum(SORT_FIELDS).default("createdAt"),
   order: z.enum(["asc", "desc"]).default("desc"),
 });
@@ -25,6 +29,12 @@ export const createUploadSessionSchema = z.object({
   displayName: z.string().trim().max(255).optional(),
   altText: z.string().trim().max(500).optional(),
   caption: z.string().trim().max(1000).optional(),
+  // Phase 13 — associates this upload with a Client (and optionally one
+  // specific onboarding record) as a Client Document, reusing the same
+  // signed-upload pipeline as every other media asset.
+  clientId: z.string().trim().uuid().optional(),
+  onboardingId: z.string().trim().uuid().optional(),
+  documentCategory: z.string().trim().max(100).optional(),
 });
 export type CreateUploadSessionInput = z.infer<typeof createUploadSessionSchema>;
 
@@ -39,6 +49,8 @@ export const updateMediaSchema = z
     altText: z.string().trim().max(500).nullable().optional(),
     caption: z.string().trim().max(1000).nullable().optional(),
     visibility: z.enum(["PRIVATE", "PUBLIC"]).optional(),
+    documentCategory: z.string().trim().max(100).nullable().optional(),
+    isClientVisible: z.boolean().optional(),
   })
   .refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
 export type UpdateMediaInput = z.infer<typeof updateMediaSchema>;

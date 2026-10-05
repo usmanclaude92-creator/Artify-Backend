@@ -96,6 +96,7 @@ const ROLE_PERMISSION_SETS: Record<RoleKey, readonly string[] | "*"> = {
     "media.delete",
     "reports.read",
     "reports.export",
+    "analytics.read",
     "settings.read",
     "settings.manage",
     "audit.read",
@@ -187,6 +188,8 @@ const ROLE_PERMISSION_SETS: Record<RoleKey, readonly string[] | "*"> = {
     "portal.subscriptions.read",
     "portal.invoices.read",
     "portal.payments.read",
+    "portal.onboarding.read",
+    "portal.documents.read",
     // Phase 5 — ADMIN gets full redirect management and the SEO audit.
     "seo.redirects.read",
     "seo.redirects.create",
@@ -198,6 +201,12 @@ const ROLE_PERMISSION_SETS: Record<RoleKey, readonly string[] | "*"> = {
     "forms.create",
     "forms.update",
     "forms.delete",
+    // Phase 14 — ADMIN gets full campaign management including archive.
+    "campaigns.read",
+    "campaigns.create",
+    "campaigns.update",
+    "campaigns.publish",
+    "campaigns.archive",
   ],
   MANAGER: [
     "users.read",
@@ -248,6 +257,7 @@ const ROLE_PERMISSION_SETS: Record<RoleKey, readonly string[] | "*"> = {
     "media.upload",
     "media.update",
     "reports.read",
+    "analytics.read",
     // Phase 12 — MANAGER can use/author AI within its own org (execute
     // workflows, author prompts/workflows, see executions/usage/approvals)
     // but cannot touch the provider/model catalog, tool enablement, or
@@ -313,6 +323,8 @@ const ROLE_PERMISSION_SETS: Record<RoleKey, readonly string[] | "*"> = {
     "portal.subscriptions.read",
     "portal.invoices.read",
     "portal.payments.read",
+    "portal.onboarding.read",
+    "portal.documents.read",
     // Phase 5 — MANAGER can manage redirects day-to-day but not delete them (ADMIN-only, §34 pattern).
     "seo.redirects.read",
     "seo.redirects.create",
@@ -322,6 +334,12 @@ const ROLE_PERMISSION_SETS: Record<RoleKey, readonly string[] | "*"> = {
     "forms.read",
     "forms.create",
     "forms.update",
+    // Phase 14 — MANAGER can run campaigns day-to-day (including publish)
+    // but not archive them (ADMIN-only, same pattern).
+    "campaigns.read",
+    "campaigns.create",
+    "campaigns.update",
+    "campaigns.publish",
   ],
   USER: [
     "clients.read",
@@ -352,6 +370,7 @@ const ROLE_PERMISSION_SETS: Record<RoleKey, readonly string[] | "*"> = {
     "media.read",
     "media.upload",
     "reports.read",
+    "analytics.read",
     // Phase 12 — USER can execute existing workflows/prompts and see their
     // own executions/usage, but cannot author prompts/workflows or touch
     // the catalog/approvals (mirrors the read/execute-only Phase 10 split).
@@ -383,11 +402,16 @@ const ROLE_PERMISSION_SETS: Record<RoleKey, readonly string[] | "*"> = {
     "portal.subscriptions.read",
     "portal.invoices.read",
     "portal.payments.read",
+    "portal.onboarding.read",
+    "portal.documents.read",
     // Phase 5 — USER is read-only for SEO, same as most other modules.
     "seo.redirects.read",
     "seo.audit.read",
     // Phase 9 — USER is read-only for forms, same convention.
     "forms.read",
+    // Phase 14 — USER can draft campaigns but not publish/archive them.
+    "campaigns.read",
+    "campaigns.create",
   ],
   VIEWER: [
     "users.read",
@@ -410,6 +434,7 @@ const ROLE_PERMISSION_SETS: Record<RoleKey, readonly string[] | "*"> = {
     "authors.read",
     "media.read",
     "reports.read",
+    "analytics.read",
     "settings.read",
     "audit.read",
     // Phase 12 — VIEWER is read-only across the AI surface, same as every
@@ -442,11 +467,15 @@ const ROLE_PERMISSION_SETS: Record<RoleKey, readonly string[] | "*"> = {
     "portal.subscriptions.read",
     "portal.invoices.read",
     "portal.payments.read",
+    "portal.onboarding.read",
+    "portal.documents.read",
     // Phase 5 — VIEWER is read-only for SEO, same convention as everywhere else.
     "seo.redirects.read",
     "seo.audit.read",
     // Phase 9 — VIEWER is read-only for forms, same convention.
     "forms.read",
+    // Phase 14 — VIEWER is read-only for campaigns, same convention.
+    "campaigns.read",
   ],
 };
 

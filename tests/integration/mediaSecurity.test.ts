@@ -2,7 +2,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import request from "supertest";
 import { createApp, finalizeApp } from "../../server/app/app";
-import { disconnectPrisma } from "../../server/db/prisma";
+import { disconnectPrisma, prisma } from "../../server/db/prisma";
 import { resetDb } from "../helpers/db";
 import { testStorageProvider } from "../../server/storage/testStorageProvider";
 
@@ -157,5 +157,59 @@ describe("Media Library security", () => {
       .set("Authorization", `Bearer ${adminToken}`)
       .send({ filename: "huge.pdf", mimeType: "application/pdf", sizeBytes: 999_000_000 });
     expect(res.status).toBe(400);
+  });
+
+  // Phase 13 — Client Documents: clientId/onboardingId association is validated
+  // server-side (own-org only), and isClientVisible can never be set true without
+  // a clientId, since the Client Portal's document feed trusts that invariant.
+  it("rejects a clientId that belongs to another organization (IDOR via upload-session, 400 not a raw FK error)", async () => {
+    // Build a client directly against the OTHER org created in beforeAll.
+    const otherOrgReg = await prisma.user.findFirstOrThrow({ where: { email: "media-sec-other-admin@example.com" } });
+    const crossOrgClient = await prisma.client.create({
+      data: { organizationId: otherOrgReg.organizationId!, clientCode: "MEDIA-SEC-X", name: "Cross Org Client" },
+    });
+
+    const res = await request(app)
+      .post("/api/v1/media/upload-session")
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({ filename: "doc.png", mimeType: "image/png", sizeBytes: PNG_BYTES.length, clientId: crossOrgClient.id });
+    expect(res.status).toBe(400);
+  });
+
+  it("rejects an unknown/nonexistent clientId on upload-session", async () => {
+    const res = await request(app)
+      .post("/api/v1/media/upload-session")
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({ filename: "doc.png", mimeType: "image/png", sizeBytes: PNG_BYTES.length, clientId: "00000000-0000-0000-0000-000000000000" });
+    expect(res.status).toBe(400);
+  });
+
+  it("rejects setting isClientVisible=true on a document that has no clientId", async () => {
+    const mediaId = await createActiveMedia(app, adminToken, "no-client-doc.png");
+    const res = await request(app)
+      .patch(`/api/v1/media/${mediaId}`)
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({ isClientVisible: true });
+    expect(res.status).toBe(400);
+  });
+
+  it("associates a document with a real own-org client and marks it client-visible", async () => {
+    const client = await prisma.client.create({
+      data: { organizationId: (await prisma.user.findFirstOrThrow({ where: { email: "media-sec-admin@example.com" } })).organizationId!, clientCode: "MEDIA-SEC-OWN", name: "Own Org Client" },
+    });
+
+    const session = await request(app)
+      .post("/api/v1/media/upload-session")
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({ filename: "contract.png", mimeType: "image/png", sizeBytes: PNG_BYTES.length, clientId: client.id, documentCategory: "contract" });
+    expect(session.status).toBe(201);
+    expect(session.body.data.media.clientId).toBe(client.id);
+    const { media, uploadToken } = session.body.data;
+    testStorageProvider.seedObject(media.storageKey, PNG_BYTES, "image/png");
+    await request(app).post(`/api/v1/media/${media.id}/complete`).set("Authorization", `Bearer ${adminToken}`).send({ token: uploadToken });
+
+    const visible = await request(app).patch(`/api/v1/media/${media.id}`).set("Authorization", `Bearer ${adminToken}`).send({ isClientVisible: true });
+    expect(visible.status).toBe(200);
+    expect(visible.body.data.media.isClientVisible).toBe(true);
   });
 });

@@ -56,6 +56,11 @@ import {
   Palette,
   Menu,
   Home,
+  Megaphone,
+  Rocket,
+  BarChart3,
+  FileBarChart,
+  Bell,
 } from "lucide-react";
 import { DashboardPage } from "../components/modules/DashboardPage";
 
@@ -95,6 +100,7 @@ const SiteEditorPage = lazyPage(() => import("../components/modules/SiteEditorPa
 const SiteIdentityPage = lazyPage(() => import("../components/modules/SiteIdentityPage"), "SiteIdentityPage");
 const GlobalStylesPage = lazyPage(() => import("../components/modules/GlobalStylesPage"), "GlobalStylesPage");
 const PostsPage = lazyPage(() => import("../components/modules/PostsPage"), "PostsPage");
+const CaseStudiesPage = lazyPage(() => import("../components/modules/CaseStudiesPage"), "CaseStudiesPage");
 const CmsTaxonomyPage = lazyPage(() => import("../components/modules/CmsTaxonomyPage"), "CmsTaxonomyPage");
 const AuthorsPage = lazyPage(() => import("../components/modules/AuthorsPage"), "AuthorsPage");
 const MediaLibraryPage = lazyPage(() => import("../components/modules/MediaLibraryPage"), "MediaLibraryPage");
@@ -116,6 +122,13 @@ const AiExecutionsPage = lazyPage(() => import("../components/modules/ai/AiExecu
 const AiUsagePage = lazyPage(() => import("../components/modules/ai/AiUsagePage"), "AiUsagePage");
 const AiApprovalsPage = lazyPage(() => import("../components/modules/ai/AiApprovalsPage"), "AiApprovalsPage");
 const AiCopilotPage = lazyPage(() => import("../components/modules/ai/AiCopilotPage"), "AiCopilotPage");
+const MarketingDashboardPage = lazyPage(() => import("../components/modules/MarketingDashboardPage"), "MarketingDashboardPage");
+const CampaignsPage = lazyPage(() => import("../components/modules/CampaignsPage"), "CampaignsPage");
+const AutomationPage = lazyPage(() => import("../components/modules/AutomationPage"), "AutomationPage");
+const AnalyticsDashboardPage = lazyPage(() => import("../components/modules/AnalyticsDashboardPage"), "AnalyticsDashboardPage");
+const ReportsPage = lazyPage(() => import("../components/modules/ReportsPage"), "ReportsPage");
+const MyWorkPage = lazyPage(() => import("../components/modules/MyWorkPage"), "MyWorkPage");
+const NotificationCenterPage = lazyPage(() => import("../components/modules/NotificationCenterPage"), "NotificationCenterPage");
 
 export function hasPermission(permissions: readonly string[] | undefined, key: string): boolean {
   return !!permissions?.includes(key);
@@ -130,7 +143,7 @@ export interface NavItem {
   requiresAnyPermission?: string[];
   component: ComponentType | LazyExoticComponent<ComponentType>;
   /** Groups items under a heading in the sidebar (§22/§31) — purely presentational. */
-  section: "Platform" | "CRM" | "Onboarding" | "Workspaces" | "Products" | "Website" | "CMS" | "SEO" | "Marketing" | "Commercial" | "AI" | "Client Portal";
+  section: "Platform" | "Workspace" | "CRM" | "Onboarding" | "Workspaces" | "Products" | "Website" | "CMS" | "SEO" | "Marketing" | "Automation" | "Analytics" | "Commercial" | "AI" | "Client Portal";
 }
 
 /**
@@ -142,6 +155,23 @@ export interface NavItem {
  */
 export const NAV_ITEMS: NavItem[] = [
   { id: "dashboard", label: "Dashboard", path: "/dashboard", icon: LayoutDashboard, component: DashboardPage, section: "Platform" },
+  {
+    id: "my-work",
+    label: "My Work",
+    path: "/my-work",
+    icon: Briefcase,
+    requiresAnyPermission: ["automation.read"],
+    component: MyWorkPage,
+    section: "Workspace",
+  },
+  {
+    id: "notification-center",
+    label: "Notifications",
+    path: "/notifications",
+    icon: Bell,
+    component: NotificationCenterPage,
+    section: "Workspace",
+  },
   {
     id: "users",
     label: "Users",
@@ -407,6 +437,15 @@ export const NAV_ITEMS: NavItem[] = [
     section: "CMS",
   },
   {
+    id: "cms-case-studies",
+    label: "Case Studies",
+    path: "/cms/case-studies",
+    icon: Briefcase,
+    requiresAnyPermission: ["content.read"],
+    component: CaseStudiesPage,
+    section: "CMS",
+  },
+  {
     id: "cms-taxonomy",
     label: "Categories & Tags",
     path: "/cms/taxonomy",
@@ -452,6 +491,23 @@ export const NAV_ITEMS: NavItem[] = [
     section: "SEO",
   },
   {
+    id: "marketing-dashboard",
+    label: "Marketing Dashboard",
+    path: "/marketing",
+    icon: Rocket,
+    section: "Marketing",
+    component: MarketingDashboardPage,
+  },
+  {
+    id: "marketing-campaigns",
+    label: "Campaigns",
+    path: "/marketing/campaigns",
+    icon: Megaphone,
+    requiresAnyPermission: ["campaigns.read"],
+    component: CampaignsPage,
+    section: "Marketing",
+  },
+  {
     id: "marketing-forms",
     label: "Forms",
     path: "/marketing/forms",
@@ -459,6 +515,33 @@ export const NAV_ITEMS: NavItem[] = [
     requiresAnyPermission: ["forms.read"],
     component: FormsPage,
     section: "Marketing",
+  },
+  {
+    id: "automation",
+    label: "Automation",
+    path: "/automation",
+    icon: Workflow,
+    requiresAnyPermission: ["automation.read"],
+    component: AutomationPage,
+    section: "Automation",
+  },
+  {
+    id: "analytics-dashboard",
+    label: "Analytics",
+    path: "/analytics",
+    icon: BarChart3,
+    requiresAnyPermission: ["analytics.read"],
+    component: AnalyticsDashboardPage,
+    section: "Analytics",
+  },
+  {
+    id: "analytics-reports",
+    label: "Reports",
+    path: "/reports",
+    icon: FileBarChart,
+    requiresAnyPermission: ["reports.read"],
+    component: ReportsPage,
+    section: "Analytics",
   },
   {
     id: "commercial-contracts",

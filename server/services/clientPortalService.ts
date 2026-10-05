@@ -14,6 +14,8 @@ import { contractRepository } from "../repositories/contractRepository";
 import { subscriptionRepository } from "../repositories/subscriptionRepository";
 import { invoiceRepository } from "../repositories/invoiceRepository";
 import { paymentRepository } from "../repositories/paymentRepository";
+import { mediaRepository } from "../repositories/mediaRepository";
+import { clientOnboardingRepository, type ChecklistItem } from "../repositories/clientOnboardingRepository";
 import { calculateContractCurrentValue, effectiveInvoiceStatus } from "./billingCalculations";
 import { sumMoney } from "../utils/money";
 import { AuthorizationError, NotFoundError } from "../core/errors";
@@ -91,5 +93,49 @@ export const clientPortalService = {
   async listPayments(caller: SanitizedUser, page: number, limit: number) {
     const client = await resolveClientForCaller(caller);
     return paymentRepository.list(client.organizationId, { clientId: client.id }, page, limit, "paymentDate", "desc");
+  },
+
+  /**
+   * Phase 13 — only documents explicitly marked `isClientVisible` are ever
+   * returned here; the agency's other media (CMS assets, non-client
+   * documents, documents awaiting internal review) stay invisible to the
+   * portal regardless of status, same boundary pattern as every other
+   * portal method (resolve-then-scope, never a caller-supplied id).
+   */
+  async listDocuments(caller: SanitizedUser, page: number, limit: number) {
+    const client = await resolveClientForCaller(caller);
+    return mediaRepository.list(client.organizationId, { clientId: client.id, isClientVisible: true }, page, limit, "createdAt", "desc");
+  },
+
+  /**
+   * Phase 13 — a safe projection of the client's onboarding record: real
+   * progress/checklist data only, with internal Control Center fields
+   * (staff notes, assignee user ids, who completed/created it) stripped
+   * out before this ever leaves the server (§9 "never expose internal
+   * Control Center data to clients").
+   */
+  async getOnboarding(caller: SanitizedUser) {
+    const client = await resolveClientForCaller(caller);
+    const record = await clientOnboardingRepository.findByClientId(client.id);
+    if (!record) return null;
+
+    const checklist = (record.checklist as unknown as ChecklistItem[]) ?? [];
+    return {
+      id: record.id,
+      status: record.status,
+      currentStep: record.currentStep,
+      startedAt: record.startedAt,
+      completedAt: record.completedAt,
+      dueDate: record.dueDate,
+      checklist: checklist.map((item) => ({
+        key: item.key,
+        label: item.label,
+        completed: item.completed,
+        completedAt: item.completedAt,
+        dueDate: item.dueDate ?? null,
+        requiresDocument: item.requiresDocument ?? false,
+        documentMediaId: item.documentMediaId ?? null,
+      })),
+    };
   },
 };

@@ -31,6 +31,19 @@ export const listPublicProductsQuerySchema = z.object({
 });
 export type ListPublicProductsQuery = z.infer<typeof listPublicProductsQuerySchema>;
 
+// Phase 11 — Case Studies. `industrySlug`/`productSlug` filter by the real
+// taxonomy, by slug (same public-id convention as listPublicProductsQuerySchema).
+export const listPublicCaseStudiesQuerySchema = z.object({
+  page: z.coerce.number().int().positive().default(1),
+  limit: z.coerce.number().int().positive().max(50).default(12),
+  search: z.string().trim().max(200).optional(),
+  industrySlug: z.string().trim().max(100).optional(),
+  productSlug: z.string().trim().max(150).optional(),
+  sort: z.enum(SORT_FIELDS).default("publishedAt"),
+  order: z.enum(["asc", "desc"]).default("desc"),
+});
+export type ListPublicCaseStudiesQuery = z.infer<typeof listPublicCaseStudiesQuerySchema>;
+
 // Phase 5 — SEO Control Center. The public site queries this when a slug it
 // tried to render 404s, to check whether it's an old slug with a redirect
 // on file before showing a hard not-found page.
@@ -69,5 +82,15 @@ export const createPublicLeadSchema = z.object({
   source: z.enum(["contact_form", "product_inquiry", "project_brief", "other"]).default("contact_form"),
   consent: z.literal(true, { errorMap: () => ({ message: "Consent is required to submit this form." }) }),
   website: z.string().trim().max(200).optional(),
+  // Phase 12 (CRM Integration) — same real attribution capture
+  // publicFormSubmitSchema already has for Control-Center-authored
+  // Forms, extended to this site's own hardcoded contact/brief form so
+  // every lead-capture surface records real source data, not just free text.
+  utmSource: z.string().trim().max(200).optional(),
+  utmMedium: z.string().trim().max(200).optional(),
+  utmCampaign: z.string().trim().max(200).optional(),
+  utmTerm: z.string().trim().max(200).optional(),
+  utmContent: z.string().trim().max(200).optional(),
+  landingPagePath: z.string().trim().max(500).optional(),
 });
 export type CreatePublicLeadInput = z.infer<typeof createPublicLeadSchema>;

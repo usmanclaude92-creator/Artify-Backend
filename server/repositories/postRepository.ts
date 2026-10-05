@@ -65,6 +65,12 @@ export const postRepository = {
     return prisma.post.findFirst({ where: { organizationId, slug, deletedAt: null } });
   },
 
+  /** Phase 11 — bulk existence check for Case Study "related posts" selection, org-scoped. */
+  async findByIdsInOrg(ids: string[], organizationId: string): Promise<Post[]> {
+    if (ids.length === 0) return [];
+    return prisma.post.findMany({ where: { id: { in: ids }, organizationId, deletedAt: null } });
+  },
+
   /** Phase 11 public projection — PUBLISHED only, with category/author/tags/featured media/revision content (docs/PUBLIC_API_ARCHITECTURE.md). Never returns DRAFT/IN_REVIEW/SCHEDULED/ARCHIVED. */
   async findPublishedBySlugWithMedia(organizationId: string, slug: string): Promise<PostWithPublicRelations | null> {
     return prisma.post.findFirst({ where: { organizationId, slug, status: "PUBLISHED", deletedAt: null }, ...withPublicRelations });
@@ -167,5 +173,14 @@ export const postRepository = {
 
   async restore(id: string): Promise<void> {
     await prisma.post.update({ where: { id }, data: { deletedAt: null } });
+  },
+
+  /** Phase 15 — content analytics inventory: real post counts, never fabricated. */
+  async countForContentInventory(organizationId: string): Promise<{ total: number; published: number }> {
+    const [total, published] = await Promise.all([
+      prisma.post.count({ where: { organizationId, deletedAt: null } }),
+      prisma.post.count({ where: { organizationId, deletedAt: null, status: "PUBLISHED" } }),
+    ]);
+    return { total, published };
   },
 };

@@ -6,14 +6,26 @@
  * create/update/issue/void/reverse controls exist here (docs/CLIENT_PORTAL_ARCHITECTURE.md).
  */
 import React, { useEffect, useState } from "react";
-import { LayoutDashboard, FileSignature, Repeat, Receipt, Wallet } from "lucide-react";
-import { portalApi, type Contract, type Subscription, type Invoice, type Payment, type ClientPortalDashboard, type InvoiceStatusValue } from "../../lib/api";
+import { LayoutDashboard, FileSignature, Repeat, Receipt, Wallet, FileText, ClipboardCheck, Download } from "lucide-react";
+import {
+  portalApi,
+  mediaApi,
+  type Contract,
+  type Subscription,
+  type Invoice,
+  type Payment,
+  type ClientPortalDashboard,
+  type InvoiceStatusValue,
+  type CmsMedia,
+  type PortalOnboarding,
+} from "../../lib/api";
 import { formatMoney } from "../../lib/money";
 import { Card, Button, Badge, LoadingState, ErrorState, EmptyState, Pagination } from "../ui/ui";
 import { hasPermission } from "../../lib/permissions";
 import { useAuth } from "../../context/AuthContext";
+import { ApiClientError } from "../../lib/apiClient";
 
-type Tab = "dashboard" | "contracts" | "subscriptions" | "invoices" | "payments";
+type Tab = "dashboard" | "onboarding" | "contracts" | "subscriptions" | "invoices" | "payments" | "documents";
 
 const CONTRACT_STATUS_TONE: Record<string, "success" | "warning" | "danger" | "info" | "neutral"> = {
   DRAFT: "neutral",
@@ -299,16 +311,135 @@ const PaymentsTab: React.FC = () => {
   );
 };
 
+const ONBOARDING_STATUS_TONE: Record<string, "success" | "warning" | "danger" | "info" | "neutral"> = {
+  NOT_STARTED: "neutral",
+  IN_PROGRESS: "warning",
+  READY: "info",
+  COMPLETED: "success",
+  CANCELLED: "danger",
+};
+
+const OnboardingTab: React.FC = () => {
+  const [onboarding, setOnboarding] = useState<PortalOnboarding | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setLoading(true);
+    portalApi
+      .onboarding()
+      .then((res) => setOnboarding(res.onboarding))
+      .catch((err) => setError(err instanceof Error ? err.message : "Failed to load onboarding."))
+      .finally(() => setLoading(false));
+  }, []);
+
+  if (loading) return <LoadingState />;
+  if (error) return <ErrorState message={error} />;
+  if (!onboarding) return <EmptyState title="Onboarding hasn't started yet" description="Your account manager will start onboarding soon." />;
+
+  const completedCount = onboarding.checklist.filter((i) => i.completed).length;
+
+  return (
+    <Card>
+      <div className="px-4 py-3 border-b flex items-center justify-between" style={{ borderColor: "var(--border)" }}>
+        <div className="flex items-center gap-2">
+          <Badge tone={ONBOARDING_STATUS_TONE[onboarding.status]}>{onboarding.status.replace("_", " ")}</Badge>
+          <span className="text-xs" style={{ color: "var(--text-muted)" }}>
+            {completedCount} of {onboarding.checklist.length} steps complete
+          </span>
+        </div>
+        {onboarding.dueDate && (
+          <span className="text-xs" style={{ color: "var(--text-muted)" }}>
+            Target: {onboarding.dueDate.slice(0, 10)}
+          </span>
+        )}
+      </div>
+      <ul className="divide-y" style={{ borderColor: "var(--border)" }}>
+        {onboarding.checklist.map((item) => (
+          <li key={item.key} className="px-4 py-3 flex items-center justify-between gap-3 text-xs">
+            <div className="flex items-center gap-2">
+              <ClipboardCheck className="w-3.5 h-3.5" style={{ color: item.completed ? "#10b981" : "var(--text-muted)" }} />
+              <span style={{ color: "var(--text-primary)" }}>{item.label}</span>
+              {item.requiresDocument && !item.documentMediaId && <Badge tone="warning">Document needed</Badge>}
+            </div>
+            <Badge tone={item.completed ? "success" : "neutral"}>{item.completed ? "Done" : "Pending"}</Badge>
+          </li>
+        ))}
+      </ul>
+    </Card>
+  );
+};
+
+const DocumentsTab: React.FC = () => {
+  const [page, setPage] = useState(1);
+  const [items, setItems] = useState<CmsMedia[]>([]);
+  const [totalPages, setTotalPages] = useState(1);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setLoading(true);
+    portalApi
+      .documents({ page, limit: 20 })
+      .then((res) => {
+        setItems(res.items);
+        setTotalPages(res.totalPages);
+      })
+      .catch((err) => setError(err instanceof Error ? err.message : "Failed to load documents."))
+      .finally(() => setLoading(false));
+  }, [page]);
+
+  const handleDownload = async (media: CmsMedia) => {
+    try {
+      const { url } = await mediaApi.getReadUrl(media.id);
+      window.open(url, "_blank", "noopener,noreferrer");
+    } catch (err) {
+      // No toast infra in the portal shell — a disabled/erroring link is feedback enough.
+      if (err instanceof ApiClientError) window.alert(err.message);
+    }
+  };
+
+  if (loading) return <LoadingState />;
+  if (error) return <ErrorState message={error} />;
+  if (items.length === 0) return <EmptyState title="No documents" description="Documents shared with you will appear here." />;
+
+  return (
+    <Card>
+      <ul className="divide-y" style={{ borderColor: "var(--border)" }}>
+        {items.map((d) => (
+          <li key={d.id} className="px-4 py-3 flex items-center justify-between text-xs gap-3">
+            <div className="flex items-center gap-2 min-w-0">
+              <FileText className="w-3.5 h-3.5 shrink-0" style={{ color: "var(--text-muted)" }} />
+              <div className="min-w-0">
+                <p className="font-semibold truncate" style={{ color: "var(--text-primary)" }}>
+                  {d.displayName ?? d.originalFilename}
+                </p>
+                <p style={{ color: "var(--text-muted)" }}>{new Date(d.createdAt).toLocaleDateString()}</p>
+              </div>
+            </div>
+            <Button variant="secondary" onClick={() => void handleDownload(d)}>
+              <Download className="w-3.5 h-3.5" /> Download
+            </Button>
+          </li>
+        ))}
+      </ul>
+      <Pagination page={page} totalPages={totalPages} onChange={setPage} />
+    </Card>
+  );
+};
+
 export const ClientPortalPage: React.FC = () => {
   const { user } = useAuth();
   const [tab, setTab] = useState<Tab>("dashboard");
 
   const allTabs: { id: Tab; label: string; icon: typeof LayoutDashboard; permission: string }[] = [
     { id: "dashboard", label: "Dashboard", icon: LayoutDashboard, permission: "portal.dashboard.read" },
+    { id: "onboarding", label: "Onboarding", icon: ClipboardCheck, permission: "portal.onboarding.read" },
     { id: "contracts", label: "Contracts", icon: FileSignature, permission: "portal.contracts.read" },
     { id: "subscriptions", label: "Subscriptions", icon: Repeat, permission: "portal.subscriptions.read" },
     { id: "invoices", label: "Invoices", icon: Receipt, permission: "portal.invoices.read" },
     { id: "payments", label: "Payments", icon: Wallet, permission: "portal.payments.read" },
+    { id: "documents", label: "Documents", icon: FileText, permission: "portal.documents.read" },
   ];
   const tabs = allTabs.filter((t) => hasPermission(user?.role.permissions, t.permission));
 
@@ -332,10 +463,12 @@ export const ClientPortalPage: React.FC = () => {
       </div>
 
       {tab === "dashboard" && <DashboardTab />}
+      {tab === "onboarding" && <OnboardingTab />}
       {tab === "contracts" && <ContractsTab />}
       {tab === "subscriptions" && <SubscriptionsTab />}
       {tab === "invoices" && <InvoicesTab />}
       {tab === "payments" && <PaymentsTab />}
+      {tab === "documents" && <DocumentsTab />}
     </div>
   );
 };

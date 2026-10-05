@@ -27,6 +27,10 @@ describe("public website API", () => {
   let draftProductSlug: string;
   let archivedProductSlug: string;
   let otherOrgPageSlug: string;
+  let publishedCaseStudySlug: string;
+  let draftCaseStudySlug: string;
+  let caseStudyIndustrySlug: string;
+  let caseStudyProductSlug: string;
 
   beforeAll(async () => {
     await resetDb();
@@ -86,6 +90,36 @@ describe("public website API", () => {
     draftProductSlug = draftProduct.slug;
     const archivedProduct = await prisma.product.create({ data: { code: "PUB-ARCHIVED", name: "Public Archived Product", slug: "public-archived-product", type: "PRODUCT", status: "ARCHIVED" } });
     archivedProductSlug = archivedProduct.slug;
+
+    // Phase 11 — Case Studies: a PUBLISHED one with real relationships (industry/product/related page/related post), and a DRAFT one that must never be publicly reachable.
+    const csIndustry = await prisma.industry.create({ data: { slug: "finance-accounting-public-test", name: "Finance & Accounting" } });
+    caseStudyIndustrySlug = csIndustry.slug;
+    const csProduct = await prisma.product.create({ data: { code: "PUB-CS-PROD", name: "Zero-Touch Close", slug: "zero-touch-close-public-test", type: "SOLUTION", status: "ACTIVE" } });
+    caseStudyProductSlug = csProduct.slug;
+
+    const caseStudy = await prisma.caseStudy.create({
+      data: { organizationId: PUBLIC_ORG_ID, slug: "acme-zero-touch-close", title: "Acme Zero-Touch Close", status: "DRAFT", clientName: "Acme Corp", industryId: csIndustry.id },
+    });
+    const csRevision = await prisma.contentRevision.create({
+      data: {
+        caseStudyId: caseStudy.id,
+        version: 1,
+        status: "PUBLISHED",
+        title: "Acme Zero-Touch Close",
+        body: "<p>How Acme closed the books in 1 day.</p>",
+        metadata: { metaTitle: "Acme Case Study", challenge: "Manual close took 10 days.", technologies: ["React"] },
+      },
+    });
+    await prisma.caseStudy.update({ where: { id: caseStudy.id }, data: { status: "PUBLISHED", currentRevisionId: csRevision.id, publishedAt: new Date() } });
+    await prisma.caseStudyProduct.create({ data: { caseStudyId: caseStudy.id, productId: csProduct.id } });
+    await prisma.caseStudyRelatedPage.create({ data: { caseStudyId: caseStudy.id, pageId: page.id } });
+    await prisma.caseStudyRelatedPost.create({ data: { caseStudyId: caseStudy.id, postId: post.id } });
+    publishedCaseStudySlug = caseStudy.slug;
+
+    const draftCaseStudy = await prisma.caseStudy.create({
+      data: { organizationId: PUBLIC_ORG_ID, slug: "secret-draft-case-study", title: "Secret Draft Case Study", status: "DRAFT" },
+    });
+    draftCaseStudySlug = draftCaseStudy.slug;
   });
 
   afterAll(async () => {
@@ -396,7 +430,7 @@ describe("public website API", () => {
   // (X-Forwarded-For, honored via `trust proxy` — server/middleware/security.ts)
   // so they don't share a rate-limit bucket with each other or with the
   // dedicated rate-limiting test, which deliberately exhausts its own.
-  it("creates a real CRM lead from a valid public submission, under the configured organization only", async () => {
+  it("creates a real CRM lead from a valid public submission, under the configured organization only, capturing UTM/consent attribution", async () => {
     const res = await request(app)
       .post("/api/v1/public/leads")
       .set("X-Forwarded-For", "203.0.113.10")
@@ -407,6 +441,10 @@ describe("public website API", () => {
         message: "We'd like a quote for an AI automation project.",
         source: "contact_form",
         consent: true,
+        utmSource: "linkedin",
+        utmMedium: "social",
+        utmCampaign: "q4-outreach",
+        landingPagePath: "/solutions/ai-automation",
       });
     expect(res.status).toBe(201);
 
@@ -416,6 +454,13 @@ describe("public website API", () => {
     expect(lead!.companyName).toBe("Prospect Co");
     expect(lead!.status).toBe("NEW");
     expect(lead!.assignedTo).toBeNull();
+    // Phase 12 — real, structured attribution columns (never fabricated —
+    // only what the submitter actually sent).
+    expect(lead!.utmSource).toBe("linkedin");
+    expect(lead!.utmMedium).toBe("social");
+    expect(lead!.utmCampaign).toBe("q4-outreach");
+    expect(lead!.landingPagePath).toBe("/solutions/ai-automation");
+    expect(lead!.consentGiven).toBe(true);
   });
 
   it("rejects an invalid lead submission (missing required fields, bad email, missing consent)", async () => {
@@ -482,5 +527,55 @@ describe("public website API", () => {
       const body = JSON.stringify(res.body);
       expect(body).not.toMatch(/storageKey|storageBucket|storageProvider|passwordHash|sessionToken/i);
     }
+  });
+
+  // Phase 11 (Case Studies + Content Relationships)
+  describe("case studies", () => {
+    it("GET /public/case-studies lists only PUBLISHED case studies, with real content relationships", async () => {
+      const res = await request(app).get("/api/v1/public/case-studies");
+      expect(res.status).toBe(200);
+      const slugs = res.body.data.caseStudies.map((c: { slug: string }) => c.slug);
+      expect(slugs).toContain(publishedCaseStudySlug);
+      expect(slugs).not.toContain(draftCaseStudySlug);
+    });
+
+    it("GET /public/case-studies/:slug returns the full projection — industry, structured content, related product/page/post", async () => {
+      const res = await request(app).get(`/api/v1/public/case-studies/${publishedCaseStudySlug}`);
+      expect(res.status).toBe(200);
+      const caseStudy = res.body.data.caseStudy;
+      expect(caseStudy.title).toBe("Acme Zero-Touch Close");
+      expect(caseStudy.clientName).toBe("Acme Corp");
+      expect(caseStudy.industry.slug).toBe(caseStudyIndustrySlug);
+      expect(caseStudy.challenge).toBe("Manual close took 10 days.");
+      expect(caseStudy.technologies).toEqual(["React"]);
+      expect(caseStudy.relatedProducts).toHaveLength(1);
+      expect(caseStudy.relatedProducts[0].slug).toBe(caseStudyProductSlug);
+      expect(caseStudy.relatedPages).toHaveLength(1);
+      expect(caseStudy.relatedPages[0].slug).toBe(publishedPageSlug);
+      expect(caseStudy.relatedPosts).toHaveLength(1);
+      expect(caseStudy.relatedPosts[0].slug).toBe(publishedPostSlug);
+    });
+
+    it("GET /public/case-studies/:slug 404s for a DRAFT case study", async () => {
+      const res = await request(app).get(`/api/v1/public/case-studies/${draftCaseStudySlug}`);
+      expect(res.status).toBe(404);
+    });
+
+    it("filters the public case-study list by industrySlug/productSlug", async () => {
+      const byIndustry = await request(app).get("/api/v1/public/case-studies").query({ industrySlug: caseStudyIndustrySlug });
+      expect(byIndustry.body.data.caseStudies.map((c: { slug: string }) => c.slug)).toContain(publishedCaseStudySlug);
+
+      const byProduct = await request(app).get("/api/v1/public/case-studies").query({ productSlug: caseStudyProductSlug });
+      expect(byProduct.body.data.caseStudies.map((c: { slug: string }) => c.slug)).toContain(publishedCaseStudySlug);
+
+      const byUnknownIndustry = await request(app).get("/api/v1/public/case-studies").query({ industrySlug: "nonexistent-industry" });
+      expect(byUnknownIndustry.body.data.caseStudies).toHaveLength(0);
+    });
+
+    it("never exposes internal ids or organization data through the public case study response", async () => {
+      const res = await request(app).get(`/api/v1/public/case-studies/${publishedCaseStudySlug}`);
+      const body = JSON.stringify(res.body);
+      expect(body).not.toMatch(/storageKey|storageBucket|storageProvider|passwordHash|sessionToken|organizationId/i);
+    });
   });
 });

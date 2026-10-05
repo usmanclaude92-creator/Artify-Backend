@@ -21,6 +21,7 @@ import { prisma } from "../../db/prisma";
 import { auditLogRepository } from "../../repositories/auditLogRepository";
 import { invoiceRepository } from "../../repositories/invoiceRepository";
 import { clientRepository } from "../../repositories/clientRepository";
+import { leadRepository } from "../../repositories/leadRepository";
 import { calculateLineItem, calculateInvoiceTotals, calculateInvoiceBalance } from "../billingCalculations";
 import { toMoney, DEFAULT_CURRENCY } from "../../utils/money";
 import { nextInvoiceNumber } from "../../utils/sequence";
@@ -386,13 +387,115 @@ export class ActionRegistry {
       requiresAudit: true,
       inputSchema: z.object({ contentType: z.enum(["PAGE", "POST"]), contentId: z.string().min(1) }),
       outputSchema: z.object({ contentId: z.string(), published: z.boolean() }),
-      execute: async (input, _context) => {
-        if (input.contentType === "PAGE") {
-          await prisma.page.update({ where: { id: input.contentId }, data: { status: "PUBLISHED", publishedAt: new Date() } });
-        } else {
-          await prisma.post.update({ where: { id: input.contentId }, data: { status: "PUBLISHED", publishedAt: new Date() } });
+      execute: async (input, context) => {
+        // Phase 16 — tenant-isolation fix: the original update had no
+        // organizationId filter at all, so any contentId (even another
+        // organization's) would be matched and published. updateMany +
+        // a result-count check keeps this a true no-op cross-tenant
+        // (affects zero rows) instead of a silent cross-tenant write.
+        const where = { id: input.contentId, organizationId: context.organizationId };
+        const result = input.contentType === "PAGE" ? await prisma.page.updateMany({ where, data: { status: "PUBLISHED", publishedAt: new Date() } }) : await prisma.post.updateMany({ where, data: { status: "PUBLISHED", publishedAt: new Date() } });
+        if (result.count === 0) {
+          throw new ValidationError(`publish_approved_content: contentId "${input.contentId}" does not refer to a ${input.contentType.toLowerCase()} in this organization.`);
         }
         return { contentId: input.contentId, published: true };
+      },
+    });
+
+    // -------------------------------------------------------------------------
+    // Action 10: create_lead (Phase 14 — Marketing + Campaigns + Automation)
+    // -------------------------------------------------------------------------
+    this.registerAction({
+      id: "create_lead",
+      name: "Create Lead",
+      description: "Creates a real CRM lead from automation (e.g. a campaign-driven or AI-recommended follow-up contact)",
+      requiredPermission: "leads.create",
+      riskLevel: "LOW",
+      requiresApproval: false,
+      requiresAudit: true,
+      inputSchema: z.object({
+        companyName: z.string().trim().min(1),
+        contactName: z.string().trim().optional(),
+        email: z.string().trim().email().optional(),
+        phone: z.string().trim().optional(),
+        source: z.string().trim().max(100).optional(),
+        assignedTo: z.string().trim().optional(),
+        campaignId: z.string().trim().optional(),
+      }),
+      outputSchema: z.object({ leadId: z.string(), companyName: z.string(), status: z.string() }),
+      execute: async (input, context) => {
+        if (input.email) {
+          const duplicates = await leadRepository.findByEmailInOrg(context.organizationId, input.email);
+          if (duplicates.length > 0) {
+            throw new ValidationError(`create_lead: an open lead with email "${input.email}" already exists in this organization (id ${duplicates[0]!.id}).`);
+          }
+        }
+
+        const lead = await leadRepository.create({
+          organizationId: context.organizationId,
+          companyName: input.companyName,
+          contactName: input.contactName,
+          email: input.email,
+          phone: input.phone,
+          source: input.source ?? "automation",
+          assignedTo: input.assignedTo,
+          campaignId: input.campaignId,
+        });
+
+        await auditLogRepository.record({
+          organizationId: context.organizationId,
+          actorUserId: context.userId,
+          actorType: context.userId ? "USER" : "SYSTEM",
+          action: "LEAD_CREATED",
+          resourceType: "lead",
+          resourceId: lead.id,
+          afterData: { companyName: lead.companyName, status: lead.status, source: "automation:create_lead", workflowId: context.workflowId },
+        });
+
+        return { leadId: lead.id, companyName: lead.companyName, status: lead.status };
+      },
+    });
+
+    // -------------------------------------------------------------------------
+    // Action 11: update_lead_status (Phase 14 — Marketing + Campaigns + Automation)
+    // -------------------------------------------------------------------------
+    this.registerAction({
+      id: "update_lead_status",
+      name: "Update Lead Status",
+      description: "Moves a CRM lead to a new non-terminal status (CONVERTED is reachable only through the real lead-conversion flow, never this action)",
+      requiredPermission: "leads.update",
+      riskLevel: "LOW",
+      requiresApproval: false,
+      requiresAudit: true,
+      inputSchema: z.object({
+        leadId: z.string().trim().min(1),
+        status: z.enum(["NEW", "CONTACTED", "QUALIFIED", "LOST"]),
+      }),
+      outputSchema: z.object({ leadId: z.string(), fromStatus: z.string(), toStatus: z.string() }),
+      execute: async (input, context) => {
+        const lead = await prisma.lead.findFirst({ where: { id: input.leadId, organizationId: context.organizationId, deletedAt: null } });
+        if (!lead) throw new ValidationError(`update_lead_status: leadId "${input.leadId}" does not refer to a lead in this organization.`);
+        if (lead.status === "CONVERTED") {
+          throw new ValidationError("update_lead_status: this lead has already been converted and can no longer change status.");
+        }
+        if (lead.status === input.status) {
+          return { leadId: lead.id, fromStatus: lead.status, toStatus: input.status };
+        }
+
+        await leadRepository.update(lead.id, { status: input.status });
+
+        await auditLogRepository.record({
+          organizationId: context.organizationId,
+          actorUserId: context.userId,
+          actorType: context.userId ? "USER" : "SYSTEM",
+          action: "LEAD_UPDATED",
+          resourceType: "lead",
+          resourceId: lead.id,
+          beforeData: { status: lead.status },
+          afterData: { status: input.status, source: "automation:update_lead_status", workflowId: context.workflowId },
+        });
+
+        return { leadId: lead.id, fromStatus: lead.status, toStatus: input.status };
       },
     });
 

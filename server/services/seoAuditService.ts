@@ -9,12 +9,13 @@
  */
 import { postRepository } from "../repositories/postRepository";
 import { pageRepository } from "../repositories/pageRepository";
+import { caseStudyRepository } from "../repositories/caseStudyRepository";
 import type { SeoMetadataInput } from "../schemas/contentSchemas";
 
 export type SeoIssueSeverity = "critical" | "warning";
 
 export interface SeoIssue {
-  resourceType: "post" | "page";
+  resourceType: "post" | "page" | "case_study";
   resourceId: string;
   resourceTitle: string;
   slug: string;
@@ -43,7 +44,7 @@ interface AuditableRecord {
   featuredMedia: { altText: string | null } | null;
 }
 
-function checkRecord(resourceType: "post" | "page", record: AuditableRecord): SeoIssue[] {
+function checkRecord(resourceType: "post" | "page" | "case_study", record: AuditableRecord): SeoIssue[] {
   const issues: SeoIssue[] = [];
   const isLive = LIVE_STATUSES.has(record.status);
   const meta = (record.currentRevision?.metadata ?? {}) as Partial<SeoMetadataInput>;
@@ -83,7 +84,7 @@ function checkRecord(resourceType: "post" | "page", record: AuditableRecord): Se
 }
 
 interface DedupableRecord {
-  resourceType: "post" | "page";
+  resourceType: "post" | "page" | "case_study";
   id: string;
   slug: string;
   title: string;
@@ -120,13 +121,17 @@ function findDuplicateField(records: DedupableRecord[], code: string, label: str
 
 export const seoAuditService = {
   async runAudit(organizationId: string): Promise<SeoIssue[]> {
-    const [posts, pages] = await Promise.all([postRepository.listForSeoAudit(organizationId), pageRepository.listForSeoAudit(organizationId)]);
+    const [posts, pages, caseStudies] = await Promise.all([
+      postRepository.listForSeoAudit(organizationId),
+      pageRepository.listForSeoAudit(organizationId),
+      caseStudyRepository.listForSeoAudit(organizationId),
+    ]);
 
     const issues: SeoIssue[] = [];
     const titleIndex: DedupableRecord[] = [];
     const descriptionIndex: DedupableRecord[] = [];
 
-    function indexRecord(resourceType: "post" | "page", record: AuditableRecord) {
+    function indexRecord(resourceType: "post" | "page" | "case_study", record: AuditableRecord) {
       const meta = (record.currentRevision?.metadata ?? {}) as Partial<SeoMetadataInput>;
       const title = record.currentRevision?.title || record.title;
       const base = { resourceType, id: record.id, slug: record.slug, title, status: record.status };
@@ -141,6 +146,10 @@ export const seoAuditService = {
     for (const page of pages) {
       issues.push(...checkRecord("page", page));
       indexRecord("page", page);
+    }
+    for (const caseStudy of caseStudies) {
+      issues.push(...checkRecord("case_study", caseStudy));
+      indexRecord("case_study", caseStudy);
     }
 
     issues.push(...findDuplicateField(titleIndex, "duplicate_meta_title", "title"));
