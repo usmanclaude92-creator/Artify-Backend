@@ -27,6 +27,8 @@ import { ConditionEngine } from "./ConditionEngine";
 import { actionRegistry } from "./ActionRegistry";
 import { approvalEngine } from "./ApprovalEngine";
 import { notificationEngine } from "./NotificationEngine";
+import { notificationService } from "../notificationService";
+import { eventEngine } from "./EventEngine";
 import { AI_TOOL_REGISTRY, isRegisteredToolCode } from "../../ai/toolRegistry";
 import { defaultAiProvider } from "../../ai/provider";
 import { userRepository } from "../../repositories/userRepository";
@@ -487,6 +489,39 @@ export class WorkflowEngine {
       metadata: { executionId, workflowName: workflow.name, durationMs: totalDuration, stepsExecuted: stepCount },
     });
 
+    // Phase 16 — in-app notification to whoever triggered this run
+    // (reuses the existing core Notification table/bell, same convention
+    // as every other notificationService.notify call site), plus a real
+    // "workflow.completed" event (previously catalog-only documentation —
+    // see EventEngine.ts — nothing ever emitted it until now). Both
+    // best-effort: never throw back into the workflow run that just
+    // finished successfully.
+    if (execution.initiatedById) {
+      await notificationService.notify({
+        organizationId: execution.organizationId,
+        userId: execution.initiatedById,
+        type: "workflow_completed",
+        title: "Workflow completed",
+        message: `"${workflow.name}" finished successfully.`,
+        entityType: "automation_execution",
+        entityId: executionId,
+      });
+    }
+    try {
+      await eventEngine.emit({
+        eventType: "workflow.completed",
+        entityType: "automation_execution",
+        entityId: executionId,
+        organizationId: execution.organizationId,
+        actorId: execution.initiatedById || undefined,
+        actorType: execution.initiatedById ? "USER" : "SYSTEM",
+        sourceModule: "AUTOMATION",
+        payload: { workflowId: workflow.id, workflowName: workflow.name, durationMs: totalDuration },
+      });
+    } catch {
+      // best-effort — see comment above.
+    }
+
     return completed;
   }
 
@@ -521,6 +556,37 @@ export class WorkflowEngine {
     const failed = await prisma.automationExecution.update({ where: { id: executionId }, data: { status: "FAILED", completedAt: new Date(), errorMessage: error } });
 
     await auditLogRepository.record({ organizationId, actorType: "SYSTEM", action: "AUTOMATION_WORKFLOW_FAILED", resourceType: "automation_execution", resourceId: executionId, metadata: { error } });
+
+    // Phase 16 — same notify+event convention as the successful-completion
+    // path above, never fabricating success: a real failure, reported
+    // honestly, to whoever triggered the run, plus a real "workflow.failed"
+    // event (previously catalog-only — see EventEngine.ts).
+    const workflow = await prisma.automationWorkflow.findUnique({ where: { id: failed.workflowId }, select: { name: true } });
+    if (failed.initiatedById) {
+      await notificationService.notify({
+        organizationId,
+        userId: failed.initiatedById,
+        type: "workflow_failed",
+        title: "Workflow failed",
+        message: `"${workflow?.name ?? "Workflow"}" failed: ${error}`,
+        entityType: "automation_execution",
+        entityId: executionId,
+      });
+    }
+    try {
+      await eventEngine.emit({
+        eventType: "workflow.failed",
+        entityType: "automation_execution",
+        entityId: executionId,
+        organizationId,
+        actorId: failed.initiatedById || undefined,
+        actorType: failed.initiatedById ? "USER" : "SYSTEM",
+        sourceModule: "AUTOMATION",
+        payload: { workflowId: failed.workflowId, workflowName: workflow?.name ?? null, error },
+      });
+    } catch {
+      // best-effort — see comment above.
+    }
 
     return failed;
   }

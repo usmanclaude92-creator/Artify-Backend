@@ -93,4 +93,10 @@ export const userRepository = {
   async updateStatus(userId: string, status: UserStatus): Promise<User> {
     return prisma.user.update({ where: { id: userId }, data: { status } });
   },
+
+  /** Phase 16 — who to notify for an approval request (e.g. every ADMIN in the org), never a caller-supplied recipient list. */
+  async listActiveByRoleKeysInOrg(organizationId: string, roleKeys: string[]): Promise<User[]> {
+    if (roleKeys.length === 0) return [];
+    return prisma.user.findMany({ where: { organizationId, status: "ACTIVE", deletedAt: null, role: { key: { in: roleKeys } } } });
+  },
 };

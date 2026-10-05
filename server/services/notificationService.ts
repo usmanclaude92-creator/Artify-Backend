@@ -38,7 +38,16 @@ export const notificationService = {
    * that triggered it (e.g. a lead create should still succeed even if
    * writing its "assigned to you" notification somehow fails).
    */
-  async notify(params: { organizationId: string; userId: string | null | undefined; type: string; title: string; message: string }): Promise<void> {
+  async notify(params: {
+    organizationId: string;
+    userId: string | null | undefined;
+    type: string;
+    title: string;
+    message: string;
+    /** Phase 16 — optional link to the real record this notification concerns, for Notification Center deep-linking. Never fabricated: omit rather than guess. */
+    entityType?: string;
+    entityId?: string;
+  }): Promise<void> {
     if (!params.userId) return;
     try {
       await notificationRepository.create({
@@ -47,6 +56,8 @@ export const notificationService = {
         type: params.type,
         title: params.title,
         message: params.message,
+        entityType: params.entityType,
+        entityId: params.entityId,
       });
     } catch {
       // Best-effort — see doc comment above.

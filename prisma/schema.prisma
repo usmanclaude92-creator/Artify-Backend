@@ -2334,6 +2334,16 @@ model Notification {
   title          String
   message        String
   status         NotificationStatus @default(UNREAD)
+  // Phase 16 (Workflow + Approvals + Tasks + Notifications,
+  // docs/AUTOMATION_ARCHITECTURE.md) — optional link to the real record
+  // this notification concerns (e.g. entityType="automation_task",
+  // entityId=<task id>), letting the Notification Center deep-link to it.
+  // Free string, same convention as AuditLog.resourceType/AnalyticsEvent.
+  // entityType — never a rigid enum, so a new source never needs a
+  // migration. Absent (both null) for a notification with no single
+  // underlying record (e.g. a generic system message).
+  entityType     String?            @map("entity_type")
+  entityId       String?            @map("entity_id")
   readAt         DateTime?          @map("read_at")
   createdAt      DateTime           @default(now()) @map("created_at")
 
@@ -2854,6 +2864,10 @@ enum AutomationApprovalStatus {
   PENDING
   APPROVED
   REJECTED
+  // Phase 16 — a reviewer can ask for edits without a hard rejection; the
+  // requester resubmits (a fresh PENDING approval) rather than this one
+  // flipping back to PENDING itself, keeping approval history append-only.
+  CHANGES_REQUESTED
   EXPIRED
   CANCELLED
 }

@@ -75,6 +75,7 @@ import knowledgeRoutes from "./knowledgeRoutes";
 import copilotRoutes from "./copilotRoutes";
 import analyticsRoutes from "./analyticsRoutes";
 import reportsRoutes from "./reportsRoutes";
+import contentApprovalRoutes from "./contentApprovalRoutes";
 
 const v1Router = Router();
 
@@ -134,5 +135,6 @@ v1Router.use("/knowledge", knowledgeRoutes);
 v1Router.use("/copilot", copilotRoutes);
 v1Router.use("/analytics", analyticsRoutes);
 v1Router.use("/reports", reportsRoutes);
+v1Router.use("/automation/content-approvals", contentApprovalRoutes);
 
 export default v1Router;

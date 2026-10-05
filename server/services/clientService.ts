@@ -3,6 +3,7 @@ import { clientRepository, type ClientFilters, type ClientWithWorkspace } from "
 import { industryRepository } from "../repositories/industryRepository";
 import { auditLogRepository } from "../repositories/auditLogRepository";
 import { auditLogQueryRepository } from "../repositories/auditLogQueryRepository";
+import { eventEngine } from "./automation/EventEngine";
 import { ConflictError, NotFoundError, ValidationError } from "../core/errors";
 import type { SanitizedUser } from "../types/domain";
 import type { CreateClientInput, UpdateClientInput } from "../schemas/clientSchemas";
@@ -86,6 +87,24 @@ export const clientService = {
       ipAddress: meta.ip,
       userAgent: meta.userAgent,
     });
+
+    // Phase 16 — real automation trigger: an ACTIVE workflow with
+    // triggerType EVENT / triggerConfig.eventType "client.created" fires
+    // from this. Best-effort: never blocks or fails client creation.
+    try {
+      await eventEngine.emit({
+        eventType: "client.created",
+        entityType: "client",
+        entityId: client.id,
+        organizationId: caller.organizationId,
+        actorId: caller.id,
+        actorType: "USER",
+        sourceModule: "CRM",
+        payload: { clientCode: client.clientCode, name: client.name, status: client.status },
+      });
+    } catch {
+      // best-effort — see comment above.
+    }
 
     return client;
   },

@@ -387,11 +387,16 @@ export class ActionRegistry {
       requiresAudit: true,
       inputSchema: z.object({ contentType: z.enum(["PAGE", "POST"]), contentId: z.string().min(1) }),
       outputSchema: z.object({ contentId: z.string(), published: z.boolean() }),
-      execute: async (input, _context) => {
-        if (input.contentType === "PAGE") {
-          await prisma.page.update({ where: { id: input.contentId }, data: { status: "PUBLISHED", publishedAt: new Date() } });
-        } else {
-          await prisma.post.update({ where: { id: input.contentId }, data: { status: "PUBLISHED", publishedAt: new Date() } });
+      execute: async (input, context) => {
+        // Phase 16 — tenant-isolation fix: the original update had no
+        // organizationId filter at all, so any contentId (even another
+        // organization's) would be matched and published. updateMany +
+        // a result-count check keeps this a true no-op cross-tenant
+        // (affects zero rows) instead of a silent cross-tenant write.
+        const where = { id: input.contentId, organizationId: context.organizationId };
+        const result = input.contentType === "PAGE" ? await prisma.page.updateMany({ where, data: { status: "PUBLISHED", publishedAt: new Date() } }) : await prisma.post.updateMany({ where, data: { status: "PUBLISHED", publishedAt: new Date() } });
+        if (result.count === 0) {
+          throw new ValidationError(`publish_approved_content: contentId "${input.contentId}" does not refer to a ${input.contentType.toLowerCase()} in this organization.`);
         }
         return { contentId: input.contentId, published: true };
       },

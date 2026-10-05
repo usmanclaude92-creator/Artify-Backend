@@ -4,9 +4,9 @@ import { useAuth } from "../../context/AuthContext";
 import { useRouter } from "../../lib/router";
 import { visibleNavItems } from "../../lib/permissions";
 
-type Section = "Platform" | "CRM" | "Onboarding" | "Workspaces" | "Products" | "Website" | "CMS" | "SEO" | "Marketing" | "Automation" | "Analytics" | "Commercial" | "AI" | "Client Portal";
+type Section = "Platform" | "Workspace" | "CRM" | "Onboarding" | "Workspaces" | "Products" | "Website" | "CMS" | "SEO" | "Marketing" | "Automation" | "Analytics" | "Commercial" | "AI" | "Client Portal";
 
-const SECTIONS: Section[] = ["Platform", "CRM", "Onboarding", "Workspaces", "Products", "Website", "CMS", "SEO", "Marketing", "Automation", "Analytics", "Commercial", "AI", "Client Portal"];
+const SECTIONS: Section[] = ["Platform", "Workspace", "CRM", "Onboarding", "Workspaces", "Products", "Website", "CMS", "SEO", "Marketing", "Automation", "Analytics", "Commercial", "AI", "Client Portal"];
 
 /** Presentation state only, like the theme preference — safe to persist client-side. */
 const EXPANDED_STORAGE_KEY = "artify_cc_sidebar_expanded_section";

@@ -137,6 +137,36 @@ export const onboardingService = {
       userAgent: meta.userAgent,
     });
 
+    if (record.ownerId && record.ownerId !== caller.id) {
+      await notificationService.notify({
+        organizationId: caller.organizationId,
+        userId: record.ownerId,
+        type: "onboarding_started",
+        title: "Onboarding started",
+        message: "A client onboarding you own has started.",
+      });
+    }
+
+    // Phase 16 — real automation trigger: an ACTIVE workflow with
+    // triggerType EVENT / triggerConfig.eventType
+    // "client.onboarding_started" fires from this (mirrors the existing
+    // "client.onboarded" completion trigger below). Best-effort: never
+    // blocks or fails onboarding start.
+    try {
+      await eventEngine.emit({
+        eventType: "client.onboarding_started",
+        entityType: "client",
+        entityId: clientId,
+        organizationId: caller.organizationId,
+        actorId: caller.id,
+        actorType: "USER",
+        sourceModule: "ONBOARDING",
+        payload: { onboardingId: record.id },
+      });
+    } catch {
+      // best-effort — see comment above.
+    }
+
     return record;
   },
 

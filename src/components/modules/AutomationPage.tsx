@@ -579,11 +579,11 @@ const ApprovalsTab: React.FC = () => {
     void load();
   }, [load]);
 
-  const decide = async (id: string, decision: "APPROVED" | "REJECTED") => {
+  const decide = async (id: string, decision: "APPROVED" | "REJECTED" | "CHANGES_REQUESTED") => {
     setBusyId(id);
     try {
       await automationApi.decideApproval(id, decision);
-      notify(decision === "APPROVED" ? "Approved." : "Rejected.", "success");
+      notify(decision === "APPROVED" ? "Approved." : decision === "CHANGES_REQUESTED" ? "Changes requested." : "Rejected.", "success");
       void load();
     } catch (err) {
       notify(err instanceof ApiClientError ? err.message : "Could not decide.", "error");
@@ -609,13 +609,28 @@ const ApprovalsTab: React.FC = () => {
                   {a.action} — {a.workflow?.name ?? a.workflowId}
                 </p>
                 <p style={{ color: "var(--text-muted)" }}>{a.description ?? "No description."}</p>
+                {a.entityType && a.entityId && (
+                  <p className="text-[10px] mt-0.5" style={{ color: "var(--text-muted)" }}>
+                    Related: {a.entityType} #{a.entityId.slice(0, 8)}
+                  </p>
+                )}
+                {a.decisionReason && (
+                  <p className="text-[10px] mt-0.5 italic" style={{ color: "var(--text-muted)" }}>
+                    "{a.decisionReason}"
+                  </p>
+                )}
               </div>
               <div className="flex items-center gap-2 shrink-0">
-                <Badge tone={a.status === "APPROVED" ? "success" : a.status === "REJECTED" ? "danger" : a.status === "EXPIRED" ? "neutral" : "warning"}>{a.status}</Badge>
+                <Badge tone={a.status === "APPROVED" ? "success" : a.status === "REJECTED" ? "danger" : a.status === "EXPIRED" ? "neutral" : a.status === "CHANGES_REQUESTED" ? "warning" : "warning"}>
+                  {a.status.replace("_", " ")}
+                </Badge>
                 {canApprove && a.status === "PENDING" && (
                   <>
                     <Button variant="primary" disabled={busyId === a.id} onClick={() => void decide(a.id, "APPROVED")}>
                       <CheckCircle2 className="w-3.5 h-3.5" /> Approve
+                    </Button>
+                    <Button variant="secondary" disabled={busyId === a.id} onClick={() => void decide(a.id, "CHANGES_REQUESTED")}>
+                      Request changes
                     </Button>
                     <Button variant="danger" disabled={busyId === a.id} onClick={() => void decide(a.id, "REJECTED")}>
                       <XCircle className="w-3.5 h-3.5" /> Reject

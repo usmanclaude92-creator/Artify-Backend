@@ -82,6 +82,17 @@ export class EventEngine {
       { eventType: "workflow.created", entityType: "workflow", sourceModule: "AUTOMATION", description: "Triggered when a new workflow is configured" },
       { eventType: "workflow.failed", entityType: "workflow", sourceModule: "AUTOMATION", description: "Triggered when an execution fails" },
       { eventType: "workflow.completed", entityType: "workflow", sourceModule: "AUTOMATION", description: "Triggered when an execution completes" },
+
+      // Phase 16 (Workflow + Approvals + Tasks + Notifications,
+      // docs/AUTOMATION_ARCHITECTURE.md) — same "registered here, wired to
+      // a real eventEngine.emit() call site" convention Phase 14 applied
+      // to lead/opportunity/form events.
+      { eventType: "opportunity.created", entityType: "opportunity", sourceModule: "CRM", description: "Triggered when a new sales opportunity is opened" },
+      { eventType: "client.onboarding_started", entityType: "client", sourceModule: "ONBOARDING", description: "Triggered when client onboarding begins" },
+      { eventType: "content.submitted_for_review", entityType: "content", sourceModule: "CMS", description: "Triggered when a CMS page or post is submitted for approval" },
+      { eventType: "content.approved", entityType: "content", sourceModule: "CMS", description: "Triggered when submitted CMS content is approved and published" },
+      { eventType: "content.rejected", entityType: "content", sourceModule: "CMS", description: "Triggered when submitted CMS content is rejected or sent back for changes" },
+      { eventType: "task.completed", entityType: "automation_task", sourceModule: "AUTOMATION", description: "Triggered when an automation task is marked complete" },
     ];
 
     for (const evt of standardEvents) {

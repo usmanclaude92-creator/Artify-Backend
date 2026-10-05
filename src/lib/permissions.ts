@@ -60,6 +60,7 @@ import {
   Rocket,
   BarChart3,
   FileBarChart,
+  Bell,
 } from "lucide-react";
 import { DashboardPage } from "../components/modules/DashboardPage";
 
@@ -126,6 +127,8 @@ const CampaignsPage = lazyPage(() => import("../components/modules/CampaignsPage
 const AutomationPage = lazyPage(() => import("../components/modules/AutomationPage"), "AutomationPage");
 const AnalyticsDashboardPage = lazyPage(() => import("../components/modules/AnalyticsDashboardPage"), "AnalyticsDashboardPage");
 const ReportsPage = lazyPage(() => import("../components/modules/ReportsPage"), "ReportsPage");
+const MyWorkPage = lazyPage(() => import("../components/modules/MyWorkPage"), "MyWorkPage");
+const NotificationCenterPage = lazyPage(() => import("../components/modules/NotificationCenterPage"), "NotificationCenterPage");
 
 export function hasPermission(permissions: readonly string[] | undefined, key: string): boolean {
   return !!permissions?.includes(key);
@@ -140,7 +143,7 @@ export interface NavItem {
   requiresAnyPermission?: string[];
   component: ComponentType | LazyExoticComponent<ComponentType>;
   /** Groups items under a heading in the sidebar (§22/§31) — purely presentational. */
-  section: "Platform" | "CRM" | "Onboarding" | "Workspaces" | "Products" | "Website" | "CMS" | "SEO" | "Marketing" | "Automation" | "Analytics" | "Commercial" | "AI" | "Client Portal";
+  section: "Platform" | "Workspace" | "CRM" | "Onboarding" | "Workspaces" | "Products" | "Website" | "CMS" | "SEO" | "Marketing" | "Automation" | "Analytics" | "Commercial" | "AI" | "Client Portal";
 }
 
 /**
@@ -152,6 +155,23 @@ export interface NavItem {
  */
 export const NAV_ITEMS: NavItem[] = [
   { id: "dashboard", label: "Dashboard", path: "/dashboard", icon: LayoutDashboard, component: DashboardPage, section: "Platform" },
+  {
+    id: "my-work",
+    label: "My Work",
+    path: "/my-work",
+    icon: Briefcase,
+    requiresAnyPermission: ["automation.read"],
+    component: MyWorkPage,
+    section: "Workspace",
+  },
+  {
+    id: "notification-center",
+    label: "Notifications",
+    path: "/notifications",
+    icon: Bell,
+    component: NotificationCenterPage,
+    section: "Workspace",
+  },
   {
     id: "users",
     label: "Users",

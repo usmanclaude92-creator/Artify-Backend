@@ -755,7 +755,7 @@ export const marketingApi = {
 export type AutomationWorkflowStatusValue = "DRAFT" | "ACTIVE" | "PAUSED" | "ARCHIVED";
 export type AutomationTriggerTypeValue = "EVENT" | "SCHEDULE" | "MANUAL" | "API" | "CONDITIONAL";
 export type AutomationExecutionStatusValue = "QUEUED" | "RUNNING" | "WAITING_APPROVAL" | "COMPLETED" | "FAILED" | "CANCELLED";
-export type AutomationApprovalStatusValue = "PENDING" | "APPROVED" | "REJECTED" | "EXPIRED";
+export type AutomationApprovalStatusValue = "PENDING" | "APPROVED" | "REJECTED" | "CHANGES_REQUESTED" | "EXPIRED";
 export type AutomationTaskStatusValue = "PENDING" | "IN_PROGRESS" | "COMPLETED" | "CANCELLED";
 export type AutomationTaskPriorityValue = "LOW" | "MEDIUM" | "HIGH" | "URGENT";
 
@@ -825,6 +825,8 @@ export interface AutomationApproval {
   stepId: string;
   action: string;
   description: string | null;
+  entityType: string | null;
+  entityId: string | null;
   status: AutomationApprovalStatusValue;
   requesterId: string | null;
   approverId: string | null;
@@ -833,6 +835,13 @@ export interface AutomationApproval {
   decidedAt: string | null;
   workflow?: { id: string; name: string; category: string } | null;
   approver?: { id: string; firstName: string; lastName: string } | null;
+}
+
+export interface AutomationTaskComment {
+  id: string;
+  userId: string;
+  text: string;
+  createdAt: string;
 }
 
 export interface AutomationTask {
@@ -849,9 +858,25 @@ export interface AutomationTask {
   sourceEntityType: string | null;
   sourceEntityId: string | null;
   isAiGenerated: boolean;
+  metadata?: { comments?: AutomationTaskComment[]; [key: string]: unknown };
   completedAt: string | null;
   createdAt: string;
   updatedAt: string;
+  assignedUser?: { id: string; firstName: string; lastName: string; email: string } | null;
+  workflow?: { id: string; name: string; category: string } | null;
+}
+
+export interface MyWork {
+  tasks: {
+    overdue: AutomationTask[];
+    upcoming: AutomationTask[];
+    assigned: AutomationTask[];
+  };
+  pendingApprovals: AutomationApproval[];
+  recentActivity: {
+    executions: AutomationExecution[];
+    completedTasks: AutomationTask[];
+  };
 }
 
 export interface AutomationDashboard {
@@ -916,7 +941,7 @@ export const automationApi = {
   cancelExecution: (id: string, reason?: string) => apiClient.post<{ execution: AutomationExecution }>(`/automation/executions/${id}/cancel`, { reason }),
   listApprovals: (params: { page?: number; limit?: number; status?: AutomationApprovalStatusValue; workflowId?: string } = {}) =>
     apiClient.get<{ rows: AutomationApproval[]; total: number; page: number; limit: number }>(`/automation/approvals${toQuery(params)}`),
-  decideApproval: (id: string, decision: "APPROVED" | "REJECTED", reason?: string) =>
+  decideApproval: (id: string, decision: "APPROVED" | "REJECTED" | "CHANGES_REQUESTED", reason?: string) =>
     apiClient.post<{ approval: AutomationApproval }>(`/automation/approvals/${id}/decide`, { decision, reason }),
   listTasks: (params: { page?: number; limit?: number; status?: AutomationTaskStatusValue; assignedUserId?: string } = {}) =>
     apiClient.get<{ rows: AutomationTask[]; total: number; page: number; limit: number }>(`/automation/tasks${toQuery(params)}`),
@@ -924,8 +949,23 @@ export const automationApi = {
     apiClient.post<{ task: AutomationTask }>("/automation/tasks", payload),
   updateTask: (id: string, payload: Partial<{ status: AutomationTaskStatusValue; assignedUserId: string; priority: AutomationTaskPriorityValue; dueDate: string }>) =>
     apiClient.patch<{ task: AutomationTask }>(`/automation/tasks/${id}`, payload),
+  addTaskComment: (id: string, text: string) => apiClient.post<{ task: AutomationTask; comment: AutomationTaskComment }>(`/automation/tasks/${id}/comments`, { text }),
   listActions: () => apiClient.get<{ actions: AutomationActionDefinition[] }>("/automation/actions"),
   listEventTypes: () => apiClient.get<{ types: Array<{ eventType: string; entityType: string; sourceModule: string; description: string }> }>("/automation/events/types"),
+  myWork: () => apiClient.get<MyWork>("/automation/my-work"),
+};
+
+// ---------------------------------------------------------------------------
+// Phase 16 — Content Approval (docs/AUTOMATION_ARCHITECTURE.md §2). Reuses
+// the same AutomationApproval shape above — never a parallel type.
+// ---------------------------------------------------------------------------
+export const contentApprovalApi = {
+  list: (params: { page?: number; limit?: number; status?: AutomationApprovalStatusValue } = {}) =>
+    apiClient.get<{ rows: AutomationApproval[]; total: number; page: number; limit: number }>(`/automation/content-approvals${toQuery(params)}`),
+  submit: (contentType: "page" | "post", contentId: string) =>
+    apiClient.post<{ approvalId: string }>("/automation/content-approvals", { contentType, contentId }),
+  decide: (id: string, decision: "APPROVED" | "REJECTED" | "CHANGES_REQUESTED", reason?: string) =>
+    apiClient.post<{ approvalId: string; decision: string }>(`/automation/content-approvals/${id}/decide`, { decision, reason }),
 };
 
 // ---------------------------------------------------------------------------
@@ -941,6 +981,8 @@ export interface AppNotification {
   title: string;
   message: string;
   status: NotificationStatusValue;
+  entityType: string | null;
+  entityId: string | null;
   readAt: string | null;
   createdAt: string;
 }

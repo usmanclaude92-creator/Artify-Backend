@@ -166,6 +166,24 @@ export const opportunityService = {
       metadata: { stage: opportunity.stage, value: opportunity.value.toString(), currency: opportunity.currency },
     });
 
+    // Phase 16 — real automation trigger: an ACTIVE workflow with
+    // triggerType EVENT / triggerConfig.eventType "opportunity.created"
+    // fires from this. Best-effort: never blocks or fails opportunity creation.
+    try {
+      await eventEngine.emit({
+        eventType: "opportunity.created",
+        entityType: "opportunity",
+        entityId: opportunity.id,
+        organizationId,
+        actorId: caller.id,
+        actorType: "USER",
+        sourceModule: "CRM",
+        payload: { name: opportunity.name, stage: opportunity.stage, clientId: opportunity.clientId, leadId: opportunity.leadId, value: opportunity.value.toString() },
+      });
+    } catch {
+      // best-effort — see comment above.
+    }
+
     if (opportunity.assignedTo && opportunity.assignedTo !== caller.id) {
       await notificationService.notify({
         organizationId,

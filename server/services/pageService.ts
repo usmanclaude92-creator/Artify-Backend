@@ -41,6 +41,7 @@ import { sanitizeContentHtml } from "../utils/sanitizeHtml";
 import { sanitizeEditorDocument } from "../schemas/editorSchemas";
 import { notificationService } from "./notificationService";
 import { redirectService } from "./redirectService";
+import { eventEngine } from "./automation/EventEngine";
 import { prisma } from "../db/prisma";
 import { ConflictError, NotFoundError, ValidationError } from "../core/errors";
 import type { SanitizedUser } from "../types/domain";
@@ -422,6 +423,25 @@ export const pageService = {
       ipAddress: meta.ip,
       userAgent: meta.userAgent,
     });
+
+    // Phase 16 — real automation trigger: an ACTIVE workflow with
+    // triggerType EVENT / triggerConfig.eventType
+    // "content.submitted_for_review" fires from this. Best-effort: never
+    // blocks or fails the submission itself.
+    try {
+      await eventEngine.emit({
+        eventType: "content.submitted_for_review",
+        entityType: "page",
+        entityId: id,
+        organizationId,
+        actorId: caller.id,
+        actorType: "USER",
+        sourceModule: "CMS",
+        payload: { title: existing.title, slug: existing.slug },
+      });
+    } catch {
+      // best-effort — see comment above.
+    }
 
     return loadPageOrThrow(id, organizationId);
   },
