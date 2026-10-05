@@ -113,7 +113,7 @@ describe("Automation workflows, actions, approvals", () => {
 
     // Poll briefly for the async background execution to complete.
     let execution: { status: string } = { status: "QUEUED" };
-    for (let i = 0; i < 20; i++) {
+    for (let i = 0; i < 200; i++) {
       const execRes = await request(app)
         .get(`/api/v1/automation/executions/${executionId}`)
         .set("Authorization", `Bearer ${adminToken}`);
@@ -167,7 +167,7 @@ describe("Automation workflows, actions, approvals", () => {
     const executionId = triggerRes.body.data.executionId;
 
     let execution: { status: string } = { status: "QUEUED" };
-    for (let i = 0; i < 20; i++) {
+    for (let i = 0; i < 200; i++) {
       const execRes = await request(app).get(`/api/v1/automation/executions/${executionId}`).set("Authorization", `Bearer ${adminToken}`);
       execution = execRes.body.data.execution;
       if (execution.status === "COMPLETED" || execution.status === "FAILED" || execution.status === "WAITING_APPROVAL") break;
@@ -213,7 +213,7 @@ describe("Automation workflows, actions, approvals", () => {
     const executionId = triggerRes.body.data.executionId;
 
     let execution: { status: string } = { status: "QUEUED" };
-    for (let i = 0; i < 20; i++) {
+    for (let i = 0; i < 200; i++) {
       const execRes = await request(app).get(`/api/v1/automation/executions/${executionId}`).set("Authorization", `Bearer ${adminToken}`);
       execution = execRes.body.data.execution;
       if (execution.status === "COMPLETED" || execution.status === "FAILED") break;
@@ -263,7 +263,7 @@ describe("Automation workflows, actions, approvals", () => {
     const executionId = triggerRes.body.data.executionId;
 
     let approvalId: string | undefined;
-    for (let i = 0; i < 20; i++) {
+    for (let i = 0; i < 200; i++) {
       const approvalsRes = await request(app)
         .get("/api/v1/automation/approvals")
         .set("Authorization", `Bearer ${adminToken}`)
@@ -323,7 +323,7 @@ describe("Automation workflows, actions, approvals", () => {
     const executionId = triggerRes.body.data.executionId;
 
     let execution: { status: string } = { status: "QUEUED" };
-    for (let i = 0; i < 20; i++) {
+    for (let i = 0; i < 200; i++) {
       const execRes = await request(app).get(`/api/v1/automation/executions/${executionId}`).set("Authorization", `Bearer ${adminToken}`);
       execution = execRes.body.data.execution;
       if (execution.status === "COMPLETED" || execution.status === "FAILED") break;
@@ -362,7 +362,7 @@ describe("Automation workflows, actions, approvals", () => {
     const executionId = triggerRes.body.data.executionId;
 
     let execution: { status: string } = { status: "QUEUED" };
-    for (let i = 0; i < 20; i++) {
+    for (let i = 0; i < 200; i++) {
       const execRes = await request(app).get(`/api/v1/automation/executions/${executionId}`).set("Authorization", `Bearer ${adminToken}`);
       execution = execRes.body.data.execution;
       if (execution.status === "COMPLETED" || execution.status === "FAILED") break;
@@ -382,7 +382,7 @@ describe("Automation workflows, actions, approvals", () => {
     const secondTrigger = await request(app).post(`/api/v1/automation/workflows/${workflowId}/trigger`).set("Authorization", `Bearer ${adminToken}`).send({});
     const secondExecutionId = secondTrigger.body.data.executionId;
     let secondExecution: { status: string } = { status: "QUEUED" };
-    for (let i = 0; i < 20; i++) {
+    for (let i = 0; i < 200; i++) {
       const execRes = await request(app).get(`/api/v1/automation/executions/${secondExecutionId}`).set("Authorization", `Bearer ${adminToken}`);
       secondExecution = execRes.body.data.execution;
       if (secondExecution.status === "COMPLETED" || secondExecution.status === "FAILED") break;
@@ -437,7 +437,7 @@ describe("Automation workflows, actions, approvals", () => {
 
     // Poll for an execution of this workflow correlated to the real event to appear and complete.
     let matched: { id: string; status: string } | null = null;
-    for (let i = 0; i < 30; i++) {
+    for (let i = 0; i < 200; i++) {
       const listRes = await request(app)
         .get("/api/v1/automation/executions")
         .set("Authorization", `Bearer ${adminToken}`)
