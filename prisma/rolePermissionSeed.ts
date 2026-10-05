@@ -100,6 +100,10 @@ const ROLE_PERMISSION_SETS: Record<RoleKey, readonly string[] | "*"> = {
     "settings.read",
     "settings.manage",
     "audit.read",
+    "security.read",
+    "integrations.read",
+    "webhooks.read",
+    "api_keys.read",
     // Phase 12 — ADMIN gets the full AI governance surface within its own
     // organization: catalog visibility, tool enablement, prompt/workflow
     // authoring and publishing, execution, approval decisions, usage/cost

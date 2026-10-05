@@ -11,6 +11,7 @@ import { organizationMembershipRepository } from "../repositories/organizationMe
 import { roleRepository } from "../repositories/roleRepository";
 import { auditLogRepository } from "../repositories/auditLogRepository";
 import { sessionRepository } from "../repositories/sessionRepository";
+import { assertCallerMayAssignRole, assertCallerMayManageTarget } from "./admin/roleAccess";
 import { hashPassword } from "../utils/password";
 import { AuthorizationError, ConflictError, NotFoundError, ValidationError } from "../core/errors";
 import { sanitizeUser, type SanitizedUser } from "../types/domain";
@@ -60,6 +61,7 @@ export const userService = {
     if (existing) throw new ConflictError("An account with this email address already exists.");
 
     const role = await resolveRoleOrThrow(input.roleKey);
+    await assertCallerMayAssignRole(caller, role);
     const passwordHash = await hashPassword(input.password);
 
     const user = await userRepository.create({
@@ -105,6 +107,11 @@ export const userService = {
     if (!membership) throw new NotFoundError("User not found.");
 
     const beforeRoleKey = membership.role.key;
+    assertCallerMayManageTarget(caller, beforeRoleKey);
+    // An administrator must never be able to lock themselves out by deactivating their own account.
+    if (targetUserId === caller.id && input.status !== undefined && input.status !== "ACTIVE") {
+      throw new AuthorizationError("You cannot deactivate your own account.");
+    }
 
     if (input.roleKey !== undefined) {
       // Role assignment is a distinct privilege from general profile
@@ -121,6 +128,7 @@ export const userService = {
       }
 
       const newRole = await resolveRoleOrThrow(input.roleKey);
+      await assertCallerMayAssignRole(caller, newRole);
       await organizationMembershipRepository.updateRole(membership.id, newRole.id);
 
       await auditLogRepository.record({

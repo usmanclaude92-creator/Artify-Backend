@@ -1,10 +1,11 @@
 /** Phase 4 Audit Log UI — read-only, paginated, tenant-scoped. */
 import { Router } from "express";
-import { auditLogQueryRepository } from "../../repositories/auditLogQueryRepository";
+import { auditLogQueryRepository, auditSeverity } from "../../repositories/auditLogQueryRepository";
 import { authenticateToken, requirePermission } from "../../middleware/auth";
 import { asyncHandler } from "../../utils/asyncHandler";
 import { sendSuccess } from "../../core/apiResponse";
 import { listAuditLogsQuerySchema } from "../../schemas/auditLogSchemas";
+import { NotFoundError } from "../../core/errors";
 
 const router = Router();
 
@@ -28,6 +29,10 @@ router.get(
         actorUserId: query.actorUserId,
         action: query.action,
         resourceType: query.resourceType,
+        resourceId: query.resourceId,
+        actorType: query.actorType,
+        q: query.q,
+        severity: query.severity,
         result: query.result,
         dateFrom: query.dateFrom,
         dateTo: query.dateTo,
@@ -36,7 +41,25 @@ router.get(
       query.limit
     );
 
-    sendSuccess(res, { auditLogs: rows }, 200, { page: query.page, limit: query.limit, total });
+    sendSuccess(res, { auditLogs: rows.map((r) => ({ ...r, severity: auditSeverity(r) })) }, 200, { page: query.page, limit: query.limit, total });
+  })
+);
+
+/** Distinct action names in the caller's organization — powers the action filter. */
+router.get(
+  "/facets",
+  requirePermission("audit.read"),
+  asyncHandler(async (req, res) => sendSuccess(res, { actions: await auditLogQueryRepository.distinctActions(req.user!.organizationId) }))
+);
+
+/** Single event with full before/after detail. Org-scoped; a foreign id is indistinguishable from a missing one. */
+router.get(
+  "/:id",
+  requirePermission("audit.read"),
+  asyncHandler(async (req, res) => {
+    const row = await auditLogQueryRepository.findById(req.params.id!, req.user!.role.key === "SUPER_ADMIN" ? undefined : req.user!.organizationId);
+    if (!row) throw new NotFoundError("Audit event not found.");
+    sendSuccess(res, { auditLog: { ...row, severity: auditSeverity(row) } });
   })
 );
 

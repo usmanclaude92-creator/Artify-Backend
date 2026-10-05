@@ -58,6 +58,7 @@ import {
   Home,
   Megaphone,
   Rocket,
+  Plug,
   BarChart3,
   FileBarChart,
   Bell,
@@ -76,6 +77,9 @@ function lazyPage<T extends ComponentType>(loader: () => Promise<Record<string, 
   return lazy(() => loader().then((m) => ({ default: m[exportName] as T })));
 }
 
+const AdministrationPage = lazyPage(() => import("../components/modules/AdministrationPage"), "AdministrationPage");
+const SecurityCenterPage = lazyPage(() => import("../components/modules/SecurityCenterPage"), "SecurityCenterPage");
+const IntegrationsPage = lazyPage(() => import("../components/modules/IntegrationsPage"), "IntegrationsPage");
 const UsersPage = lazyPage(() => import("../components/modules/UsersPage"), "UsersPage");
 const RolesPage = lazyPage(() => import("../components/modules/RolesPage"), "RolesPage");
 const PermissionsPage = lazyPage(() => import("../components/modules/PermissionsPage"), "PermissionsPage");
@@ -173,6 +177,15 @@ export const NAV_ITEMS: NavItem[] = [
     section: "Workspace",
   },
   {
+    id: "administration",
+    label: "Administration",
+    path: "/administration",
+    icon: Gauge,
+    requiresAnyPermission: ["security.read"],
+    component: AdministrationPage,
+    section: "Platform",
+  },
+  {
     id: "users",
     label: "Users",
     path: "/users",
@@ -217,7 +230,25 @@ export const NAV_ITEMS: NavItem[] = [
     component: AuditLogPage,
     section: "Platform",
   },
-  { id: "security", label: "Security", path: "/security", icon: MonitorSmartphone, component: SecurityPage, section: "Platform" },
+  { id: "security", label: "My Sessions", path: "/security", icon: MonitorSmartphone, component: SecurityPage, section: "Platform" },
+  {
+    id: "security-center",
+    label: "Security Center",
+    path: "/security-center",
+    icon: ShieldAlert,
+    requiresAnyPermission: ["security.read"],
+    component: SecurityCenterPage,
+    section: "Platform",
+  },
+  {
+    id: "integrations",
+    label: "Integrations",
+    path: "/integrations",
+    icon: Plug,
+    requiresAnyPermission: ["integrations.read", "webhooks.read", "api_keys.read"],
+    component: IntegrationsPage,
+    section: "Platform",
+  },
   {
     id: "settings",
     label: "Settings",

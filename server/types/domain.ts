@@ -143,6 +143,16 @@ export const PERMISSION_KEYS = [
   "settings.read",
   "settings.manage",
   "audit.read",
+  // Phase 17 — Administration, Security & Integrations. Reads and manages are
+  // separate keys; only SUPER_ADMIN holds the manage keys by default (wildcard).
+  "security.read",
+  "security.manage",
+  "integrations.read",
+  "integrations.manage",
+  "webhooks.read",
+  "webhooks.manage",
+  "api_keys.read",
+  "api_keys.manage",
   // Phase 12 — AI Control Center governance keys (docs/AI_GOVERNANCE.md).
   // Deliberately granular: provider/model catalog and tool enablement are
   // admin-only; prompt/workflow authoring is separate from execution;

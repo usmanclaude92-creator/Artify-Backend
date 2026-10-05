@@ -10,6 +10,10 @@ export interface ResolvedRole {
   key: string;
   name: string;
   permissions: string[];
+  /** Phase 17 — present on GET /roles. */
+  description?: string | null;
+  isSystem?: boolean;
+  memberCount?: number;
 }
 
 export interface SanitizedUser {
@@ -91,6 +95,12 @@ export interface AuditLogEntry {
   ipAddress: string | null;
   userAgent: string | null;
   createdAt: string;
+  /** Derived server-side: critical (RBAC/credential changes), warning (failures/lockouts), info. */
+  severity?: "info" | "warning" | "critical";
+  beforeData?: unknown;
+  afterData?: unknown;
+  metadata?: unknown;
+  requestId?: string | null;
 }
 
 export interface SessionSummary {
@@ -187,6 +197,7 @@ export const authApi = {
     }),
   sessions: () => apiClient.get<{ sessions: SessionSummary[] }>("/auth/sessions"),
   revokeSession: (id: string) => apiClient.post<{ message: string }>(`/auth/sessions/${id}/revoke`),
+  revokeOtherSessions: () => apiClient.post<{ message: string }>("/auth/sessions/revoke-others"),
 };
 
 export const usersApi = {
@@ -205,10 +216,19 @@ export const usersApi = {
       roleKey: string;
     }>
   ) => apiClient.patch<{ user: SanitizedUser }>(`/users/${id}`, payload),
+  sessions: (id: string) => apiClient.get<{ sessions: AdminSession[] }>(`/users/${id}/sessions`),
+  revokeSessions: (id: string) => apiClient.post<{ revoked: number }>(`/users/${id}/revoke-sessions`),
+  unlock: (id: string) => apiClient.post<{ message: string }>(`/users/${id}/unlock`),
 };
 
 export const rolesApi = {
   list: () => apiClient.get<{ roles: ResolvedRole[] }>("/roles"),
+  create: (payload: { name: string; description?: string; permissionKeys: string[]; confirmCritical?: boolean }) =>
+    apiClient.post<{ role: { id: string; key: string } }>("/roles", payload),
+  update: (id: string, payload: { name?: string; description?: string | null }) => apiClient.patch<{ role: { id: string } }>(`/roles/${id}`, payload),
+  setPermissions: (id: string, permissionKeys: string[], confirmCritical: boolean) =>
+    apiClient.put<{ role: { id: string; permissions: string[] } }>(`/roles/${id}/permissions`, { permissionKeys, confirmCritical }),
+  remove: (id: string) => apiClient.delete<{ message: string }>(`/roles/${id}`),
 };
 
 export const permissionsApi = {
@@ -235,11 +255,173 @@ export const auditLogsApi = {
       limit?: number;
       action?: string;
       resourceType?: string;
+      resourceId?: string;
       result?: "SUCCESS" | "FAILURE";
+      actorType?: AuditLogEntry["actorType"];
+      severity?: "info" | "warning" | "critical";
+      q?: string;
       dateFrom?: string;
       dateTo?: string;
     } = {}
   ) => paginatedGet<AuditLogEntry>("/audit-logs", "auditLogs", params),
+  get: (id: string) => apiClient.get<{ auditLog: AuditLogEntry }>(`/audit-logs/${id}`),
+  actions: () => apiClient.get<{ actions: string[] }>("/audit-logs/facets"),
+};
+
+// ---------------------------------------------------------------------------
+// Phase 17 — Administration, Security & Integrations
+// ---------------------------------------------------------------------------
+
+export interface AdminSession {
+  id: string;
+  createdAt: string;
+  expiresAt: string;
+  lastUsedAt: string | null;
+  ipAddress: string | null;
+  userAgent: string | null;
+  userId: string;
+  user?: { email: string; firstName: string; lastName: string };
+}
+
+export interface AdminOverview {
+  users: { total: number; active: number; invited: number; disabled: number; lockedNow: number };
+  roles: { total: number; custom: number; distribution: { roleKey: string; roleName: string; members: number }[] };
+  organizations: { visibleToCaller: number; byStatus: Record<string, number> } | null;
+  sessions: { active: number; createdLast24h: number };
+  security: { failedLogins24h: number; lockoutsLast7d: number; expiringApiKeys14d: number };
+  recentActivity: { id: string; action: string; actorName: string | null; actorType: string; resourceType: string | null; resourceId: string | null; result: "SUCCESS" | "FAILURE"; createdAt: string; severity: "info" | "warning" | "critical" }[];
+  integrations: {
+    systemConfigured: number;
+    systemTotal: number;
+    configurableEnabled: number;
+    configurableFailing: number;
+    webhookEndpoints: { total: number; enabled: number; failedDeliveries24h: number; retrying: number };
+    apiKeys: { active: number };
+  };
+}
+
+export interface SecurityPolicy {
+  sessions: { ttlHours: number; tokenStorage: string };
+  passwords: { minLength: number; rules: string[]; hashing: string };
+  lockout: { failedAttemptsThreshold: number; lockDurationMinutes: number };
+  tokens: { passwordResetTtlMinutes: number; invitationTtlHours: number };
+  rateLimits: { name: string; limit: number; windowMinutes: number }[];
+  rateLimitStore: string;
+  cors: { allowedOrigins: string[]; wildcardAllowed: boolean };
+  transport: { httpsOnlyOutboundInProduction: boolean; secureHeaders: string };
+  secrets: { credentialEncryption: string; keySource: string };
+  note: string;
+}
+
+export const adminApi = {
+  overview: () => apiClient.get<{ overview: AdminOverview }>("/admin/overview"),
+  policy: () => apiClient.get<{ policy: SecurityPolicy }>("/admin/security/policy"),
+  events: (params: { page?: number; limit?: number } = {}) => paginatedGet<AuditLogEntry>("/admin/security/events", "events", params),
+  sessions: (params: { page?: number; limit?: number } = {}) => paginatedGet<AdminSession>("/admin/sessions", "sessions", params),
+  revokeSession: (id: string) => apiClient.post<{ message: string }>(`/admin/sessions/${id}/revoke`),
+};
+
+export interface SystemIntegration {
+  key: string;
+  name: string;
+  category: string;
+  managedBy: "environment" | "control-center";
+  status: "configured" | "not_configured";
+  verified: boolean;
+  detail: string;
+  lastSuccessAt: string | null;
+  lastFailureAt: string | null;
+  requires: string[];
+}
+
+export interface ConfigurableIntegration {
+  id: string;
+  provider: string;
+  name: string;
+  enabled: boolean;
+  config: Record<string, string>;
+  hasSecret: boolean;
+  secretLast4: string | null;
+  status: "NOT_CONFIGURED" | "CONFIGURED" | "VERIFIED" | "FAILING";
+  lastVerifiedAt: string | null;
+  lastSuccessAt: string | null;
+  lastFailureAt: string | null;
+  lastError: string | null;
+}
+
+export interface IntegrationCatalogEntry {
+  provider: string;
+  label: string;
+  description: string;
+  configFields: { key: string; label: string; required: boolean; placeholder?: string }[];
+  secretLabel: string;
+  integration: ConfigurableIntegration | null;
+}
+
+export interface WebhookEndpoint {
+  id: string;
+  name: string;
+  url: string;
+  events: string[];
+  enabled: boolean;
+  secretLast4: string;
+  lastDeliveryAt: string | null;
+  lastSuccessAt: string | null;
+  lastFailureAt: string | null;
+  createdAt: string;
+  last24h?: { succeeded: number; failed: number; pending: number };
+}
+
+export interface WebhookDelivery {
+  id: string;
+  eventType: string;
+  eventId: string;
+  status: "PENDING" | "SUCCEEDED" | "FAILED";
+  attempts: number;
+  responseStatus: number | null;
+  error: string | null;
+  nextRetryAt: string | null;
+  createdAt: string;
+  deliveredAt: string | null;
+}
+
+export interface ApiKeySummary {
+  id: string;
+  name: string;
+  prefix: string;
+  scopes: string[];
+  expiresAt: string | null;
+  revokedAt: string | null;
+  lastUsedAt: string | null;
+  createdAt: string;
+  status: "active" | "revoked" | "expired";
+}
+
+export const integrationsApi = {
+  overview: () => apiClient.get<{ system: SystemIntegration[]; configurable: IntegrationCatalogEntry[]; encryption: { source: string } }>("/integrations"),
+  save: (provider: string, payload: { name?: string; enabled?: boolean; config?: Record<string, string>; secret?: string }) =>
+    apiClient.put<{ integration: ConfigurableIntegration }>(`/integrations/${provider}`, payload),
+  test: (provider: string) => apiClient.post<{ integration: ConfigurableIntegration }>(`/integrations/${provider}/test`),
+  clearSecret: (provider: string) => apiClient.delete<{ integration: ConfigurableIntegration }>(`/integrations/${provider}/secret`),
+};
+
+export const webhookEndpointsApi = {
+  events: () => apiClient.get<{ events: { eventType: string; description: string; sourceModule: string }[] }>("/webhook-endpoints/events"),
+  list: () => apiClient.get<{ endpoints: WebhookEndpoint[] }>("/webhook-endpoints"),
+  create: (payload: { name: string; url: string; events: string[] }) => apiClient.post<{ endpoint: WebhookEndpoint; secret: string }>("/webhook-endpoints", payload),
+  update: (id: string, payload: { name?: string; url?: string; events?: string[]; enabled?: boolean }) =>
+    apiClient.patch<{ endpoint: WebhookEndpoint }>(`/webhook-endpoints/${id}`, payload),
+  rotateSecret: (id: string) => apiClient.post<{ endpoint: WebhookEndpoint; secret: string }>(`/webhook-endpoints/${id}/rotate-secret`),
+  test: (id: string) => apiClient.post<{ delivery: WebhookDelivery }>(`/webhook-endpoints/${id}/test`),
+  remove: (id: string) => apiClient.delete<{ message: string }>(`/webhook-endpoints/${id}`),
+  deliveries: (id: string, params: { page?: number; limit?: number } = {}) => paginatedGet<WebhookDelivery>(`/webhook-endpoints/${id}/deliveries`, "deliveries", params),
+  retry: (deliveryId: string) => apiClient.post<{ delivery: WebhookDelivery }>(`/webhook-endpoints/deliveries/${deliveryId}/retry`),
+};
+
+export const apiKeysApi = {
+  list: () => apiClient.get<{ apiKeys: ApiKeySummary[] }>("/api-keys"),
+  create: (payload: { name: string; scopes: string[]; expiresInDays?: number }) => apiClient.post<{ apiKey: ApiKeySummary; key: string }>("/api-keys", payload),
+  revoke: (id: string) => apiClient.post<{ apiKey: ApiKeySummary }>(`/api-keys/${id}/revoke`),
 };
 
 export const settingsApi = {

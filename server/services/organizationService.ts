@@ -5,6 +5,7 @@
  * method here re-validates the caller's own relationship to the target
  * organization rather than trusting the :id path param blindly (§17).
  */
+import { assertCallerMayAssignRole } from "./admin/roleAccess";
 import { organizationRepository } from "../repositories/organizationRepository";
 import { organizationMembershipRepository } from "../repositories/organizationMembershipRepository";
 import { roleRepository } from "../repositories/roleRepository";
@@ -53,6 +54,7 @@ export const organizationService = {
     if (existing) throw new ValidationError("This user is already a member of the organization.");
 
     const role = await resolveRoleOrThrow(input.roleKey);
+    await assertCallerMayAssignRole(caller, role);
     const membership = await organizationMembershipRepository.create({
       userId: input.userId,
       organizationId,
@@ -97,6 +99,7 @@ export const organizationService = {
         throw new AuthorizationError('Permission denied. Required privilege: "roles.assign"');
       }
       const role = await resolveRoleOrThrow(input.roleKey);
+      await assertCallerMayAssignRole(caller, role);
       await organizationMembershipRepository.updateRole(membership.id, role.id);
       await auditLogRepository.record({
         organizationId,

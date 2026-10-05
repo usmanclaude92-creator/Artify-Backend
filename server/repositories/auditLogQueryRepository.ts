@@ -20,8 +20,27 @@ export interface AuditLogFilters {
   resourceId?: string;
   result?: AuditResult;
   actorType?: AuditActorType;
+  /** Matches any of several exact action names (security-event feeds). */
+  actions?: string[];
+  /** Free-text search across action, actor name, resource type/id. */
+  q?: string;
+  severity?: AuditSeverity;
   dateFrom?: Date;
   dateTo?: Date;
+}
+
+/** Actions that change who can do what, or touch credentials/secrets. */
+export const CRITICAL_AUDIT_ACTIONS: readonly string[] = [
+  "USER_ROLE_CHANGED", "USER_SESSIONS_REVOKED", "SESSION_REVOKED_BY_ADMIN", "ROLE_CREATED", "ROLE_UPDATED", "ROLE_PERMISSIONS_CHANGED", "ROLE_DELETED",
+  "API_KEY_CREATED", "API_KEY_REVOKED", "INTEGRATION_CREDENTIAL_SET", "INTEGRATION_CREDENTIAL_REMOVED", "WEBHOOK_SECRET_ROTATED",
+  "AUTH_ACCOUNT_LOCKED", "SETTINGS_UPDATED",
+];
+export type AuditSeverity = "info" | "warning" | "critical";
+
+export function auditSeverity(row: { action: string; result: AuditResult }): AuditSeverity {
+  if (CRITICAL_AUDIT_ACTIONS.includes(row.action)) return "critical";
+  if (row.result === "FAILURE" || /FAILED|DENIED|LOCKED|REJECTED/.test(row.action)) return "warning";
+  return "info";
 }
 
 export const auditLogQueryRepository = {
@@ -35,6 +54,26 @@ export const auditLogQueryRepository = {
       result: filters.result,
       actorType: filters.actorType,
     };
+    if (filters.actions) where.action = { in: filters.actions };
+    const and: Prisma.AuditLogWhereInput[] = [];
+    if (filters.q) {
+      and.push({
+        OR: [
+          { action: { contains: filters.q, mode: "insensitive" } },
+          { actorName: { contains: filters.q, mode: "insensitive" } },
+          { resourceType: { contains: filters.q, mode: "insensitive" } },
+          { resourceId: { contains: filters.q, mode: "insensitive" } },
+        ],
+      });
+    }
+    if (filters.severity === "critical") and.push({ action: { in: [...CRITICAL_AUDIT_ACTIONS] } });
+    if (filters.severity === "warning") {
+      and.push({ action: { notIn: [...CRITICAL_AUDIT_ACTIONS] } }, { OR: [{ result: "FAILURE" }, { action: { contains: "FAILED" } }, { action: { contains: "DENIED" } }, { action: { contains: "LOCKED" } }, { action: { contains: "REJECTED" } }] });
+    }
+    if (filters.severity === "info") {
+      and.push({ action: { notIn: [...CRITICAL_AUDIT_ACTIONS] }, result: "SUCCESS", NOT: [{ action: { contains: "FAILED" } }, { action: { contains: "DENIED" } }, { action: { contains: "LOCKED" } }, { action: { contains: "REJECTED" } }] });
+    }
+    if (and.length) where.AND = and;
     if (filters.dateFrom || filters.dateTo) {
       where.createdAt = {
         ...(filters.dateFrom ? { gte: filters.dateFrom } : {}),
@@ -53,5 +92,16 @@ export const auditLogQueryRepository = {
     ]);
 
     return { rows, total };
+  },
+
+  /** Single event, scoped to an organization unless `organizationId` is undefined (SUPER_ADMIN). */
+  async findById(id: string, organizationId?: string) {
+    return prisma.auditLog.findFirst({ where: { id, ...(organizationId ? { organizationId } : {}) } });
+  },
+
+  /** Distinct action names seen in the organization — powers the action filter. */
+  async distinctActions(organizationId: string): Promise<string[]> {
+    const rows = await prisma.auditLog.findMany({ where: { organizationId }, distinct: ["action"], select: { action: true }, orderBy: { action: "asc" }, take: 300 });
+    return rows.map((r) => r.action);
   },
 };

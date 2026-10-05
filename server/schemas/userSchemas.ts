@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { SYSTEM_ROLE_KEYS } from "../types/domain";
 import { validatePasswordPolicy } from "../utils/password";
 
 const newPasswordSchema = z.string().superRefine((password, ctx) => {
@@ -7,13 +6,16 @@ const newPasswordSchema = z.string().superRefine((password, ctx) => {
   if (issue) ctx.addIssue({ code: z.ZodIssueCode.custom, message: issue });
 });
 
-/** Roles assignable through the admin API. SUPER_ADMIN is deliberately
+/** Roles assignable through the admin API — system roles and custom roles (existence and
+ * escalation checks happen in the service). SUPER_ADMIN is deliberately
  * excluded — that role is granted only via the seed/bootstrap procedure
  * (server/services/userService.ts enforces this again at runtime; this
  * schema is the first, not the only, gate). */
-export const assignableRoleKeySchema = z.enum(
-  SYSTEM_ROLE_KEYS.filter((k) => k !== "SUPER_ADMIN") as [string, ...string[]]
-);
+export const assignableRoleKeySchema = z
+  .string()
+  .trim()
+  .regex(/^[A-Z][A-Z0-9_]{1,49}$/, "Invalid role key.")
+  .refine((k) => k !== "SUPER_ADMIN", { message: "The SUPER_ADMIN role cannot be assigned through the API." });
 
 export const listUsersQuerySchema = z.object({
   page: z.coerce.number().int().positive().default(1),

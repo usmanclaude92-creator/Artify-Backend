@@ -136,6 +136,11 @@ model Organization {
   copilotConversations       CopilotConversation[]
   copilotActionPreviews      CopilotActionPreview[]
   copilotUsages              CopilotUsage[]
+  // Phase 17 — Administration, Security & Integrations
+  integrations               Integration[]
+  webhookEndpoints           WebhookEndpoint[]
+  webhookDeliveries          WebhookDelivery[]
+  apiKeys                    ApiKey[]
 
   @@map("organizations")
 }
@@ -246,6 +251,9 @@ model User {
   copilotConversations           CopilotConversation[]       @relation("CopilotConversationUser")
   confirmedCopilotActions        CopilotActionPreview[]      @relation("CopilotActionConfirmedBy")
   copilotUsages                  CopilotUsage[]              @relation("CopilotUsageUser")
+  createdIntegrations            Integration[]               @relation("IntegrationCreatedBy")
+  createdWebhookEndpoints        WebhookEndpoint[]           @relation("WebhookEndpointCreatedBy")
+  createdApiKeys                 ApiKey[]                    @relation("ApiKeyCreatedBy")
 
   @@index([organizationId])
   @@map("users")
@@ -3574,4 +3582,128 @@ model CopilotUsage {
   @@index([userId])
   @@index([workspaceId])
   @@map("copilot_usages")
+}
+
+// =============================================================================
+// PHASE 17 — Administration, Security & Integrations
+//
+// Reversible secrets (integration credentials, outbound-webhook signing
+// secrets) are AES-256-GCM encrypted at rest (server/utils/secretBox.ts) —
+// they must be recoverable to be used, unlike API keys, which are only ever
+// verified and are therefore stored as a SHA-256 hash (same reasoning as
+// Session.tokenHash). Neither plaintext secrets nor ciphertext are ever
+// returned by an API; clients only ever see `secretLast4`.
+// =============================================================================
+
+enum IntegrationStatus {
+  NOT_CONFIGURED
+  CONFIGURED // credentials present, never verified
+  VERIFIED // last connectivity test succeeded
+  FAILING // last connectivity test failed
+}
+
+model Integration {
+  id               String            @id @default(uuid())
+  organizationId   String            @map("organization_id")
+  provider         String
+  name             String
+  enabled          Boolean           @default(false)
+  /// Non-secret settings only (e.g. baseUrl). Never holds credentials.
+  config           Json              @default("{}")
+  secretCiphertext String?           @map("secret_ciphertext")
+  secretLast4      String?           @map("secret_last4")
+  status           IntegrationStatus @default(NOT_CONFIGURED)
+  lastVerifiedAt   DateTime?         @map("last_verified_at")
+  lastSuccessAt    DateTime?         @map("last_success_at")
+  lastFailureAt    DateTime?         @map("last_failure_at")
+  lastError        String?           @map("last_error")
+  createdById      String?           @map("created_by")
+  createdAt        DateTime          @default(now()) @map("created_at")
+  updatedAt        DateTime          @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdBy    User?        @relation("IntegrationCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@unique([organizationId, provider])
+  @@map("integrations")
+}
+
+model WebhookEndpoint {
+  id               String    @id @default(uuid())
+  organizationId   String    @map("organization_id")
+  name             String
+  url              String
+  /// Event types this endpoint subscribes to ("*" = all supported events).
+  events           String[]
+  enabled          Boolean   @default(true)
+  secretCiphertext String    @map("secret_ciphertext")
+  secretLast4      String    @map("secret_last4")
+  lastDeliveryAt   DateTime? @map("last_delivery_at")
+  lastSuccessAt    DateTime? @map("last_success_at")
+  lastFailureAt    DateTime? @map("last_failure_at")
+  createdById      String?   @map("created_by")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+  deletedAt        DateTime? @map("deleted_at")
+
+  organization Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdBy    User?             @relation("WebhookEndpointCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  deliveries   WebhookDelivery[]
+
+  @@index([organizationId, enabled])
+  @@map("webhook_endpoints")
+}
+
+enum WebhookDeliveryStatus {
+  PENDING // not yet delivered; nextRetryAt set when a retry is scheduled
+  SUCCEEDED
+  FAILED // retries exhausted
+}
+
+model WebhookDelivery {
+  id             String                @id @default(uuid())
+  endpointId     String                @map("endpoint_id")
+  organizationId String                @map("organization_id")
+  eventType      String                @map("event_type")
+  eventId        String                @map("event_id")
+  status         WebhookDeliveryStatus @default(PENDING)
+  attempts       Int                   @default(0)
+  responseStatus Int?                  @map("response_status")
+  error          String?
+  payload        Json
+  nextRetryAt    DateTime?             @map("next_retry_at")
+  createdAt      DateTime              @default(now()) @map("created_at")
+  deliveredAt    DateTime?             @map("delivered_at")
+
+  endpoint     WebhookEndpoint @relation(fields: [endpointId], references: [id], onDelete: Cascade)
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([endpointId, eventId])
+  @@index([endpointId, createdAt])
+  @@index([status, nextRetryAt])
+  @@index([organizationId, createdAt])
+  @@map("webhook_deliveries")
+}
+
+model ApiKey {
+  id             String    @id @default(uuid())
+  organizationId String    @map("organization_id")
+  name           String
+  /// Non-secret display prefix (e.g. "ak_1a2b3c4d") so a key can be recognized in a list.
+  prefix         String
+  keyHash        String    @unique @map("key_hash")
+  /// Permission keys this key is limited to. Never wider than its creator held at creation time.
+  scopes         String[]
+  expiresAt      DateTime? @map("expires_at")
+  revokedAt      DateTime? @map("revoked_at")
+  lastUsedAt     DateTime? @map("last_used_at")
+  lastUsedIp     String?   @map("last_used_ip")
+  createdById    String?   @map("created_by")
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdBy    User?        @relation("ApiKeyCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([organizationId])
+  @@map("api_keys")
 }

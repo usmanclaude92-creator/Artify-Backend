@@ -3,6 +3,8 @@ import { userService } from "../../services/userService";
 import { authenticateToken, requirePermission } from "../../middleware/auth";
 import { asyncHandler } from "../../utils/asyncHandler";
 import { sendSuccess } from "../../core/apiResponse";
+import { userSecurityService } from "../../services/admin/userSecurityService";
+import { sensitiveActionLimiter } from "../../middleware/rateLimiter";
 import { createUserSchema, listUsersQuerySchema, updateUserSchema } from "../../schemas/userSchemas";
 
 const router = Router();
@@ -54,6 +56,32 @@ router.patch(
       userAgent: req.headers["user-agent"],
     });
     sendSuccess(res, { user });
+  })
+);
+
+router.get(
+  "/:id/sessions",
+  requirePermission("users.read"),
+  requirePermission("security.read"),
+  asyncHandler(async (req, res) => sendSuccess(res, { sessions: await userSecurityService.listUserSessions(req.user!, req.params.id!) }))
+);
+
+router.post(
+  "/:id/revoke-sessions",
+  requirePermission("users.update"),
+  sensitiveActionLimiter,
+  asyncHandler(async (req, res) =>
+    sendSuccess(res, await userSecurityService.revokeAllForUser(req.user!, req.params.id!, { ip: req.ip, userAgent: req.headers["user-agent"] }))
+  )
+);
+
+router.post(
+  "/:id/unlock",
+  requirePermission("users.update"),
+  sensitiveActionLimiter,
+  asyncHandler(async (req, res) => {
+    await userSecurityService.unlock(req.user!, req.params.id!, { ip: req.ip, userAgent: req.headers["user-agent"] });
+    sendSuccess(res, { message: "Account unlocked." });
   })
 );
 

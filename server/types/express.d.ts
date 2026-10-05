@@ -14,6 +14,8 @@ declare global {
       rawBody?: Buffer;
       user?: SanitizedUser;
       sessionToken?: string;
+      /** Set by authenticateApiKey (Phase 17) — never set together with `user`. */
+      apiKey?: { id: string; organizationId: string; scopes: string[] };
       organizationId?: string;
     }
   }

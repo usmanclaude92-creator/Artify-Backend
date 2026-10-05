@@ -7,6 +7,8 @@
  * reads a bare `req.organizationId`).
  */
 
+import { timingSafeEqual } from "node:crypto";
+import { webhookEndpointService } from "../../services/admin/webhookEndpointService";
 import { Router } from "express";
 import { z } from "zod";
 import { authenticateToken, requirePermission } from "../../middleware/auth";
@@ -16,6 +18,14 @@ import { automationService } from "../../services/automation/AutomationService";
 import { contentSchedulingService } from "../../services/contentSchedulingService";
 import { config } from "../../config/env";
 import { AuthenticationError, NotFoundError } from "../../core/errors";
+
+/** Length-independent constant-time string comparison for shared secrets. */
+function constantTimeEquals(a: string, b: string): boolean {
+  const ab = Buffer.from(a);
+  const bb = Buffer.from(b);
+  return ab.length === bb.length && timingSafeEqual(ab, bb);
+}
+
 
 const router = Router();
 
@@ -44,11 +54,15 @@ router.get(
     if (!config.cronSecret) {
       throw new NotFoundError("Not found.");
     }
-    if (req.headers.authorization !== `Bearer ${config.cronSecret}`) {
+    if (!constantTimeEquals(req.headers.authorization ?? "", `Bearer ${config.cronSecret}`)) {
       throw new AuthenticationError("Invalid cron credentials.");
     }
-    const [automation, content] = await Promise.all([automationService.runCronTick(), contentSchedulingService.publishDueScheduled()]);
-    sendSuccess(res, { automation, content });
+    const [automation, content, webhookRetries] = await Promise.all([
+      automationService.runCronTick(),
+      contentSchedulingService.publishDueScheduled(),
+      webhookEndpointService.processDueRetries(),
+    ]);
+    sendSuccess(res, { automation, content, webhookRetries });
   })
 );
 

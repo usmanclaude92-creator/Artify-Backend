@@ -160,6 +160,27 @@ router.post(
   })
 );
 
+/** Signs out every other device while keeping the current session. */
+router.post(
+  "/sessions/revoke-others",
+  authenticateToken,
+  sensitiveActionLimiter,
+  asyncHandler(async (req, res) => {
+    await sessionRepository.revokeAllForUserExcept(req.user!.id, req.sessionToken!);
+    await auditLogRepository.record({
+      organizationId: req.user!.organizationId,
+      actorUserId: req.user!.id,
+      actorType: "USER",
+      action: "AUTH_OTHER_SESSIONS_REVOKED",
+      resourceType: "user",
+      resourceId: req.user!.id,
+      ipAddress: req.ip,
+      userAgent: req.headers["user-agent"],
+    });
+    sendSuccess(res, { message: "All other sessions were signed out." });
+  })
+);
+
 router.post(
   "/switch-organization",
   authenticateToken,

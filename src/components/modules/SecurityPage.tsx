@@ -50,6 +50,16 @@ export const SecurityPage: React.FC = () => {
     }
   };
 
+  const handleRevokeOthers = async () => {
+    try {
+      await authApi.revokeOtherSessions();
+      notify("All other devices were signed out.", "success");
+      void load();
+    } catch (err) {
+      notify(err instanceof ApiClientError ? err.message : "Could not sign out other devices.", "error");
+    }
+  };
+
   if (loading) return <LoadingState />;
   if (error) return <ErrorState message={error} />;
 
@@ -64,9 +74,16 @@ export const SecurityPage: React.FC = () => {
             {sessions.length} active session{sessions.length === 1 ? "" : "s"} for your account.
           </p>
         </div>
-        <Button variant="danger" onClick={() => setConfirmSignOutAll(true)}>
-          <LogOut className="w-3.5 h-3.5" /> Sign out everywhere
-        </Button>
+        <div className="flex gap-2">
+          {sessions.length > 1 && (
+            <Button variant="secondary" onClick={() => void handleRevokeOthers()}>
+              Sign out other devices
+            </Button>
+          )}
+          <Button variant="danger" onClick={() => setConfirmSignOutAll(true)}>
+            <LogOut className="w-3.5 h-3.5" /> Sign out everywhere
+          </Button>
+        </div>
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2">

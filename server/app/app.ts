@@ -5,6 +5,7 @@
  * existing single-process deployment topology (Railway/Docker) documented
  * in docs/TARGET_ARCHITECTURE.md.
  */
+import { registerWebhookDispatcher } from "../services/admin/webhookEndpointService";
 import express, { type Express } from "express";
 import { requestIdMiddleware } from "../middleware/requestId";
 import { applySecurityMiddleware } from "../middleware/security";
@@ -23,6 +24,7 @@ import v1Router from "../routes/v1";
  */
 export function createApp(): Express {
   const app = express();
+  registerWebhookDispatcher();
 
   // Order matters: request id first (everything downstream needs it),
   // then security headers/CORS/body-limits, then request logging (so log

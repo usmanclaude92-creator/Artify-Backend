@@ -3,12 +3,12 @@ import React, { useEffect, useState } from "react";
 import { Users as UsersIcon, Plus, Search } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
-import { usersApi, type SanitizedUser } from "../../lib/api";
+import { usersApi, rolesApi, type SanitizedUser, type AdminSession } from "../../lib/api";
 import { ApiClientError } from "../../lib/apiClient";
-import { Card, Button, Input, Badge, LoadingState, ErrorState, EmptyState, Pagination, Modal, Field, Select, DataTable, type DataTableColumn } from "../ui/ui";
+import { Card, Button, Input, Badge, LoadingState, ErrorState, EmptyState, Pagination, Modal, Field, Select, ConfirmDialog, DataTable, type DataTableColumn } from "../ui/ui";
 import { hasPermission } from "../../lib/permissions";
 
-const ASSIGNABLE_ROLES = ["ADMIN", "MANAGER", "USER", "VIEWER"];
+const FALLBACK_ROLES = ["ADMIN", "MANAGER", "USER", "VIEWER"];
 const STATUS_TONE: Record<string, "success" | "warning" | "danger"> = { ACTIVE: "success", INVITED: "warning", DISABLED: "danger" };
 
 const UserFormModal: React.FC<{
@@ -18,7 +18,8 @@ const UserFormModal: React.FC<{
   mode: "create" | "edit";
   user?: SanitizedUser;
   canAssignRole: boolean;
-}> = ({ open, onClose, onSaved, mode, user, canAssignRole }) => {
+  roleOptions: string[];
+}> = ({ open, onClose, onSaved, mode, user, canAssignRole, roleOptions }) => {
   const { notify } = useToast();
   const [email, setEmail] = useState(user?.email ?? "");
   const [password, setPassword] = useState("");
@@ -85,7 +86,7 @@ const UserFormModal: React.FC<{
         {canAssignRole && (mode === "create" || user?.id !== undefined) && (
           <Field label="Role">
             <Select value={roleKey} onChange={(e) => setRoleKey(e.target.value)} disabled={mode === "edit" && user?.role.key === "SUPER_ADMIN"}>
-              {ASSIGNABLE_ROLES.map((r) => (
+              {roleOptions.map((r) => (
                 <option key={r} value={r}>
                   {r}
                 </option>
@@ -106,12 +107,105 @@ const UserFormModal: React.FC<{
   );
 };
 
+const UserSecurityModal: React.FC<{ user: SanitizedUser | null; canManage: boolean; canViewSessions: boolean; onClose: () => void }> = ({ user, canManage, canViewSessions, onClose }) => {
+  const { notify } = useToast();
+  const [sessions, setSessions] = useState<AdminSession[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [confirm, setConfirm] = useState<"revoke" | "unlock" | null>(null);
+
+  const load = React.useCallback(async () => {
+    if (!user || !canViewSessions) return;
+    try {
+      setSessions((await usersApi.sessions(user.id)).sessions);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not load sessions.");
+    }
+  }, [user, canViewSessions]);
+  useEffect(() => { setSessions(null); setError(null); void load(); }, [load]);
+
+  const run = async () => {
+    if (!user || !confirm) return;
+    try {
+      if (confirm === "revoke") {
+        const r = await usersApi.revokeSessions(user.id);
+        notify(`Signed out ${r.revoked} session${r.revoked === 1 ? "" : "s"}.`, "success");
+      } else {
+        await usersApi.unlock(user.id);
+        notify("Account unlocked.", "success");
+      }
+    } catch (e) {
+      notify(e instanceof ApiClientError ? e.message : "Action failed.", "error");
+    } finally {
+      setConfirm(null);
+      void load();
+    }
+  };
+
+  return (
+    <Modal open={!!user} onClose={onClose} title={`Security — ${user?.displayName ?? user?.email ?? ""}`}>
+      <div className="space-y-3">
+        <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+          Role: <Badge tone="info">{user?.role.key ?? ""}</Badge> · Status: {user?.status}
+        </p>
+        {canViewSessions && (
+          <div>
+            <p className="text-[10px] uppercase font-bold mb-1" style={{ color: "var(--text-muted)" }}>Active sessions</p>
+            {error ? (
+              <ErrorState message={error} />
+            ) : sessions === null ? (
+              <LoadingState />
+            ) : sessions.length === 0 ? (
+              <p className="text-xs" style={{ color: "var(--text-muted)" }}>No active sessions.</p>
+            ) : (
+              <ul className="text-xs divide-y" style={{ borderColor: "var(--border)" }}>
+                {sessions.map((s) => (
+                  <li key={s.id} className="py-1.5 flex justify-between gap-3">
+                    <span style={{ color: "var(--text-primary)" }}>{(s.userAgent ?? "Unknown device").slice(0, 40)} · {s.ipAddress ?? "unknown IP"}</span>
+                    <span style={{ color: "var(--text-muted)" }}>{s.lastUsedAt ? new Date(s.lastUsedAt).toLocaleString() : "never used"}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+        {canManage && (
+          <div className="flex flex-wrap gap-2 pt-2 border-t" style={{ borderColor: "var(--border)" }}>
+            <Button variant="danger" onClick={() => setConfirm("revoke")}>Sign out everywhere</Button>
+            <Button variant="secondary" onClick={() => setConfirm("unlock")}>Unlock account</Button>
+          </div>
+        )}
+      </div>
+      <ConfirmDialog
+        open={confirm !== null}
+        title={confirm === "revoke" ? "Sign out everywhere" : "Unlock account"}
+        message={confirm === "revoke" ? `End every active session for ${user?.email}? They will have to sign in again on all devices.` : `Clear the sign-in lockout for ${user?.email}?`}
+        confirmLabel={confirm === "revoke" ? "Sign out everywhere" : "Unlock"}
+        destructive={confirm === "revoke"}
+        onConfirm={() => void run()}
+        onCancel={() => setConfirm(null)}
+      />
+    </Modal>
+  );
+};
+
 export const UsersPage: React.FC = () => {
   const { user: currentUser } = useAuth();
   const { notify } = useToast();
   const canCreate = hasPermission(currentUser?.role.permissions, "users.create");
   const canUpdate = hasPermission(currentUser?.role.permissions, "users.update");
   const canAssignRole = hasPermission(currentUser?.role.permissions, "roles.assign");
+  const canViewSessions = hasPermission(currentUser?.role.permissions, "security.read");
+  const canManageSecurity = hasPermission(currentUser?.role.permissions, "users.update");
+  const [roleOptions, setRoleOptions] = useState<string[]>(FALLBACK_ROLES);
+  const [securityUser, setSecurityUser] = useState<SanitizedUser | null>(null);
+
+  useEffect(() => {
+    if (!hasPermission(currentUser?.role.permissions, "roles.read")) return;
+    rolesApi
+      .list()
+      .then((r) => setRoleOptions(r.roles.map((x) => x.key).filter((k) => k !== "SUPER_ADMIN")))
+      .catch(() => setRoleOptions(FALLBACK_ROLES));
+  }, [currentUser]);
 
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState("");
@@ -139,6 +233,7 @@ export const UsersPage: React.FC = () => {
     void load();
   }, [load]);
 
+  const [deactivating, setDeactivating] = useState<SanitizedUser | null>(null);
   const toggleStatus = async (u: SanitizedUser) => {
     try {
       await usersApi.update(u.id, { status: u.status === "ACTIVE" ? "DISABLED" : "ACTIVE" });
@@ -191,8 +286,13 @@ export const UsersPage: React.FC = () => {
               Edit
             </Button>
           )}
+          {(canManageSecurity || canViewSessions) && (
+            <Button variant="secondary" onClick={() => setSecurityUser(u)}>
+              Security
+            </Button>
+          )}
           {canUpdate && u.id !== currentUser?.id && (
-            <Button variant={u.status === "ACTIVE" ? "danger" : "primary"} onClick={() => void toggleStatus(u)}>
+            <Button variant={u.status === "ACTIVE" ? "danger" : "primary"} onClick={() => (u.status === "ACTIVE" ? setDeactivating(u) : void toggleStatus(u))}>
               {u.status === "ACTIVE" ? "Deactivate" : "Activate"}
             </Button>
           )}
@@ -246,7 +346,18 @@ export const UsersPage: React.FC = () => {
         mode={modal?.mode ?? "create"}
         user={modal?.user}
         canAssignRole={canAssignRole}
+        roleOptions={roleOptions}
       />
+      <ConfirmDialog
+        open={!!deactivating}
+        title="Deactivate user"
+        message={`Deactivate ${deactivating?.email}? They are signed out everywhere immediately and cannot sign in until reactivated.`}
+        confirmLabel="Deactivate"
+        destructive
+        onCancel={() => setDeactivating(null)}
+        onConfirm={() => { const u = deactivating!; setDeactivating(null); void toggleStatus(u); }}
+      />
+      <UserSecurityModal user={securityUser} canManage={canManageSecurity} canViewSessions={canViewSessions} onClose={() => setSecurityUser(null)} />
     </div>
   );
 };

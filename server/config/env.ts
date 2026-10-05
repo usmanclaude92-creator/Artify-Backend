@@ -138,9 +138,24 @@ const envSchema = z
     // preview reports the landing page's real slug/status but no
     // absolute URL, rather than guessing a domain.
     PUBLIC_SITE_BASE_URL: z.string().optional().default(""),
+
+    // Phase 17 — dedicated key for encrypting integration credentials and
+    // webhook signing secrets at rest (server/utils/secretBox.ts). Optional:
+    // when unset, a key is derived (HKDF) from SESSION_SECRET instead, which
+    // works but ties stored secrets to that value — set this to rotate the
+    // two independently. Min 32 chars when set.
+    INTEGRATIONS_ENCRYPTION_KEY: z.string().optional().default(""),
   })
   .superRefine((val, ctx) => {
     const isProdLike = val.NODE_ENV === "production" || val.NODE_ENV === "staging";
+
+    if (val.INTEGRATIONS_ENCRYPTION_KEY && val.INTEGRATIONS_ENCRYPTION_KEY.length < 32) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["INTEGRATIONS_ENCRYPTION_KEY"],
+        message: "INTEGRATIONS_ENCRYPTION_KEY must be at least 32 characters when set",
+      });
+    }
 
     if (val.CRON_SECRET && val.CRON_SECRET.length < 16) {
       ctx.addIssue({
@@ -280,6 +295,7 @@ export type AppConfig = Readonly<{
   publicSiteBaseUrl: string;
   cronSecret: string;
   redisUrl: string;
+  integrationsEncryptionKey: string;
 }>;
 
 export type EnvValidationResult =
@@ -344,6 +360,7 @@ export function validateEnv(raw: NodeJS.ProcessEnv | Record<string, string | und
       publicSiteBaseUrl: env.PUBLIC_SITE_BASE_URL,
       cronSecret: env.CRON_SECRET,
       redisUrl: env.REDIS_URL,
+      integrationsEncryptionKey: env.INTEGRATIONS_ENCRYPTION_KEY,
     }),
   };
 }
