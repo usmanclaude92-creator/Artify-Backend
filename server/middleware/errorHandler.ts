@@ -9,8 +9,16 @@
 import type { NextFunction, Request, Response } from "express";
 import { ZodError } from "zod";
 import { ApiErrorCode, sendError } from "../core/apiResponse";
-import { AppError, InternalError, isAppError, ValidationError } from "../core/errors";
+import { AppError, AuthorizationError, InternalError, isAppError, ValidationError } from "../core/errors";
 import { logger } from "../core/logger";
+
+export const CORS_REJECTED_MESSAGE = "Not allowed by CORS policy";
+
+function isClientBodyError(err: unknown): err is { type: string; status?: number } {
+  if (!err || typeof err !== "object") return false;
+  const e = err as { type?: unknown; status?: unknown };
+  return typeof e.type === "string" && e.type.startsWith("entity.") && typeof e.status === "number" && e.status >= 400 && e.status < 500;
+}
 
 export function notFoundHandler(req: Request, res: Response): void {
   sendError(res, 404, ApiErrorCode.RESOURCE_NOT_FOUND, `No route matches ${req.method} ${req.path}`);
@@ -24,6 +32,14 @@ export function errorHandlerMiddleware(err: unknown, req: Request, res: Response
 
   if (isAppError(err)) {
     appError = err;
+  } else if (isClientBodyError(err)) {
+    // body-parser failures (malformed JSON, oversize body, bad charset…) are client errors.
+    appError = new ValidationError(
+      err.type === "entity.too.large" ? "Request body is too large" : "Malformed request body"
+    );
+    if (err.type === "entity.too.large") Object.defineProperty(appError, "statusCode", { value: 413 });
+  } else if (err instanceof Error && err.message === CORS_REJECTED_MESSAGE) {
+    appError = new AuthorizationError("Origin not allowed");
   } else if (err instanceof ZodError) {
     appError = new ValidationError("Request validation failed", err.flatten());
   } else {

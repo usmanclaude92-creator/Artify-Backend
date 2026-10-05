@@ -167,17 +167,42 @@ async function projectPageEditorBlocks(revision: PageWithPublicRelations["curren
  * individual content. The featured image (if any) still outranks the
  * site-wide social image, exactly like the explicit-ogImage case.
  */
+/**
+ * Per-instance, short-lived memo of the published site identity (+ its
+ * projected social image URL). Public list endpoints project many rows at
+ * once and each row needs these site-wide SEO defaults — without this every
+ * post/case study re-queried the same identity (N+1). Disabled under test so
+ * publish-then-read assertions stay deterministic.
+ */
+const SEO_DEFAULTS_TTL_MS = process.env.NODE_ENV === "test" ? 0 : 30_000;
+const seoDefaultsCache = new Map<string, { at: number; value: Promise<{ identity: Awaited<ReturnType<typeof siteSettingsService.getPublishedSiteIdentity>>; socialImageUrl: string | null }> }>();
+
+function loadSeoDefaults(organizationId: string) {
+  const hit = seoDefaultsCache.get(organizationId);
+  if (SEO_DEFAULTS_TTL_MS > 0 && hit && Date.now() - hit.at < SEO_DEFAULTS_TTL_MS) return hit.value;
+  const value = (async () => {
+    const identity = await siteSettingsService.getPublishedSiteIdentity(organizationId);
+    let socialImageUrl: string | null = null;
+    if (identity.socialImageMediaId) {
+      const media = await mediaRepository.findByIdInOrg(identity.socialImageMediaId, organizationId);
+      socialImageUrl = (await projectPublicMedia(media))?.url ?? null;
+    }
+    return { identity, socialImageUrl };
+  })();
+  if (SEO_DEFAULTS_TTL_MS > 0) {
+    seoDefaultsCache.set(organizationId, { at: Date.now(), value });
+    value.catch(() => seoDefaultsCache.delete(organizationId));
+  }
+  return value;
+}
+
 async function applySeoDefaults(seo: Record<string, unknown>, organizationId: string, hasFeaturedMedia: boolean): Promise<Record<string, unknown>> {
   if (seo.metaTitle && seo.metaDescription && (seo.ogImage || hasFeaturedMedia)) return seo;
-  const identity = await siteSettingsService.getPublishedSiteIdentity(organizationId);
+  const { identity, socialImageUrl } = await loadSeoDefaults(organizationId);
   const result = { ...seo };
   if (!result.metaTitle && identity.defaultMetaTitle) result.metaTitle = identity.defaultMetaTitle;
   if (!result.metaDescription && identity.defaultMetaDescription) result.metaDescription = identity.defaultMetaDescription;
-  if (!result.ogImage && !hasFeaturedMedia && identity.socialImageMediaId) {
-    const media = await mediaRepository.findByIdInOrg(identity.socialImageMediaId, organizationId);
-    const projected = await projectPublicMedia(media);
-    if (projected) result.ogImage = projected.url;
-  }
+  if (!result.ogImage && !hasFeaturedMedia && socialImageUrl) result.ogImage = socialImageUrl;
   return result;
 }
 
@@ -265,12 +290,13 @@ function projectAuthor(author: PostWithPublicRelations["author"]) {
 async function projectPost(post: PostWithPublicRelations) {
   const revision = post.currentRevision;
   const featuredMedia = await projectPublicMedia(post.featuredMedia);
+  const seo = await applySeoDefaults((revision?.metadata as Record<string, unknown> | undefined) ?? {}, post.organizationId, !!featuredMedia);
   return {
     slug: post.slug,
     title: post.title,
     body: revision?.body ?? "",
     excerpt: revision?.excerpt ?? null,
-    seo: await applySeoDefaults((revision?.metadata as Record<string, unknown> | undefined) ?? {}, post.organizationId, !!featuredMedia),
+    seo,
     category: post.category ? { slug: post.category.slug, name: post.category.name } : null,
     tags: post.tags.map((t) => ({ slug: t.tag.slug, name: t.tag.name })),
     author: projectAuthor(post.author),

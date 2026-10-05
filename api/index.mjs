@@ -1035,6 +1035,53 @@ function requestIdMiddleware(req, res, next) {
 import cors from "cors";
 import helmet from "helmet";
 import express from "express";
+
+// server/middleware/errorHandler.ts
+import { ZodError } from "zod";
+var CORS_REJECTED_MESSAGE = "Not allowed by CORS policy";
+function isClientBodyError(err) {
+  if (!err || typeof err !== "object") return false;
+  const e = err;
+  return typeof e.type === "string" && e.type.startsWith("entity.") && typeof e.status === "number" && e.status >= 400 && e.status < 500;
+}
+function notFoundHandler(req, res) {
+  sendError(res, 404, "RESOURCE_NOT_FOUND" /* RESOURCE_NOT_FOUND */, `No route matches ${req.method} ${req.path}`);
+}
+function errorHandlerMiddleware(err, req, res, _next) {
+  const requestId = req.requestId ?? "unknown-request-id";
+  const log = logger.child({ requestId, route: req.path, method: req.method });
+  let appError;
+  if (isAppError(err)) {
+    appError = err;
+  } else if (isClientBodyError(err)) {
+    appError = new ValidationError(
+      err.type === "entity.too.large" ? "Request body is too large" : "Malformed request body"
+    );
+    if (err.type === "entity.too.large") Object.defineProperty(appError, "statusCode", { value: 413 });
+  } else if (err instanceof Error && err.message === CORS_REJECTED_MESSAGE) {
+    appError = new AuthorizationError("Origin not allowed");
+  } else if (err instanceof ZodError) {
+    appError = new ValidationError("Request validation failed", err.flatten());
+  } else {
+    appError = new InternalError("An unexpected error occurred");
+    log.error({ err, event: "unhandled_error" }, "Unhandled error reached the error middleware");
+  }
+  if (appError.statusCode >= 500) {
+    log.error({ err, event: "app_error" }, appError.message);
+  } else {
+    log.warn({ event: "app_error", code: appError.code }, appError.message);
+  }
+  const exposeDetails = appError.statusCode < 500;
+  sendError(
+    res,
+    appError.statusCode,
+    appError.code,
+    appError.statusCode >= 500 ? "An unexpected error occurred" : appError.message,
+    exposeDetails ? appError.details : void 0
+  );
+}
+
+// server/middleware/security.ts
 var MAX_JSON_BODY_SIZE = "1mb";
 var corsOptions = {
   origin(origin, callback) {
@@ -1047,7 +1094,7 @@ var corsOptions = {
       return;
     }
     logger.warn({ event: "cors_rejected", origin }, "Rejected request from disallowed CORS origin");
-    callback(new Error("Not allowed by CORS policy"));
+    callback(new Error(CORS_REJECTED_MESSAGE));
   },
   credentials: true,
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
@@ -1225,38 +1272,6 @@ var aiExecutionLimiter = rateLimit({
   passOnStoreError: true,
   keyGenerator: (req) => req.user?.id ?? req.ip ?? "unknown"
 });
-
-// server/middleware/errorHandler.ts
-import { ZodError } from "zod";
-function notFoundHandler(req, res) {
-  sendError(res, 404, "RESOURCE_NOT_FOUND" /* RESOURCE_NOT_FOUND */, `No route matches ${req.method} ${req.path}`);
-}
-function errorHandlerMiddleware(err, req, res, _next) {
-  const requestId = req.requestId ?? "unknown-request-id";
-  const log = logger.child({ requestId, route: req.path, method: req.method });
-  let appError;
-  if (isAppError(err)) {
-    appError = err;
-  } else if (err instanceof ZodError) {
-    appError = new ValidationError("Request validation failed", err.flatten());
-  } else {
-    appError = new InternalError("An unexpected error occurred");
-    log.error({ err, event: "unhandled_error" }, "Unhandled error reached the error middleware");
-  }
-  if (appError.statusCode >= 500) {
-    log.error({ err, event: "app_error" }, appError.message);
-  } else {
-    log.warn({ event: "app_error", code: appError.code }, appError.message);
-  }
-  const exposeDetails = appError.statusCode < 500;
-  sendError(
-    res,
-    appError.statusCode,
-    appError.code,
-    appError.statusCode >= 500 ? "An unexpected error occurred" : appError.message,
-    exposeDetails ? appError.details : void 0
-  );
-}
 
 // server/routes/v1/index.ts
 import { Router as Router61 } from "express";
@@ -18831,17 +18846,33 @@ async function projectPageEditorBlocks(revision, organizationId) {
   const resolvedBlocks = await Promise.all(blocks.blocks.map((b) => resolveBlockMedia(b, organizationId)));
   return { ...blocks, blocks: resolvedBlocks };
 }
+var SEO_DEFAULTS_TTL_MS = process.env.NODE_ENV === "test" ? 0 : 3e4;
+var seoDefaultsCache = /* @__PURE__ */ new Map();
+function loadSeoDefaults(organizationId) {
+  const hit = seoDefaultsCache.get(organizationId);
+  if (SEO_DEFAULTS_TTL_MS > 0 && hit && Date.now() - hit.at < SEO_DEFAULTS_TTL_MS) return hit.value;
+  const value = (async () => {
+    const identity = await siteSettingsService.getPublishedSiteIdentity(organizationId);
+    let socialImageUrl = null;
+    if (identity.socialImageMediaId) {
+      const media = await mediaRepository.findByIdInOrg(identity.socialImageMediaId, organizationId);
+      socialImageUrl = (await projectPublicMedia(media))?.url ?? null;
+    }
+    return { identity, socialImageUrl };
+  })();
+  if (SEO_DEFAULTS_TTL_MS > 0) {
+    seoDefaultsCache.set(organizationId, { at: Date.now(), value });
+    value.catch(() => seoDefaultsCache.delete(organizationId));
+  }
+  return value;
+}
 async function applySeoDefaults(seo, organizationId, hasFeaturedMedia) {
   if (seo.metaTitle && seo.metaDescription && (seo.ogImage || hasFeaturedMedia)) return seo;
-  const identity = await siteSettingsService.getPublishedSiteIdentity(organizationId);
+  const { identity, socialImageUrl } = await loadSeoDefaults(organizationId);
   const result = { ...seo };
   if (!result.metaTitle && identity.defaultMetaTitle) result.metaTitle = identity.defaultMetaTitle;
   if (!result.metaDescription && identity.defaultMetaDescription) result.metaDescription = identity.defaultMetaDescription;
-  if (!result.ogImage && !hasFeaturedMedia && identity.socialImageMediaId) {
-    const media = await mediaRepository.findByIdInOrg(identity.socialImageMediaId, organizationId);
-    const projected = await projectPublicMedia(media);
-    if (projected) result.ogImage = projected.url;
-  }
+  if (!result.ogImage && !hasFeaturedMedia && socialImageUrl) result.ogImage = socialImageUrl;
   return result;
 }
 async function projectPage(page) {
@@ -18905,12 +18936,13 @@ function projectAuthor(author) {
 async function projectPost(post) {
   const revision = post.currentRevision;
   const featuredMedia = await projectPublicMedia(post.featuredMedia);
+  const seo = await applySeoDefaults(revision?.metadata ?? {}, post.organizationId, !!featuredMedia);
   return {
     slug: post.slug,
     title: post.title,
     body: revision?.body ?? "",
     excerpt: revision?.excerpt ?? null,
-    seo: await applySeoDefaults(revision?.metadata ?? {}, post.organizationId, !!featuredMedia),
+    seo,
     category: post.category ? { slug: post.category.slug, name: post.category.name } : null,
     tags: post.tags.map((t) => ({ slug: t.tag.slug, name: t.tag.name })),
     author: projectAuthor(post.author),
@@ -19195,8 +19227,10 @@ function projectModule(module_) {
 }
 var publicProductService = {
   async listProducts(filters, page, limit) {
-    const categoryId = filters.categorySlug ? (await productCategoryRepository.findBySlug(filters.categorySlug))?.id : void 0;
-    const industryId = filters.industrySlug ? (await industryRepository.findBySlug(filters.industrySlug))?.id : void 0;
+    const [categoryId, industryId] = await Promise.all([
+      filters.categorySlug ? productCategoryRepository.findBySlug(filters.categorySlug).then((c) => c?.id) : Promise.resolve(void 0),
+      filters.industrySlug ? industryRepository.findBySlug(filters.industrySlug).then((i) => i?.id) : Promise.resolve(void 0)
+    ]);
     const { rows, total } = await productRepository.list(
       { search: filters.search, type: filters.type, status: "ACTIVE", categoryId, industryId },
       page,
@@ -19413,6 +19447,12 @@ var reportQuerySchema = z43.object({
 
 // server/routes/v1/publicRoutes.ts
 var router43 = Router43();
+router43.use((req, res, next) => {
+  if (req.method === "GET" || req.method === "HEAD") {
+    res.setHeader("Cache-Control", "public, s-maxage=60, stale-while-revalidate=300");
+  }
+  next();
+});
 function requestMeta31(req) {
   const referrerHeader = req.headers["referer"];
   return {

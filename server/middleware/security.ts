@@ -10,6 +10,7 @@ import type { Express, Request } from "express";
 import express from "express";
 import { config } from "../config/env";
 import { logger } from "../core/logger";
+import { CORS_REJECTED_MESSAGE } from "./errorHandler";
 
 const MAX_JSON_BODY_SIZE = "1mb";
 
@@ -25,7 +26,7 @@ export const corsOptions: CorsOptions = {
       return;
     }
     logger.warn({ event: "cors_rejected", origin }, "Rejected request from disallowed CORS origin");
-    callback(new Error("Not allowed by CORS policy"));
+    callback(new Error(CORS_REJECTED_MESSAGE));
   },
   credentials: true,
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],

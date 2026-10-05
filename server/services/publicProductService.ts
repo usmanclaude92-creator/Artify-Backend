@@ -111,8 +111,10 @@ function projectModule(module_: ProductModule) {
 
 export const publicProductService = {
   async listProducts(filters: { search?: string; type?: string; categorySlug?: string; industrySlug?: string }, page: number, limit: number) {
-    const categoryId = filters.categorySlug ? (await productCategoryRepository.findBySlug(filters.categorySlug))?.id : undefined;
-    const industryId = filters.industrySlug ? (await industryRepository.findBySlug(filters.industrySlug))?.id : undefined;
+    const [categoryId, industryId] = await Promise.all([
+      filters.categorySlug ? productCategoryRepository.findBySlug(filters.categorySlug).then((c) => c?.id) : Promise.resolve(undefined),
+      filters.industrySlug ? industryRepository.findBySlug(filters.industrySlug).then((i) => i?.id) : Promise.resolve(undefined),
+    ]);
     const { rows, total } = await productRepository.list(
       { search: filters.search, type: filters.type, status: "ACTIVE", categoryId, industryId },
       page,

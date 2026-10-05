@@ -30,6 +30,16 @@ import { publicAnalyticsEventSchema } from "../../schemas/analyticsSchemas";
 
 const router = Router();
 
+// Shared-cache the anonymous read endpoints (never the POST write endpoints).
+// `Vary: Origin` is already set by the CORS middleware, so the edge cache keys
+// per-origin and cannot serve one origin's CORS headers to another.
+router.use((req, res, next) => {
+  if (req.method === "GET" || req.method === "HEAD") {
+    res.setHeader("Cache-Control", "public, s-maxage=60, stale-while-revalidate=300");
+  }
+  next();
+});
+
 function requestMeta(req: { ip?: string; headers: Record<string, unknown> }) {
   const referrerHeader = req.headers["referer"];
   return {
