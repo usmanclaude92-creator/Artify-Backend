@@ -5668,6 +5668,11 @@ var siteIdentitySchema = z9.object({
   socialImageMediaId: mediaIdSchema.nullable().default(null),
   defaultMetaTitle: z9.string().trim().max(70).default("Artify Solutions | AI-Native Software & Intelligent Automation"),
   defaultMetaDescription: z9.string().trim().max(200).default("Your Business. Reimagined by AI. We engineer intelligent software systems that understand your business, automate processes, and connect your data."),
+  // Social share card (link previews on WhatsApp/Facebook/LinkedIn/X…). Optional overrides:
+  // blank means "fall back to the default meta title/description".
+  socialTitle: z9.string().trim().max(70).optional(),
+  socialDescription: z9.string().trim().max(200).optional(),
+  socialImageAlt: z9.string().trim().max(200).optional(),
   contactEmail: z9.string().trim().toLowerCase().email().optional(),
   contactPhone: z9.string().trim().max(40).optional(),
   address: z9.string().trim().max(300).optional(),

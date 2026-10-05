@@ -446,6 +446,9 @@ export interface SiteIdentity {
   socialImageMediaId: string | null;
   defaultMetaTitle: string;
   defaultMetaDescription: string;
+  socialTitle?: string;
+  socialDescription?: string;
+  socialImageAlt?: string;
   contactEmail?: string;
   contactPhone?: string;
   address?: string;

@@ -243,6 +243,27 @@ describe("Site Settings (Site Identity + Global Styles)", () => {
     expect(res.body.data.settings.globalStyles.colors.primary).toBe("#7C3AED");
   });
 
+  it("persists and publishes the Social Share Card fields, and rejects over-long values", async () => {
+    const ok = await request(app)
+      .put("/api/v1/site-settings/identity/draft")
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({ siteName: "Social Co", socialTitle: "Share Title", socialDescription: "Share description.", socialImageAlt: "Banner" });
+    expect(ok.status).toBe(200);
+    expect(ok.body.data.draft.socialTitle).toBe("Share Title");
+
+    const tooLong = await request(app)
+      .put("/api/v1/site-settings/identity/draft")
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({ siteName: "Social Co", socialTitle: "x".repeat(71) });
+    expect(tooLong.status).toBe(400);
+
+    const publish = await request(app).post("/api/v1/site-settings/identity/publish").set("Authorization", `Bearer ${adminToken}`).send();
+    expect(publish.status).toBe(200);
+    const got = await request(app).get("/api/v1/site-settings/identity").set("Authorization", `Bearer ${adminToken}`);
+    expect(got.body.data.published.socialDescription).toBe("Share description.");
+    expect(got.body.data.published.socialImageAlt).toBe("Banner");
+  });
+
   it("backward compatibility — the generic /settings endpoint still works untouched by this phase", async () => {
     const patchRes = await request(app)
       .patch("/api/v1/settings/branding.display_name")

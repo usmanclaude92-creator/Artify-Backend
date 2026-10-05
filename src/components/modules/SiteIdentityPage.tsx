@@ -24,7 +24,6 @@ const MEDIA_FIELDS = [
   { key: "logoDarkMediaId", label: "Logo (dark mode)", hint: "Shown in the header when dark mode is active." },
   { key: "logoMobileMediaId", label: "Logo (mobile)", hint: "Optional compact mark for small screens. Falls back to the main logo." },
   { key: "faviconMediaId", label: "Favicon", hint: "Browser tab icon. A square PNG or SVG works best." },
-  { key: "socialImageMediaId", label: "Default social share image", hint: "Used for og:image/Twitter cards when a page has no image of its own." },
 ] as const satisfies readonly { key: keyof SiteIdentity; label: string; hint: string }[];
 
 const MediaThumb: React.FC<{ mediaId: string | null }> = ({ mediaId }) => {
@@ -294,6 +293,68 @@ export const SiteIdentityPage: React.FC = () => {
                 onChange={(e) => set("defaultMetaDescription", e.target.value)}
               />
             </Field>
+          </Card>
+
+          <Card className="p-4 space-y-3">
+            <p className="text-xs font-bold uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>
+              Social Share Card
+            </p>
+            <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+              What appears when a link to your site is shared on WhatsApp, Facebook, LinkedIn, X and similar. Leave title/description blank to use the Default Metadata above. Platforms cache previews, so re-scrape a link after publishing.
+            </p>
+            <MediaField
+              label="Share image"
+              hint="Recommended 1200×630 (JPG or PNG). Used when a page has no image of its own."
+              disabled={!canManage}
+              mediaId={formState.socialImageMediaId ?? null}
+              onChange={(id) => set("socialImageMediaId", id)}
+            />
+            <Field label="Share image description (alt text)" hint="Read by screen readers and shown if the image fails to load.">
+              <Input disabled={!canManage} maxLength={200} value={formState.socialImageAlt ?? ""} onChange={(e) => set("socialImageAlt", e.target.value)} />
+            </Field>
+            <Field label="Share title" hint={`Blank = default meta title. ${(formState.socialTitle ?? "").length}/70`}>
+              <Input
+                disabled={!canManage}
+                maxLength={70}
+                placeholder={formState.defaultMetaTitle}
+                value={formState.socialTitle ?? ""}
+                onChange={(e) => set("socialTitle", e.target.value)}
+              />
+            </Field>
+            <Field label="Share description" hint={`Blank = default meta description. ${(formState.socialDescription ?? "").length}/200`}>
+              <textarea
+                className="w-full px-3 py-2 rounded-lg text-sm focus:outline-none"
+                style={{ background: "var(--bg-app)", border: "1px solid var(--border)", color: "var(--text-primary)" }}
+                rows={3}
+                maxLength={200}
+                placeholder={formState.defaultMetaDescription}
+                disabled={!canManage}
+                value={formState.socialDescription ?? ""}
+                onChange={(e) => set("socialDescription", e.target.value)}
+              />
+            </Field>
+
+            <div>
+              <p className="text-[11px] font-semibold mb-1.5" style={{ color: "var(--text-muted)" }}>
+                Preview
+              </p>
+              <div className="rounded-xl overflow-hidden border" style={{ borderColor: "var(--border)", background: "var(--bg-app)" }}>
+                <div className="w-full aspect-[1200/630] flex items-center justify-center" style={{ background: "var(--bg-card, var(--bg-app))" }}>
+                  <MediaThumb mediaId={formState.socialImageMediaId ?? null} />
+                </div>
+                <div className="p-3 space-y-0.5">
+                  <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
+                    {formState.socialTitle || formState.defaultMetaTitle}
+                  </p>
+                  <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+                    {formState.socialDescription || formState.defaultMetaDescription}
+                  </p>
+                  <p className="text-[11px] uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>
+                    {formState.siteName}
+                  </p>
+                </div>
+              </div>
+            </div>
           </Card>
 
           {published && (
