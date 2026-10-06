@@ -71,3 +71,7 @@ export const switchOrganizationSchema = z.object({
   organizationId: z.string().trim().uuid(),
 });
 export type SwitchOrganizationInput = z.infer<typeof switchOrganizationSchema>;
+
+export const handoffExchangeSchema = z.object({
+  code: z.string().trim().min(1).max(200),
+});

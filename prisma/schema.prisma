@@ -186,6 +186,7 @@ model User {
   sessions                       Session[]
   passwordResetTokens            PasswordResetToken[]
   emailVerificationTokens        EmailVerificationToken[]
+  authHandoffCodes               AuthHandoffCode[]
   author                         Author?
   assignedLeads                  Lead[]                      @relation("LeadAssignee")
   managedClients                 Client[]                    @relation("ClientAccountManager")
@@ -410,6 +411,24 @@ model EmailVerificationToken {
   @@index([userId])
   @@index([expiresAt])
   @@map("email_verification_tokens")
+}
+
+// Single-use, 60-second codes that carry a signed-in user from the public site to the Control Center
+// without ever putting a session token in a URL. Stored hashed; exchanged once for a fresh session.
+model AuthHandoffCode {
+  id             String    @id @default(uuid())
+  userId         String    @map("user_id")
+  organizationId String    @map("organization_id")
+  codeHash       String    @unique @map("code_hash")
+  expiresAt      DateTime  @map("expires_at")
+  usedAt         DateTime? @map("used_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("auth_handoff_codes")
 }
 
 // =============================================================================

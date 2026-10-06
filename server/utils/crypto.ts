@@ -18,6 +18,10 @@ export function generateEmailVerificationToken(): string {
   return `art_verify_${randomBytes(32).toString("hex")}`;
 }
 
+export function generateHandoffCode(): string {
+  return `art_handoff_${randomBytes(32).toString("hex")}`;
+}
+
 export function generateResetToken(): string {
   return `art_reset_${randomBytes(32).toString("hex")}`;
 }

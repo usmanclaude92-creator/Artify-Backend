@@ -488,6 +488,9 @@ function generateSessionToken() {
 function generateEmailVerificationToken() {
   return `art_verify_${randomBytes2(32).toString("hex")}`;
 }
+function generateHandoffCode() {
+  return `art_handoff_${randomBytes2(32).toString("hex")}`;
+}
 function generateResetToken() {
   return `art_reset_${randomBytes2(32).toString("hex")}`;
 }
@@ -1660,6 +1663,32 @@ function validatePasswordPolicy(password) {
   return null;
 }
 
+// server/repositories/authHandoffRepository.ts
+var authHandoffRepository = {
+  async create(data) {
+    await prisma.authHandoffCode.create({
+      data: { codeHash: hashToken(data.code), userId: data.userId, organizationId: data.organizationId, expiresAt: data.expiresAt }
+    });
+  },
+  /**
+   * Atomically claims a code: the conditional update succeeds for exactly one caller, so a code
+   * can never be exchanged twice even under concurrent requests.
+   */
+  async consume(code) {
+    const codeHash = hashToken(code);
+    const claimed = await prisma.authHandoffCode.updateMany({
+      where: { codeHash, usedAt: null, expiresAt: { gt: /* @__PURE__ */ new Date() } },
+      data: { usedAt: /* @__PURE__ */ new Date() }
+    });
+    if (claimed.count !== 1) return null;
+    const row = await prisma.authHandoffCode.findUnique({ where: { codeHash } });
+    return row ? { userId: row.userId, organizationId: row.organizationId } : null;
+  },
+  async purgeExpired() {
+    await prisma.authHandoffCode.deleteMany({ where: { expiresAt: { lt: new Date(Date.now() - 60 * 60 * 1e3) } } });
+  }
+};
+
 // server/repositories/emailVerificationRepository.ts
 var emailVerificationRepository = {
   async create(data) {
@@ -2125,6 +2154,7 @@ function sanitizeUser(user, role) {
 // server/services/authService.ts
 var SELF_REGISTRATION_ROLE_KEY = "ADMIN";
 var PORTAL_REGISTRATION_ROLE_KEY = "CLIENT_PORTAL";
+var HANDOFF_CODE_TTL_MS = 60 * 1e3;
 function sessionExpiry() {
   return new Date(Date.now() + config.sessionTtlHours * 60 * 60 * 1e3);
 }
@@ -2138,6 +2168,61 @@ async function resolveSanitizedUserForOrganization(user, organizationId) {
   return sanitizeUser({ ...user, organizationId }, role);
 }
 var authService = {
+  /**
+   * Issues a single-use code that lets the caller's CURRENT, already-authenticated session continue
+   * on the Control Center origin. Client-portal accounts never get one — they have nothing to open there.
+   */
+  async issueHandoffCode(user, meta4 = {}) {
+    if (user.role.key === PORTAL_REGISTRATION_ROLE_KEY) {
+      throw new AuthorizationError("This account does not have Control Center access.");
+    }
+    const code = generateHandoffCode();
+    const expiresAt = new Date(Date.now() + HANDOFF_CODE_TTL_MS);
+    await authHandoffRepository.create({ code, userId: user.id, organizationId: user.organizationId, expiresAt });
+    await auditLogRepository.record({
+      organizationId: user.organizationId,
+      actorUserId: user.id,
+      actorType: "USER",
+      action: "AUTH_HANDOFF_ISSUED",
+      resourceType: "session",
+      resourceId: user.id,
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
+    });
+    return { code, expiresAt };
+  },
+  /** Exchanges a handoff code for a brand-new session (the originating session/token is never shared). */
+  async exchangeHandoffCode(code, meta4 = {}) {
+    const claimed = await authHandoffRepository.consume(code);
+    const failure = () => new AuthenticationError("This sign-in link is invalid or has expired. Please sign in again.");
+    if (!claimed) throw failure();
+    const user = await userRepository.findById(claimed.userId);
+    if (!user || user.status !== "ACTIVE" || userRepository.isLocked(user)) throw failure();
+    const sanitized = await resolveSanitizedUserForOrganization(user, claimed.organizationId);
+    if (!sanitized || sanitized.role.key === PORTAL_REGISTRATION_ROLE_KEY) throw failure();
+    const token = generateSessionToken();
+    const expiresAt = sessionExpiry();
+    await sessionRepository.create({
+      token,
+      userId: user.id,
+      organizationId: claimed.organizationId,
+      expiresAt,
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
+    });
+    await auditLogRepository.record({
+      organizationId: claimed.organizationId,
+      actorUserId: user.id,
+      actorName: sanitized.displayName ?? `${user.firstName} ${user.lastName}`,
+      actorType: "USER",
+      action: "AUTH_HANDOFF_EXCHANGED",
+      resourceType: "session",
+      resourceId: user.id,
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
+    });
+    return { session: { token, expiresAt }, user: sanitized };
+  },
   async login(email, password, meta4 = {}, targetOrganizationId) {
     const user = await userRepository.findByEmail(email);
     const genericFailure = () => new AuthenticationError("Invalid email or password credentials.");
@@ -2712,6 +2797,9 @@ var passwordResetConfirmSchema = z2.object({
 var switchOrganizationSchema = z2.object({
   organizationId: z2.string().trim().uuid()
 });
+var handoffExchangeSchema = z2.object({
+  code: z2.string().trim().min(1).max(200)
+});
 
 // server/routes/v1/authRoutes.ts
 var router = Router();
@@ -2724,6 +2812,24 @@ router.post(
   asyncHandler(async (req, res) => {
     const input = loginSchema.parse(req.body);
     const result = await authService.login(input.email, input.password, requestMeta(req));
+    sendSuccess(res, result);
+  })
+);
+router.post(
+  "/handoff",
+  authenticateToken,
+  sensitiveActionLimiter,
+  asyncHandler(async (req, res) => {
+    const { code } = await authService.issueHandoffCode(req.user, requestMeta(req));
+    sendSuccess(res, { code });
+  })
+);
+router.post(
+  "/handoff/exchange",
+  authLimiter,
+  asyncHandler(async (req, res) => {
+    const { code } = handoffExchangeSchema.parse(req.body);
+    const result = await authService.exchangeHandoffCode(code, requestMeta(req));
     sendSuccess(res, result);
   })
 );

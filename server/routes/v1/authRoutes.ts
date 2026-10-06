@@ -20,6 +20,7 @@ import {
   passwordResetRequestSchema,
   passwordResetConfirmSchema,
   switchOrganizationSchema,
+  handoffExchangeSchema,
 } from "../../schemas/authSchemas";
 
 const router = Router();
@@ -34,6 +35,28 @@ router.post(
   asyncHandler(async (req, res) => {
     const input = loginSchema.parse(req.body);
     const result = await authService.login(input.email, input.password, requestMeta(req));
+    sendSuccess(res, result);
+  })
+);
+
+// Cross-site sign-in: the public site asks for a 60-second single-use code, then the Control Center
+// exchanges it for its own fresh session. No session token ever travels in a URL.
+router.post(
+  "/handoff",
+  authenticateToken,
+  sensitiveActionLimiter,
+  asyncHandler(async (req, res) => {
+    const { code } = await authService.issueHandoffCode(req.user!, requestMeta(req));
+    sendSuccess(res, { code });
+  })
+);
+
+router.post(
+  "/handoff/exchange",
+  authLimiter,
+  asyncHandler(async (req, res) => {
+    const { code } = handoffExchangeSchema.parse(req.body);
+    const result = await authService.exchangeHandoffCode(code, requestMeta(req));
     sendSuccess(res, result);
   })
 );

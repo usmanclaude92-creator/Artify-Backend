@@ -195,6 +195,13 @@ export const authApi = {
     apiClient.post<{ session: { token: string; expiresAt: string }; user: SanitizedUser }>("/auth/switch-organization", {
       organizationId,
     }),
+  /** Exchanges the single-use code the public site handed over for a fresh Control Center session. */
+  exchangeHandoff: (code: string) =>
+    apiClient.post<{ session: { token: string; expiresAt: string }; user: SanitizedUser }>(
+      "/auth/handoff/exchange",
+      { code },
+      { suppressUnauthorizedHandling: true }
+    ),
   sessions: () => apiClient.get<{ sessions: SessionSummary[] }>("/auth/sessions"),
   revokeSession: (id: string) => apiClient.post<{ message: string }>(`/auth/sessions/${id}/revoke`),
   revokeOtherSessions: () => apiClient.post<{ message: string }>("/auth/sessions/revoke-others"),

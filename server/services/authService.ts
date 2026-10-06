@@ -17,7 +17,8 @@ import { roleRepository } from "../repositories/roleRepository";
 import { organizationMembershipRepository } from "../repositories/organizationMembershipRepository";
 import { passwordResetRepository } from "../repositories/passwordResetRepository";
 import { hashPassword, verifyPassword } from "../utils/password";
-import { generateSessionToken, generateResetToken, generateEmailVerificationToken } from "../utils/crypto";
+import { generateSessionToken, generateResetToken, generateEmailVerificationToken, generateHandoffCode } from "../utils/crypto";
+import { authHandoffRepository } from "../repositories/authHandoffRepository";
 import { emailVerificationRepository } from "../repositories/emailVerificationRepository";
 import { emailService } from "./emailService";
 import { notificationService } from "./notificationService";
@@ -33,6 +34,9 @@ const SELF_REGISTRATION_ROLE_KEY = "ADMIN";
 
 /** Public website registration: a least-privilege role that can only read its own client portal. */
 const PORTAL_REGISTRATION_ROLE_KEY = "CLIENT_PORTAL";
+
+/** A handoff code is only valid this long — it exists solely to bridge one browser redirect. */
+const HANDOFF_CODE_TTL_MS = 60 * 1000;
 
 export interface RequestMeta {
   ip?: string;
@@ -75,6 +79,65 @@ export async function resolveSanitizedUserForOrganization(user: User, organizati
 }
 
 export const authService = {
+  /**
+   * Issues a single-use code that lets the caller's CURRENT, already-authenticated session continue
+   * on the Control Center origin. Client-portal accounts never get one — they have nothing to open there.
+   */
+  async issueHandoffCode(user: SanitizedUser, meta: RequestMeta = {}): Promise<{ code: string; expiresAt: Date }> {
+    if (user.role.key === PORTAL_REGISTRATION_ROLE_KEY) {
+      throw new AuthorizationError("This account does not have Control Center access.");
+    }
+    const code = generateHandoffCode();
+    const expiresAt = new Date(Date.now() + HANDOFF_CODE_TTL_MS);
+    await authHandoffRepository.create({ code, userId: user.id, organizationId: user.organizationId, expiresAt });
+    await auditLogRepository.record({
+      organizationId: user.organizationId,
+      actorUserId: user.id,
+      actorType: "USER",
+      action: "AUTH_HANDOFF_ISSUED",
+      resourceType: "session",
+      resourceId: user.id,
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent,
+    });
+    return { code, expiresAt };
+  },
+
+  /** Exchanges a handoff code for a brand-new session (the originating session/token is never shared). */
+  async exchangeHandoffCode(code: string, meta: RequestMeta = {}): Promise<LoginResult> {
+    const claimed = await authHandoffRepository.consume(code);
+    const failure = () => new AuthenticationError("This sign-in link is invalid or has expired. Please sign in again.");
+    if (!claimed) throw failure();
+
+    const user = await userRepository.findById(claimed.userId);
+    if (!user || user.status !== "ACTIVE" || userRepository.isLocked(user)) throw failure();
+    const sanitized = await resolveSanitizedUserForOrganization(user, claimed.organizationId);
+    if (!sanitized || sanitized.role.key === PORTAL_REGISTRATION_ROLE_KEY) throw failure();
+
+    const token = generateSessionToken();
+    const expiresAt = sessionExpiry();
+    await sessionRepository.create({
+      token,
+      userId: user.id,
+      organizationId: claimed.organizationId,
+      expiresAt,
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent,
+    });
+    await auditLogRepository.record({
+      organizationId: claimed.organizationId,
+      actorUserId: user.id,
+      actorName: sanitized.displayName ?? `${user.firstName} ${user.lastName}`,
+      actorType: "USER",
+      action: "AUTH_HANDOFF_EXCHANGED",
+      resourceType: "session",
+      resourceId: user.id,
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent,
+    });
+    return { session: { token, expiresAt }, user: sanitized };
+  },
+
   async login(email: string, password: string, meta: RequestMeta = {}, targetOrganizationId?: string): Promise<LoginResult> {
     const user = await userRepository.findByEmail(email);
 

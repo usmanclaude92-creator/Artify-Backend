@@ -12,6 +12,7 @@ import { LoginPage } from "./components/auth/LoginPage";
 import { ForgotPasswordPage } from "./components/auth/ForgotPasswordPage";
 import { ResetPasswordPage } from "./components/auth/ResetPasswordPage";
 import { AcceptInvitationPage } from "./components/auth/AcceptInvitationPage";
+import { HandoffCallbackPage } from "./components/auth/HandoffCallbackPage";
 import { Spinner } from "./components/ui/ui";
 
 const AUTH_PATHS = ["/login", "/forgot-password", "/reset-password"];
@@ -19,7 +20,7 @@ const AUTH_PATHS = ["/login", "/forgot-password", "/reset-password"];
 // typically has no session yet, but an already-authenticated user (e.g.
 // accepting a second workspace) must also be able to open the link without
 // being redirected away from it.
-const PUBLIC_PATHS = ["/accept-invitation"];
+const PUBLIC_PATHS = ["/accept-invitation", "/auth/callback"];
 
 const AppContent: React.FC = () => {
   const { status, sessionExpiredMessage, dismissSessionExpired } = useAuth();
@@ -34,6 +35,10 @@ const AppContent: React.FC = () => {
       navigate("/dashboard");
     }
   }, [status, path, navigate]);
+
+  if (path === "/auth/callback") {
+    return <HandoffCallbackPage />;
+  }
 
   if (PUBLIC_PATHS.includes(path)) {
     return <AcceptInvitationPage />;
