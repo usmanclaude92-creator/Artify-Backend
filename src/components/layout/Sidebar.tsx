@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { X, ShieldCheck, ChevronDown } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
 import { useRouter } from "../../lib/router";
@@ -26,7 +26,16 @@ export const Sidebar: React.FC<{ mobileOpen: boolean; onCloseMobile: () => void 
   const { user } = useAuth();
   const { path, navigate } = useRouter();
   const items = visibleNavItems(user?.role.permissions);
-  const [expanded, setExpanded] = useState<Section | null>(loadExpanded);
+  const activeSection = items.find((item) => item.path === path)?.section ?? null;
+  // Strict accordion: exactly one section open at a time. Opening a section closes the others — including
+  // the one holding the current page. Navigating to a page opens that page's section.
+  const [expanded, setExpanded] = useState<Section | null>(() => activeSection ?? loadExpanded());
+  const lastPath = useRef(path);
+  useEffect(() => {
+    if (lastPath.current === path) return;
+    lastPath.current = path;
+    if (activeSection) setExpanded(activeSection);
+  }, [path, activeSection]);
 
   const toggleSection = (section: Section) => {
     setExpanded((prev) => {
@@ -61,17 +70,15 @@ export const Sidebar: React.FC<{ mobileOpen: boolean; onCloseMobile: () => void 
             .sort((a, b) => NAV_ORDER.indexOf(a.id) - NAV_ORDER.indexOf(b.id));
           if (sectionItems.length === 0) return null;
 
-          const hasActiveItem = sectionItems.some((item) => path === item.path);
-          const isCollapsed = expanded !== section && !hasActiveItem;
+          const isCollapsed = expanded !== section;
 
           return (
-            <div key={section} className="space-y-0.5">
+            <div key={section} className="space-y-1">
               <button
                 type="button"
                 onClick={() => toggleSection(section)}
                 aria-expanded={!isCollapsed}
-                className="cc-ctl w-full flex items-center justify-between gap-2 px-3 py-1.5 text-[10px] font-bold uppercase tracking-wide"
-                style={{ color: "var(--text-muted)" }}
+                className="cc-section-head"
               >
                 <span>{section}</span>
                 <ChevronDown
@@ -79,8 +86,9 @@ export const Sidebar: React.FC<{ mobileOpen: boolean; onCloseMobile: () => void 
                   style={{ transform: isCollapsed ? "rotate(-90deg)" : "rotate(0deg)" }}
                 />
               </button>
-              {!isCollapsed &&
-                sectionItems.map((item, index) => {
+              {!isCollapsed && (
+                <div className="cc-section-body space-y-0.5">
+                {sectionItems.map((item, index) => {
                   const active = path === item.path;
                   const Icon = item.icon;
                   const showGroup = item.group && item.group !== sectionItems[index - 1]?.group;
@@ -105,6 +113,8 @@ export const Sidebar: React.FC<{ mobileOpen: boolean; onCloseMobile: () => void 
                     </React.Fragment>
                   );
                 })}
+                </div>
+              )}
             </div>
           );
         })}

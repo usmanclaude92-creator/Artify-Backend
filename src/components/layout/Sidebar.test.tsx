@@ -44,3 +44,16 @@ describe("Sidebar", () => {
     expect(screen.getByText("Social Overview")).toBeInTheDocument();
   });
 });
+
+describe("Sidebar accordion", () => {
+  it("keeps only one section open: opening another closes the section holding the current page", async () => {
+    mockPath = "/users";
+    const { Sidebar } = await import("./Sidebar");
+    render(<Sidebar mobileOpen={false} onCloseMobile={() => {}} />);
+    const admin = screen.getByRole("button", { name: /^Administration$/ });
+    expect(admin.getAttribute("aria-expanded")).toBe("true");
+    fireEvent.click(screen.getByRole("button", { name: /Social Media/ }));
+    expect(screen.getAllByRole("button", { expanded: true })).toHaveLength(1);
+    expect(admin.getAttribute("aria-expanded")).toBe("false");
+  });
+});
