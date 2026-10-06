@@ -8,8 +8,14 @@ export const Breadcrumbs: React.FC<{ item: NavItem | undefined }> = ({ item }) =
   return (
     <nav aria-label="Breadcrumb" className="flex items-center gap-1.5 text-xs px-4 sm:px-6 pt-3" style={{ color: "var(--text-muted)" }}>
       <span>{item.section}</span>
-      <ChevronRight className="w-3 h-3" />
-      <span className="font-semibold" style={{ color: "var(--text-primary)" }}>
+      {item.group && (
+        <>
+          <ChevronRight className="w-3 h-3" aria-hidden="true" />
+          <span>{item.group}</span>
+        </>
+      )}
+      <ChevronRight className="w-3 h-3" aria-hidden="true" />
+      <span className="font-semibold" aria-current="page" style={{ color: "var(--text-primary)" }}>
         {item.label}
       </span>
     </nav>

@@ -144,6 +144,8 @@ export const PERMISSION_KEYS = [
   // overview, while reports.read/reports.export gate the Reports area's
   // generated/exportable report documents.
   "analytics.read",
+  // Step 1 redesign — Social Media Management section (placeholder page now; real module in a later phase).
+  "social.read",
   "settings.read",
   "settings.manage",
   "audit.read",

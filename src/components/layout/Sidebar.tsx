@@ -2,11 +2,11 @@ import React, { useState } from "react";
 import { X, ShieldCheck, ChevronDown } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
 import { useRouter } from "../../lib/router";
-import { visibleNavItems } from "../../lib/permissions";
+import { visibleNavItems, NAV_SECTIONS, NAV_ORDER, type NavSection } from "../../lib/permissions";
 
-type Section = "Platform" | "Workspace" | "CRM" | "Onboarding" | "Workspaces" | "Products" | "Website" | "CMS" | "SEO" | "Marketing" | "Automation" | "Analytics" | "Commercial" | "AI" | "Client Portal";
+type Section = NavSection;
 
-const SECTIONS: Section[] = ["Platform", "Workspace", "CRM", "Onboarding", "Workspaces", "Products", "Website", "CMS", "SEO", "Marketing", "Automation", "Analytics", "Commercial", "AI", "Client Portal"];
+const SECTIONS: Section[] = NAV_SECTIONS;
 
 /** Presentation state only, like the theme preference — safe to persist client-side. */
 const EXPANDED_STORAGE_KEY = "artify_cc_sidebar_expanded_section";
@@ -44,19 +44,21 @@ export const Sidebar: React.FC<{ mobileOpen: boolean; onCloseMobile: () => void 
   const content = (
     <>
       <div className="flex items-center gap-2 px-4 h-14 shrink-0 border-b" style={{ borderColor: "var(--border)" }}>
-        <div className="w-7 h-7 rounded-lg flex items-center justify-center" style={{ background: "var(--accent)" }}>
+        <div className="w-8 h-8 rounded-xl flex items-center justify-center" style={{ background: "linear-gradient(135deg, var(--accent), var(--accent-hover))", boxShadow: "var(--shadow-card)" }}>
           <ShieldCheck className="w-4 h-4 text-white" />
         </div>
         <span className="text-sm font-bold" style={{ color: "var(--text-primary)" }}>
           Control Center
         </span>
-        <button onClick={onCloseMobile} className="ml-auto md:hidden" aria-label="Close menu" style={{ color: "var(--text-muted)" }}>
+        <button onClick={onCloseMobile} className="cc-ctl ml-auto md:hidden p-1.5" aria-label="Close menu">
           <X className="w-4 h-4" />
         </button>
       </div>
       <nav className="flex-1 min-h-0 overflow-y-auto p-2 space-y-1" aria-label="Primary">
         {SECTIONS.map((section) => {
-          const sectionItems = items.filter((item) => item.section === section);
+          const sectionItems = items
+            .filter((item) => item.section === section)
+            .sort((a, b) => NAV_ORDER.indexOf(a.id) - NAV_ORDER.indexOf(b.id));
           if (sectionItems.length === 0) return null;
 
           const hasActiveItem = sectionItems.some((item) => path === item.path);
@@ -68,7 +70,7 @@ export const Sidebar: React.FC<{ mobileOpen: boolean; onCloseMobile: () => void 
                 type="button"
                 onClick={() => toggleSection(section)}
                 aria-expanded={!isCollapsed}
-                className="w-full flex items-center justify-between gap-2 px-3 pt-1 pb-1 text-[10px] font-bold uppercase tracking-wide"
+                className="cc-ctl w-full flex items-center justify-between gap-2 px-3 py-1.5 text-[10px] font-bold uppercase tracking-wide"
                 style={{ color: "var(--text-muted)" }}
               >
                 <span>{section}</span>
@@ -78,27 +80,29 @@ export const Sidebar: React.FC<{ mobileOpen: boolean; onCloseMobile: () => void 
                 />
               </button>
               {!isCollapsed &&
-                sectionItems.map((item) => {
+                sectionItems.map((item, index) => {
                   const active = path === item.path;
                   const Icon = item.icon;
+                  const showGroup = item.group && item.group !== sectionItems[index - 1]?.group;
                   return (
-                    <button
-                      key={item.id}
-                      onClick={() => {
-                        navigate(item.path);
-                        onCloseMobile();
-                      }}
-                      aria-current={active ? "page" : undefined}
-                      className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-semibold transition text-left"
-                      style={
-                        active
-                          ? { background: "var(--accent-soft)", color: "var(--accent)" }
-                          : { color: "var(--text-secondary)" }
-                      }
-                    >
-                      <Icon className="w-4 h-4" />
-                      {item.label}
-                    </button>
+                    <React.Fragment key={item.id}>
+                      {showGroup && (
+                        <p className="cc-subheading" role="presentation">
+                          {item.group}
+                        </p>
+                      )}
+                      <button
+                        onClick={() => {
+                          navigate(item.path);
+                          onCloseMobile();
+                        }}
+                        aria-current={active ? "page" : undefined}
+                        className="cc-nav-item"
+                      >
+                        <Icon className="w-4 h-4 shrink-0" />
+                        {item.label}
+                      </button>
+                    </React.Fragment>
                   );
                 })}
             </div>
@@ -119,10 +123,10 @@ export const Sidebar: React.FC<{ mobileOpen: boolean; onCloseMobile: () => void 
 
       {mobileOpen && (
         <div className="fixed inset-0 z-40 md:hidden">
-          <div className="absolute inset-0" style={{ background: "rgba(2,6,23,0.6)" }} onClick={onCloseMobile} />
+          <div className="absolute inset-0 backdrop-blur-sm" style={{ background: "rgba(2,6,23,0.6)" }} onClick={onCloseMobile} />
           <aside
-            className="absolute left-0 top-0 h-full w-64 flex flex-col shadow-2xl overflow-hidden"
-            style={{ background: "var(--bg-surface)" }}
+            className="absolute left-0 top-0 h-full w-64 flex flex-col overflow-hidden"
+            style={{ background: "var(--bg-surface)", boxShadow: "var(--shadow-pop)" }}
           >
             {content}
           </aside>

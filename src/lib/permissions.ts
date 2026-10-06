@@ -10,6 +10,7 @@
 import { lazy, type ComponentType, type LazyExoticComponent } from "react";
 import {
   LayoutDashboard,
+  Share2,
   Users,
   ShieldCheck,
   KeyRound,
@@ -78,6 +79,7 @@ function lazyPage<T extends ComponentType>(loader: () => Promise<Record<string, 
 }
 
 const AdministrationPage = lazyPage(() => import("../components/modules/AdministrationPage"), "AdministrationPage");
+const SocialOverviewPage = lazyPage(() => import("../components/modules/SocialOverviewPage"), "SocialOverviewPage");
 const SecurityCenterPage = lazyPage(() => import("../components/modules/SecurityCenterPage"), "SecurityCenterPage");
 const IntegrationsPage = lazyPage(() => import("../components/modules/IntegrationsPage"), "IntegrationsPage");
 const UsersPage = lazyPage(() => import("../components/modules/UsersPage"), "UsersPage");
@@ -138,6 +140,14 @@ export function hasPermission(permissions: readonly string[] | undefined, key: s
   return !!permissions?.includes(key);
 }
 
+export type NavSection = "Dashboard" | "Website Management" | "CRM" | "Social Media" | "Marketing" | "Catalog" | "Commercial" | "Automation & AI" | "Administration" | "Client Portal";
+
+/** Sidebar section order. */
+export const NAV_SECTIONS: NavSection[] = ["Dashboard", "Website Management", "CRM", "Social Media", "Marketing", "Catalog", "Commercial", "Automation & AI", "Administration", "Client Portal"];
+
+/** Display order of items inside the sidebar (section + group are on each item; this only orders them). */
+export const NAV_ORDER: string[] = ["dashboard", "my-work", "notification-center", "analytics-dashboard", "analytics-reports", "website-templates", "website-template-parts", "website-navigation-menus", "website-homepage", "website-site-identity", "website-global-styles", "website-site-editor", "cms-pages", "cms-posts", "cms-case-studies", "cms-taxonomy", "cms-authors", "cms-media", "seo-issues", "seo-redirects", "crm-dashboard", "crm-leads", "crm-clients", "crm-contacts", "crm-opportunities", "onboarding-overview", "onboarding-pending", "marketing-forms", "social-overview", "marketing-dashboard", "marketing-campaigns", "products-all", "products-modules", "services-all", "solutions-all", "products-taxonomy", "commercial-contracts", "commercial-subscriptions", "commercial-invoices", "commercial-payments", "automation", "ai-overview", "ai-providers", "ai-tools", "ai-prompts", "ai-workflows", "ai-executions", "ai-usage", "ai-approvals", "ai-copilot", "users", "roles", "permissions", "organizations", "workspaces-all", "workspaces-members", "security-center", "audit-log", "security", "administration", "integrations", "settings", "client-portal"];
+
 export interface NavItem {
   id: string;
   label: string;
@@ -147,7 +157,9 @@ export interface NavItem {
   requiresAnyPermission?: string[];
   component: ComponentType | LazyExoticComponent<ComponentType>;
   /** Groups items under a heading in the sidebar (§22/§31) — purely presentational. */
-  section: "Platform" | "Workspace" | "CRM" | "Onboarding" | "Workspaces" | "Products" | "Website" | "CMS" | "SEO" | "Marketing" | "Automation" | "Analytics" | "Commercial" | "AI" | "Client Portal";
+  section: NavSection;
+  /** Optional small subheading inside the section (presentational only). */
+  group?: string;
 }
 
 /**
@@ -158,7 +170,7 @@ export interface NavItem {
  * built yet.
  */
 export const NAV_ITEMS: NavItem[] = [
-  { id: "dashboard", label: "Dashboard", path: "/dashboard", icon: LayoutDashboard, component: DashboardPage, section: "Platform" },
+  { id: "dashboard", label: "Dashboard", path: "/dashboard", icon: LayoutDashboard, component: DashboardPage, section: "Dashboard" },
   {
     id: "my-work",
     label: "My Work",
@@ -166,7 +178,7 @@ export const NAV_ITEMS: NavItem[] = [
     icon: Briefcase,
     requiresAnyPermission: ["automation.read"],
     component: MyWorkPage,
-    section: "Workspace",
+    section: "Dashboard",
   },
   {
     id: "notification-center",
@@ -174,7 +186,7 @@ export const NAV_ITEMS: NavItem[] = [
     path: "/notifications",
     icon: Bell,
     component: NotificationCenterPage,
-    section: "Workspace",
+    section: "Dashboard",
   },
   {
     id: "administration",
@@ -183,7 +195,8 @@ export const NAV_ITEMS: NavItem[] = [
     icon: Gauge,
     requiresAnyPermission: ["security.read"],
     component: AdministrationPage,
-    section: "Platform",
+    section: "Administration",
+    group: "Platform",
   },
   {
     id: "users",
@@ -192,7 +205,8 @@ export const NAV_ITEMS: NavItem[] = [
     icon: Users,
     requiresAnyPermission: ["users.read"],
     component: UsersPage,
-    section: "Platform",
+    section: "Administration",
+    group: "People & access",
   },
   {
     id: "roles",
@@ -201,7 +215,8 @@ export const NAV_ITEMS: NavItem[] = [
     icon: ShieldCheck,
     requiresAnyPermission: ["roles.read"],
     component: RolesPage,
-    section: "Platform",
+    section: "Administration",
+    group: "People & access",
   },
   {
     id: "permissions",
@@ -210,7 +225,8 @@ export const NAV_ITEMS: NavItem[] = [
     icon: KeyRound,
     requiresAnyPermission: ["roles.read"],
     component: PermissionsPage,
-    section: "Platform",
+    section: "Administration",
+    group: "People & access",
   },
   {
     id: "organizations",
@@ -219,7 +235,8 @@ export const NAV_ITEMS: NavItem[] = [
     icon: Building2,
     requiresAnyPermission: ["organizations.read"],
     component: OrganizationsPage,
-    section: "Platform",
+    section: "Administration",
+    group: "People & access",
   },
   {
     id: "audit-log",
@@ -228,9 +245,10 @@ export const NAV_ITEMS: NavItem[] = [
     icon: ScrollText,
     requiresAnyPermission: ["audit.read"],
     component: AuditLogPage,
-    section: "Platform",
+    section: "Administration",
+    group: "Security",
   },
-  { id: "security", label: "My Sessions", path: "/security", icon: MonitorSmartphone, component: SecurityPage, section: "Platform" },
+  { id: "security", label: "My Sessions", path: "/security", icon: MonitorSmartphone, component: SecurityPage, section: "Administration", group: "Security" },
   {
     id: "security-center",
     label: "Security Center",
@@ -238,7 +256,8 @@ export const NAV_ITEMS: NavItem[] = [
     icon: ShieldAlert,
     requiresAnyPermission: ["security.read"],
     component: SecurityCenterPage,
-    section: "Platform",
+    section: "Administration",
+    group: "Security",
   },
   {
     id: "integrations",
@@ -247,7 +266,8 @@ export const NAV_ITEMS: NavItem[] = [
     icon: Plug,
     requiresAnyPermission: ["integrations.read", "webhooks.read", "api_keys.read"],
     component: IntegrationsPage,
-    section: "Platform",
+    section: "Administration",
+    group: "Platform",
   },
   {
     id: "settings",
@@ -256,7 +276,8 @@ export const NAV_ITEMS: NavItem[] = [
     icon: Settings,
     requiresAnyPermission: ["settings.read"],
     component: SettingsPage,
-    section: "Platform",
+    section: "Administration",
+    group: "Platform",
   },
   {
     id: "crm-dashboard",
@@ -309,7 +330,7 @@ export const NAV_ITEMS: NavItem[] = [
     icon: ClipboardCheck,
     requiresAnyPermission: ["onboarding.read"],
     component: OnboardingPage,
-    section: "Onboarding",
+    section: "CRM",
   },
   {
     id: "onboarding-pending",
@@ -318,7 +339,7 @@ export const NAV_ITEMS: NavItem[] = [
     icon: Hourglass,
     requiresAnyPermission: ["onboarding.read"],
     component: OnboardingPage,
-    section: "Onboarding",
+    section: "CRM",
   },
   {
     id: "workspaces-all",
@@ -327,7 +348,8 @@ export const NAV_ITEMS: NavItem[] = [
     icon: Layers,
     requiresAnyPermission: ["workspaces.read"],
     component: WorkspacesPage,
-    section: "Workspaces",
+    section: "Administration",
+    group: "People & access",
   },
   {
     id: "workspaces-members",
@@ -336,7 +358,8 @@ export const NAV_ITEMS: NavItem[] = [
     icon: UsersRound,
     requiresAnyPermission: ["workspaces.read"],
     component: WorkspacesPage,
-    section: "Workspaces",
+    section: "Administration",
+    group: "People & access",
   },
   {
     id: "products-all",
@@ -345,7 +368,7 @@ export const NAV_ITEMS: NavItem[] = [
     icon: Package,
     requiresAnyPermission: ["products.read"],
     component: ProductsPage,
-    section: "Products",
+    section: "Catalog",
   },
   {
     id: "products-modules",
@@ -354,11 +377,8 @@ export const NAV_ITEMS: NavItem[] = [
     icon: Boxes,
     requiresAnyPermission: ["product_modules.read"],
     component: ProductsPage,
-    section: "Products",
+    section: "Catalog",
   },
-  // Phase 10 (Products + Services + Solutions) — same ProductsPage
-  // component, route-locked to a single catalog `type` (see its own
-  // `lockedType` derivation from `path`) — never a second catalog system.
   {
     id: "services-all",
     label: "Services",
@@ -366,7 +386,7 @@ export const NAV_ITEMS: NavItem[] = [
     icon: Briefcase,
     requiresAnyPermission: ["products.read"],
     component: ProductsPage,
-    section: "Products",
+    section: "Catalog",
   },
   {
     id: "solutions-all",
@@ -375,7 +395,7 @@ export const NAV_ITEMS: NavItem[] = [
     icon: Target,
     requiresAnyPermission: ["products.read"],
     component: ProductsPage,
-    section: "Products",
+    section: "Catalog",
   },
   {
     id: "products-taxonomy",
@@ -384,7 +404,7 @@ export const NAV_ITEMS: NavItem[] = [
     icon: FolderTree,
     requiresAnyPermission: ["product_categories.read", "industries.read"],
     component: ProductTaxonomyPage,
-    section: "Products",
+    section: "Catalog",
   },
   {
     id: "website-templates",
@@ -393,7 +413,8 @@ export const NAV_ITEMS: NavItem[] = [
     icon: LayoutTemplate,
     requiresAnyPermission: ["templates.read"],
     component: TemplatesPage,
-    section: "Website",
+    section: "Website Management",
+    group: "Design",
   },
   {
     id: "website-template-parts",
@@ -402,7 +423,8 @@ export const NAV_ITEMS: NavItem[] = [
     icon: PanelsTopLeft,
     requiresAnyPermission: ["template_parts.read"],
     component: TemplatePartsPage,
-    section: "Website",
+    section: "Website Management",
+    group: "Design",
   },
   {
     id: "website-navigation-menus",
@@ -411,7 +433,8 @@ export const NAV_ITEMS: NavItem[] = [
     icon: Menu,
     requiresAnyPermission: ["navigation_menus.read"],
     component: NavigationMenusPage,
-    section: "Website",
+    section: "Website Management",
+    group: "Design",
   },
   {
     id: "website-homepage",
@@ -420,7 +443,8 @@ export const NAV_ITEMS: NavItem[] = [
     icon: Home,
     requiresAnyPermission: ["content.read"],
     component: HomepageManagerPage,
-    section: "Website",
+    section: "Website Management",
+    group: "Design",
   },
   {
     id: "website-site-identity",
@@ -429,7 +453,8 @@ export const NAV_ITEMS: NavItem[] = [
     icon: Globe,
     requiresAnyPermission: ["settings.read"],
     component: SiteIdentityPage,
-    section: "Website",
+    section: "Website Management",
+    group: "Design",
   },
   {
     id: "website-global-styles",
@@ -438,7 +463,8 @@ export const NAV_ITEMS: NavItem[] = [
     icon: Palette,
     requiresAnyPermission: ["settings.read"],
     component: GlobalStylesPage,
-    section: "Website",
+    section: "Website Management",
+    group: "Design",
   },
   {
     id: "website-site-editor",
@@ -447,7 +473,8 @@ export const NAV_ITEMS: NavItem[] = [
     icon: Wand2,
     requiresAnyPermission: ["content.update"],
     component: SiteEditorPage,
-    section: "Website",
+    section: "Website Management",
+    group: "Design",
   },
   {
     id: "cms-pages",
@@ -456,7 +483,8 @@ export const NAV_ITEMS: NavItem[] = [
     icon: FileText,
     requiresAnyPermission: ["content.read"],
     component: PagesPage,
-    section: "CMS",
+    section: "Website Management",
+    group: "Content",
   },
   {
     id: "cms-posts",
@@ -465,7 +493,8 @@ export const NAV_ITEMS: NavItem[] = [
     icon: Newspaper,
     requiresAnyPermission: ["content.read"],
     component: PostsPage,
-    section: "CMS",
+    section: "Website Management",
+    group: "Content",
   },
   {
     id: "cms-case-studies",
@@ -474,7 +503,8 @@ export const NAV_ITEMS: NavItem[] = [
     icon: Briefcase,
     requiresAnyPermission: ["content.read"],
     component: CaseStudiesPage,
-    section: "CMS",
+    section: "Website Management",
+    group: "Content",
   },
   {
     id: "cms-taxonomy",
@@ -483,7 +513,8 @@ export const NAV_ITEMS: NavItem[] = [
     icon: FolderTree,
     requiresAnyPermission: ["content.read"],
     component: CmsTaxonomyPage,
-    section: "CMS",
+    section: "Website Management",
+    group: "Content",
   },
   {
     id: "cms-authors",
@@ -492,7 +523,8 @@ export const NAV_ITEMS: NavItem[] = [
     icon: UserSquare2,
     requiresAnyPermission: ["authors.read"],
     component: AuthorsPage,
-    section: "CMS",
+    section: "Website Management",
+    group: "Content",
   },
   {
     id: "cms-media",
@@ -501,7 +533,8 @@ export const NAV_ITEMS: NavItem[] = [
     icon: ImageIcon,
     requiresAnyPermission: ["media.read"],
     component: MediaLibraryPage,
-    section: "CMS",
+    section: "Website Management",
+    group: "Content",
   },
   {
     id: "seo-issues",
@@ -510,7 +543,8 @@ export const NAV_ITEMS: NavItem[] = [
     icon: Search,
     requiresAnyPermission: ["seo.audit.read"],
     component: SeoIssuesPage,
-    section: "SEO",
+    section: "Website Management",
+    group: "SEO",
   },
   {
     id: "seo-redirects",
@@ -519,7 +553,8 @@ export const NAV_ITEMS: NavItem[] = [
     icon: ArrowRightLeft,
     requiresAnyPermission: ["seo.redirects.read"],
     component: RedirectsPage,
-    section: "SEO",
+    section: "Website Management",
+    group: "SEO",
   },
   {
     id: "marketing-dashboard",
@@ -545,7 +580,7 @@ export const NAV_ITEMS: NavItem[] = [
     icon: ClipboardList,
     requiresAnyPermission: ["forms.read"],
     component: FormsPage,
-    section: "Marketing",
+    section: "CRM",
   },
   {
     id: "automation",
@@ -554,7 +589,7 @@ export const NAV_ITEMS: NavItem[] = [
     icon: Workflow,
     requiresAnyPermission: ["automation.read"],
     component: AutomationPage,
-    section: "Automation",
+    section: "Automation & AI",
   },
   {
     id: "analytics-dashboard",
@@ -563,7 +598,7 @@ export const NAV_ITEMS: NavItem[] = [
     icon: BarChart3,
     requiresAnyPermission: ["analytics.read"],
     component: AnalyticsDashboardPage,
-    section: "Analytics",
+    section: "Dashboard",
   },
   {
     id: "analytics-reports",
@@ -572,7 +607,7 @@ export const NAV_ITEMS: NavItem[] = [
     icon: FileBarChart,
     requiresAnyPermission: ["reports.read"],
     component: ReportsPage,
-    section: "Analytics",
+    section: "Dashboard",
   },
   {
     id: "commercial-contracts",
@@ -617,7 +652,7 @@ export const NAV_ITEMS: NavItem[] = [
     icon: Sparkles,
     requiresAnyPermission: ["ai.executions.read", "ai.approvals.read", "ai.usage.read"],
     component: AiOverviewPage,
-    section: "AI",
+    section: "Automation & AI",
   },
   {
     id: "ai-providers",
@@ -626,7 +661,7 @@ export const NAV_ITEMS: NavItem[] = [
     icon: Cpu,
     requiresAnyPermission: ["ai.providers.read"],
     component: AiProvidersPage,
-    section: "AI",
+    section: "Automation & AI",
   },
   {
     id: "ai-tools",
@@ -635,7 +670,7 @@ export const NAV_ITEMS: NavItem[] = [
     icon: Wrench,
     requiresAnyPermission: ["ai.tools.read"],
     component: AiToolsPage,
-    section: "AI",
+    section: "Automation & AI",
   },
   {
     id: "ai-prompts",
@@ -644,7 +679,7 @@ export const NAV_ITEMS: NavItem[] = [
     icon: MessageSquareText,
     requiresAnyPermission: ["ai.prompts.read"],
     component: AiPromptsPage,
-    section: "AI",
+    section: "Automation & AI",
   },
   {
     id: "ai-workflows",
@@ -653,7 +688,7 @@ export const NAV_ITEMS: NavItem[] = [
     icon: Workflow,
     requiresAnyPermission: ["ai.workflows.read"],
     component: AiWorkflowsPage,
-    section: "AI",
+    section: "Automation & AI",
   },
   {
     id: "ai-executions",
@@ -662,7 +697,7 @@ export const NAV_ITEMS: NavItem[] = [
     icon: History,
     requiresAnyPermission: ["ai.executions.read"],
     component: AiExecutionsPage,
-    section: "AI",
+    section: "Automation & AI",
   },
   {
     id: "ai-usage",
@@ -671,7 +706,7 @@ export const NAV_ITEMS: NavItem[] = [
     icon: Gauge,
     requiresAnyPermission: ["ai.usage.read"],
     component: AiUsagePage,
-    section: "AI",
+    section: "Automation & AI",
   },
   {
     id: "ai-approvals",
@@ -680,7 +715,7 @@ export const NAV_ITEMS: NavItem[] = [
     icon: ShieldAlert,
     requiresAnyPermission: ["ai.approvals.read"],
     component: AiApprovalsPage,
-    section: "AI",
+    section: "Automation & AI",
   },
   {
     id: "ai-copilot",
@@ -689,7 +724,7 @@ export const NAV_ITEMS: NavItem[] = [
     icon: Bot,
     requiresAnyPermission: ["copilot.read", "copilot.use"],
     component: AiCopilotPage,
-    section: "AI",
+    section: "Automation & AI",
   },
   {
     id: "client-portal",
@@ -699,6 +734,15 @@ export const NAV_ITEMS: NavItem[] = [
     requiresAnyPermission: ["portal.dashboard.read"],
     component: ClientPortalPage,
     section: "Client Portal",
+  },
+  {
+    id: "social-overview",
+    label: "Social Overview",
+    path: "/social",
+    icon: Share2,
+    requiresAnyPermission: ["social.read"],
+    component: SocialOverviewPage,
+    section: "Social Media",
   },
 ];
 

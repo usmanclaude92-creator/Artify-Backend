@@ -3,8 +3,8 @@ import { Loader2, Inbox, AlertTriangle } from "lucide-react";
 
 export const Card: React.FC<React.HTMLAttributes<HTMLDivElement>> = ({ className = "", ...props }) => (
   <div
-    className={`rounded-2xl border shadow-sm ${className}`}
-    style={{ background: "var(--bg-surface)", borderColor: "var(--border)" }}
+    className={`rounded-2xl border ${className}`}
+    style={{ background: "var(--bg-surface)", borderColor: "var(--border)", boxShadow: "var(--shadow-card)" }}
     {...props}
   />
 );
@@ -43,7 +43,7 @@ export const Badge: React.FC<{ tone?: "neutral" | "success" | "warning" | "dange
     success: "bg-emerald-500/10 text-emerald-500 border-emerald-500/30",
     warning: "bg-amber-500/10 text-amber-500 border-amber-500/30",
     danger: "bg-rose-500/10 text-rose-500 border-rose-500/30",
-    info: "bg-indigo-500/10 text-indigo-500 border-indigo-500/30",
+    info: "bg-violet-500/10 text-violet-600 dark:text-violet-300 border-violet-500/30",
   };
   return (
     <span className={`px-2 py-0.5 rounded-full border text-[10px] font-bold uppercase tracking-wide ${tones[tone]}`}>

@@ -33,18 +33,20 @@ export const Header: React.FC<{ onOpenMobileMenu: () => void; onOpenCommandPalet
 
   return (
     <header
-      className="h-14 flex items-center gap-3 px-4 border-b sticky top-0 z-30"
-      style={{ background: "var(--bg-surface)", borderColor: "var(--border)" }}
+      className="h-14 flex items-center gap-3 px-4 border-b sticky top-0 z-30 backdrop-blur"
+      style={{ background: "color-mix(in srgb, var(--bg-surface) 92%, transparent)", borderColor: "var(--border)" }}
     >
-      <button onClick={onOpenMobileMenu} className="md:hidden" aria-label="Open menu" style={{ color: "var(--text-secondary)" }}>
+      <button onClick={onOpenMobileMenu} className="cc-ctl md:hidden p-2" aria-label="Open menu">
         <Menu className="w-5 h-5" />
       </button>
 
       <div className="relative">
         <button
           onClick={() => setOrgMenuOpen((v) => !v)}
-          className="flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1.5 rounded-lg"
-          style={{ color: "var(--text-secondary)", background: "var(--bg-hover)" }}
+          aria-haspopup={organizations.length > 1 ? "menu" : undefined}
+          aria-expanded={organizations.length > 1 ? orgMenuOpen : undefined}
+          className="cc-field flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1.5"
+          style={{ color: "var(--text-secondary)" }}
         >
           <Building2 className="w-3.5 h-3.5" />
           {currentOrg?.organizationName ?? "Organization"}
@@ -52,14 +54,13 @@ export const Header: React.FC<{ onOpenMobileMenu: () => void; onOpenCommandPalet
         </button>
         {orgMenuOpen && organizations.length > 1 && (
           <div
-            className="absolute left-0 mt-1 w-64 rounded-xl shadow-lg py-1 z-40"
-            style={{ background: "var(--bg-surface)", border: "1px solid var(--border)" }}
+            className="cc-popover absolute left-0 mt-1 w-64 py-1 z-40"
           >
             {organizations.map((org) => (
               <button
                 key={org.organizationId}
                 onClick={() => handleSwitchOrg(org.organizationId)}
-                className="w-full flex items-center justify-between gap-2 px-3 py-2 text-xs text-left hover:opacity-80"
+                className="cc-row w-full flex items-center justify-between gap-2 px-3 py-2 text-xs text-left"
                 style={{ color: "var(--text-primary)" }}
               >
                 <span>
@@ -77,8 +78,8 @@ export const Header: React.FC<{ onOpenMobileMenu: () => void; onOpenCommandPalet
 
       <button
         onClick={onOpenCommandPalette}
-        className="hidden sm:flex items-center gap-2 text-xs px-3 py-1.5 rounded-lg w-64 max-w-xs"
-        style={{ color: "var(--text-muted)", background: "var(--bg-hover)" }}
+        className="cc-field hidden sm:flex items-center gap-2 text-xs px-3 py-1.5 w-64 max-w-xs"
+        style={{ color: "var(--text-muted)" }}
       >
         <Search className="w-3.5 h-3.5 shrink-0" />
         <span className="flex-1 text-left">Search…</span>
@@ -91,8 +92,7 @@ export const Header: React.FC<{ onOpenMobileMenu: () => void; onOpenCommandPalet
         <button
           onClick={onOpenCommandPalette}
           aria-label="Search"
-          className="sm:hidden p-2 rounded-lg"
-          style={{ color: "var(--text-secondary)" }}
+          className="cc-ctl sm:hidden p-2"
         >
           <Search className="w-4 h-4" />
         </button>
@@ -100,17 +100,16 @@ export const Header: React.FC<{ onOpenMobileMenu: () => void; onOpenCommandPalet
         <button
           onClick={toggleTheme}
           aria-label="Toggle theme"
-          className="p-2 rounded-lg"
-          style={{ color: "var(--text-secondary)" }}
+          className="cc-ctl p-2"
         >
           {theme === "dark" ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
         </button>
 
         <div className="relative">
-          <button onClick={() => setMenuOpen((v) => !v)} className="flex items-center gap-2 pl-1 pr-2 py-1 rounded-lg" style={{ background: "var(--bg-hover)" }}>
+          <button onClick={() => setMenuOpen((v) => !v)} aria-haspopup="menu" aria-expanded={menuOpen} className="cc-field flex items-center gap-2 pl-1 pr-2 py-1">
             <div
               className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold text-white"
-              style={{ background: "var(--accent)" }}
+              style={{ background: "linear-gradient(135deg, var(--accent), var(--accent-hover))" }}
             >
               {user?.firstName?.charAt(0) ?? "U"}
             </div>
@@ -122,8 +121,7 @@ export const Header: React.FC<{ onOpenMobileMenu: () => void; onOpenCommandPalet
 
           {menuOpen && (
             <div
-              className="absolute right-0 mt-1 w-56 rounded-xl shadow-lg py-1 z-40 text-xs"
-              style={{ background: "var(--bg-surface)", border: "1px solid var(--border)" }}
+              className="cc-popover absolute right-0 mt-1 w-56 py-1 z-40 text-xs"
             >
               <div className="px-3 py-2 border-b" style={{ borderColor: "var(--border)" }}>
                 <p className="font-semibold" style={{ color: "var(--text-primary)" }}>
@@ -136,7 +134,7 @@ export const Header: React.FC<{ onOpenMobileMenu: () => void; onOpenCommandPalet
                   setMenuOpen(false);
                   setChangePasswordOpen(true);
                 }}
-                className="w-full flex items-center gap-2 px-3 py-2 text-left hover:opacity-80"
+                className="cc-row w-full flex items-center gap-2 px-3 py-2 text-left"
                 style={{ color: "var(--text-primary)" }}
               >
                 <KeyRound className="w-3.5 h-3.5" /> Change password
@@ -146,21 +144,21 @@ export const Header: React.FC<{ onOpenMobileMenu: () => void; onOpenCommandPalet
                   setMenuOpen(false);
                   navigate("/security");
                 }}
-                className="w-full flex items-center gap-2 px-3 py-2 text-left hover:opacity-80"
+                className="cc-row w-full flex items-center gap-2 px-3 py-2 text-left"
                 style={{ color: "var(--text-primary)" }}
               >
                 <Building2 className="w-3.5 h-3.5" /> Sessions &amp; security
               </button>
               <button
                 onClick={() => void logout()}
-                className="w-full flex items-center gap-2 px-3 py-2 text-left hover:opacity-80"
+                className="cc-row w-full flex items-center gap-2 px-3 py-2 text-left"
                 style={{ color: "var(--text-primary)" }}
               >
                 <LogOut className="w-3.5 h-3.5" /> Sign out
               </button>
               <button
                 onClick={() => void logoutAll()}
-                className="w-full flex items-center gap-2 px-3 py-2 text-left hover:opacity-80 text-rose-500"
+                className="cc-row w-full flex items-center gap-2 px-3 py-2 text-left text-rose-500"
               >
                 <LogOutIcon className="w-3.5 h-3.5" /> Sign out everywhere
               </button>

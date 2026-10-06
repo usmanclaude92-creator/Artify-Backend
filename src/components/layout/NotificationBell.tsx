@@ -75,8 +75,9 @@ export const NotificationBell: React.FC = () => {
       <button
         onClick={() => setOpen((v) => !v)}
         aria-label={`Notifications${unreadCount > 0 ? ` (${unreadCount} unread)` : ""}`}
-        className="relative p-2 rounded-lg"
-        style={{ color: "var(--text-secondary)" }}
+        aria-haspopup="true"
+        aria-expanded={open}
+        className="cc-ctl relative p-2"
       >
         <Bell className="w-4 h-4" />
         {unreadCount > 0 && (
@@ -88,15 +89,14 @@ export const NotificationBell: React.FC = () => {
 
       {open && (
         <div
-          className="absolute right-0 mt-1 w-80 max-w-[90vw] rounded-xl shadow-lg z-40 text-xs overflow-hidden"
-          style={{ background: "var(--bg-surface)", border: "1px solid var(--border)" }}
+          className="cc-popover absolute right-0 mt-1 w-80 max-w-[90vw] z-40 text-xs overflow-hidden"
         >
           <div className="flex items-center justify-between px-3 py-2.5 border-b" style={{ borderColor: "var(--border)" }}>
             <span className="font-bold" style={{ color: "var(--text-primary)" }}>
               Notifications
             </span>
             {unreadCount > 0 && (
-              <button onClick={handleMarkAllRead} className="flex items-center gap-1 text-[11px]" style={{ color: "var(--accent)" }}>
+              <button onClick={handleMarkAllRead} className="flex items-center gap-1 text-[11px]" style={{ color: "var(--accent-soft-text)" }}>
                 <CheckCheck className="w-3 h-3" /> Mark all read
               </button>
             )}

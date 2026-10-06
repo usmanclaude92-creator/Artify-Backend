@@ -34,7 +34,7 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const icons: Record<ToastKind, React.ReactNode> = {
     success: <CheckCircle2 className="w-4 h-4 text-emerald-500" />,
     error: <XCircle className="w-4 h-4 text-rose-500" />,
-    info: <Info className="w-4 h-4 text-indigo-500" />,
+    info: <Info className="w-4 h-4 text-violet-500" />,
   };
 
   return (

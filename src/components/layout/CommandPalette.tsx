@@ -257,7 +257,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ open, onClose })
     return matches.map((item) => ({
       id: `nav-${item.id}`,
       label: item.label,
-      sublabel: item.section,
+      sublabel: item.group ? `${item.section} · ${item.group}` : item.section,
       group: "Go to",
       icon: item.icon,
       onSelect: () => go(item.path),
@@ -315,13 +315,12 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ open, onClose })
   }
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-start justify-center pt-[12vh] px-4" style={{ background: "rgba(2,6,23,0.6)" }} onClick={onClose}>
+    <div className="fixed inset-0 z-[100] flex items-start justify-center pt-[12vh] px-4" style={{ background: "rgba(2,6,23,0.6)", backdropFilter: "blur(4px)" }} onClick={onClose}>
       <div
         role="dialog"
         aria-modal="true"
         aria-label="Command Center"
-        className="w-full max-w-xl rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[70vh]"
-        style={{ background: "var(--bg-surface)", border: "1px solid var(--border)" }}
+        className="cc-popover w-full max-w-xl overflow-hidden flex flex-col max-h-[70vh]"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center gap-2.5 px-4 py-3 border-b" style={{ borderColor: "var(--border)" }}>
@@ -358,7 +357,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ open, onClose })
                     onMouseEnter={() => setActiveIndex(renderedIndex)}
                     onClick={item.onSelect}
                     className="w-full flex items-center gap-3 px-4 py-2 text-left text-sm"
-                    style={{ background: isActive ? "var(--bg-hover)" : "transparent", color: "var(--text-primary)" }}
+                    style={{ background: isActive ? "var(--accent-soft)" : "transparent", color: isActive ? "var(--accent-soft-text)" : "var(--text-primary)" }}
                   >
                     <Icon className="w-4 h-4 shrink-0" style={{ color: "var(--text-secondary)" }} />
                     <span className="flex-1 truncate">{item.label}</span>

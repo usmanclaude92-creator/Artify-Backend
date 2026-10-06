@@ -97,6 +97,7 @@ const ROLE_PERMISSION_SETS: Record<RoleKey, readonly string[] | "*"> = {
     "reports.read",
     "reports.export",
     "analytics.read",
+    "social.read",
     "settings.read",
     "settings.manage",
     "audit.read",

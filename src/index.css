@@ -4,34 +4,65 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 @layer base {
+  /*
+   * Theme tokens — aligned with artifysols.com (artifysolscom/src/index.css).
+   * The legacy --bg-* / --border / --text-* / --accent* names are kept so every
+   * page keeps working; only their values changed. The website's own --color-*
+   * names are exposed too, for new components.
+   */
   :root {
-    --bg-app: #f4f5f7;
-    --bg-surface: #ffffff;
-    --bg-surface-alt: #f8fafc;
+    --bg-app: #f8fafc; /* site --color-background */
+    --bg-surface: #ffffff; /* --color-surface */
+    --bg-surface-alt: #f1f5f9; /* --color-surface-subtle */
     --bg-hover: #f1f5f9;
-    --border: #e2e8f0;
-    --border-strong: #cbd5e1;
-    --text-primary: #0f172a;
-    --text-secondary: #475569;
-    --text-muted: #94a3b8;
-    --accent: #4f46e5;
-    --accent-hover: #4338ca;
-    --accent-soft: #eef2ff;
+    --border: #e2e8f0; /* --color-card-border */
+    --border-strong: #cbd5e1; /* --color-border */
+    --text-primary: #020617; /* --color-foreground (18.7:1) */
+    --text-secondary: #334155; /* --color-foreground-muted (9.1:1) */
+    --text-muted: #475569; /* --color-foreground-subtle (5.9:1) */
+    --accent: #7c3aed; /* --color-primary */
+    --accent-hover: #6d28d9;
+    --accent-soft: #ede9fe; /* --color-primary-subtle */
+    --accent-soft-text: #5b21b6; /* --color-primary-subtle-text (8.2:1 on soft) */
+    --accent-border: #ddd6fe;
+    --accent-foreground: #ffffff;
+
+    --color-primary: var(--accent);
+    --color-primary-hover: var(--accent-hover);
+    --color-primary-foreground: var(--accent-foreground);
+    --color-primary-subtle: var(--accent-soft);
+    --color-primary-subtle-text: var(--accent-soft-text);
+    --color-primary-border: var(--accent-border);
+    --color-background: var(--bg-app);
+    --color-surface: var(--bg-surface);
+    --color-foreground: var(--text-primary);
+
+    --radius-control: 0.75rem; /* buttons / inputs / nav items */
+    --radius-card: 1rem;
+    --shadow-card: 0 1px 2px 0 rgba(15, 23, 42, 0.05);
+    --shadow-pop: 0 12px 25px -5px rgba(15, 23, 42, 0.12);
+    --ring-focus: rgba(124, 58, 237, 0.2); /* site input focus ring */
   }
 
   .dark {
-    --bg-app: #0b1120;
-    --bg-surface: #0f172a;
-    --bg-surface-alt: #131f35;
-    --bg-hover: #1e293b;
-    --border: #1e293b;
-    --border-strong: #334155;
-    --text-primary: #f1f5f9;
-    --text-secondary: #cbd5e1;
-    --text-muted: #64748b;
-    --accent: #6366f1;
-    --accent-hover: #818cf8;
-    --accent-soft: rgba(99, 102, 241, 0.12);
+    --bg-app: #07070b;
+    --bg-surface: #0e0e16;
+    --bg-surface-alt: #13131e; /* --color-surface-elevated */
+    --bg-hover: rgba(255, 255, 255, 0.06);
+    --border: rgba(255, 255, 255, 0.12);
+    --border-strong: rgba(255, 255, 255, 0.22);
+    --text-primary: #ffffff;
+    --text-secondary: #e2e8f0;
+    --text-muted: #94a3b8; /* 6.9:1 on #0e0e16 */
+    --accent: #8b5cf6;
+    --accent-hover: #a78bfa;
+    --accent-soft: rgba(139, 92, 246, 0.16);
+    --accent-soft-text: #c4b5fd; /* 10.5:1 on dark canvas */
+    --accent-border: rgba(139, 92, 246, 0.35);
+
+    --shadow-card: 0 1px 2px 0 rgba(0, 0, 0, 0.4);
+    --shadow-pop: 0 18px 40px -8px rgba(0, 0, 0, 0.7);
+    --ring-focus: rgba(139, 92, 246, 0.35);
   }
 
   body {
@@ -45,11 +76,70 @@
   :focus-visible {
     outline: 2px solid var(--accent);
     outline-offset: 2px;
+    border-radius: 0.375rem;
   }
   * {
     scrollbar-width: thin;
     scrollbar-color: var(--border-strong) transparent;
   }
+}
+
+/* Shell chrome — shared hover/active states (website look: violet active, soft neutral hover). */
+.cc-nav-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: var(--radius-control);
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-align: left;
+  color: var(--text-secondary);
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+.cc-nav-item:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+.cc-nav-item[aria-current="page"] {
+  background: var(--accent-soft);
+  color: var(--accent-soft-text);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.cc-ctl {
+  border-radius: var(--radius-control);
+  color: var(--text-secondary);
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+.cc-ctl:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+.cc-field {
+  background: var(--bg-surface-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+.cc-field:hover {
+  border-color: var(--border-strong);
+}
+.cc-popover {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-pop);
+}
+.cc-row:hover {
+  background: var(--bg-hover);
+}
+.cc-subheading {
+  padding: 0.5rem 0.75rem 0.125rem;
+  font-size: 0.625rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
 }
 
 ::-webkit-scrollbar {
