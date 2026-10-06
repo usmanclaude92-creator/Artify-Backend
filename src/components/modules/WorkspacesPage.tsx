@@ -15,6 +15,7 @@ import {
 import { ApiClientError } from "../../lib/apiClient";
 import { Card, Button, Input, Select, Badge, LoadingState, ErrorState, EmptyState, Pagination, Modal, Field, ConfirmDialog } from "../ui/ui";
 import { hasPermission } from "../../lib/permissions";
+import { PortalRegistrationsPanel } from "./PortalRegistrationsPanel";
 
 const STATUS_OPTIONS: WorkspaceStatusValue[] = ["TRIAL", "ACTIVE", "SUSPENDED", "ARCHIVED"];
 const STATUS_TONE: Record<WorkspaceStatusValue, "success" | "warning" | "danger" | "info" | "neutral"> = {
@@ -357,6 +358,8 @@ export const WorkspacesPage: React.FC = () => {
             : "Operational tenants provisioned from CRM clients."}
         </p>
       </div>
+
+      {!isMembersView && <PortalRegistrationsPanel />}
 
       <Card className="p-3 flex flex-col sm:flex-row gap-2">
         <div className="relative flex-1 max-w-xs">

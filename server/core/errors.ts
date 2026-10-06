@@ -46,6 +46,15 @@ export class AuthorizationError extends AppError {
   }
 }
 
+/** Sign-in refused because the account's email address has not been verified yet (only raised after the password was correct). */
+export class EmailNotVerifiedError extends AppError {
+  readonly statusCode = 403;
+  readonly code = ApiErrorCode.EMAIL_NOT_VERIFIED;
+  constructor(message = "Please verify your email address before signing in.") {
+    super(message);
+  }
+}
+
 export class TenantIsolationError extends AppError {
   readonly statusCode = 403;
   readonly code = ApiErrorCode.TENANT_ISOLATION_ERROR;

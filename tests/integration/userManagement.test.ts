@@ -146,7 +146,7 @@ describe("user management", () => {
     const res = await request(app).get("/api/v1/roles").set("Authorization", `Bearer ${adminToken}`);
     expect(res.status).toBe(200);
     const keys = res.body.data.roles.map((r: { key: string }) => r.key).sort();
-    expect(keys).toEqual(["ADMIN", "MANAGER", "SUPER_ADMIN", "USER", "VIEWER"]);
+    expect(keys).toEqual(["ADMIN", "CLIENT_PORTAL", "MANAGER", "SUPER_ADMIN", "USER", "VIEWER"]);
   });
 
   it("GET /permissions returns the full catalog including the new Phase 3 role-management permissions", async () => {

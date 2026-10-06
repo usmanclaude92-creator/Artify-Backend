@@ -71,6 +71,10 @@ export const userRepository = {
     return !!user.lockedUntil && user.lockedUntil.getTime() > Date.now();
   },
 
+  async markEmailVerified(userId: string): Promise<void> {
+    await prisma.user.updateMany({ where: { id: userId, emailVerifiedAt: null }, data: { emailVerifiedAt: new Date() } });
+  },
+
   async updatePasswordHash(userId: string, passwordHash: string): Promise<void> {
     await prisma.user.update({ where: { id: userId }, data: { passwordHash } });
   },

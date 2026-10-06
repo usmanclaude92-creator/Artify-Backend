@@ -17,8 +17,11 @@ import { roleRepository } from "../repositories/roleRepository";
 import { organizationMembershipRepository } from "../repositories/organizationMembershipRepository";
 import { passwordResetRepository } from "../repositories/passwordResetRepository";
 import { hashPassword, verifyPassword } from "../utils/password";
-import { generateSessionToken, generateResetToken } from "../utils/crypto";
-import { AuthenticationError, AuthorizationError, ConflictError, InternalError } from "../core/errors";
+import { generateSessionToken, generateResetToken, generateEmailVerificationToken } from "../utils/crypto";
+import { emailVerificationRepository } from "../repositories/emailVerificationRepository";
+import { emailService } from "./emailService";
+import { notificationService } from "./notificationService";
+import { AuthenticationError, AuthorizationError, ConflictError, EmailNotVerifiedError, InternalError } from "../core/errors";
 import { sanitizeUser, type SanitizedUser, type MembershipSummary } from "../types/domain";
 import type { RegisterInput } from "../schemas/authSchemas";
 import { config } from "../config/env";
@@ -27,6 +30,9 @@ import type { User } from "@prisma/client";
 
 /** Self-registration always creates the organization's ADMIN (not SUPER_ADMIN — that role is reserved for Artify's own platform operators, granted only via the seed/bootstrap procedure, never through the public register endpoint). */
 const SELF_REGISTRATION_ROLE_KEY = "ADMIN";
+
+/** Public website registration: a least-privilege role that can only read its own client portal. */
+const PORTAL_REGISTRATION_ROLE_KEY = "CLIENT_PORTAL";
 
 export interface RequestMeta {
   ip?: string;
@@ -124,6 +130,12 @@ export const authService = {
     const sanitized = await resolveSanitizedUserForOrganization(user, organizationId);
     if (!sanitized) {
       throw new AuthenticationError("This account does not have active access to the requested organization.");
+    }
+
+    // Self-registered portal accounts must prove they control their inbox before a session is issued.
+    // Checked only after the password was verified, so this never reveals whether an email is registered.
+    if (sanitized.role.key === PORTAL_REGISTRATION_ROLE_KEY && !user.emailVerifiedAt && emailService.isEnabled()) {
+      throw new EmailNotVerifiedError();
     }
 
     await userRepository.recordSuccessfulLogin(user.id);
@@ -228,6 +240,145 @@ export const authService = {
     });
 
     return this.login(payload.email, payload.password);
+  },
+
+  /**
+   * Public client-portal registration (artifysols.com). Creates the account in
+   * its own TRIAL organization with the least-privilege CLIENT_PORTAL role —
+   * never an administrator. With email delivery configured the response is
+   * identical whether or not the address already exists (no enumeration), the
+   * account must be verified before sign-in, and an operator is notified to
+   * link it to a CRM client. Without email delivery it falls back to the
+   * degraded mode: immediate sign-in, and a duplicate address returns 409.
+   */
+  async registerPortalAccount(payload: RegisterInput, meta: RequestMeta = {}): Promise<{ status: "verification_required" } | ({ status: "registered" } & LoginResult)> {
+    const emailOn = emailService.isEnabled();
+    const email = payload.email.trim().toLowerCase();
+
+    const existing = await userRepository.findByEmail(email);
+    if (existing) {
+      if (!emailOn) throw new ConflictError("An account with this email address already exists.");
+      emailService.sendAccountAlreadyExists(email, payload.firstName).catch((err) => logger.warn({ err, event: "account_exists_email_failed" }, "Could not send account-exists email"));
+      return { status: "verification_required" };
+    }
+
+    const role = await roleRepository.findByKey(PORTAL_REGISTRATION_ROLE_KEY);
+    if (!role) throw new InternalError("Registration is not available: required role configuration is missing.");
+
+    const passwordHash = await hashPassword(payload.password);
+
+    const created = await prisma.$transaction(async (tx) => {
+      const baseSlug = payload.organizationName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 80) || "organization";
+      let slug = baseSlug;
+      let suffix = 1;
+      while (await tx.organization.findUnique({ where: { slug } })) {
+        suffix += 1;
+        slug = `${baseSlug}-${suffix}`;
+        if (suffix > 50) break;
+      }
+      const organization = await tx.organization.create({ data: { name: payload.organizationName, slug, type: "CLIENT", tier: "GROWTH", status: "TRIAL" } });
+      const user = await tx.user.create({
+        data: {
+          organizationId: organization.id,
+          email,
+          passwordHash,
+          firstName: payload.firstName,
+          lastName: payload.lastName,
+          displayName: `${payload.firstName} ${payload.lastName}`.trim(),
+          title: payload.title?.trim() || "Client user",
+          roleId: role.id,
+        },
+      });
+      await tx.organizationMembership.create({ data: { userId: user.id, organizationId: organization.id, roleId: role.id, status: "ACTIVE", isPrimary: true } });
+      return { organization, user };
+    });
+
+    await auditLogRepository.record({
+      organizationId: created.organization.id,
+      actorUserId: created.user.id,
+      actorType: "USER",
+      action: "AUTH_PORTAL_REGISTERED",
+      resourceType: "user",
+      resourceId: created.user.id,
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent,
+    });
+    void this.notifyOperatorsOfRegistration(created.organization.id, created.organization.name, `${payload.firstName} ${payload.lastName}`.trim());
+
+    if (emailOn) {
+      await this.issueEmailVerification(created.user.id, email, payload.firstName).catch((err) =>
+        logger.error({ err, event: "verification_email_failed", userId: created.user.id }, "Could not send verification email")
+      );
+      return { status: "verification_required" };
+    }
+
+    const login = await this.login(email, payload.password, meta);
+    return { status: "registered", ...login };
+  },
+
+  /** Tells the agency's own admins (the public website organization) that a new client account is waiting to be linked. Best-effort. */
+  async notifyOperatorsOfRegistration(organizationId: string, organizationName: string, personName: string): Promise<void> {
+    const agencyOrgId = config.publicWebsiteOrganizationId;
+    if (!agencyOrgId) return;
+    try {
+      const admins = await prisma.user.findMany({
+        where: { organizationId: agencyOrgId, status: "ACTIVE", role: { key: { in: ["SUPER_ADMIN", "ADMIN"] } } },
+        select: { id: true },
+        take: 20,
+      });
+      await Promise.all(
+        admins.map((a) =>
+          notificationService.notify({
+            organizationId: agencyOrgId,
+            userId: a.id,
+            type: "PORTAL_REGISTRATION",
+            title: "New client portal registration",
+            message: `${personName} registered ${organizationName}. Link the account to a client to activate the portal.`,
+            entityType: "organization",
+            entityId: organizationId,
+          })
+        )
+      );
+    } catch (err) {
+      logger.warn({ err, event: "registration_notify_failed" }, "Could not notify operators of a portal registration");
+    }
+  },
+
+  async issueEmailVerification(userId: string, email: string, firstName: string): Promise<void> {
+    await emailVerificationRepository.invalidateAllForUser(userId);
+    const token = generateEmailVerificationToken();
+    await emailVerificationRepository.create({ token, userId, expiresAt: new Date(Date.now() + config.emailVerificationTtlHours * 60 * 60 * 1000) });
+    await emailService.sendVerification(email, firstName, token);
+  },
+
+  async verifyEmail(token: string, meta: RequestMeta = {}): Promise<void> {
+    const row = await emailVerificationRepository.findValidByToken(token);
+    if (!row) throw new AuthenticationError("This verification link is invalid or has expired.");
+    const user = await userRepository.findById(row.userId);
+    if (!user) throw new AuthenticationError("This verification link is invalid or has expired.");
+    await userRepository.markEmailVerified(user.id);
+    await emailVerificationRepository.markUsed(row.id);
+    await emailVerificationRepository.invalidateAllForUser(user.id);
+    await auditLogRepository.record({
+      organizationId: user.organizationId,
+      actorUserId: user.id,
+      actorType: "USER",
+      action: "AUTH_EMAIL_VERIFIED",
+      resourceType: "user",
+      resourceId: user.id,
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent,
+    });
+  },
+
+  /** Always resolves silently — never reveals whether the address exists or is already verified. */
+  async resendVerification(email: string): Promise<void> {
+    if (!emailService.isEnabled()) return;
+    const user = await userRepository.findByEmail(email.trim().toLowerCase());
+    if (!user || user.status !== "ACTIVE" || user.emailVerifiedAt) return;
+    await this.issueEmailVerification(user.id, user.email, user.firstName).catch((err) =>
+      logger.error({ err, event: "verification_email_failed", userId: user.id }, "Could not send verification email")
+    );
   },
 
   async verifySession(token: string): Promise<SanitizedUser | null> {
@@ -354,9 +505,15 @@ export const authService = {
       userAgent: meta.userAgent,
     });
 
-    // Phase 13 integration point: send `token` via the email provider
-    // instead of returning it here. Until then, non-production callers get
-    // it back directly so the reset flow is testable end-to-end.
+    // With email delivery configured the token only ever travels by email.
+    // Otherwise non-production callers get it back directly so the reset flow
+    // stays testable; production without email cannot deliver resets at all.
+    if (emailService.isEnabled()) {
+      await emailService.sendPasswordReset(user.email, user.firstName, token).catch((err) =>
+        logger.error({ err, event: "reset_email_failed", userId: user.id }, "Could not send password reset email")
+      );
+      return {};
+    }
     return config.isProduction ? {} : { devToken: token };
   },
 
@@ -373,6 +530,8 @@ export const authService = {
 
     const newHash = await hashPassword(newPassword);
     await userRepository.updatePasswordHash(user.id, newHash);
+    // Following the emailed link proves control of the inbox.
+    await userRepository.markEmailVerified(user.id);
     await passwordResetRepository.markUsed(resetRow.id);
     await passwordResetRepository.invalidateAllForUser(user.id);
 

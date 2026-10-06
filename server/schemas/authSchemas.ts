@@ -25,6 +25,26 @@ export const registerSchema = z.object({
 });
 export type RegisterInput = z.infer<typeof registerSchema>;
 
+/** Public client-portal registration: same fields as register plus the honeypot ("website" must stay empty) and an optional Turnstile token. */
+export const portalRegisterSchema = registerSchema
+  .extend({
+    website: z.string().max(200).optional(),
+    captchaToken: z.string().max(4096).optional(),
+  })
+  .superRefine((v, ctx) => {
+    const local = v.email.split("@")[0]?.toLowerCase() ?? "";
+    if (local.length >= 4 && v.password.toLowerCase().includes(local)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["password"], message: "Password must not contain your email name." });
+    }
+  });
+export type PortalRegisterInput = z.infer<typeof portalRegisterSchema>;
+
+export const verifyEmailSchema = z.object({ token: z.string().trim().min(1).max(200) });
+export const resendVerificationSchema = z.object({
+  email: z.string().trim().min(1).email(),
+  captchaToken: z.string().max(4096).optional(),
+});
+
 export const changePasswordSchema = z
   .object({
     currentPassword: z.string().min(1),

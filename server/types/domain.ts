@@ -10,7 +10,7 @@
 import type { User as PrismaUser } from "@prisma/client";
 
 /** The 5 built-in system roles seeded by prisma/seed.ts. Custom roles (not built in Phase 2) would extend this at runtime without a corresponding TS literal. */
-export const SYSTEM_ROLE_KEYS = ["SUPER_ADMIN", "ADMIN", "MANAGER", "USER", "VIEWER"] as const;
+export const SYSTEM_ROLE_KEYS = ["SUPER_ADMIN", "ADMIN", "MANAGER", "USER", "VIEWER", "CLIENT_PORTAL"] as const;
 export type RoleKey = (typeof SYSTEM_ROLE_KEYS)[number];
 
 export const ROLE_DEFINITIONS: Readonly<Record<RoleKey, { name: string; description: string }>> = {
@@ -33,6 +33,10 @@ export const ROLE_DEFINITIONS: Readonly<Record<RoleKey, { name: string; descript
   VIEWER: {
     name: "Viewer",
     description: "Read-only access within the organization.",
+  },
+  CLIENT_PORTAL: {
+    name: "Client Portal User",
+    description: "Self-registered client account: read-only access to its own client portal. No Control Center administration.",
   },
 };
 

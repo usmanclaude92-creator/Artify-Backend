@@ -100,6 +100,17 @@ const envSchema = z
     PASSWORD_RESET_TOKEN_TTL_MINUTES: z.coerce.number().int().positive().default(30),
     PASSWORD_MIN_LENGTH: z.coerce.number().int().min(8).default(10),
 
+    // Account email (verification + password reset). With EMAIL_PROVIDER=none the
+    // platform runs in "degraded" mode: no verification gate and no reset email.
+    EMAIL_PROVIDER: z.enum(["none", "resend"]).default("none"),
+    RESEND_API_KEY: z.string().optional().default(""),
+    EMAIL_FROM: z.string().optional().default(""),
+    EMAIL_VERIFICATION_TTL_HOURS: z.coerce.number().int().positive().default(48),
+    // Legacy POST /auth/register creates an ORGANIZATION ADMIN. It stays on in dev/test (many flows seed through it) but is OFF by default in production; public sign-up uses /auth/portal/register.
+    ALLOW_ADMIN_SELF_REGISTRATION: z.enum(["true", "false"]).optional(),
+    // Cloudflare Turnstile bot protection for public auth forms. Optional; unset = honeypot only.
+    TURNSTILE_SECRET_KEY: z.string().optional().default(""),
+
     // Phase 6 — client-admin workspace invitations (docs/WORKSPACE_PROVISIONING.md).
     INVITATION_TOKEN_TTL_HOURS: z.coerce.number().int().positive().default(72),
 
@@ -238,6 +249,11 @@ const envSchema = z
       }
     }
 
+    if (val.EMAIL_PROVIDER === "resend") {
+      if (!val.RESEND_API_KEY) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["RESEND_API_KEY"], message: "required when EMAIL_PROVIDER=resend" });
+      if (!val.EMAIL_FROM) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["EMAIL_FROM"], message: "required when EMAIL_PROVIDER=resend (e.g. 'Artify <no-reply@artifysols.com>')" });
+    }
+
     if (val.OBJECT_STORAGE_PROVIDER === "s3" || val.OBJECT_STORAGE_PROVIDER === "r2") {
       if (!val.OBJECT_STORAGE_BUCKET) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["OBJECT_STORAGE_BUCKET"], message: "required for the s3/r2 storage provider" });
       if (!val.OBJECT_STORAGE_ACCESS_KEY_ID) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["OBJECT_STORAGE_ACCESS_KEY_ID"], message: "required for the s3/r2 storage provider" });
@@ -291,6 +307,12 @@ export type AppConfig = Readonly<{
   passwordResetTokenTtlMinutes: number;
   passwordMinLength: number;
   invitationTokenTtlHours: number;
+  emailProvider: "none" | "resend";
+  resendApiKey: string;
+  emailFrom: string;
+  emailVerificationTtlHours: number;
+  turnstileSecretKey: string;
+  allowAdminSelfRegistration: boolean;
   publicWebsiteOrganizationId: string;
   publicSiteBaseUrl: string;
   cronSecret: string;
@@ -356,6 +378,12 @@ export function validateEnv(raw: NodeJS.ProcessEnv | Record<string, string | und
       passwordResetTokenTtlMinutes: env.PASSWORD_RESET_TOKEN_TTL_MINUTES,
       passwordMinLength: env.PASSWORD_MIN_LENGTH,
       invitationTokenTtlHours: env.INVITATION_TOKEN_TTL_HOURS,
+      emailProvider: env.EMAIL_PROVIDER,
+      resendApiKey: env.RESEND_API_KEY,
+      emailFrom: env.EMAIL_FROM,
+      emailVerificationTtlHours: env.EMAIL_VERIFICATION_TTL_HOURS,
+      turnstileSecretKey: env.TURNSTILE_SECRET_KEY,
+      allowAdminSelfRegistration: env.ALLOW_ADMIN_SELF_REGISTRATION ? env.ALLOW_ADMIN_SELF_REGISTRATION === "true" : env.NODE_ENV !== "production",
       publicWebsiteOrganizationId: env.PUBLIC_WEBSITE_ORGANIZATION_ID,
       publicSiteBaseUrl: env.PUBLIC_SITE_BASE_URL,
       cronSecret: env.CRON_SECRET,

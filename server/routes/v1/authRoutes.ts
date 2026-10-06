@@ -3,14 +3,19 @@ import { authService } from "../../services/authService";
 import { sessionRepository } from "../../repositories/sessionRepository";
 import { auditLogRepository } from "../../repositories/auditLogRepository";
 import { authenticateToken } from "../../middleware/auth";
-import { NotFoundError } from "../../core/errors";
-import { authLimiter, passwordResetLimiter, sensitiveActionLimiter } from "../../middleware/rateLimiter";
+import { NotFoundError, AuthorizationError } from "../../core/errors";
+import { config } from "../../config/env";
+import { captchaService } from "../../services/captchaService";
+import { authLimiter, passwordResetLimiter, sensitiveActionLimiter, registerLimiter, verificationLimiter } from "../../middleware/rateLimiter";
 import { asyncHandler } from "../../utils/asyncHandler";
 import { sendSuccess } from "../../core/apiResponse";
 import { AuthenticationError } from "../../core/errors";
 import {
   loginSchema,
   registerSchema,
+  portalRegisterSchema,
+  verifyEmailSchema,
+  resendVerificationSchema,
   changePasswordSchema,
   passwordResetRequestSchema,
   passwordResetConfirmSchema,
@@ -33,10 +38,54 @@ router.post(
   })
 );
 
+// Public client-portal registration: least-privilege role, honeypot + optional CAPTCHA,
+// per-IP cap, email verification, and no account enumeration when email is configured.
+router.post(
+  "/portal/register",
+  registerLimiter,
+  authLimiter,
+  asyncHandler(async (req, res) => {
+    const input = portalRegisterSchema.parse(req.body);
+    // Honeypot: real users never fill the hidden field. Answer exactly like a success so bots learn nothing.
+    if (input.website && input.website.trim().length > 0) {
+      sendSuccess(res, { status: "verification_required" }, 201);
+      return;
+    }
+    await captchaService.assertHuman(input.captchaToken, req.ip);
+    const { website: _website, captchaToken: _captchaToken, ...account } = input;
+    const result = await authService.registerPortalAccount(account, requestMeta(req));
+    sendSuccess(res, result, 201);
+  })
+);
+
+router.post(
+  "/verify-email",
+  verificationLimiter,
+  asyncHandler(async (req, res) => {
+    const input = verifyEmailSchema.parse(req.body);
+    await authService.verifyEmail(input.token, requestMeta(req));
+    sendSuccess(res, { verified: true });
+  })
+);
+
+router.post(
+  "/resend-verification",
+  verificationLimiter,
+  asyncHandler(async (req, res) => {
+    const input = resendVerificationSchema.parse(req.body);
+    await captchaService.assertHuman(input.captchaToken, req.ip);
+    await authService.resendVerification(input.email);
+    sendSuccess(res, { message: "If that account needs verification, a new email has been sent." });
+  })
+);
+
 router.post(
   "/register",
   authLimiter,
   asyncHandler(async (req, res) => {
+    if (!config.allowAdminSelfRegistration) {
+      throw new AuthorizationError("Self-registration is disabled. Use the client portal registration.");
+    }
     const input = registerSchema.parse(req.body);
     const result = await authService.register(input);
     sendSuccess(res, result, 201);
@@ -93,6 +142,7 @@ router.post(
   passwordResetLimiter,
   asyncHandler(async (req, res) => {
     const input = passwordResetRequestSchema.parse(req.body);
+    await captchaService.assertHuman(typeof req.body?.captchaToken === "string" ? req.body.captchaToken : undefined, req.ip);
     const result = await authService.requestPasswordReset(input.email, requestMeta(req));
     // Generic response regardless of whether the account exists — never
     // let this endpoint be used to enumerate registered emails.

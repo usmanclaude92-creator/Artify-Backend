@@ -481,6 +481,15 @@ const ROLE_PERMISSION_SETS: Record<RoleKey, readonly string[] | "*"> = {
     // Phase 14 — VIEWER is read-only for campaigns, same convention.
     "campaigns.read",
   ],
+  CLIENT_PORTAL: [
+    "portal.dashboard.read",
+    "portal.contracts.read",
+    "portal.subscriptions.read",
+    "portal.invoices.read",
+    "portal.payments.read",
+    "portal.onboarding.read",
+    "portal.documents.read",
+  ],
 };
 
 /**

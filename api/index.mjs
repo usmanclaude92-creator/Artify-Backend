@@ -68,6 +68,16 @@ var envSchema = z.object({
   ACCOUNT_LOCKOUT_DURATION_MINUTES: z.coerce.number().int().positive().default(15),
   PASSWORD_RESET_TOKEN_TTL_MINUTES: z.coerce.number().int().positive().default(30),
   PASSWORD_MIN_LENGTH: z.coerce.number().int().min(8).default(10),
+  // Account email (verification + password reset). With EMAIL_PROVIDER=none the
+  // platform runs in "degraded" mode: no verification gate and no reset email.
+  EMAIL_PROVIDER: z.enum(["none", "resend"]).default("none"),
+  RESEND_API_KEY: z.string().optional().default(""),
+  EMAIL_FROM: z.string().optional().default(""),
+  EMAIL_VERIFICATION_TTL_HOURS: z.coerce.number().int().positive().default(48),
+  // Legacy POST /auth/register creates an ORGANIZATION ADMIN. It stays on in dev/test (many flows seed through it) but is OFF by default in production; public sign-up uses /auth/portal/register.
+  ALLOW_ADMIN_SELF_REGISTRATION: z.enum(["true", "false"]).optional(),
+  // Cloudflare Turnstile bot protection for public auth forms. Optional; unset = honeypot only.
+  TURNSTILE_SECRET_KEY: z.string().optional().default(""),
   // Phase 6 — client-admin workspace invitations (docs/WORKSPACE_PROVISIONING.md).
   INVITATION_TOKEN_TTL_HOURS: z.coerce.number().int().positive().default(72),
   // Rate limiting (docs/SECURITY_MODEL.md "Authentication"). The default
@@ -174,6 +184,10 @@ var envSchema = z.object({
       });
     }
   }
+  if (val.EMAIL_PROVIDER === "resend") {
+    if (!val.RESEND_API_KEY) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["RESEND_API_KEY"], message: "required when EMAIL_PROVIDER=resend" });
+    if (!val.EMAIL_FROM) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["EMAIL_FROM"], message: "required when EMAIL_PROVIDER=resend (e.g. 'Artify <no-reply@artifysols.com>')" });
+  }
   if (val.OBJECT_STORAGE_PROVIDER === "s3" || val.OBJECT_STORAGE_PROVIDER === "r2") {
     if (!val.OBJECT_STORAGE_BUCKET) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["OBJECT_STORAGE_BUCKET"], message: "required for the s3/r2 storage provider" });
     if (!val.OBJECT_STORAGE_ACCESS_KEY_ID) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["OBJECT_STORAGE_ACCESS_KEY_ID"], message: "required for the s3/r2 storage provider" });
@@ -236,6 +250,12 @@ function validateEnv(raw) {
       passwordResetTokenTtlMinutes: env.PASSWORD_RESET_TOKEN_TTL_MINUTES,
       passwordMinLength: env.PASSWORD_MIN_LENGTH,
       invitationTokenTtlHours: env.INVITATION_TOKEN_TTL_HOURS,
+      emailProvider: env.EMAIL_PROVIDER,
+      resendApiKey: env.RESEND_API_KEY,
+      emailFrom: env.EMAIL_FROM,
+      emailVerificationTtlHours: env.EMAIL_VERIFICATION_TTL_HOURS,
+      turnstileSecretKey: env.TURNSTILE_SECRET_KEY,
+      allowAdminSelfRegistration: env.ALLOW_ADMIN_SELF_REGISTRATION ? env.ALLOW_ADMIN_SELF_REGISTRATION === "true" : env.NODE_ENV !== "production",
       publicWebsiteOrganizationId: env.PUBLIC_WEBSITE_ORGANIZATION_ID,
       publicSiteBaseUrl: env.PUBLIC_SITE_BASE_URL,
       cronSecret: env.CRON_SECRET,
@@ -378,6 +398,13 @@ var AuthorizationError = class extends AppError {
     this.code = "FORBIDDEN" /* FORBIDDEN */;
   }
 };
+var EmailNotVerifiedError = class extends AppError {
+  constructor(message = "Please verify your email address before signing in.") {
+    super(message);
+    this.statusCode = 403;
+    this.code = "EMAIL_NOT_VERIFIED" /* EMAIL_NOT_VERIFIED */;
+  }
+};
 var NotFoundError = class extends AppError {
   constructor(message = "Resource not found") {
     super(message);
@@ -457,6 +484,9 @@ function last4(secret) {
 import { randomBytes as randomBytes2, createHash, createHmac, timingSafeEqual } from "node:crypto";
 function generateSessionToken() {
   return `art_sess_${randomBytes2(32).toString("hex")}`;
+}
+function generateEmailVerificationToken() {
+  return `art_verify_${randomBytes2(32).toString("hex")}`;
 }
 function generateResetToken() {
   return `art_reset_${randomBytes2(32).toString("hex")}`;
@@ -877,7 +907,7 @@ var webhookEndpointService = {
       }
     }));
   },
-  async create(caller, input, meta3 = {}) {
+  async create(caller, input, meta4 = {}) {
     const count = await prisma.webhookEndpoint.count({ where: { organizationId: caller.organizationId, deletedAt: null } });
     if (count >= MAX_ENDPOINTS_PER_ORG) throw new ConflictError(`An organization can have at most ${MAX_ENDPOINTS_PER_ORG} webhook endpoints.`);
     await assertSafeOutboundUrl(input.url);
@@ -902,12 +932,12 @@ var webhookEndpointService = {
       resourceType: "webhook_endpoint",
       resourceId: endpoint.id,
       afterData: { name: endpoint.name, url: endpoint.url, events },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return { endpoint: projectEndpoint(endpoint), secret };
   },
-  async update(caller, id, input, meta3 = {}) {
+  async update(caller, id, input, meta4 = {}) {
     const existing = await loadInOrg(id, caller.organizationId);
     if (input.url !== void 0) await assertSafeOutboundUrl(input.url);
     const endpoint = await prisma.webhookEndpoint.update({
@@ -928,12 +958,12 @@ var webhookEndpointService = {
       resourceId: id,
       beforeData: { url: existing.url, events: existing.events, enabled: existing.enabled },
       afterData: { url: endpoint.url, events: endpoint.events, enabled: endpoint.enabled },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return projectEndpoint(endpoint);
   },
-  async rotateSecret(caller, id, meta3 = {}) {
+  async rotateSecret(caller, id, meta4 = {}) {
     const existing = await loadInOrg(id, caller.organizationId);
     const secret = newSigningSecret();
     const endpoint = await prisma.webhookEndpoint.update({ where: { id: existing.id }, data: { secretCiphertext: encryptSecret(secret), secretLast4: last4(secret) } });
@@ -944,12 +974,12 @@ var webhookEndpointService = {
       action: "WEBHOOK_SECRET_ROTATED",
       resourceType: "webhook_endpoint",
       resourceId: id,
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return { endpoint: projectEndpoint(endpoint), secret };
   },
-  async remove(caller, id, meta3 = {}) {
+  async remove(caller, id, meta4 = {}) {
     const existing = await loadInOrg(id, caller.organizationId);
     await prisma.webhookEndpoint.update({ where: { id: existing.id }, data: { deletedAt: /* @__PURE__ */ new Date(), enabled: false } });
     await auditLogRepository.record({
@@ -960,8 +990,8 @@ var webhookEndpointService = {
       resourceType: "webhook_endpoint",
       resourceId: id,
       beforeData: { name: existing.name, url: existing.url },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
   },
   async test(caller, id) {
@@ -1227,6 +1257,29 @@ var authLimiter = rateLimit({
     return `${req.ip ?? "unknown-ip"}:${email}`;
   }
 });
+var registerLimiter = rateLimit({
+  windowMs: 60 * 60 * 1e3,
+  limit: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: rateLimitHandler,
+  store: makeStore("register"),
+  passOnStoreError: true,
+  keyGenerator: (req) => req.ip ?? "unknown-ip"
+});
+var verificationLimiter = rateLimit({
+  windowMs: 60 * 60 * 1e3,
+  limit: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: rateLimitHandler,
+  store: makeStore("verification"),
+  passOnStoreError: true,
+  keyGenerator: (req) => {
+    const email = typeof req.body?.email === "string" ? req.body.email.toLowerCase() : "unknown";
+    return `${req.ip ?? "unknown-ip"}:${email}`;
+  }
+});
 var webhookLimiter = rateLimit({
   windowMs: 5 * 60 * 1e3,
   limit: 100,
@@ -1291,7 +1344,7 @@ var aiExecutionLimiter = rateLimit({
 });
 
 // server/routes/v1/index.ts
-import { Router as Router61 } from "express";
+import { Router as Router62 } from "express";
 
 // server/routes/v1/authRoutes.ts
 import { Router } from "express";
@@ -1345,6 +1398,9 @@ var userRepository = {
   },
   isLocked(user) {
     return !!user.lockedUntil && user.lockedUntil.getTime() > Date.now();
+  },
+  async markEmailVerified(userId) {
+    await prisma.user.updateMany({ where: { id: userId, emailVerifiedAt: null }, data: { emailVerifiedAt: /* @__PURE__ */ new Date() } });
   },
   async updatePasswordHash(userId, passwordHash) {
     await prisma.user.update({ where: { id: userId }, data: { passwordHash } });
@@ -1604,8 +1660,189 @@ function validatePasswordPolicy(password) {
   return null;
 }
 
+// server/repositories/emailVerificationRepository.ts
+var emailVerificationRepository = {
+  async create(data) {
+    return prisma.emailVerificationToken.create({ data: { tokenHash: hashToken(data.token), userId: data.userId, expiresAt: data.expiresAt } });
+  },
+  async findValidByToken(token) {
+    const row = await prisma.emailVerificationToken.findUnique({ where: { tokenHash: hashToken(token) } });
+    if (!row || row.usedAt || row.expiresAt.getTime() <= Date.now()) return null;
+    return row;
+  },
+  async markUsed(id) {
+    await prisma.emailVerificationToken.update({ where: { id }, data: { usedAt: /* @__PURE__ */ new Date() } });
+  },
+  async invalidateAllForUser(userId) {
+    await prisma.emailVerificationToken.updateMany({ where: { userId, usedAt: null }, data: { usedAt: /* @__PURE__ */ new Date() } });
+  }
+};
+
+// server/services/emailService.ts
+function esc(value) {
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+function siteUrl(path) {
+  const base = (config.publicSiteBaseUrl || "https://artifysols.com").replace(/\/+$/, "");
+  return `${base}${path}`;
+}
+function layout(heading, bodyHtml, ctaLabel, ctaUrl) {
+  const cta = ctaLabel && ctaUrl ? `<p style="margin:28px 0"><a href="${esc(ctaUrl)}" style="background:#6d28d9;color:#fff;text-decoration:none;padding:12px 22px;border-radius:10px;font-weight:600;display:inline-block">${esc(ctaLabel)}</a></p>
+       <p style="font-size:12px;color:#64748b">If the button does not work, copy this link into your browser:<br>${esc(ctaUrl)}</p>` : "";
+  return `<!doctype html><html><body style="margin:0;background:#f8fafc;font-family:Arial,Helvetica,sans-serif;color:#0f172a">
+  <div style="max-width:520px;margin:0 auto;padding:32px 20px">
+    <p style="font-weight:700;font-size:18px;margin:0 0 20px">Artify Solutions</p>
+    <div style="background:#fff;border:1px solid #e2e8f0;border-radius:14px;padding:28px">
+      <h1 style="font-size:20px;margin:0 0 12px">${esc(heading)}</h1>
+      ${bodyHtml}${cta}
+    </div>
+    <p style="font-size:12px;color:#94a3b8;margin-top:18px">You received this because of activity on your Artify account. If this was not you, you can ignore this email.</p>
+  </div></body></html>`;
+}
+var emailService = {
+  /** True when a real provider is configured; auth flows depend on this to decide whether email verification can be enforced. */
+  isEnabled() {
+    return config.emailProvider !== "none";
+  },
+  async send(email) {
+    if (config.emailProvider === "resend") {
+      let res;
+      try {
+        res = await fetch("https://api.resend.com/emails", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${config.resendApiKey}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ from: config.emailFrom, to: [email.to], subject: email.subject, text: email.text, html: email.html }),
+          signal: AbortSignal.timeout(1e4)
+        });
+      } catch (err) {
+        logger.error({ err, event: "email_send_failed" }, "Email provider request failed");
+        throw new InfrastructureError("Email could not be sent right now.");
+      }
+      if (!res.ok) {
+        logger.error({ status: res.status, event: "email_send_rejected" }, "Email provider rejected the message");
+        throw new InfrastructureError("Email could not be sent right now.");
+      }
+      return;
+    }
+    throw new InfrastructureError("Email delivery is not configured.");
+  },
+  async sendVerification(to, firstName, token) {
+    const url = siteUrl(`/verify-email?token=${encodeURIComponent(token)}`);
+    await this.send({
+      to,
+      subject: "Verify your email for Artify",
+      text: `Hi ${firstName},
+
+Confirm your email address to finish setting up your Artify account:
+${url}
+
+This link expires in ${config.emailVerificationTtlHours} hours.`,
+      html: layout("Confirm your email", `<p>Hi ${esc(firstName)}, confirm your email address to finish setting up your Artify client account. The link expires in ${config.emailVerificationTtlHours} hours.</p>`, "Verify email", url)
+    });
+  },
+  async sendPasswordReset(to, firstName, token) {
+    const url = siteUrl(`/reset-password?token=${encodeURIComponent(token)}`);
+    await this.send({
+      to,
+      subject: "Reset your Artify password",
+      text: `Hi ${firstName},
+
+Use this link to choose a new password:
+${url}
+
+It expires in ${config.passwordResetTokenTtlMinutes} minutes. If you did not ask for this, ignore this email.`,
+      html: layout("Reset your password", `<p>Hi ${esc(firstName)}, use the button below to choose a new password. The link expires in ${config.passwordResetTokenTtlMinutes} minutes.</p>`, "Choose a new password", url)
+    });
+  },
+  /** Sent instead of a second account when someone registers with an email that already exists — keeps the public response identical. */
+  async sendAccountAlreadyExists(to, firstName) {
+    const url = siteUrl("/");
+    await this.send({
+      to,
+      subject: "You already have an Artify account",
+      text: `Hi ${firstName},
+
+Someone (hopefully you) tried to create an Artify account with this email address, but one already exists. You can sign in, or use "Forgot password" if you need to reset it: ${url}`,
+      html: layout("You already have an account", `<p>Hi ${esc(firstName)}, someone tried to create an Artify account with this email address, but one already exists. Sign in, or use "Forgot password" to reset it.</p>`, "Go to Artify", url)
+    });
+  }
+};
+
+// server/repositories/notificationRepository.ts
+var notificationRepository = {
+  async list(userId, organizationId, filters, page, limit) {
+    const where = { userId, organizationId, ...filters.status ? { status: filters.status } : {} };
+    const [rows, total] = await Promise.all([
+      prisma.notification.findMany({ where, orderBy: { createdAt: "desc" }, skip: (page - 1) * limit, take: limit }),
+      prisma.notification.count({ where })
+    ]);
+    return { rows, total };
+  },
+  async unreadCount(userId, organizationId) {
+    return prisma.notification.count({ where: { userId, organizationId, status: "UNREAD" } });
+  },
+  async findByIdForUser(id, userId) {
+    return prisma.notification.findFirst({ where: { id, userId } });
+  },
+  async create(data) {
+    return prisma.notification.create({ data });
+  },
+  async markRead(id) {
+    return prisma.notification.update({ where: { id }, data: { status: "READ", readAt: /* @__PURE__ */ new Date() } });
+  },
+  async markAllRead(userId, organizationId) {
+    const result = await prisma.notification.updateMany({
+      where: { userId, organizationId, status: "UNREAD" },
+      data: { status: "READ", readAt: /* @__PURE__ */ new Date() }
+    });
+    return result.count;
+  }
+};
+
+// server/services/notificationService.ts
+var notificationService = {
+  async listNotifications(userId, organizationId, status, page, limit) {
+    return notificationRepository.list(userId, organizationId, { status }, page, limit);
+  },
+  async unreadCount(userId, organizationId) {
+    return notificationRepository.unreadCount(userId, organizationId);
+  },
+  async markRead(userId, id) {
+    const existing = await notificationRepository.findByIdForUser(id, userId);
+    if (!existing) throw new NotFoundError("Notification not found.");
+    if (existing.status === "READ") return existing;
+    return notificationRepository.markRead(id);
+  },
+  async markAllRead(userId, organizationId) {
+    return notificationRepository.markAllRead(userId, organizationId);
+  },
+  /**
+   * Internal fire-and-forget helper other services call directly (never
+   * exposed via a public route — a notification always originates from a
+   * real system event, not a user-authored POST body). Never throws: a
+   * notification failing to write must not fail the business operation
+   * that triggered it (e.g. a lead create should still succeed even if
+   * writing its "assigned to you" notification somehow fails).
+   */
+  async notify(params) {
+    if (!params.userId) return;
+    try {
+      await notificationRepository.create({
+        organizationId: params.organizationId,
+        userId: params.userId,
+        type: params.type,
+        title: params.title,
+        message: params.message,
+        entityType: params.entityType,
+        entityId: params.entityId
+      });
+    } catch {
+    }
+  }
+};
+
 // server/types/domain.ts
-var SYSTEM_ROLE_KEYS = ["SUPER_ADMIN", "ADMIN", "MANAGER", "USER", "VIEWER"];
+var SYSTEM_ROLE_KEYS = ["SUPER_ADMIN", "ADMIN", "MANAGER", "USER", "VIEWER", "CLIENT_PORTAL"];
 var ROLE_DEFINITIONS = {
   SUPER_ADMIN: {
     name: "Super Administrator",
@@ -1626,6 +1863,10 @@ var ROLE_DEFINITIONS = {
   VIEWER: {
     name: "Viewer",
     description: "Read-only access within the organization."
+  },
+  CLIENT_PORTAL: {
+    name: "Client Portal User",
+    description: "Self-registered client account: read-only access to its own client portal. No Control Center administration."
   }
 };
 var PERMISSION_KEYS = [
@@ -1883,6 +2124,7 @@ function sanitizeUser(user, role) {
 
 // server/services/authService.ts
 var SELF_REGISTRATION_ROLE_KEY = "ADMIN";
+var PORTAL_REGISTRATION_ROLE_KEY = "CLIENT_PORTAL";
 function sessionExpiry() {
   return new Date(Date.now() + config.sessionTtlHours * 60 * 60 * 1e3);
 }
@@ -1896,7 +2138,7 @@ async function resolveSanitizedUserForOrganization(user, organizationId) {
   return sanitizeUser({ ...user, organizationId }, role);
 }
 var authService = {
-  async login(email, password, meta3 = {}, targetOrganizationId) {
+  async login(email, password, meta4 = {}, targetOrganizationId) {
     const user = await userRepository.findByEmail(email);
     const genericFailure = () => new AuthenticationError("Invalid email or password credentials.");
     if (!user) throw genericFailure();
@@ -1916,8 +2158,8 @@ var authService = {
         resourceType: "session",
         resourceId: user.id,
         result: "FAILURE",
-        ipAddress: meta3.ip,
-        userAgent: meta3.userAgent
+        ipAddress: meta4.ip,
+        userAgent: meta4.userAgent
       });
       if (nowLocked) {
         logger.warn({ event: "account_locked", userId: user.id }, "Account locked after repeated failed logins");
@@ -1929,8 +2171,8 @@ var authService = {
           resourceType: "user",
           resourceId: user.id,
           result: "FAILURE",
-          ipAddress: meta3.ip,
-          userAgent: meta3.userAgent
+          ipAddress: meta4.ip,
+          userAgent: meta4.userAgent
         });
       }
       throw genericFailure();
@@ -1943,6 +2185,9 @@ var authService = {
     if (!sanitized) {
       throw new AuthenticationError("This account does not have active access to the requested organization.");
     }
+    if (sanitized.role.key === PORTAL_REGISTRATION_ROLE_KEY && !user.emailVerifiedAt && emailService.isEnabled()) {
+      throw new EmailNotVerifiedError();
+    }
     await userRepository.recordSuccessfulLogin(user.id);
     const token = generateSessionToken();
     const expiresAt = sessionExpiry();
@@ -1951,8 +2196,8 @@ var authService = {
       userId: user.id,
       organizationId,
       expiresAt,
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     await auditLogRepository.record({
       organizationId,
@@ -1962,8 +2207,8 @@ var authService = {
       action: "AUTH_LOGIN",
       resourceType: "session",
       resourceId: user.id,
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return { session: { token, expiresAt }, user: sanitized };
   },
@@ -2020,6 +2265,133 @@ var authService = {
     });
     return this.login(payload.email, payload.password);
   },
+  /**
+   * Public client-portal registration (artifysols.com). Creates the account in
+   * its own TRIAL organization with the least-privilege CLIENT_PORTAL role —
+   * never an administrator. With email delivery configured the response is
+   * identical whether or not the address already exists (no enumeration), the
+   * account must be verified before sign-in, and an operator is notified to
+   * link it to a CRM client. Without email delivery it falls back to the
+   * degraded mode: immediate sign-in, and a duplicate address returns 409.
+   */
+  async registerPortalAccount(payload, meta4 = {}) {
+    const emailOn = emailService.isEnabled();
+    const email = payload.email.trim().toLowerCase();
+    const existing = await userRepository.findByEmail(email);
+    if (existing) {
+      if (!emailOn) throw new ConflictError("An account with this email address already exists.");
+      emailService.sendAccountAlreadyExists(email, payload.firstName).catch((err) => logger.warn({ err, event: "account_exists_email_failed" }, "Could not send account-exists email"));
+      return { status: "verification_required" };
+    }
+    const role = await roleRepository.findByKey(PORTAL_REGISTRATION_ROLE_KEY);
+    if (!role) throw new InternalError("Registration is not available: required role configuration is missing.");
+    const passwordHash = await hashPassword(payload.password);
+    const created = await prisma.$transaction(async (tx) => {
+      const baseSlug = payload.organizationName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 80) || "organization";
+      let slug = baseSlug;
+      let suffix = 1;
+      while (await tx.organization.findUnique({ where: { slug } })) {
+        suffix += 1;
+        slug = `${baseSlug}-${suffix}`;
+        if (suffix > 50) break;
+      }
+      const organization = await tx.organization.create({ data: { name: payload.organizationName, slug, type: "CLIENT", tier: "GROWTH", status: "TRIAL" } });
+      const user = await tx.user.create({
+        data: {
+          organizationId: organization.id,
+          email,
+          passwordHash,
+          firstName: payload.firstName,
+          lastName: payload.lastName,
+          displayName: `${payload.firstName} ${payload.lastName}`.trim(),
+          title: payload.title?.trim() || "Client user",
+          roleId: role.id
+        }
+      });
+      await tx.organizationMembership.create({ data: { userId: user.id, organizationId: organization.id, roleId: role.id, status: "ACTIVE", isPrimary: true } });
+      return { organization, user };
+    });
+    await auditLogRepository.record({
+      organizationId: created.organization.id,
+      actorUserId: created.user.id,
+      actorType: "USER",
+      action: "AUTH_PORTAL_REGISTERED",
+      resourceType: "user",
+      resourceId: created.user.id,
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
+    });
+    void this.notifyOperatorsOfRegistration(created.organization.id, created.organization.name, `${payload.firstName} ${payload.lastName}`.trim());
+    if (emailOn) {
+      await this.issueEmailVerification(created.user.id, email, payload.firstName).catch(
+        (err) => logger.error({ err, event: "verification_email_failed", userId: created.user.id }, "Could not send verification email")
+      );
+      return { status: "verification_required" };
+    }
+    const login = await this.login(email, payload.password, meta4);
+    return { status: "registered", ...login };
+  },
+  /** Tells the agency's own admins (the public website organization) that a new client account is waiting to be linked. Best-effort. */
+  async notifyOperatorsOfRegistration(organizationId, organizationName, personName) {
+    const agencyOrgId = config.publicWebsiteOrganizationId;
+    if (!agencyOrgId) return;
+    try {
+      const admins = await prisma.user.findMany({
+        where: { organizationId: agencyOrgId, status: "ACTIVE", role: { key: { in: ["SUPER_ADMIN", "ADMIN"] } } },
+        select: { id: true },
+        take: 20
+      });
+      await Promise.all(
+        admins.map(
+          (a) => notificationService.notify({
+            organizationId: agencyOrgId,
+            userId: a.id,
+            type: "PORTAL_REGISTRATION",
+            title: "New client portal registration",
+            message: `${personName} registered ${organizationName}. Link the account to a client to activate the portal.`,
+            entityType: "organization",
+            entityId: organizationId
+          })
+        )
+      );
+    } catch (err) {
+      logger.warn({ err, event: "registration_notify_failed" }, "Could not notify operators of a portal registration");
+    }
+  },
+  async issueEmailVerification(userId, email, firstName) {
+    await emailVerificationRepository.invalidateAllForUser(userId);
+    const token = generateEmailVerificationToken();
+    await emailVerificationRepository.create({ token, userId, expiresAt: new Date(Date.now() + config.emailVerificationTtlHours * 60 * 60 * 1e3) });
+    await emailService.sendVerification(email, firstName, token);
+  },
+  async verifyEmail(token, meta4 = {}) {
+    const row = await emailVerificationRepository.findValidByToken(token);
+    if (!row) throw new AuthenticationError("This verification link is invalid or has expired.");
+    const user = await userRepository.findById(row.userId);
+    if (!user) throw new AuthenticationError("This verification link is invalid or has expired.");
+    await userRepository.markEmailVerified(user.id);
+    await emailVerificationRepository.markUsed(row.id);
+    await emailVerificationRepository.invalidateAllForUser(user.id);
+    await auditLogRepository.record({
+      organizationId: user.organizationId,
+      actorUserId: user.id,
+      actorType: "USER",
+      action: "AUTH_EMAIL_VERIFIED",
+      resourceType: "user",
+      resourceId: user.id,
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
+    });
+  },
+  /** Always resolves silently — never reveals whether the address exists or is already verified. */
+  async resendVerification(email) {
+    if (!emailService.isEnabled()) return;
+    const user = await userRepository.findByEmail(email.trim().toLowerCase());
+    if (!user || user.status !== "ACTIVE" || user.emailVerifiedAt) return;
+    await this.issueEmailVerification(user.id, user.email, user.firstName).catch(
+      (err) => logger.error({ err, event: "verification_email_failed", userId: user.id }, "Could not send verification email")
+    );
+  },
   async verifySession(token) {
     const session = await sessionRepository.findValidByToken(token);
     if (!session) return null;
@@ -2030,7 +2402,7 @@ var authService = {
     void sessionRepository.touchLastUsed(session.id);
     return sanitized;
   },
-  async logout(token, actor, meta3 = {}) {
+  async logout(token, actor, meta4 = {}) {
     await sessionRepository.revoke(token);
     if (actor) {
       await auditLogRepository.record({
@@ -2039,13 +2411,13 @@ var authService = {
         actorType: "USER",
         action: "AUTH_LOGOUT",
         resourceType: "session",
-        ipAddress: meta3.ip,
-        userAgent: meta3.userAgent
+        ipAddress: meta4.ip,
+        userAgent: meta4.userAgent
       });
     }
   },
   /** Revokes every active session for the user (all devices/tabs) — a broader action than logout(), which only revokes the caller's current session. */
-  async logoutAll(user, meta3 = {}) {
+  async logoutAll(user, meta4 = {}) {
     await sessionRepository.revokeAllForUser(user.id);
     await auditLogRepository.record({
       organizationId: user.organizationId,
@@ -2054,11 +2426,11 @@ var authService = {
       action: "AUTH_LOGOUT_ALL",
       resourceType: "user",
       resourceId: user.id,
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
   },
-  async changePassword(user, currentSessionToken, currentPassword, newPassword, meta3 = {}) {
+  async changePassword(user, currentSessionToken, currentPassword, newPassword, meta4 = {}) {
     const fullUser = await userRepository.findById(user.id);
     if (!fullUser) throw new InternalError("User record could not be loaded.");
     const validCurrent = await verifyPassword(currentPassword, fullUser.passwordHash);
@@ -2075,8 +2447,8 @@ var authService = {
       action: "AUTH_PASSWORD_CHANGE",
       resourceType: "user",
       resourceId: user.id,
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
   },
   /**
@@ -2087,7 +2459,7 @@ var authService = {
    * undefined; the raw token is never logged, never included in a
    * production response, and never persisted anywhere but as a hash.
    */
-  async requestPasswordReset(email, meta3 = {}) {
+  async requestPasswordReset(email, meta4 = {}) {
     const user = await userRepository.findByEmail(email);
     if (!user || user.status !== "ACTIVE") {
       return {};
@@ -2099,8 +2471,8 @@ var authService = {
       token,
       userId: user.id,
       expiresAt,
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     await auditLogRepository.record({
       organizationId: user.organizationId,
@@ -2109,12 +2481,18 @@ var authService = {
       action: "AUTH_PASSWORD_RESET_REQUESTED",
       resourceType: "user",
       resourceId: user.id,
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
+    if (emailService.isEnabled()) {
+      await emailService.sendPasswordReset(user.email, user.firstName, token).catch(
+        (err) => logger.error({ err, event: "reset_email_failed", userId: user.id }, "Could not send password reset email")
+      );
+      return {};
+    }
     return config.isProduction ? {} : { devToken: token };
   },
-  async confirmPasswordReset(token, newPassword, meta3 = {}) {
+  async confirmPasswordReset(token, newPassword, meta4 = {}) {
     const resetRow = await passwordResetRepository.findValidByToken(token);
     if (!resetRow) {
       throw new AuthenticationError("This password reset link is invalid or has expired.");
@@ -2125,6 +2503,7 @@ var authService = {
     }
     const newHash = await hashPassword(newPassword);
     await userRepository.updatePasswordHash(user.id, newHash);
+    await userRepository.markEmailVerified(user.id);
     await passwordResetRepository.markUsed(resetRow.id);
     await passwordResetRepository.invalidateAllForUser(user.id);
     await sessionRepository.revokeAllForUser(user.id);
@@ -2135,8 +2514,8 @@ var authService = {
       action: "AUTH_PASSWORD_RESET_COMPLETED",
       resourceType: "user",
       resourceId: user.id,
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
   },
   /**
@@ -2147,7 +2526,7 @@ var authService = {
    * rotation (new token issued, old one revoked) rather than mutating the
    * existing session row in place.
    */
-  async switchOrganization(user, currentSessionToken, targetOrganizationId, meta3 = {}) {
+  async switchOrganization(user, currentSessionToken, targetOrganizationId, meta4 = {}) {
     const fullUser = await userRepository.findById(user.id);
     if (!fullUser) throw new InternalError("User record could not be loaded.");
     const sanitized = await resolveSanitizedUserForOrganization(fullUser, targetOrganizationId);
@@ -2161,8 +2540,8 @@ var authService = {
       userId: user.id,
       organizationId: targetOrganizationId,
       expiresAt,
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     await sessionRepository.revoke(currentSessionToken);
     await auditLogRepository.record({
@@ -2174,8 +2553,8 @@ var authService = {
       resourceId: user.id,
       beforeData: { organizationId: user.organizationId },
       afterData: { organizationId: targetOrganizationId },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return { session: { token, expiresAt }, user: sanitized };
   },
@@ -2256,6 +2635,32 @@ function requireRole(allowedRoleKeys) {
   };
 }
 
+// server/services/captchaService.ts
+var captchaService = {
+  isEnabled() {
+    return config.turnstileSecretKey.length > 0;
+  },
+  async assertHuman(token, ip) {
+    if (!this.isEnabled()) return;
+    if (!token) throw new ValidationError("Please complete the security check and try again.");
+    try {
+      const body = new URLSearchParams({ secret: config.turnstileSecretKey, response: token });
+      if (ip) body.set("remoteip", ip);
+      const res = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body,
+        signal: AbortSignal.timeout(8e3)
+      });
+      const data = await res.json();
+      if (data.success) return;
+    } catch (err) {
+      logger.error({ err, event: "captcha_verify_failed" }, "Turnstile verification request failed");
+    }
+    throw new ValidationError("Security check failed. Please try again.");
+  }
+};
+
 // server/schemas/authSchemas.ts
 import { z as z2 } from "zod";
 var newPasswordSchema = z2.string().superRefine((password, ctx) => {
@@ -2275,6 +2680,20 @@ var registerSchema = z2.object({
   lastName: z2.string().trim().min(1).max(100),
   organizationName: z2.string().trim().min(1).max(200),
   title: z2.string().trim().min(1).max(150).optional()
+});
+var portalRegisterSchema = registerSchema.extend({
+  website: z2.string().max(200).optional(),
+  captchaToken: z2.string().max(4096).optional()
+}).superRefine((v, ctx) => {
+  const local = v.email.split("@")[0]?.toLowerCase() ?? "";
+  if (local.length >= 4 && v.password.toLowerCase().includes(local)) {
+    ctx.addIssue({ code: z2.ZodIssueCode.custom, path: ["password"], message: "Password must not contain your email name." });
+  }
+});
+var verifyEmailSchema = z2.object({ token: z2.string().trim().min(1).max(200) });
+var resendVerificationSchema = z2.object({
+  email: z2.string().trim().min(1).email(),
+  captchaToken: z2.string().max(4096).optional()
 });
 var changePasswordSchema = z2.object({
   currentPassword: z2.string().min(1),
@@ -2309,9 +2728,47 @@ router.post(
   })
 );
 router.post(
+  "/portal/register",
+  registerLimiter,
+  authLimiter,
+  asyncHandler(async (req, res) => {
+    const input = portalRegisterSchema.parse(req.body);
+    if (input.website && input.website.trim().length > 0) {
+      sendSuccess(res, { status: "verification_required" }, 201);
+      return;
+    }
+    await captchaService.assertHuman(input.captchaToken, req.ip);
+    const { website: _website, captchaToken: _captchaToken, ...account } = input;
+    const result = await authService.registerPortalAccount(account, requestMeta(req));
+    sendSuccess(res, result, 201);
+  })
+);
+router.post(
+  "/verify-email",
+  verificationLimiter,
+  asyncHandler(async (req, res) => {
+    const input = verifyEmailSchema.parse(req.body);
+    await authService.verifyEmail(input.token, requestMeta(req));
+    sendSuccess(res, { verified: true });
+  })
+);
+router.post(
+  "/resend-verification",
+  verificationLimiter,
+  asyncHandler(async (req, res) => {
+    const input = resendVerificationSchema.parse(req.body);
+    await captchaService.assertHuman(input.captchaToken, req.ip);
+    await authService.resendVerification(input.email);
+    sendSuccess(res, { message: "If that account needs verification, a new email has been sent." });
+  })
+);
+router.post(
   "/register",
   authLimiter,
   asyncHandler(async (req, res) => {
+    if (!config.allowAdminSelfRegistration) {
+      throw new AuthorizationError("Self-registration is disabled. Use the client portal registration.");
+    }
     const input = registerSchema.parse(req.body);
     const result = await authService.register(input);
     sendSuccess(res, result, 201);
@@ -2363,6 +2820,7 @@ router.post(
   passwordResetLimiter,
   asyncHandler(async (req, res) => {
     const input = passwordResetRequestSchema.parse(req.body);
+    await captchaService.assertHuman(typeof req.body?.captchaToken === "string" ? req.body.captchaToken : void 0, req.ip);
     const result = await authService.requestPasswordReset(input.email, requestMeta(req));
     sendSuccess(res, {
       message: "If an account with that email exists, password reset instructions have been sent.",
@@ -3073,6 +3531,15 @@ var ROLE_PERMISSION_SETS = {
     "forms.read",
     // Phase 14 — VIEWER is read-only for campaigns, same convention.
     "campaigns.read"
+  ],
+  CLIENT_PORTAL: [
+    "portal.dashboard.read",
+    "portal.contracts.read",
+    "portal.subscriptions.read",
+    "portal.invoices.read",
+    "portal.payments.read",
+    "portal.onboarding.read",
+    "portal.documents.read"
   ]
 };
 async function mapWithConcurrency(items, limit, fn) {
@@ -3628,7 +4095,7 @@ var userService = {
   async getUser(organizationId, userId) {
     return loadUserInOrgOrThrow(userId, organizationId);
   },
-  async createUser(caller, input, meta3 = {}) {
+  async createUser(caller, input, meta4 = {}) {
     const existing = await userRepository.findByEmail(input.email);
     if (existing) throw new ConflictError("An account with this email address already exists.");
     const role = await resolveRoleOrThrow(input.roleKey);
@@ -3657,12 +4124,12 @@ var userService = {
       resourceType: "user",
       resourceId: user.id,
       afterData: { email: user.email, roleKey: role.key },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return sanitizeUser({ ...user, organizationId: caller.organizationId }, { id: role.id, key: role.key, name: role.name, permissions: [] });
   },
-  async updateUser(caller, targetUserId, input, callerPermissions, meta3 = {}) {
+  async updateUser(caller, targetUserId, input, callerPermissions, meta4 = {}) {
     const membership = await organizationMembershipRepository.findByUserAndOrg(targetUserId, caller.organizationId);
     if (!membership) throw new NotFoundError("User not found.");
     const beforeRoleKey = membership.role.key;
@@ -3689,8 +4156,8 @@ var userService = {
         resourceId: targetUserId,
         beforeData: { roleKey: beforeRoleKey },
         afterData: { roleKey: newRole.key },
-        ipAddress: meta3.ip,
-        userAgent: meta3.userAgent
+        ipAddress: meta4.ip,
+        userAgent: meta4.userAgent
       });
     }
     const profilePatch = {};
@@ -3710,8 +4177,8 @@ var userService = {
           resourceType: "user",
           resourceId: targetUserId,
           afterData: { status: input.status },
-          ipAddress: meta3.ip,
-          userAgent: meta3.userAgent
+          ipAddress: meta4.ip,
+          userAgent: meta4.userAgent
         });
         if (input.status === "DISABLED") {
           await sessionRepository.revokeAllForUser(targetUserId);
@@ -3725,8 +4192,8 @@ var userService = {
           resourceType: "user",
           resourceId: targetUserId,
           afterData: profilePatch,
-          ipAddress: meta3.ip,
-          userAgent: meta3.userAgent
+          ipAddress: meta4.ip,
+          userAgent: meta4.userAgent
         });
       }
     }
@@ -3750,7 +4217,7 @@ var userSecurityService = {
       orderBy: { createdAt: "desc" }
     });
   },
-  async revokeAllForUser(caller, userId, meta3 = {}) {
+  async revokeAllForUser(caller, userId, meta4 = {}) {
     const membership = await loadMember(caller, userId);
     assertCallerMayManageTarget(caller, membership.role.key);
     const result = await prisma.session.updateMany({ where: { userId, revokedAt: null }, data: { revokedAt: /* @__PURE__ */ new Date() } });
@@ -3762,13 +4229,13 @@ var userSecurityService = {
       resourceType: "user",
       resourceId: userId,
       afterData: { revoked: result.count },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return { revoked: result.count };
   },
   /** Clears a lockout caused by repeated failed sign-ins. */
-  async unlock(caller, userId, meta3 = {}) {
+  async unlock(caller, userId, meta4 = {}) {
     const membership = await loadMember(caller, userId);
     assertCallerMayManageTarget(caller, membership.role.key);
     await prisma.user.update({ where: { id: userId }, data: { failedLoginAttempts: 0, lockedUntil: null } });
@@ -3779,8 +4246,8 @@ var userSecurityService = {
       action: "USER_UNLOCKED",
       resourceType: "user",
       resourceId: userId,
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
   },
   /** Active sessions across the caller's organization (security.read). */
@@ -3798,7 +4265,7 @@ var userSecurityService = {
     ]);
     return { sessions: rows, total };
   },
-  async revokeOrganizationSession(caller, sessionId, meta3 = {}) {
+  async revokeOrganizationSession(caller, sessionId, meta4 = {}) {
     const session = await prisma.session.findFirst({ where: { id: sessionId, organizationId: caller.organizationId, revokedAt: null } });
     if (!session) throw new NotFoundError("Session not found.");
     if (session.userId !== caller.id) {
@@ -3814,8 +4281,8 @@ var userSecurityService = {
       resourceType: "session",
       resourceId: sessionId,
       afterData: { userId: session.userId },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
   }
 };
@@ -3982,7 +4449,7 @@ var roleAdminService = {
       permissions: r.rolePermissions.map((rp) => rp.permission.key).sort()
     }));
   },
-  async create(caller, input, meta3 = {}) {
+  async create(caller, input, meta4 = {}) {
     requireSuperAdmin(caller);
     const key2 = slugKey(input.name);
     if (key2 === "CUSTOM_") throw new ValidationError("Role name must contain letters or digits.");
@@ -4005,12 +4472,12 @@ var roleAdminService = {
       resourceType: "role",
       resourceId: role.id,
       afterData: { key: key2, permissions: perms.map((p) => p.key).sort() },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return role;
   },
-  async update(caller, id, input, meta3 = {}) {
+  async update(caller, id, input, meta4 = {}) {
     requireSuperAdmin(caller);
     const role = await loadCustomRole(id);
     const updated = await prisma.role.update({ where: { id }, data: { name: input.name, description: input.description } });
@@ -4023,12 +4490,12 @@ var roleAdminService = {
       resourceId: id,
       beforeData: { name: role.name, description: role.description },
       afterData: { name: updated.name, description: updated.description },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return updated;
   },
-  async setPermissions(caller, id, permissionKeys2, confirmCritical, meta3 = {}) {
+  async setPermissions(caller, id, permissionKeys2, confirmCritical, meta4 = {}) {
     requireSuperAdmin(caller);
     const role = await loadCustomRole(id);
     const perms = await resolvePermissionIds(permissionKeys2, confirmCritical);
@@ -4047,12 +4514,12 @@ var roleAdminService = {
       resourceId: id,
       beforeData: { permissions: before },
       afterData: { permissions: after, added: after.filter((k) => !before.includes(k)), removed: before.filter((k) => !after.includes(k)) },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return { id, key: role.key, permissions: after };
   },
-  async remove(caller, id, meta3 = {}) {
+  async remove(caller, id, meta4 = {}) {
     requireSuperAdmin(caller);
     const role = await loadCustomRole(id);
     const [memberships, invitations] = await Promise.all([
@@ -4077,8 +4544,8 @@ var roleAdminService = {
       resourceType: "role",
       resourceId: id,
       beforeData: { key: role.key, name: role.name },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
   }
 };
@@ -4233,7 +4700,7 @@ var organizationService = {
     if (!org) throw new NotFoundError("Organization not found.");
     return org;
   },
-  async addMember(caller, organizationId, input, meta3 = {}) {
+  async addMember(caller, organizationId, input, meta4 = {}) {
     if (caller.role.key !== "SUPER_ADMIN" && organizationId !== caller.organizationId) {
       throw new AuthorizationError("Access denied: resource belongs to a different organization");
     }
@@ -4256,12 +4723,12 @@ var organizationService = {
       resourceType: "organization_membership",
       resourceId: membership.id,
       afterData: { userId: input.userId, roleKey: role.key },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return membership;
   },
-  async updateMember(caller, organizationId, targetUserId, input, callerPermissions, meta3 = {}) {
+  async updateMember(caller, organizationId, targetUserId, input, callerPermissions, meta4 = {}) {
     if (caller.role.key !== "SUPER_ADMIN" && organizationId !== caller.organizationId) {
       throw new AuthorizationError("Access denied: resource belongs to a different organization");
     }
@@ -4286,8 +4753,8 @@ var organizationService = {
         resourceId: membership.id,
         beforeData: { roleKey: membership.role.key },
         afterData: { roleKey: role.key },
-        ipAddress: meta3.ip,
-        userAgent: meta3.userAgent
+        ipAddress: meta4.ip,
+        userAgent: meta4.userAgent
       });
     }
     if (input.status !== void 0) {
@@ -4300,13 +4767,13 @@ var organizationService = {
         resourceType: "organization_membership",
         resourceId: membership.id,
         afterData: { status: input.status },
-        ipAddress: meta3.ip,
-        userAgent: meta3.userAgent
+        ipAddress: meta4.ip,
+        userAgent: meta4.userAgent
       });
     }
     return organizationMembershipRepository.findById(membership.id);
   },
-  async removeMember(caller, organizationId, targetUserId, meta3 = {}) {
+  async removeMember(caller, organizationId, targetUserId, meta4 = {}) {
     if (caller.role.key !== "SUPER_ADMIN" && organizationId !== caller.organizationId) {
       throw new AuthorizationError("Access denied: resource belongs to a different organization");
     }
@@ -4324,8 +4791,8 @@ var organizationService = {
       resourceType: "organization_membership",
       resourceId: targetUserId,
       beforeData: { roleKey: membership.role.key },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
   }
 };
@@ -5406,7 +5873,7 @@ var mediaService = {
   async getMedia(organizationId, id) {
     return toApiMedia(await loadMediaOrThrow(id, organizationId));
   },
-  async createUploadSession(caller, input, meta3 = {}) {
+  async createUploadSession(caller, input, meta4 = {}) {
     const organizationId = caller.organizationId;
     if (!extensionMatchesMimeType(input.filename, input.mimeType)) {
       throw new ValidationError(`The file extension does not match the declared type (${input.mimeType}).`);
@@ -5463,12 +5930,12 @@ var mediaService = {
       resourceType: "media",
       resourceId: mediaId,
       afterData: { originalFilename: input.filename, mimeType: input.mimeType, sizeBytes: input.sizeBytes },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return { media: toApiMedia(media), upload, uploadToken: rawToken };
   },
-  async completeUpload(caller, id, token, meta3 = {}) {
+  async completeUpload(caller, id, token, meta4 = {}) {
     const organizationId = caller.organizationId;
     const media = await loadMediaOrThrow(id, organizationId);
     if (media.status !== "PENDING") {
@@ -5511,8 +5978,8 @@ var mediaService = {
       resourceType: "media",
       resourceId: id,
       afterData: { sizeBytes: verifiedSize },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return toApiMedia(activated);
   },
@@ -5527,7 +5994,7 @@ var mediaService = {
    * caller with media.update can choose to make this specific image
    * public by embedding it, audited like any other visibility change.
    */
-  async getEmbedUrl(caller, id, meta3 = {}) {
+  async getEmbedUrl(caller, id, meta4 = {}) {
     const organizationId = caller.organizationId;
     const media = await loadMediaOrThrow(id, organizationId);
     if (media.status !== "ACTIVE") throw new ConflictError("This media has no readable object yet.");
@@ -5543,15 +6010,15 @@ var mediaService = {
         resourceId: id,
         beforeData: { visibility: media.visibility },
         afterData: { visibility: "PUBLIC" },
-        ipAddress: meta3.ip,
-        userAgent: meta3.userAgent
+        ipAddress: meta4.ip,
+        userAgent: meta4.userAgent
       });
     }
     const provider = getStorageProvider();
     const url = provider.getPublicUrl(media.storageKey) ?? await provider.createSignedReadUrl({ key: media.storageKey, expiresInSeconds: config.mediaPublicSignedUrlTtlSeconds });
     return { url };
   },
-  async getReadUrl(caller, id, meta3 = {}) {
+  async getReadUrl(caller, id, meta4 = {}) {
     const organizationId = caller.organizationId;
     const media = await loadMediaOrThrow(id, organizationId);
     if (media.status !== "ACTIVE" && media.status !== "ARCHIVED") {
@@ -5568,12 +6035,12 @@ var mediaService = {
       resourceType: "media",
       resourceId: id,
       afterData: { expiresAt: expiresAt.toISOString() },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return { url, expiresAt: expiresAt.toISOString() };
   },
-  async updateMedia(caller, id, input, meta3 = {}) {
+  async updateMedia(caller, id, input, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadMediaOrThrow(id, organizationId);
     const patch = {};
@@ -5598,12 +6065,12 @@ var mediaService = {
       resourceId: id,
       beforeData: { displayName: existing.displayName, altText: existing.altText, caption: existing.caption, visibility: existing.visibility },
       afterData: patch,
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return toApiMedia(updated);
   },
-  async archiveMedia(caller, id, meta3 = {}) {
+  async archiveMedia(caller, id, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadMediaOrThrow(id, organizationId);
     if (existing.status === "ARCHIVED") throw new ConflictError("This media is already archived.");
@@ -5618,12 +6085,12 @@ var mediaService = {
       resourceType: "media",
       resourceId: id,
       beforeData: { status: existing.status },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return toApiMedia(updated);
   },
-  async deleteMedia(caller, id, meta3 = {}) {
+  async deleteMedia(caller, id, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadMediaOrThrow(id, organizationId);
     const referenceCount = await mediaRepository.countContentReferences(id);
@@ -5641,8 +6108,8 @@ var mediaService = {
       resourceType: "media",
       resourceId: id,
       beforeData: { status: existing.status, originalFilename: existing.originalFilename },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
   }
 };
@@ -5803,7 +6270,7 @@ async function assertSiteIdentityMediaUsable(input, organizationId) {
     if (mediaId) await assertFeaturedMediaUsable(mediaId, organizationId);
   }
 }
-async function publishGroup(caller, publishedKey, draftKey, schema, revalidate, auditResourceType, meta3) {
+async function publishGroup(caller, publishedKey, draftKey, schema, revalidate, auditResourceType, meta4) {
   const organizationId = caller.organizationId;
   const draftRow = await systemSettingRepository.findByKey(organizationId, draftKey);
   const value = schema.parse(draftRow?.value ?? {});
@@ -5819,12 +6286,12 @@ async function publishGroup(caller, publishedKey, draftKey, schema, revalidate, 
     action: "SETTINGS_PUBLISHED",
     resourceType: auditResourceType,
     resourceId: publishedKey,
-    ipAddress: meta3.ip,
-    userAgent: meta3.userAgent
+    ipAddress: meta4.ip,
+    userAgent: meta4.userAgent
   });
   return value;
 }
-async function revertGroup(caller, publishedKey, draftKey, schema, auditResourceType, meta3) {
+async function revertGroup(caller, publishedKey, draftKey, schema, auditResourceType, meta4) {
   const organizationId = caller.organizationId;
   const publishedRow = await systemSettingRepository.findByKey(organizationId, publishedKey);
   const value = schema.parse(publishedRow?.value ?? {});
@@ -5836,8 +6303,8 @@ async function revertGroup(caller, publishedKey, draftKey, schema, auditResource
     action: "SETTINGS_REVERTED",
     resourceType: auditResourceType,
     resourceId: draftKey,
-    ipAddress: meta3.ip,
-    userAgent: meta3.userAgent
+    ipAddress: meta4.ip,
+    userAgent: meta4.userAgent
   });
   return value;
 }
@@ -5857,7 +6324,7 @@ var siteSettingsService = {
     const row = await systemSettingRepository.findByKey(organizationId, GLOBAL_STYLES_KEY);
     return globalStylesSchema.parse(row?.value ?? {});
   },
-  async saveSiteIdentityDraft(caller, input, meta3 = {}) {
+  async saveSiteIdentityDraft(caller, input, meta4 = {}) {
     const organizationId = caller.organizationId;
     await assertSiteIdentityMediaUsable(input, organizationId);
     await saveDraft(organizationId, SITE_IDENTITY_DRAFT_KEY, input, caller.id);
@@ -5868,12 +6335,12 @@ var siteSettingsService = {
       action: "SETTINGS_UPDATED",
       resourceType: "site_identity",
       resourceId: SITE_IDENTITY_DRAFT_KEY,
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return input;
   },
-  async saveGlobalStylesDraft(caller, input, meta3 = {}) {
+  async saveGlobalStylesDraft(caller, input, meta4 = {}) {
     const organizationId = caller.organizationId;
     await saveDraft(organizationId, GLOBAL_STYLES_DRAFT_KEY, input, caller.id);
     await auditLogRepository.record({
@@ -5883,12 +6350,12 @@ var siteSettingsService = {
       action: "SETTINGS_UPDATED",
       resourceType: "global_styles",
       resourceId: GLOBAL_STYLES_DRAFT_KEY,
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return input;
   },
-  async publishSiteIdentity(caller, meta3 = {}) {
+  async publishSiteIdentity(caller, meta4 = {}) {
     return publishGroup(
       caller,
       SITE_IDENTITY_KEY,
@@ -5896,17 +6363,17 @@ var siteSettingsService = {
       siteIdentitySchema,
       (value) => assertSiteIdentityMediaUsable(value, caller.organizationId),
       "site_identity",
-      meta3
+      meta4
     );
   },
-  async publishGlobalStyles(caller, meta3 = {}) {
-    return publishGroup(caller, GLOBAL_STYLES_KEY, GLOBAL_STYLES_DRAFT_KEY, globalStylesSchema, async () => void 0, "global_styles", meta3);
+  async publishGlobalStyles(caller, meta4 = {}) {
+    return publishGroup(caller, GLOBAL_STYLES_KEY, GLOBAL_STYLES_DRAFT_KEY, globalStylesSchema, async () => void 0, "global_styles", meta4);
   },
-  async revertSiteIdentityDraft(caller, meta3 = {}) {
-    return revertGroup(caller, SITE_IDENTITY_KEY, SITE_IDENTITY_DRAFT_KEY, siteIdentitySchema, "site_identity", meta3);
+  async revertSiteIdentityDraft(caller, meta4 = {}) {
+    return revertGroup(caller, SITE_IDENTITY_KEY, SITE_IDENTITY_DRAFT_KEY, siteIdentitySchema, "site_identity", meta4);
   },
-  async revertGlobalStylesDraft(caller, meta3 = {}) {
-    return revertGroup(caller, GLOBAL_STYLES_KEY, GLOBAL_STYLES_DRAFT_KEY, globalStylesSchema, "global_styles", meta3);
+  async revertGlobalStylesDraft(caller, meta4 = {}) {
+    return revertGroup(caller, GLOBAL_STYLES_KEY, GLOBAL_STYLES_DRAFT_KEY, globalStylesSchema, "global_styles", meta4);
   }
 };
 
@@ -6168,79 +6635,6 @@ var industryRepository = {
   },
   async delete(id) {
     await prisma.industry.delete({ where: { id } });
-  }
-};
-
-// server/repositories/notificationRepository.ts
-var notificationRepository = {
-  async list(userId, organizationId, filters, page, limit) {
-    const where = { userId, organizationId, ...filters.status ? { status: filters.status } : {} };
-    const [rows, total] = await Promise.all([
-      prisma.notification.findMany({ where, orderBy: { createdAt: "desc" }, skip: (page - 1) * limit, take: limit }),
-      prisma.notification.count({ where })
-    ]);
-    return { rows, total };
-  },
-  async unreadCount(userId, organizationId) {
-    return prisma.notification.count({ where: { userId, organizationId, status: "UNREAD" } });
-  },
-  async findByIdForUser(id, userId) {
-    return prisma.notification.findFirst({ where: { id, userId } });
-  },
-  async create(data) {
-    return prisma.notification.create({ data });
-  },
-  async markRead(id) {
-    return prisma.notification.update({ where: { id }, data: { status: "READ", readAt: /* @__PURE__ */ new Date() } });
-  },
-  async markAllRead(userId, organizationId) {
-    const result = await prisma.notification.updateMany({
-      where: { userId, organizationId, status: "UNREAD" },
-      data: { status: "READ", readAt: /* @__PURE__ */ new Date() }
-    });
-    return result.count;
-  }
-};
-
-// server/services/notificationService.ts
-var notificationService = {
-  async listNotifications(userId, organizationId, status, page, limit) {
-    return notificationRepository.list(userId, organizationId, { status }, page, limit);
-  },
-  async unreadCount(userId, organizationId) {
-    return notificationRepository.unreadCount(userId, organizationId);
-  },
-  async markRead(userId, id) {
-    const existing = await notificationRepository.findByIdForUser(id, userId);
-    if (!existing) throw new NotFoundError("Notification not found.");
-    if (existing.status === "READ") return existing;
-    return notificationRepository.markRead(id);
-  },
-  async markAllRead(userId, organizationId) {
-    return notificationRepository.markAllRead(userId, organizationId);
-  },
-  /**
-   * Internal fire-and-forget helper other services call directly (never
-   * exposed via a public route — a notification always originates from a
-   * real system event, not a user-authored POST body). Never throws: a
-   * notification failing to write must not fail the business operation
-   * that triggered it (e.g. a lead create should still succeed even if
-   * writing its "assigned to you" notification somehow fails).
-   */
-  async notify(params) {
-    if (!params.userId) return;
-    try {
-      await notificationRepository.create({
-        organizationId: params.organizationId,
-        userId: params.userId,
-        type: params.type,
-        title: params.title,
-        message: params.message,
-        entityType: params.entityType,
-        entityId: params.entityId
-      });
-    } catch {
-    }
   }
 };
 
@@ -6568,7 +6962,7 @@ var leadService = {
   async getLead(organizationId, id) {
     return loadLeadInOrgOrThrow(id, organizationId);
   },
-  async createLead(caller, input, meta3 = {}) {
+  async createLead(caller, input, meta4 = {}) {
     const email = input.email || void 0;
     if (email) {
       const duplicates = await leadRepository.findByEmailInOrg(caller.organizationId, email);
@@ -6597,8 +6991,8 @@ var leadService = {
       resourceType: "lead",
       resourceId: lead.id,
       afterData: { companyName: lead.companyName, status: lead.status },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     if (lead.assignedTo && lead.assignedTo !== caller.id) {
       await notificationService.notify({
@@ -6624,7 +7018,7 @@ var leadService = {
     }
     return lead;
   },
-  async updateLead(caller, id, input, meta3 = {}) {
+  async updateLead(caller, id, input, meta4 = {}) {
     const existing = await loadLeadInOrgOrThrow(id, caller.organizationId);
     if (input.status !== void 0) {
       assertValidTransition(existing.status, input.status);
@@ -6650,8 +7044,8 @@ var leadService = {
       resourceId: id,
       beforeData: { status: existing.status },
       afterData: patch,
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     if (input.status !== void 0 && input.status !== existing.status) {
       try {
@@ -6679,7 +7073,7 @@ var leadService = {
     }
     return updated;
   },
-  async deleteLead(caller, id, meta3 = {}) {
+  async deleteLead(caller, id, meta4 = {}) {
     await loadLeadInOrgOrThrow(id, caller.organizationId);
     await leadRepository.softDelete(id);
     await auditLogRepository.record({
@@ -6689,8 +7083,8 @@ var leadService = {
       action: "LEAD_ARCHIVED",
       resourceType: "lead",
       resourceId: id,
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
   },
   /**
@@ -6701,7 +7095,7 @@ var leadService = {
    * rolls back the whole transaction (including the client/contact rows
    * already created in it), rather than racing on a read-then-write.
    */
-  async convertLead(caller, id, input, meta3 = {}) {
+  async convertLead(caller, id, input, meta4 = {}) {
     const lead = await loadLeadInOrgOrThrow(id, caller.organizationId);
     if (lead.status === "CONVERTED") {
       throw new ConflictError("This lead has already been converted.", { convertedClientId: lead.convertedClientId });
@@ -6774,8 +7168,8 @@ var leadService = {
       resourceType: "client",
       resourceId: result.client.id,
       afterData: { clientCode: result.client.clientCode, name: result.client.name, convertedFromLeadId: id },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     await auditLogRepository.record({
       organizationId: caller.organizationId,
@@ -6785,8 +7179,8 @@ var leadService = {
       resourceType: "lead",
       resourceId: id,
       afterData: { clientId: result.client.id, clientCode: result.client.clientCode },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     await analyticsEventService.recordBusinessEvent({
       organizationId: caller.organizationId,
@@ -6963,7 +7357,7 @@ var clientService = {
     const client3 = await loadClientInOrgOrThrow(id, organizationId);
     return withProvisioningStatus(client3);
   },
-  async createClient(caller, input, meta3 = {}) {
+  async createClient(caller, input, meta4 = {}) {
     const [byCode, byName] = await Promise.all([
       clientRepository.findByCodeInOrg(caller.organizationId, input.clientCode),
       clientRepository.findByNameInOrg(caller.organizationId, input.name)
@@ -6998,8 +7392,8 @@ var clientService = {
       resourceType: "client",
       resourceId: client3.id,
       afterData: { clientCode: client3.clientCode, name: client3.name, status: client3.status },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     try {
       await eventEngine.emit({
@@ -7016,7 +7410,7 @@ var clientService = {
     }
     return client3;
   },
-  async updateClient(caller, id, input, meta3 = {}) {
+  async updateClient(caller, id, input, meta4 = {}) {
     const existing = await loadClientInOrgOrThrow(id, caller.organizationId);
     if (input.name !== void 0 && input.name.toLowerCase() !== existing.name.toLowerCase()) {
       const dup = await clientRepository.findByNameInOrg(caller.organizationId, input.name);
@@ -7049,12 +7443,12 @@ var clientService = {
       resourceId: id,
       beforeData: { status: existing.status },
       afterData: patch,
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return updated;
   },
-  async deleteClient(caller, id, meta3 = {}) {
+  async deleteClient(caller, id, meta4 = {}) {
     await loadClientInOrgOrThrow(id, caller.organizationId);
     await clientRepository.softDelete(id);
     await auditLogRepository.record({
@@ -7064,8 +7458,8 @@ var clientService = {
       action: "CLIENT_ARCHIVED",
       resourceType: "client",
       resourceId: id,
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
   },
   async dashboardCounts(organizationId) {
@@ -7179,7 +7573,7 @@ var contactService = {
   async getContact(organizationId, id) {
     return loadContactInOrgOrThrow(id, organizationId);
   },
-  async createForClient(caller, clientId, input, meta3 = {}) {
+  async createForClient(caller, clientId, input, meta4 = {}) {
     await assertClientInOrg(clientId, caller.organizationId);
     const email = input.email || void 0;
     if (email) {
@@ -7211,12 +7605,12 @@ var contactService = {
       resourceType: "contact",
       resourceId: contact.id,
       afterData: { clientId, firstName: contact.firstName, lastName: contact.lastName },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return contact;
   },
-  async updateContact(caller, id, input, meta3 = {}) {
+  async updateContact(caller, id, input, meta4 = {}) {
     const existing = await loadContactInOrgOrThrow(id, caller.organizationId);
     if (input.email) {
       const dup = existing.clientId ? await contactRepository.findByEmailForClient(existing.clientId, caller.organizationId, input.email) : null;
@@ -7249,12 +7643,12 @@ var contactService = {
       resourceType: "contact",
       resourceId: id,
       afterData: patch,
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return updated;
   },
-  async deleteContact(caller, id, meta3 = {}) {
+  async deleteContact(caller, id, meta4 = {}) {
     await loadContactInOrgOrThrow(id, caller.organizationId);
     await contactRepository.softDelete(id);
     await auditLogRepository.record({
@@ -7264,8 +7658,8 @@ var contactService = {
       action: "CONTACT_DELETED",
       resourceType: "contact",
       resourceId: id,
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
   }
 };
@@ -7305,7 +7699,7 @@ var onboardingService = {
     const steps = await getCustomTemplateSteps(organizationId);
     return { steps: steps ?? defaultOnboardingTemplateSteps(), isCustom: !!steps };
   },
-  async updateTemplate(caller, steps, meta3 = {}) {
+  async updateTemplate(caller, steps, meta4 = {}) {
     await systemSettingRepository.upsert({
       organizationId: caller.organizationId,
       key: TEMPLATE_SETTING_KEY,
@@ -7322,12 +7716,12 @@ var onboardingService = {
       resourceType: "system_setting",
       resourceId: TEMPLATE_SETTING_KEY,
       afterData: { stepCount: steps.length },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return { steps, isCustom: true };
   },
-  async startOnboarding(caller, clientId, input = {}, meta3 = {}) {
+  async startOnboarding(caller, clientId, input = {}, meta4 = {}) {
     await loadClientInOrgOrThrow2(clientId, caller.organizationId);
     const existing = await clientOnboardingRepository.findByClientId(clientId);
     if (existing) {
@@ -7350,8 +7744,8 @@ var onboardingService = {
       resourceType: "client_onboarding",
       resourceId: record.id,
       afterData: { clientId, status: record.status },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     if (record.ownerId && record.ownerId !== caller.id) {
       await notificationService.notify({
@@ -7377,7 +7771,7 @@ var onboardingService = {
     }
     return record;
   },
-  async updateOnboarding(caller, id, input, meta3 = {}) {
+  async updateOnboarding(caller, id, input, meta4 = {}) {
     const existing = await loadOnboardingInOrgOrThrow(id, caller.organizationId);
     if (TERMINAL_STATUSES2.has(existing.status)) {
       throw new ConflictError(`This onboarding is already ${existing.status.toLowerCase()} and can no longer be changed.`);
@@ -7393,13 +7787,13 @@ var onboardingService = {
         resourceId: id,
         beforeData: { status: existing.status },
         afterData: { status: "CANCELLED" },
-        ipAddress: meta3.ip,
-        userAgent: meta3.userAgent
+        ipAddress: meta4.ip,
+        userAgent: meta4.userAgent
       });
       return updated;
     }
     if (input.completeStep) {
-      return this.completeStep(caller, id, input.completeStep, meta3);
+      return this.completeStep(caller, id, input.completeStep, meta4);
     }
     if (input.ownerId !== void 0 || input.dueDate !== void 0) {
       const patch = {};
@@ -7414,8 +7808,8 @@ var onboardingService = {
         resourceType: "client_onboarding",
         resourceId: id,
         afterData: patch,
-        ipAddress: meta3.ip,
-        userAgent: meta3.userAgent
+        ipAddress: meta4.ip,
+        userAgent: meta4.userAgent
       });
       if (input.ownerId && input.ownerId !== existing.ownerId && input.ownerId !== caller.id) {
         await notificationService.notify({
@@ -7437,7 +7831,7 @@ var onboardingService = {
    * ignored, since this is an explicit staff action (unlike
    * completeStepForClient's system-triggered no-op).
    */
-  async updateStep(caller, onboardingId, step, input, meta3 = {}) {
+  async updateStep(caller, onboardingId, step, input, meta4 = {}) {
     const record = await loadOnboardingInOrgOrThrow(onboardingId, caller.organizationId);
     if (TERMINAL_STATUSES2.has(record.status)) {
       throw new ConflictError(`This onboarding is already ${record.status.toLowerCase()} and can no longer be changed.`);
@@ -7462,8 +7856,8 @@ var onboardingService = {
       resourceType: "client_onboarding",
       resourceId: record.id,
       afterData: { step, ...input, dueDate: input.dueDate ? input.dueDate.toISOString() : input.dueDate },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     if (input.assignedTo && input.assignedTo !== caller.id) {
       await notificationService.notify({
@@ -7484,7 +7878,7 @@ var onboardingService = {
    * READY once every step is done — completion itself is a separate,
    * explicit action (completeOnboarding), never inferred (§7).
    */
-  async completeStep(caller, onboardingId, step, meta3 = {}) {
+  async completeStep(caller, onboardingId, step, meta4 = {}) {
     const record = await loadOnboardingInOrgOrThrow(onboardingId, caller.organizationId);
     if (TERMINAL_STATUSES2.has(record.status)) return record;
     const checklist = record.checklist ?? freshChecklist();
@@ -7508,8 +7902,8 @@ var onboardingService = {
       resourceType: "client_onboarding",
       resourceId: record.id,
       afterData: { step, status: updated.status },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     if (record.ownerId && record.ownerId !== caller.id) {
       await notificationService.notify({
@@ -7548,7 +7942,7 @@ var onboardingService = {
       afterData: { step }
     });
   },
-  async completeOnboarding(caller, id, meta3 = {}) {
+  async completeOnboarding(caller, id, meta4 = {}) {
     const existing = await loadOnboardingInOrgOrThrow(id, caller.organizationId);
     if (existing.status === "COMPLETED") {
       throw new ConflictError("This onboarding has already been completed.");
@@ -7569,8 +7963,8 @@ var onboardingService = {
       resourceType: "client_onboarding",
       resourceId: id,
       afterData: { status: "COMPLETED" },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     if (existing.ownerId && existing.ownerId !== caller.id) {
       await notificationService.notify({
@@ -7702,7 +8096,7 @@ var workspaceService = {
    * client both succeeding — the loser's transaction rolls back entirely,
    * including the Organization row it just created.
    */
-  async provisionWorkspace(caller, clientId, input, meta3 = {}) {
+  async provisionWorkspace(caller, clientId, input, meta4 = {}) {
     const client3 = await loadClientInOrgOrThrow3(clientId, caller.organizationId);
     if (client3.workspaceOrganizationId) {
       throw new ConflictError("This client has already been provisioned into a workspace.", {
@@ -7766,13 +8160,13 @@ var workspaceService = {
       resourceType: "organization",
       resourceId: result.workspace.id,
       afterData: { clientId, name: result.workspace.name, status: result.workspace.status },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     await onboardingService.completeStepForClient(clientId, "WORKSPACE_CREATED", caller.id);
     return result.workspace;
   },
-  async updateWorkspace(caller, id, input, callerPermissions, meta3 = {}) {
+  async updateWorkspace(caller, id, input, callerPermissions, meta4 = {}) {
     const existing = await loadWorkspaceForOwnerOrThrow(id, caller.organizationId);
     if (input.status !== void 0) {
       assertValidWorkspaceTransition(existing.status, input.status);
@@ -7801,8 +8195,8 @@ var workspaceService = {
       resourceId: id,
       beforeData: { status: existing.status },
       afterData: patch,
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     if (input.name !== void 0 || Object.keys(patch).some((k) => ["timezone", "currency", "locale", "email", "phone", "address"].includes(k))) {
       await onboardingService.completeStepForClient(existing.provisionedForClient.id, "WORKSPACE_CONFIGURED", caller.id);
@@ -8394,7 +8788,7 @@ var opportunityService = {
   async getOpportunity(organizationId, id) {
     return loadOpportunityOrThrow(id, organizationId);
   },
-  async createOpportunity(caller, input, meta3 = {}) {
+  async createOpportunity(caller, input, meta4 = {}) {
     const organizationId = caller.organizationId;
     if (input.clientId) {
       const client3 = await clientRepository.findByIdInOrg(input.clientId, organizationId);
@@ -8435,8 +8829,8 @@ var opportunityService = {
       resourceType: "opportunity",
       resourceId: opportunity.id,
       afterData: { name: opportunity.name, stage: opportunity.stage, clientId: opportunity.clientId, leadId: opportunity.leadId, value: opportunity.value.toString() },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     await analyticsEventService.recordBusinessEvent({
       organizationId,
@@ -8470,7 +8864,7 @@ var opportunityService = {
     }
     return opportunity;
   },
-  async updateOpportunity(caller, id, input, meta3 = {}) {
+  async updateOpportunity(caller, id, input, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadOpportunityOrThrow(id, organizationId);
     if (input.stage !== void 0) {
@@ -8503,15 +8897,15 @@ var opportunityService = {
       resourceId: id,
       beforeData: { stage: existing.stage, value: existing.value.toString() },
       afterData: { ...patch, value: patch.value !== void 0 ? patch.value.toString() : void 0 },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     if (input.stage !== void 0 && input.stage !== existing.stage) {
       await emitStageChangedEvent(organizationId, id, caller.id, existing.stage, input.stage);
     }
     return updated;
   },
-  async deleteOpportunity(caller, id, meta3 = {}) {
+  async deleteOpportunity(caller, id, meta4 = {}) {
     const organizationId = caller.organizationId;
     await loadOpportunityOrThrow(id, organizationId);
     await opportunityRepository.softDelete(id);
@@ -8522,11 +8916,11 @@ var opportunityService = {
       action: "OPPORTUNITY_DELETED",
       resourceType: "opportunity",
       resourceId: id,
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
   },
-  async winOpportunity(caller, id, meta3 = {}) {
+  async winOpportunity(caller, id, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadOpportunityOrThrow(id, organizationId);
     if (TERMINAL_STAGES.has(existing.stage)) {
@@ -8545,8 +8939,8 @@ var opportunityService = {
       resourceId: id,
       beforeData: { stage: existing.stage },
       afterData: { stage: "CLOSED_WON", value: existing.value.toString() },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     await notifyClose({
       organizationId,
@@ -8560,7 +8954,7 @@ var opportunityService = {
     await emitStageChangedEvent(organizationId, id, caller.id, existing.stage, "CLOSED_WON");
     return updated;
   },
-  async loseOpportunity(caller, id, input, meta3 = {}) {
+  async loseOpportunity(caller, id, input, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadOpportunityOrThrow(id, organizationId);
     if (TERMINAL_STAGES.has(existing.stage)) {
@@ -8580,8 +8974,8 @@ var opportunityService = {
       resourceId: id,
       beforeData: { stage: existing.stage },
       afterData: { stage: "CLOSED_LOST", lostReason: input.lostReason ?? null },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     await notifyClose({
       organizationId,
@@ -8609,7 +9003,7 @@ var opportunityService = {
    * converts anything itself (reuse leadService.convertLead for that) —
    * this only links two already-real records together.
    */
-  async linkClient(caller, id, input, meta3 = {}) {
+  async linkClient(caller, id, input, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadOpportunityOrThrow(id, organizationId);
     if (TERMINAL_STAGES.has(existing.stage)) {
@@ -8630,8 +9024,8 @@ var opportunityService = {
       resourceId: id,
       beforeData: { clientId: null },
       afterData: { clientId: input.clientId },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return updated;
   },
@@ -8935,7 +9329,7 @@ var formService = {
   async getForm(organizationId, id) {
     return loadFormOrThrow(id, organizationId);
   },
-  async createForm(caller, input, meta3 = {}) {
+  async createForm(caller, input, meta4 = {}) {
     const organizationId = caller.organizationId;
     if (input.slug) {
       const dup = await formRepository.findBySlugInOrg(organizationId, input.slug);
@@ -8960,12 +9354,12 @@ var formService = {
       resourceType: "form",
       resourceId: form.id,
       afterData: { name: form.name, slug: form.slug },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return form;
   },
-  async updateForm(caller, id, input, meta3 = {}) {
+  async updateForm(caller, id, input, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadFormOrThrow(id, organizationId);
     if (input.slug !== void 0 && input.slug !== existing.slug) {
@@ -8990,12 +9384,12 @@ var formService = {
       resourceId: id,
       beforeData: { name: existing.name, slug: existing.slug, status: existing.status },
       afterData: { name: input.name, slug: input.slug, status: input.status },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return updated;
   },
-  async deleteForm(caller, id, meta3 = {}) {
+  async deleteForm(caller, id, meta4 = {}) {
     const organizationId = caller.organizationId;
     await loadFormOrThrow(id, organizationId);
     const submissionCount = await formRepository.countSubmissions(id);
@@ -9010,8 +9404,8 @@ var formService = {
       action: "FORM_DELETED",
       resourceType: "form",
       resourceId: id,
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
   },
   async listSubmissions(organizationId, formId, page, limit) {
@@ -9818,7 +10212,7 @@ var campaignService = {
   async getCampaign(organizationId, id) {
     return loadCampaignOrThrow(id, organizationId);
   },
-  async createCampaign(caller, input, meta3 = {}) {
+  async createCampaign(caller, input, meta4 = {}) {
     const organizationId = caller.organizationId;
     await assertRelationshipsUsable(input, organizationId);
     const campaign = await campaignRepository.create({
@@ -9852,13 +10246,13 @@ var campaignService = {
       resourceType: "campaign",
       resourceId: campaign.id,
       afterData: { name: campaign.name, status: campaign.status, channel: campaign.channel, utmCampaign: campaign.utmCampaign },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     await emitCampaignEvent("campaign.created", campaign, caller.id);
     return loadCampaignOrThrow(campaign.id, organizationId);
   },
-  async updateCampaign(caller, id, input, meta3 = {}) {
+  async updateCampaign(caller, id, input, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadCampaignOrThrow(id, organizationId);
     if (TERMINAL_STATUSES3.has(existing.status)) {
@@ -9896,15 +10290,15 @@ var campaignService = {
       resourceId: id,
       beforeData: { name: existing.name, channel: existing.channel },
       afterData: patch,
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     const updated = await loadCampaignOrThrow(id, organizationId);
     await emitCampaignEvent("campaign.updated", updated, caller.id);
     return updated;
   },
   /** Creates a new DRAFT campaign copying this one's fields and relations (never its leads/opportunities/clients — those are this campaign's own attributed activity, not the new copy's). */
-  async duplicateCampaign(caller, id, input, meta3 = {}) {
+  async duplicateCampaign(caller, id, input, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadCampaignOrThrow(id, organizationId);
     const copy = await campaignRepository.create({
@@ -9949,12 +10343,12 @@ var campaignService = {
       resourceId: copy.id,
       beforeData: { duplicatedFromCampaignId: id },
       afterData: { name: copy.name },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return loadCampaignOrThrow(copy.id, organizationId);
   },
-  async activateCampaign(caller, id, meta3 = {}) {
+  async activateCampaign(caller, id, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadCampaignOrThrow(id, organizationId);
     assertValidTransition2(existing.status, "ACTIVE");
@@ -9969,14 +10363,14 @@ var campaignService = {
       resourceId: id,
       beforeData: { status: existing.status },
       afterData: { status: "ACTIVE" },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     const updated = await loadCampaignOrThrow(id, organizationId);
     await emitCampaignEvent("campaign.activated", updated, caller.id);
     return updated;
   },
-  async pauseCampaign(caller, id, meta3 = {}) {
+  async pauseCampaign(caller, id, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadCampaignOrThrow(id, organizationId);
     if (existing.status !== "ACTIVE") throw new ConflictError("Only an ACTIVE campaign can be paused.");
@@ -9990,14 +10384,14 @@ var campaignService = {
       resourceId: id,
       beforeData: { status: existing.status },
       afterData: { status: "PAUSED" },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     const updated = await loadCampaignOrThrow(id, organizationId);
     await emitCampaignEvent("campaign.paused", updated, caller.id);
     return updated;
   },
-  async archiveCampaign(caller, id, meta3 = {}) {
+  async archiveCampaign(caller, id, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadCampaignOrThrow(id, organizationId);
     if (existing.status === "ARCHIVED") throw new ConflictError("This campaign is already archived.");
@@ -10011,8 +10405,8 @@ var campaignService = {
       resourceId: id,
       beforeData: { status: existing.status },
       afterData: { status: "ARCHIVED" },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     const updated = await loadCampaignOrThrow(id, organizationId);
     await emitCampaignEvent("campaign.archived", updated, caller.id);
@@ -10027,7 +10421,7 @@ var campaignService = {
    * separately permissioned action), it only refuses to go live until
    * that's genuinely true.
    */
-  async publishCampaign(caller, id, meta3 = {}) {
+  async publishCampaign(caller, id, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadCampaignOrThrow(id, organizationId);
     assertValidTransition2(existing.status, "ACTIVE");
@@ -10035,7 +10429,7 @@ var campaignService = {
     if (existing.landingPageId && existing.landingPage?.status !== "PUBLISHED") {
       throw new ValidationError("This campaign's landing page must be published before the campaign can go live.");
     }
-    return this.activateCampaign(caller, id, meta3);
+    return this.activateCampaign(caller, id, meta4);
   },
   /**
    * Composes the real, resolvable preview URL for this campaign's landing
@@ -10476,7 +10870,7 @@ var invitationService = {
       total
     };
   },
-  async createInvitation(caller, workspaceId, input, meta3 = {}) {
+  async createInvitation(caller, workspaceId, input, meta4 = {}) {
     const workspace = await loadWorkspaceForOwnerOrThrow2(workspaceId, caller.organizationId);
     const adminRole = await roleRepository.findByKey(CLIENT_ADMIN_ROLE_KEY);
     if (!adminRole) throw new InternalError("Required role configuration is missing.");
@@ -10507,15 +10901,15 @@ var invitationService = {
       resourceType: "workspace_invitation",
       resourceId: invitation.id,
       afterData: { workspaceId: workspace.id, email, roleKey: CLIENT_ADMIN_ROLE_KEY },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     if (workspace.provisionedForClient) {
       await onboardingService.completeStepForClient(workspace.provisionedForClient.id, "ADMINISTRATOR_INVITED", caller.id);
     }
     return { invitation, devToken: config.isProduction ? void 0 : token };
   },
-  async revokeInvitation(caller, invitationId, meta3 = {}) {
+  async revokeInvitation(caller, invitationId, meta4 = {}) {
     const invitation = await workspaceInvitationRepository.findById(invitationId);
     const workspace = invitation ? await workspaceRepository.findByIdForOwner(invitation.organizationId, caller.organizationId) : null;
     if (!invitation || !workspace) throw new NotFoundError("Invitation not found.");
@@ -10531,8 +10925,8 @@ var invitationService = {
       action: "CLIENT_ADMIN_INVITATION_REVOKED",
       resourceType: "workspace_invitation",
       resourceId: invitationId,
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
   },
   /** Public, unauthenticated lookup for the acceptance page (§26) — returns only what's needed to render a safe form, never the token hash or workspace internals. */
@@ -10551,7 +10945,7 @@ var invitationService = {
     };
   },
   /** Transactional acceptance (§21) — race-safe against double-acceptance via a conditional updateMany, same TOCTOU-guard pattern as leadService.convertLead. */
-  async acceptInvitation(token, input, meta3 = {}) {
+  async acceptInvitation(token, input, meta4 = {}) {
     const invitation = await workspaceInvitationRepository.findByToken(token);
     if (!invitation || computeInvitationStatus(invitation) !== "PENDING") {
       throw new AuthenticationError("This invitation link is invalid or has expired.");
@@ -10616,8 +11010,8 @@ var invitationService = {
       userId: result.id,
       organizationId: invitation.organizationId,
       expiresAt,
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     const role = await roleRepository.resolveById(invitation.roleId);
     if (!role) throw new InternalError("Role could not be resolved.");
@@ -10629,8 +11023,8 @@ var invitationService = {
       action: "CLIENT_ADMIN_ACCEPTED",
       resourceType: "workspace_invitation",
       resourceId: invitation.id,
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     const client3 = await prisma.client.findUnique({ where: { workspaceOrganizationId: invitation.organizationId } });
     if (client3) {
@@ -10889,7 +11283,7 @@ var productService = {
     await loadProductOrThrow(id);
     return productRepository.listRevisions(id);
   },
-  async createProduct(caller, input, meta3 = {}) {
+  async createProduct(caller, input, meta4 = {}) {
     const existingCode = await productRepository.findByCode(input.code);
     if (existingCode) throw new ConflictError(`A product with code "${input.code}" already exists.`, { existingProductId: existingCode.id });
     let slug;
@@ -10946,12 +11340,12 @@ var productService = {
       resourceType: "product",
       resourceId: productId,
       afterData: { code: input.code, name: input.name, type: input.type, status: input.status ?? "DRAFT" },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return loadProductDetailOrThrow(productId);
   },
-  async updateProduct(caller, id, input, meta3 = {}) {
+  async updateProduct(caller, id, input, meta4 = {}) {
     const existing = await loadProductDetailOrThrow(id);
     if (TERMINAL_STATUSES4.has(existing.status)) {
       throw new ConflictError("This product is archived and can no longer be edited.");
@@ -11013,12 +11407,12 @@ var productService = {
       resourceId: id,
       beforeData: { status: existing.status, name: existing.name },
       afterData: patch,
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return loadProductDetailOrThrow(id);
   },
-  async revertProduct(caller, id, revisionId, meta3 = {}) {
+  async revertProduct(caller, id, revisionId, meta4 = {}) {
     const existing = await loadProductDetailOrThrow(id);
     if (TERMINAL_STATUSES4.has(existing.status)) throw new ConflictError("This product is archived and can no longer be edited.");
     const target = await productRepository.findRevision(id, revisionId);
@@ -11034,12 +11428,12 @@ var productService = {
       resourceId: id,
       beforeData: { fromVersion: existing.currentRevision?.version, revertedToVersion: target.version },
       afterData: { newVersion: nextVersion },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return loadProductDetailOrThrow(id);
   },
-  async duplicateProduct(caller, id, name, meta3 = {}) {
+  async duplicateProduct(caller, id, name, meta4 = {}) {
     const existing = await loadProductDetailOrThrow(id);
     const baseName = name ?? `${existing.name} (Copy)`;
     const slug = await productRepository.findUniqueSlug(baseName);
@@ -11088,12 +11482,12 @@ var productService = {
       resourceType: "product",
       resourceId: productId,
       afterData: { duplicatedFromId: id, name: baseName },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return loadProductDetailOrThrow(productId);
   },
-  async archiveProduct(caller, id, meta3 = {}) {
+  async archiveProduct(caller, id, meta4 = {}) {
     const existing = await loadProductOrThrow(id);
     if (existing.status === "ARCHIVED") {
       throw new ConflictError("This product is already archived.");
@@ -11106,18 +11500,18 @@ var productService = {
       resourceType: "product",
       resourceId: id,
       beforeData: { status: existing.status },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return archived;
   },
   /** Phase 10 — bulk archive, the one bulk action that's unambiguous and safe for a catalog that's never hard-deleted. */
-  async bulkArchiveProducts(caller, ids, meta3 = {}) {
+  async bulkArchiveProducts(caller, ids, meta4 = {}) {
     const skipped = [];
     let archived = 0;
     for (const id of ids) {
       try {
-        await productService.archiveProduct(caller, id, meta3);
+        await productService.archiveProduct(caller, id, meta4);
         archived += 1;
       } catch {
         skipped.push(id);
@@ -11224,7 +11618,7 @@ var productModuleService = {
   async getModule(id) {
     return loadModuleOrThrow(id);
   },
-  async createModule(caller, productId, input, meta3 = {}) {
+  async createModule(caller, productId, input, meta4 = {}) {
     const product = await loadProductOrThrow2(productId);
     if (product.status === "ARCHIVED") {
       throw new ConflictError("Cannot add a module to an archived product.");
@@ -11262,12 +11656,12 @@ var productModuleService = {
       resourceType: "product_module",
       resourceId: module_.id,
       afterData: { productId, code: module_.code, name: module_.name, status: module_.status },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return module_;
   },
-  async updateModule(caller, id, input, meta3 = {}) {
+  async updateModule(caller, id, input, meta4 = {}) {
     const existing = await loadModuleOrThrow(id);
     if (input.slug !== void 0 && input.slug !== existing.slug) {
       const dup = await productModuleRepository.findBySlugForProduct(existing.productId, input.slug);
@@ -11297,12 +11691,12 @@ var productModuleService = {
       resourceId: id,
       beforeData: { status: existing.status, name: existing.name },
       afterData: patch,
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return updated;
   },
-  async archiveModule(caller, id, meta3 = {}) {
+  async archiveModule(caller, id, meta4 = {}) {
     const existing = await loadModuleOrThrow(id);
     if (existing.status === "INACTIVE") {
       throw new ConflictError("This module is already inactive.");
@@ -11315,13 +11709,13 @@ var productModuleService = {
       resourceType: "product_module",
       resourceId: id,
       beforeData: { status: existing.status },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return archived;
   },
   /** Transactional, all-or-nothing reorder — validates every id belongs to this exact product before applying anything (§36). */
-  async reorderModules(caller, productId, moduleIds, meta3 = {}) {
+  async reorderModules(caller, productId, moduleIds, meta4 = {}) {
     await loadProductOrThrow2(productId);
     const existingIds = await productModuleRepository.listAllIdsForProduct(productId);
     const existingSet = new Set(existingIds);
@@ -11337,8 +11731,8 @@ var productModuleService = {
       resourceType: "product",
       resourceId: productId,
       afterData: { order: moduleIds },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
   }
 };
@@ -11679,7 +12073,7 @@ var productCategoryService = {
   async list(search) {
     return productCategoryRepository.list(search);
   },
-  async create(caller, input, meta3 = {}) {
+  async create(caller, input, meta4 = {}) {
     let slug;
     if (input.slug) {
       const existing = await productCategoryRepository.findBySlug(input.slug);
@@ -11701,12 +12095,12 @@ var productCategoryService = {
       resourceType: "product_category",
       resourceId: category.id,
       afterData: { name: category.name, slug: category.slug },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return category;
   },
-  async update(caller, id, input, meta3 = {}) {
+  async update(caller, id, input, meta4 = {}) {
     const existing = await loadOrThrow(id);
     if (input.slug !== void 0 && input.slug !== existing.slug) {
       const dup = await productCategoryRepository.findBySlug(input.slug);
@@ -11726,12 +12120,12 @@ var productCategoryService = {
       resourceId: id,
       beforeData: { name: existing.name, slug: existing.slug },
       afterData: input,
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return updated;
   },
-  async delete(caller, id, meta3 = {}) {
+  async delete(caller, id, meta4 = {}) {
     const existing = await loadOrThrow(id);
     const productCount = await productCategoryRepository.countProducts(id);
     if (productCount > 0) {
@@ -11745,8 +12139,8 @@ var productCategoryService = {
       resourceType: "product_category",
       resourceId: id,
       beforeData: { name: existing.name, slug: existing.slug },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
   }
 };
@@ -11828,7 +12222,7 @@ var industryService = {
   async list(search) {
     return industryRepository.list(search);
   },
-  async create(caller, input, meta3 = {}) {
+  async create(caller, input, meta4 = {}) {
     let slug;
     if (input.slug) {
       const existing = await industryRepository.findBySlug(input.slug);
@@ -11850,12 +12244,12 @@ var industryService = {
       resourceType: "industry",
       resourceId: industry.id,
       afterData: { name: industry.name, slug: industry.slug },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return industry;
   },
-  async update(caller, id, input, meta3 = {}) {
+  async update(caller, id, input, meta4 = {}) {
     const existing = await loadOrThrow2(id);
     if (input.slug !== void 0 && input.slug !== existing.slug) {
       const dup = await industryRepository.findBySlug(input.slug);
@@ -11875,12 +12269,12 @@ var industryService = {
       resourceId: id,
       beforeData: { name: existing.name, slug: existing.slug },
       afterData: input,
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return updated;
   },
-  async delete(caller, id, meta3 = {}) {
+  async delete(caller, id, meta4 = {}) {
     const existing = await loadOrThrow2(id);
     const productCount = await industryRepository.countProducts(id);
     if (productCount > 0) {
@@ -11894,8 +12288,8 @@ var industryService = {
       resourceType: "industry",
       resourceId: id,
       beforeData: { name: existing.name, slug: existing.slug },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
   }
 };
@@ -12338,7 +12732,7 @@ var redirectService = {
   async getRedirect(organizationId, id) {
     return loadRedirectOrThrow(id, organizationId);
   },
-  async createRedirect(caller, input, meta3 = {}) {
+  async createRedirect(caller, input, meta4 = {}) {
     const organizationId = caller.organizationId;
     const dup = await redirectRepository.findByFromPathInOrg(organizationId, input.fromPath);
     if (dup) throw new ConflictError(`A redirect from "${input.fromPath}" already exists.`, { existingRedirectId: dup.id });
@@ -12365,12 +12759,12 @@ var redirectService = {
       resourceType: "redirect",
       resourceId: redirect.id,
       afterData: { fromPath: redirect.fromPath, toPath: redirect.toPath, statusCode: redirect.statusCode },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return redirect;
   },
-  async updateRedirect(caller, id, input, meta3 = {}) {
+  async updateRedirect(caller, id, input, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadRedirectOrThrow(id, organizationId);
     if (input.toPath !== void 0) {
@@ -12391,12 +12785,12 @@ var redirectService = {
       resourceId: id,
       beforeData: { toPath: existing.toPath, statusCode: existing.statusCode },
       afterData: patch,
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return updated;
   },
-  async deleteRedirect(caller, id, meta3 = {}) {
+  async deleteRedirect(caller, id, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadRedirectOrThrow(id, organizationId);
     await redirectRepository.delete(id);
@@ -12408,8 +12802,8 @@ var redirectService = {
       resourceType: "redirect",
       resourceId: id,
       beforeData: { fromPath: existing.fromPath, toPath: existing.toPath },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
   },
   /**
@@ -12488,7 +12882,7 @@ var pageService = {
     await loadPageOrThrow(id, organizationId);
     return pageRepository.listChildren(id, organizationId);
   },
-  async createPage(caller, input, meta3 = {}) {
+  async createPage(caller, input, meta4 = {}) {
     const organizationId = caller.organizationId;
     const body = sanitizeContentHtml(input.body);
     const editorBlocks = input.editorBlocks ? sanitizeEditorDocument(input.editorBlocks) : void 0;
@@ -12548,12 +12942,12 @@ var pageService = {
       resourceType: "page",
       resourceId: createdId,
       afterData: { title: input.title, slug },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return loadPageOrThrow(createdId, organizationId);
   },
-  async updatePage(caller, id, input, meta3 = {}) {
+  async updatePage(caller, id, input, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadPageOrThrow(id, organizationId);
     const sanitizedBody = input.body !== void 0 ? sanitizeContentHtml(input.body) : void 0;
@@ -12639,8 +13033,8 @@ var pageService = {
       resourceId: id,
       beforeData: { status: existing.status, title: existing.title },
       afterData: { status: input.status, title: input.title, slug: input.slug },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     if (hasFeaturedMediaEdit && input.featuredMediaId !== existing.featuredMediaId) {
       await auditLogRepository.record({
@@ -12652,8 +13046,8 @@ var pageService = {
         resourceId: id,
         beforeData: { featuredMediaId: existing.featuredMediaId },
         afterData: { featuredMediaId: input.featuredMediaId ?? null },
-        ipAddress: meta3.ip,
-        userAgent: meta3.userAgent
+        ipAddress: meta4.ip,
+        userAgent: meta4.userAgent
       });
     }
     if (input.slug !== void 0 && input.slug !== existing.slug) {
@@ -12670,7 +13064,7 @@ var pageService = {
     }
     return loadPageOrThrow(id, organizationId);
   },
-  async submitForReview(caller, id, meta3 = {}) {
+  async submitForReview(caller, id, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadPageOrThrow(id, organizationId);
     if (existing.status !== "DRAFT") throw new ConflictError(`Only a DRAFT page can be submitted for review (current status: ${existing.status}).`);
@@ -12687,8 +13081,8 @@ var pageService = {
       resourceId: id,
       beforeData: { status: existing.status },
       afterData: { status: "IN_REVIEW" },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     try {
       await eventEngine.emit({
@@ -12705,7 +13099,7 @@ var pageService = {
     }
     return loadPageOrThrow(id, organizationId);
   },
-  async publishPage(caller, id, meta3 = {}) {
+  async publishPage(caller, id, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadPageOrThrow(id, organizationId);
     if (existing.status === "ARCHIVED") throw new ConflictError("An archived page must be restored before it can be published.");
@@ -12726,8 +13120,8 @@ var pageService = {
       resourceId: id,
       beforeData: { status: existing.status },
       afterData: { status: "PUBLISHED" },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     if (existing.createdById && existing.createdById !== caller.id) {
       await notificationService.notify({
@@ -12740,7 +13134,7 @@ var pageService = {
     }
     return loadPageOrThrow(id, organizationId);
   },
-  async schedulePage(caller, id, input, meta3 = {}) {
+  async schedulePage(caller, id, input, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadPageOrThrow(id, organizationId);
     if (existing.status === "ARCHIVED") throw new ConflictError("An archived page must be restored before it can be scheduled.");
@@ -12756,12 +13150,12 @@ var pageService = {
       resourceId: id,
       beforeData: { status: existing.status },
       afterData: { status: "SCHEDULED", scheduledAt: input.scheduledAt },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return loadPageOrThrow(id, organizationId);
   },
-  async archivePage(caller, id, meta3 = {}) {
+  async archivePage(caller, id, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadPageOrThrow(id, organizationId);
     if (existing.status === "ARCHIVED") throw new ConflictError("This page is already archived.");
@@ -12775,12 +13169,12 @@ var pageService = {
       resourceId: id,
       beforeData: { status: existing.status },
       afterData: { status: "ARCHIVED" },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return loadPageOrThrow(id, organizationId);
   },
-  async revertPage(caller, id, input, meta3 = {}) {
+  async revertPage(caller, id, input, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadPageOrThrow(id, organizationId);
     if (existing.status === "ARCHIVED") throw new ConflictError("An archived page must be restored before its content can be reverted.");
@@ -12818,12 +13212,12 @@ var pageService = {
       resourceId: id,
       beforeData: { fromVersion: current?.version, revertedToRevisionId: target.id, revertedToVersion: target.version },
       afterData: { newVersion: nextVersion },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return loadPageOrThrow(id, organizationId);
   },
-  async deletePage(caller, id, meta3 = {}) {
+  async deletePage(caller, id, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadPageOrThrow(id, organizationId);
     await pageRepository.softDelete(id);
@@ -12835,15 +13229,15 @@ var pageService = {
       resourceType: "page",
       resourceId: id,
       beforeData: { status: existing.status, title: existing.title },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
   },
   /** Phase 7 — Trash view (Content Dashboard): soft-deleted pages, paginated. */
   async listTrash(organizationId, page, limit) {
     return pageRepository.listTrash(organizationId, page, limit);
   },
-  async restorePage(caller, id, meta3 = {}) {
+  async restorePage(caller, id, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await pageRepository.findTrashedByIdInOrg(id, organizationId);
     if (!existing) throw new NotFoundError("Page not found in trash.");
@@ -12856,19 +13250,19 @@ var pageService = {
       resourceType: "page",
       resourceId: id,
       beforeData: { status: existing.status, title: existing.title },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
   },
   /** Phase 7 — bulk workflow actions, same per-item isolation as postService.bulkAction. */
-  async bulkAction(caller, action, ids, meta3 = {}) {
+  async bulkAction(caller, action, ids, meta4 = {}) {
     const succeeded = [];
     const failed = [];
     for (const id of ids) {
       try {
-        if (action === "archive") await this.archivePage(caller, id, meta3);
-        else if (action === "trash") await this.deletePage(caller, id, meta3);
-        else await this.restorePage(caller, id, meta3);
+        if (action === "archive") await this.archivePage(caller, id, meta4);
+        else if (action === "trash") await this.deletePage(caller, id, meta4);
+        else await this.restorePage(caller, id, meta4);
         succeeded.push(id);
       } catch (err) {
         failed.push({ id, error: err instanceof Error ? err.message : "Action failed." });
@@ -13274,7 +13668,7 @@ var templateService = {
     );
     return { template, regions };
   },
-  async createTemplate(caller, input, meta3 = {}) {
+  async createTemplate(caller, input, meta4 = {}) {
     const organizationId = caller.organizationId;
     if (input.slug) {
       const dup = await templateRepository.findBySlugInOrg(organizationId, input.slug);
@@ -13319,12 +13713,12 @@ var templateService = {
       resourceType: "template",
       resourceId: createdId,
       afterData: { name: input.name, slug, type: input.type },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return loadTemplateOrThrow(createdId, organizationId);
   },
-  async updateTemplate(caller, id, input, meta3 = {}) {
+  async updateTemplate(caller, id, input, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadTemplateOrThrow(id, organizationId);
     assertNotSystem(existing, "edited");
@@ -13383,12 +13777,12 @@ var templateService = {
       resourceId: id,
       beforeData: { name: existing.name, slug: existing.slug },
       afterData: { name: input.name, slug: input.slug },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return loadTemplateOrThrow(id, organizationId);
   },
-  async publishTemplate(caller, id, meta3 = {}) {
+  async publishTemplate(caller, id, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadTemplateOrThrow(id, organizationId);
     assertNotSystem(existing, "published");
@@ -13409,12 +13803,12 @@ var templateService = {
       resourceId: id,
       beforeData: { status: existing.status },
       afterData: { status: "PUBLISHED" },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return loadTemplateOrThrow(id, organizationId);
   },
-  async archiveTemplate(caller, id, meta3 = {}) {
+  async archiveTemplate(caller, id, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadTemplateOrThrow(id, organizationId);
     assertNotSystem(existing, "archived");
@@ -13429,12 +13823,12 @@ var templateService = {
       resourceId: id,
       beforeData: { status: existing.status },
       afterData: { status: "ARCHIVED" },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return loadTemplateOrThrow(id, organizationId);
   },
-  async revertTemplate(caller, id, input, meta3 = {}) {
+  async revertTemplate(caller, id, input, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadTemplateOrThrow(id, organizationId);
     assertNotSystem(existing, "rolled back");
@@ -13466,12 +13860,12 @@ var templateService = {
       resourceId: id,
       beforeData: { fromVersion: current?.version, revertedToRevisionId: target.id, revertedToVersion: target.version },
       afterData: { newVersion: nextVersion },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return loadTemplateOrThrow(id, organizationId);
   },
-  async duplicateTemplate(caller, id, input, meta3 = {}) {
+  async duplicateTemplate(caller, id, input, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadTemplateOrThrow(id, organizationId);
     const baseName = input.name ?? `${existing.name} (Copy)`;
@@ -13511,12 +13905,12 @@ var templateService = {
       resourceType: "template",
       resourceId: createdId,
       afterData: { duplicatedFromId: id, name: baseName },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return loadTemplateOrThrow(createdId, organizationId);
   },
-  async deleteTemplate(caller, id, meta3 = {}) {
+  async deleteTemplate(caller, id, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadTemplateOrThrow(id, organizationId);
     assertNotSystem(existing, "deleted");
@@ -13532,8 +13926,8 @@ var templateService = {
       resourceType: "template",
       resourceId: id,
       beforeData: { name: existing.name, status: existing.status },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
   }
 };
@@ -13779,7 +14173,7 @@ var templatePartService = {
     await loadTemplatePartOrThrow(id, organizationId);
     return templatePartRepository.findUsage(id, organizationId);
   },
-  async createPart(caller, input, meta3 = {}) {
+  async createPart(caller, input, meta4 = {}) {
     const organizationId = caller.organizationId;
     if (input.slug) {
       const dup = await templatePartRepository.findBySlugInOrg(organizationId, input.slug);
@@ -13824,12 +14218,12 @@ var templatePartService = {
       resourceType: "template_part",
       resourceId: createdId,
       afterData: { name: input.name, slug, type: input.type },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return loadTemplatePartOrThrow(createdId, organizationId);
   },
-  async updatePart(caller, id, input, meta3 = {}) {
+  async updatePart(caller, id, input, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadTemplatePartOrThrow(id, organizationId);
     assertNotSystem2(existing, "edited");
@@ -13888,12 +14282,12 @@ var templatePartService = {
       resourceId: id,
       beforeData: { name: existing.name, slug: existing.slug },
       afterData: { name: input.name, slug: input.slug },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return loadTemplatePartOrThrow(id, organizationId);
   },
-  async publishPart(caller, id, meta3 = {}) {
+  async publishPart(caller, id, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadTemplatePartOrThrow(id, organizationId);
     assertNotSystem2(existing, "published");
@@ -13913,12 +14307,12 @@ var templatePartService = {
       resourceId: id,
       beforeData: { status: existing.status },
       afterData: { status: "PUBLISHED" },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return loadTemplatePartOrThrow(id, organizationId);
   },
-  async archivePart(caller, id, meta3 = {}) {
+  async archivePart(caller, id, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadTemplatePartOrThrow(id, organizationId);
     assertNotSystem2(existing, "archived");
@@ -13933,12 +14327,12 @@ var templatePartService = {
       resourceId: id,
       beforeData: { status: existing.status },
       afterData: { status: "ARCHIVED" },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return loadTemplatePartOrThrow(id, organizationId);
   },
-  async revertPart(caller, id, input, meta3 = {}) {
+  async revertPart(caller, id, input, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadTemplatePartOrThrow(id, organizationId);
     assertNotSystem2(existing, "rolled back");
@@ -13970,12 +14364,12 @@ var templatePartService = {
       resourceId: id,
       beforeData: { fromVersion: current?.version, revertedToRevisionId: target.id, revertedToVersion: target.version },
       afterData: { newVersion: nextVersion },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return loadTemplatePartOrThrow(id, organizationId);
   },
-  async duplicatePart(caller, id, input, meta3 = {}) {
+  async duplicatePart(caller, id, input, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadTemplatePartOrThrow(id, organizationId);
     const baseName = input.name ?? `${existing.name} (Copy)`;
@@ -14014,12 +14408,12 @@ var templatePartService = {
       resourceType: "template_part",
       resourceId: createdId,
       afterData: { duplicatedFromId: id, name: baseName },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return loadTemplatePartOrThrow(createdId, organizationId);
   },
-  async deletePart(caller, id, meta3 = {}) {
+  async deletePart(caller, id, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadTemplatePartOrThrow(id, organizationId);
     assertNotSystem2(existing, "deleted");
@@ -14039,8 +14433,8 @@ var templatePartService = {
       resourceType: "template_part",
       resourceId: id,
       beforeData: { name: existing.name, status: existing.status },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
   }
 };
@@ -14407,7 +14801,7 @@ var navigationMenuService = {
     await loadMenuOrThrow(id, organizationId);
     return navigationMenuRepository.findUsage(id, organizationId);
   },
-  async createMenu(caller, input, meta3 = {}) {
+  async createMenu(caller, input, meta4 = {}) {
     const organizationId = caller.organizationId;
     if (input.slug) {
       const dup = await navigationMenuRepository.findBySlugInOrg(organizationId, input.slug);
@@ -14444,12 +14838,12 @@ var navigationMenuService = {
       resourceType: "navigation_menu",
       resourceId: createdId,
       afterData: { name: input.name, slug, type: input.type },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return loadMenuOrThrow(createdId, organizationId);
   },
-  async updateMenu(caller, id, input, meta3 = {}) {
+  async updateMenu(caller, id, input, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadMenuOrThrow(id, organizationId);
     assertNotSystem3(existing, "edited");
@@ -14507,12 +14901,12 @@ var navigationMenuService = {
       resourceId: id,
       beforeData: { name: existing.name, slug: existing.slug },
       afterData: { name: input.name, slug: input.slug },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return loadMenuOrThrow(id, organizationId);
   },
-  async publishMenu(caller, id, meta3 = {}) {
+  async publishMenu(caller, id, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadMenuOrThrow(id, organizationId);
     assertNotSystem3(existing, "published");
@@ -14533,12 +14927,12 @@ var navigationMenuService = {
       resourceId: id,
       beforeData: { status: existing.status },
       afterData: { status: "PUBLISHED" },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return loadMenuOrThrow(id, organizationId);
   },
-  async archiveMenu(caller, id, meta3 = {}) {
+  async archiveMenu(caller, id, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadMenuOrThrow(id, organizationId);
     assertNotSystem3(existing, "archived");
@@ -14553,12 +14947,12 @@ var navigationMenuService = {
       resourceId: id,
       beforeData: { status: existing.status },
       afterData: { status: "ARCHIVED" },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return loadMenuOrThrow(id, organizationId);
   },
-  async revertMenu(caller, id, input, meta3 = {}) {
+  async revertMenu(caller, id, input, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadMenuOrThrow(id, organizationId);
     assertNotSystem3(existing, "rolled back");
@@ -14590,12 +14984,12 @@ var navigationMenuService = {
       resourceId: id,
       beforeData: { fromVersion: current?.version, revertedToRevisionId: target.id, revertedToVersion: target.version },
       afterData: { newVersion: nextVersion },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return loadMenuOrThrow(id, organizationId);
   },
-  async duplicateMenu(caller, id, input, meta3 = {}) {
+  async duplicateMenu(caller, id, input, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadMenuOrThrow(id, organizationId);
     const baseName = input.name ?? `${existing.name} (Copy)`;
@@ -14619,12 +15013,12 @@ var navigationMenuService = {
       resourceType: "navigation_menu",
       resourceId: createdId,
       afterData: { duplicatedFromId: id, name: baseName },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return loadMenuOrThrow(createdId, organizationId);
   },
-  async deleteMenu(caller, id, meta3 = {}) {
+  async deleteMenu(caller, id, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadMenuOrThrow(id, organizationId);
     assertNotSystem3(existing, "deleted");
@@ -14644,8 +15038,8 @@ var navigationMenuService = {
       resourceType: "navigation_menu",
       resourceId: id,
       beforeData: { name: existing.name, status: existing.status },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
   }
 };
@@ -14850,7 +15244,7 @@ var postService = {
     await loadPostOrThrow(id, organizationId);
     return postRepository.listRevisions(id);
   },
-  async createPost(caller, input, meta3 = {}) {
+  async createPost(caller, input, meta4 = {}) {
     const organizationId = caller.organizationId;
     const body = sanitizeContentHtml(input.body);
     await assertCategoryInOrg(input.categoryId, organizationId);
@@ -14905,12 +15299,12 @@ var postService = {
       resourceType: "post",
       resourceId: createdId,
       afterData: { title: input.title, slug },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return loadPostOrThrow(createdId, organizationId);
   },
-  async updatePost(caller, id, input, meta3 = {}) {
+  async updatePost(caller, id, input, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadPostOrThrow(id, organizationId);
     const sanitizedBody = input.body !== void 0 ? sanitizeContentHtml(input.body) : void 0;
@@ -14997,8 +15391,8 @@ var postService = {
       resourceId: id,
       beforeData: { status: existing.status, title: existing.title },
       afterData: { status: input.status, title: input.title, slug: input.slug },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     if (input.slug !== void 0 && input.slug !== existing.slug) {
       const finalStatus = input.status ?? existing.status;
@@ -15022,13 +15416,13 @@ var postService = {
         resourceId: id,
         beforeData: { featuredMediaId: existing.featuredMediaId },
         afterData: { featuredMediaId: input.featuredMediaId ?? null },
-        ipAddress: meta3.ip,
-        userAgent: meta3.userAgent
+        ipAddress: meta4.ip,
+        userAgent: meta4.userAgent
       });
     }
     return loadPostOrThrow(id, organizationId);
   },
-  async submitForReview(caller, id, meta3 = {}) {
+  async submitForReview(caller, id, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadPostOrThrow(id, organizationId);
     if (existing.status !== "DRAFT") throw new ConflictError(`Only a DRAFT post can be submitted for review (current status: ${existing.status}).`);
@@ -15045,8 +15439,8 @@ var postService = {
       resourceId: id,
       beforeData: { status: existing.status },
       afterData: { status: "IN_REVIEW" },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     try {
       await eventEngine.emit({
@@ -15063,7 +15457,7 @@ var postService = {
     }
     return loadPostOrThrow(id, organizationId);
   },
-  async publishPost(caller, id, meta3 = {}) {
+  async publishPost(caller, id, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadPostOrThrow(id, organizationId);
     if (existing.status === "ARCHIVED") throw new ConflictError("An archived post must be restored before it can be published.");
@@ -15084,8 +15478,8 @@ var postService = {
       resourceId: id,
       beforeData: { status: existing.status },
       afterData: { status: "PUBLISHED" },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     if (existing.createdById && existing.createdById !== caller.id) {
       await notificationService.notify({
@@ -15098,7 +15492,7 @@ var postService = {
     }
     return loadPostOrThrow(id, organizationId);
   },
-  async schedulePost(caller, id, input, meta3 = {}) {
+  async schedulePost(caller, id, input, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadPostOrThrow(id, organizationId);
     if (existing.status === "ARCHIVED") throw new ConflictError("An archived post must be restored before it can be scheduled.");
@@ -15114,12 +15508,12 @@ var postService = {
       resourceId: id,
       beforeData: { status: existing.status },
       afterData: { status: "SCHEDULED", scheduledAt: input.scheduledAt },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return loadPostOrThrow(id, organizationId);
   },
-  async archivePost(caller, id, meta3 = {}) {
+  async archivePost(caller, id, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadPostOrThrow(id, organizationId);
     if (existing.status === "ARCHIVED") throw new ConflictError("This post is already archived.");
@@ -15133,12 +15527,12 @@ var postService = {
       resourceId: id,
       beforeData: { status: existing.status },
       afterData: { status: "ARCHIVED" },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return loadPostOrThrow(id, organizationId);
   },
-  async revertPost(caller, id, input, meta3 = {}) {
+  async revertPost(caller, id, input, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadPostOrThrow(id, organizationId);
     if (existing.status === "ARCHIVED") throw new ConflictError("An archived post must be restored before its content can be reverted.");
@@ -15175,12 +15569,12 @@ var postService = {
       resourceId: id,
       beforeData: { fromVersion: current?.version, revertedToRevisionId: target.id, revertedToVersion: target.version },
       afterData: { newVersion: nextVersion },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return loadPostOrThrow(id, organizationId);
   },
-  async deletePost(caller, id, meta3 = {}) {
+  async deletePost(caller, id, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadPostOrThrow(id, organizationId);
     await postRepository.softDelete(id);
@@ -15192,15 +15586,15 @@ var postService = {
       resourceType: "post",
       resourceId: id,
       beforeData: { status: existing.status, title: existing.title },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
   },
   /** Phase 7 — Trash view (Content Dashboard): soft-deleted posts, paginated. */
   async listTrash(organizationId, page, limit) {
     return postRepository.listTrash(organizationId, page, limit);
   },
-  async restorePost(caller, id, meta3 = {}) {
+  async restorePost(caller, id, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await postRepository.findTrashedByIdInOrg(id, organizationId);
     if (!existing) throw new NotFoundError("Post not found in trash.");
@@ -15213,8 +15607,8 @@ var postService = {
       resourceType: "post",
       resourceId: id,
       beforeData: { status: existing.status, title: existing.title },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
   },
   /**
@@ -15226,14 +15620,14 @@ var postService = {
    * the rest of the batch — mirrors contentSchedulingService's per-item
    * isolation for the same reason.
    */
-  async bulkAction(caller, action, ids, meta3 = {}) {
+  async bulkAction(caller, action, ids, meta4 = {}) {
     const succeeded = [];
     const failed = [];
     for (const id of ids) {
       try {
-        if (action === "archive") await this.archivePost(caller, id, meta3);
-        else if (action === "trash") await this.deletePost(caller, id, meta3);
-        else await this.restorePost(caller, id, meta3);
+        if (action === "archive") await this.archivePost(caller, id, meta4);
+        else if (action === "trash") await this.deletePost(caller, id, meta4);
+        else await this.restorePost(caller, id, meta4);
         succeeded.push(id);
       } catch (err) {
         failed.push({ id, error: err instanceof Error ? err.message : "Action failed." });
@@ -15522,7 +15916,7 @@ var caseStudyService = {
     await loadCaseStudyOrThrow(id, organizationId);
     return caseStudyRepository.listRevisions(id);
   },
-  async createCaseStudy(caller, input, meta3 = {}) {
+  async createCaseStudy(caller, input, meta4 = {}) {
     const organizationId = caller.organizationId;
     const body = sanitizeContentHtml(input.body);
     const editorBlocks = input.editorBlocks ? sanitizeEditorDocument(input.editorBlocks) : void 0;
@@ -15584,12 +15978,12 @@ var caseStudyService = {
       resourceType: "case_study",
       resourceId: createdId,
       afterData: { title: input.title, slug },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return loadCaseStudyOrThrow(createdId, organizationId);
   },
-  async updateCaseStudy(caller, id, input, meta3 = {}) {
+  async updateCaseStudy(caller, id, input, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadCaseStudyOrThrow(id, organizationId);
     const sanitizedBody = input.body !== void 0 ? sanitizeContentHtml(input.body) : void 0;
@@ -15693,8 +16087,8 @@ var caseStudyService = {
       resourceId: id,
       beforeData: { status: existing.status, title: existing.title },
       afterData: { status: input.status, title: input.title, slug: input.slug },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     if (hasFeaturedMediaEdit && input.featuredMediaId !== existing.featuredMediaId) {
       await auditLogRepository.record({
@@ -15706,8 +16100,8 @@ var caseStudyService = {
         resourceId: id,
         beforeData: { featuredMediaId: existing.featuredMediaId },
         afterData: { featuredMediaId: input.featuredMediaId ?? null },
-        ipAddress: meta3.ip,
-        userAgent: meta3.userAgent
+        ipAddress: meta4.ip,
+        userAgent: meta4.userAgent
       });
     }
     if (input.slug !== void 0 && input.slug !== existing.slug) {
@@ -15724,7 +16118,7 @@ var caseStudyService = {
     }
     return loadCaseStudyOrThrow(id, organizationId);
   },
-  async submitForReview(caller, id, meta3 = {}) {
+  async submitForReview(caller, id, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadCaseStudyOrThrow(id, organizationId);
     if (existing.status !== "DRAFT") throw new ConflictError(`Only a DRAFT case study can be submitted for review (current status: ${existing.status}).`);
@@ -15741,12 +16135,12 @@ var caseStudyService = {
       resourceId: id,
       beforeData: { status: existing.status },
       afterData: { status: "IN_REVIEW" },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return loadCaseStudyOrThrow(id, organizationId);
   },
-  async publishCaseStudy(caller, id, meta3 = {}) {
+  async publishCaseStudy(caller, id, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadCaseStudyOrThrow(id, organizationId);
     if (existing.status === "ARCHIVED") throw new ConflictError("An archived case study must be restored before it can be published.");
@@ -15767,8 +16161,8 @@ var caseStudyService = {
       resourceId: id,
       beforeData: { status: existing.status },
       afterData: { status: "PUBLISHED" },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     if (existing.createdById && existing.createdById !== caller.id) {
       await notificationService.notify({
@@ -15781,7 +16175,7 @@ var caseStudyService = {
     }
     return loadCaseStudyOrThrow(id, organizationId);
   },
-  async scheduleCaseStudy(caller, id, input, meta3 = {}) {
+  async scheduleCaseStudy(caller, id, input, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadCaseStudyOrThrow(id, organizationId);
     if (existing.status === "ARCHIVED") throw new ConflictError("An archived case study must be restored before it can be scheduled.");
@@ -15797,12 +16191,12 @@ var caseStudyService = {
       resourceId: id,
       beforeData: { status: existing.status },
       afterData: { status: "SCHEDULED", scheduledAt: input.scheduledAt },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return loadCaseStudyOrThrow(id, organizationId);
   },
-  async archiveCaseStudy(caller, id, meta3 = {}) {
+  async archiveCaseStudy(caller, id, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadCaseStudyOrThrow(id, organizationId);
     if (existing.status === "ARCHIVED") throw new ConflictError("This case study is already archived.");
@@ -15816,12 +16210,12 @@ var caseStudyService = {
       resourceId: id,
       beforeData: { status: existing.status },
       afterData: { status: "ARCHIVED" },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return loadCaseStudyOrThrow(id, organizationId);
   },
-  async revertCaseStudy(caller, id, input, meta3 = {}) {
+  async revertCaseStudy(caller, id, input, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadCaseStudyOrThrow(id, organizationId);
     if (existing.status === "ARCHIVED") throw new ConflictError("An archived case study must be restored before its content can be reverted.");
@@ -15856,12 +16250,12 @@ var caseStudyService = {
       resourceId: id,
       beforeData: { fromVersion: current?.version, revertedToRevisionId: target.id, revertedToVersion: target.version },
       afterData: { newVersion: nextVersion },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return loadCaseStudyOrThrow(id, organizationId);
   },
-  async deleteCaseStudy(caller, id, meta3 = {}) {
+  async deleteCaseStudy(caller, id, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadCaseStudyOrThrow(id, organizationId);
     await caseStudyRepository.softDelete(id);
@@ -15873,14 +16267,14 @@ var caseStudyService = {
       resourceType: "case_study",
       resourceId: id,
       beforeData: { status: existing.status, title: existing.title },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
   },
   async listTrash(organizationId, page, limit) {
     return caseStudyRepository.listTrash(organizationId, page, limit);
   },
-  async restoreCaseStudy(caller, id, meta3 = {}) {
+  async restoreCaseStudy(caller, id, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await caseStudyRepository.findTrashedByIdInOrg(id, organizationId);
     if (!existing) throw new NotFoundError("Case study not found in trash.");
@@ -15893,19 +16287,19 @@ var caseStudyService = {
       resourceType: "case_study",
       resourceId: id,
       beforeData: { status: existing.status, title: existing.title },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
   },
   /** Bulk workflow actions for the list view — same per-item isolation as postService.bulkAction/pageService.bulkAction. */
-  async bulkAction(caller, action, ids, meta3 = {}) {
+  async bulkAction(caller, action, ids, meta4 = {}) {
     const succeeded = [];
     const failed = [];
     for (const id of ids) {
       try {
-        if (action === "archive") await this.archiveCaseStudy(caller, id, meta3);
-        else if (action === "trash") await this.deleteCaseStudy(caller, id, meta3);
-        else await this.restoreCaseStudy(caller, id, meta3);
+        if (action === "archive") await this.archiveCaseStudy(caller, id, meta4);
+        else if (action === "trash") await this.deleteCaseStudy(caller, id, meta4);
+        else await this.restoreCaseStudy(caller, id, meta4);
         succeeded.push(id);
       } catch (err) {
         failed.push({ id, error: err instanceof Error ? err.message : "Action failed." });
@@ -16165,7 +16559,7 @@ var categoryService = {
   async getCategory(organizationId, id) {
     return loadCategoryOrThrow(id, organizationId);
   },
-  async createCategory(caller, input, meta3 = {}) {
+  async createCategory(caller, input, meta4 = {}) {
     const organizationId = caller.organizationId;
     if (input.slug) {
       const dup = await categoryRepository.findBySlugInOrg(organizationId, input.slug);
@@ -16187,12 +16581,12 @@ var categoryService = {
       resourceType: "category",
       resourceId: category.id,
       afterData: { name: category.name, slug: category.slug },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return category;
   },
-  async updateCategory(caller, id, input, meta3 = {}) {
+  async updateCategory(caller, id, input, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadCategoryOrThrow(id, organizationId);
     if (input.slug !== void 0 && input.slug !== existing.slug) {
@@ -16220,12 +16614,12 @@ var categoryService = {
       resourceId: id,
       beforeData: { name: existing.name, slug: existing.slug },
       afterData: patch,
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return updated;
   },
-  async deleteCategory(caller, id, meta3 = {}) {
+  async deleteCategory(caller, id, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadCategoryOrThrow(id, organizationId);
     const postCount = await categoryRepository.countPostsUsing(id);
@@ -16241,8 +16635,8 @@ var categoryService = {
       resourceType: "category",
       resourceId: id,
       beforeData: { name: existing.name, slug: existing.slug },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
   }
 };
@@ -16395,27 +16789,27 @@ var VALID_SLUG_PATTERN = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 function checkRecord(resourceType, record) {
   const issues = [];
   const isLive = LIVE_STATUSES.has(record.status);
-  const meta3 = record.currentRevision?.metadata ?? {};
+  const meta4 = record.currentRevision?.metadata ?? {};
   const displayTitle = record.currentRevision?.title || record.title;
   function push(severity, code, message) {
     issues.push({ resourceType, resourceId: record.id, resourceTitle: displayTitle, slug: record.slug, status: record.status, severity, code, message });
   }
-  if (!meta3.metaTitle) {
+  if (!meta4.metaTitle) {
     push(isLive ? "critical" : "warning", "missing_meta_title", "No SEO title set \u2014 search engines will fall back to the content title, which may not be optimized.");
-  } else if (meta3.metaTitle.length > META_TITLE_IDEAL_MAX) {
-    push("warning", "meta_title_too_long", `SEO title is ${meta3.metaTitle.length} characters \u2014 search engines typically truncate titles beyond ~${META_TITLE_IDEAL_MAX}.`);
+  } else if (meta4.metaTitle.length > META_TITLE_IDEAL_MAX) {
+    push("warning", "meta_title_too_long", `SEO title is ${meta4.metaTitle.length} characters \u2014 search engines typically truncate titles beyond ~${META_TITLE_IDEAL_MAX}.`);
   }
-  if (!meta3.metaDescription) {
+  if (!meta4.metaDescription) {
     push(isLive ? "critical" : "warning", "missing_meta_description", "No meta description set \u2014 search engines will auto-generate a snippet from the page content instead.");
-  } else if (meta3.metaDescription.length > META_DESCRIPTION_IDEAL_MAX) {
-    push("warning", "meta_description_too_long", `Meta description is ${meta3.metaDescription.length} characters \u2014 likely to be truncated beyond ~${META_DESCRIPTION_IDEAL_MAX}.`);
-  } else if (meta3.metaDescription.length < META_DESCRIPTION_IDEAL_MIN) {
-    push("warning", "meta_description_too_short", `Meta description is only ${meta3.metaDescription.length} characters \u2014 likely too short to be a useful search-result snippet.`);
+  } else if (meta4.metaDescription.length > META_DESCRIPTION_IDEAL_MAX) {
+    push("warning", "meta_description_too_long", `Meta description is ${meta4.metaDescription.length} characters \u2014 likely to be truncated beyond ~${META_DESCRIPTION_IDEAL_MAX}.`);
+  } else if (meta4.metaDescription.length < META_DESCRIPTION_IDEAL_MIN) {
+    push("warning", "meta_description_too_short", `Meta description is only ${meta4.metaDescription.length} characters \u2014 likely too short to be a useful search-result snippet.`);
   }
   if (record.featuredMedia && !record.featuredMedia.altText) {
     push("warning", "missing_featured_image_alt_text", "Featured image has no alt text \u2014 hurts accessibility and image search visibility.");
   }
-  if (isLive && !meta3.ogImage && !record.featuredMedia) {
+  if (isLive && !meta4.ogImage && !record.featuredMedia) {
     push("warning", "missing_social_image", "No social share image (Open Graph image or featured image) set \u2014 links shared on social platforms will show no preview image.");
   }
   if (!VALID_SLUG_PATTERN.test(record.slug)) {
@@ -16460,11 +16854,11 @@ var seoAuditService = {
     const titleIndex = [];
     const descriptionIndex = [];
     function indexRecord(resourceType, record) {
-      const meta3 = record.currentRevision?.metadata ?? {};
+      const meta4 = record.currentRevision?.metadata ?? {};
       const title = record.currentRevision?.title || record.title;
       const base = { resourceType, id: record.id, slug: record.slug, title, status: record.status };
-      if (meta3.metaTitle) titleIndex.push({ ...base, value: meta3.metaTitle });
-      if (meta3.metaDescription) descriptionIndex.push({ ...base, value: meta3.metaDescription });
+      if (meta4.metaTitle) titleIndex.push({ ...base, value: meta4.metaTitle });
+      if (meta4.metaDescription) descriptionIndex.push({ ...base, value: meta4.metaDescription });
     }
     for (const post of posts) {
       issues.push(...checkRecord("post", post));
@@ -16516,7 +16910,7 @@ var tagService = {
   async getTag(organizationId, id) {
     return loadTagOrThrow(id, organizationId);
   },
-  async createTag(caller, input, meta3 = {}) {
+  async createTag(caller, input, meta4 = {}) {
     const organizationId = caller.organizationId;
     if (input.slug) {
       const dup = await tagRepository.findBySlugInOrg(organizationId, input.slug);
@@ -16537,12 +16931,12 @@ var tagService = {
       resourceType: "tag",
       resourceId: tag.id,
       afterData: { name: tag.name, slug: tag.slug },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return tag;
   },
-  async updateTag(caller, id, input, meta3 = {}) {
+  async updateTag(caller, id, input, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadTagOrThrow(id, organizationId);
     if (input.slug !== void 0 && input.slug !== existing.slug) {
@@ -16568,12 +16962,12 @@ var tagService = {
       resourceId: id,
       beforeData: { name: existing.name, slug: existing.slug },
       afterData: patch,
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return updated;
   },
-  async deleteTag(caller, id, meta3 = {}) {
+  async deleteTag(caller, id, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadTagOrThrow(id, organizationId);
     const postCount = await tagRepository.countPostsUsing(id);
@@ -16589,8 +16983,8 @@ var tagService = {
       resourceType: "tag",
       resourceId: id,
       beforeData: { name: existing.name, slug: existing.slug },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
   }
 };
@@ -16686,7 +17080,7 @@ var authorService = {
   async getAuthor(id) {
     return loadAuthorOrThrow(id);
   },
-  async createAuthor(caller, input, meta3 = {}) {
+  async createAuthor(caller, input, meta4 = {}) {
     const user = await userRepository.findById(input.userId);
     if (!user) throw new ValidationError("userId does not refer to an existing user.");
     const existing = await authorRepository.findByUserId(input.userId);
@@ -16699,12 +17093,12 @@ var authorService = {
       resourceType: "author",
       resourceId: author.id,
       afterData: { userId: input.userId },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return author;
   },
-  async updateAuthor(caller, id, input, meta3 = {}) {
+  async updateAuthor(caller, id, input, meta4 = {}) {
     const existing = await loadAuthorOrThrow(id);
     const patch = {};
     if (input.bio !== void 0) patch.bio = input.bio;
@@ -16718,8 +17112,8 @@ var authorService = {
       resourceId: id,
       beforeData: { bio: existing.bio, avatarUrl: existing.avatarUrl },
       afterData: patch,
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return updated;
   }
@@ -17120,7 +17514,7 @@ var contractService = {
   async getContract(organizationId, id) {
     return withCurrentValue(await loadContractOrThrow(id, organizationId));
   },
-  async createContract(caller, input, meta3 = {}) {
+  async createContract(caller, input, meta4 = {}) {
     const organizationId = caller.organizationId;
     await assertClientInOrg2(input.clientId, organizationId);
     if (input.endDate && input.endDate.getTime() < input.startDate.getTime()) {
@@ -17148,12 +17542,12 @@ var contractService = {
       resourceType: "contract",
       resourceId: contract.id,
       afterData: { contractNumber, clientId: input.clientId, contractValue: contract.contractValue.toString(), currency: contract.currency },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return this.getContract(organizationId, contract.id);
   },
-  async updateContract(caller, id, input, meta3 = {}) {
+  async updateContract(caller, id, input, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadContractOrThrow(id, organizationId);
     if (existing.status === "TERMINATED" || existing.status === "EXPIRED") {
@@ -17178,12 +17572,12 @@ var contractService = {
       resourceId: id,
       beforeData: { title: existing.title },
       afterData: patch,
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return this.getContract(organizationId, id);
   },
-  async activateContract(caller, id, meta3 = {}) {
+  async activateContract(caller, id, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadContractOrThrow(id, organizationId);
     const count = await contractRepository.transitionStatus(id, ACTIVATABLE_FROM, "ACTIVE");
@@ -17197,12 +17591,12 @@ var contractService = {
       resourceId: id,
       beforeData: { status: existing.status },
       afterData: { status: "ACTIVE" },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return this.getContract(organizationId, id);
   },
-  async suspendContract(caller, id, meta3 = {}) {
+  async suspendContract(caller, id, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadContractOrThrow(id, organizationId);
     const count = await contractRepository.transitionStatus(id, SUSPENDABLE_FROM, "SUSPENDED");
@@ -17216,12 +17610,12 @@ var contractService = {
       resourceId: id,
       beforeData: { status: existing.status },
       afterData: { status: "SUSPENDED" },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return this.getContract(organizationId, id);
   },
-  async terminateContract(caller, id, input, meta3 = {}) {
+  async terminateContract(caller, id, input, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadContractOrThrow(id, organizationId);
     const count = await contractRepository.transitionStatus(id, TERMINABLE_FROM, "TERMINATED");
@@ -17235,12 +17629,12 @@ var contractService = {
       resourceId: id,
       beforeData: { status: existing.status },
       afterData: { status: "TERMINATED", reason: input.reason },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return this.getContract(organizationId, id);
   },
-  async createVariation(caller, contractId, input, meta3 = {}) {
+  async createVariation(caller, contractId, input, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadContractOrThrow(contractId, organizationId);
     if (existing.status === "TERMINATED" || existing.status === "EXPIRED") {
@@ -17263,8 +17657,8 @@ var contractService = {
       resourceType: "contract",
       resourceId: contractId,
       afterData: { amount: amount.toString(), effectiveDate: input.effectiveDate, reason: input.reason },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return this.getContract(organizationId, contractId);
   }
@@ -17483,7 +17877,7 @@ var subscriptionService = {
   async getSubscription(organizationId, id) {
     return loadSubscriptionOrThrow(id, organizationId);
   },
-  async createSubscription(caller, input, meta3 = {}) {
+  async createSubscription(caller, input, meta4 = {}) {
     const organizationId = caller.organizationId;
     const client3 = await clientRepository.findByIdInOrg(input.clientId, organizationId);
     if (!client3) throw new ValidationError("The specified client does not exist in this organization.");
@@ -17526,12 +17920,12 @@ var subscriptionService = {
       resourceType: "subscription",
       resourceId: subscription.id,
       afterData: { subscriptionNumber, clientId: input.clientId, productId: input.productId, price: subscription.price.toString(), currency },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return subscription;
   },
-  async updateSubscription(caller, id, input, meta3 = {}) {
+  async updateSubscription(caller, id, input, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadSubscriptionOrThrow(id, organizationId);
     if (existing.status === "CANCELLED" || existing.status === "EXPIRED") {
@@ -17556,12 +17950,12 @@ var subscriptionService = {
       resourceId: id,
       beforeData: { quantity: existing.quantity, price: existing.price.toString() },
       afterData: patch,
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return loadSubscriptionOrThrow(id, organizationId);
   },
-  async activateSubscription(caller, id, meta3 = {}) {
+  async activateSubscription(caller, id, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadSubscriptionOrThrow(id, organizationId);
     const count = await subscriptionRepository.transitionStatus(id, ACTIVATABLE_FROM2, { status: "ACTIVE" });
@@ -17575,12 +17969,12 @@ var subscriptionService = {
       resourceId: id,
       beforeData: { status: existing.status },
       afterData: { status: "ACTIVE" },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return loadSubscriptionOrThrow(id, organizationId);
   },
-  async pauseSubscription(caller, id, meta3 = {}) {
+  async pauseSubscription(caller, id, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadSubscriptionOrThrow(id, organizationId);
     const count = await subscriptionRepository.transitionStatus(id, PAUSABLE_FROM, { status: "PAUSED" });
@@ -17594,12 +17988,12 @@ var subscriptionService = {
       resourceId: id,
       beforeData: { status: existing.status },
       afterData: { status: "PAUSED" },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return loadSubscriptionOrThrow(id, organizationId);
   },
-  async cancelSubscription(caller, id, input, meta3 = {}) {
+  async cancelSubscription(caller, id, input, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadSubscriptionOrThrow(id, organizationId);
     const now = /* @__PURE__ */ new Date();
@@ -17619,8 +18013,8 @@ var subscriptionService = {
       resourceId: id,
       beforeData: { status: existing.status },
       afterData: { status: "CANCELLED", reason: input.reason },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return loadSubscriptionOrThrow(id, organizationId);
   }
@@ -17902,7 +18296,7 @@ var invoiceService = {
   async getInvoice(organizationId, id) {
     return withEffectiveStatus(await loadInvoiceOrThrow(id, organizationId));
   },
-  async createInvoice(caller, input, meta3 = {}) {
+  async createInvoice(caller, input, meta4 = {}) {
     const organizationId = caller.organizationId;
     const client3 = await clientRepository.findByIdInOrg(input.clientId, organizationId);
     if (!client3) throw new ValidationError("The specified client does not exist in this organization.");
@@ -17953,12 +18347,12 @@ var invoiceService = {
       resourceType: "invoice",
       resourceId: invoice.id,
       afterData: { invoiceNumber, clientId: input.clientId, total: total.toString(), currency },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return withEffectiveStatus(invoice);
   },
-  async updateInvoice(caller, id, input, meta3 = {}) {
+  async updateInvoice(caller, id, input, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadInvoiceOrThrow(id, organizationId);
     if (existing.status !== "DRAFT") {
@@ -18005,12 +18399,12 @@ var invoiceService = {
       resourceType: "invoice",
       resourceId: id,
       beforeData: { total: existing.total.toString() },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return this.getInvoice(organizationId, id);
   },
-  async issueInvoice(caller, id, input, meta3 = {}) {
+  async issueInvoice(caller, id, input, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadInvoiceOrThrow(id, organizationId);
     if (existing.items.length === 0) throw new ValidationError("An invoice needs at least one line item before it can be issued.");
@@ -18032,12 +18426,12 @@ var invoiceService = {
       resourceId: id,
       beforeData: { status: existing.status },
       afterData: { status: "ISSUED", total: existing.total.toString() },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return this.getInvoice(organizationId, id);
   },
-  async voidInvoice(caller, id, input, meta3 = {}) {
+  async voidInvoice(caller, id, input, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadInvoiceOrThrow(id, organizationId);
     if (existing.status === "VOID" || existing.status === "CANCELLED" || existing.status === "PAID") {
@@ -18058,12 +18452,12 @@ var invoiceService = {
       resourceId: id,
       beforeData: { status: existing.status },
       afterData: { status: targetStatus, reason: input.reason },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return this.getInvoice(organizationId, id);
   },
-  async recordPayment(caller, invoiceId, input, meta3 = {}) {
+  async recordPayment(caller, invoiceId, input, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadInvoiceOrThrow(invoiceId, organizationId);
     const amount = toMoney(input.amount);
@@ -18107,8 +18501,8 @@ var invoiceService = {
       resourceType: "payment",
       resourceId: payment.id,
       afterData: { invoiceId, amount: amount.toString(), currency, method: input.method },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return payment;
   }
@@ -18132,7 +18526,7 @@ var paymentService = {
   async getPayment(organizationId, id) {
     return loadPaymentOrThrow(id, organizationId);
   },
-  async reversePayment(caller, id, input, meta3 = {}) {
+  async reversePayment(caller, id, input, meta4 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadPaymentOrThrow(id, organizationId);
     if (existing.status !== "COMPLETED") {
@@ -18163,8 +18557,8 @@ var paymentService = {
       resourceId: id,
       beforeData: { status: "COMPLETED", amount: existing.amount.toString() },
       afterData: { status: "REVERSED", reason: input.reason },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return loadPaymentOrThrow(id, organizationId);
   }
@@ -18641,7 +19035,7 @@ var publicFormService = {
    * successMessage (§8's "accepted-but-discarded" contract from
    * publicLeadService), but writes nothing.
    */
-  async submit(slug, input, meta3 = {}) {
+  async submit(slug, input, meta4 = {}) {
     const organizationId = config.publicWebsiteOrganizationId;
     if (!organizationId) {
       throw new InfrastructureError("Public form intake is not configured.");
@@ -18700,7 +19094,7 @@ var publicFormService = {
       utmTerm: input.utmTerm,
       utmContent: input.utmContent,
       landingPagePath: input.landingPagePath,
-      referrer: meta3.referrer,
+      referrer: meta4.referrer,
       consentGiven: consentGiven ?? void 0,
       formId: form.id,
       campaignId
@@ -18757,11 +19151,11 @@ ${notes}` : notes,
       utmTerm: input.utmTerm,
       utmContent: input.utmContent,
       leadId,
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent,
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent,
       consentGiven: consentGiven ?? void 0,
       landingPagePath: input.landingPagePath,
-      referrer: meta3.referrer,
+      referrer: meta4.referrer,
       campaignId
     });
     await auditLogRepository.record({
@@ -18772,8 +19166,8 @@ ${notes}` : notes,
       resourceType: "form_submission",
       resourceId: submission.id,
       afterData: { formId: form.id, formSlug: form.slug, leadId },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     try {
       await eventEngine.emit({
@@ -18799,7 +19193,7 @@ ${notes}` : notes,
       utmContent: input.utmContent,
       campaignId,
       path: input.landingPagePath,
-      referrer: meta3.referrer
+      referrer: meta4.referrer
     });
     const notifyUserIds = form.notifyUserIds ?? [];
     for (const userId of notifyUserIds) {
@@ -19301,7 +19695,7 @@ var publicLeadService = {
    * like a real submission from the caller's point of view, so a bot
    * learns nothing about which field gave it away.
    */
-  async createLead(input, meta3 = {}) {
+  async createLead(input, meta4 = {}) {
     if (input.website) {
       return null;
     }
@@ -19324,7 +19718,7 @@ var publicLeadService = {
       utmTerm: input.utmTerm,
       utmContent: input.utmContent,
       landingPagePath: input.landingPagePath,
-      referrer: meta3.referrer,
+      referrer: meta4.referrer,
       consentGiven: true,
       campaignId
     });
@@ -19336,8 +19730,8 @@ var publicLeadService = {
       resourceType: "lead",
       resourceId: lead.id,
       afterData: { companyName: lead.companyName, source: lead.source },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     try {
       await eventEngine.emit({
@@ -19363,7 +19757,7 @@ var publicLeadService = {
       utmContent: input.utmContent,
       campaignId,
       path: input.landingPagePath,
-      referrer: meta3.referrer
+      referrer: meta4.referrer
     });
     return lead;
   }
@@ -19730,7 +20124,7 @@ var aiProviderService = {
     if (!provider) throw new NotFoundError("AI provider not found.");
     return provider;
   },
-  async createProvider(caller, input, meta3 = {}) {
+  async createProvider(caller, input, meta4 = {}) {
     const existing = await aiProviderRepository.findProviderByCode(input.code);
     if (existing) throw new ConflictError(`An AI provider with code "${input.code}" already exists.`);
     if (input.isDefault) await aiProviderRepository.clearDefaultProviders();
@@ -19743,12 +20137,12 @@ var aiProviderService = {
       resourceType: "ai_provider",
       resourceId: provider.id,
       afterData: { code: provider.code, status: provider.status },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return provider;
   },
-  async updateProvider(caller, id, input, meta3 = {}) {
+  async updateProvider(caller, id, input, meta4 = {}) {
     await this.getProvider(id);
     if (input.isDefault) await aiProviderRepository.clearDefaultProviders();
     const provider = await aiProviderRepository.updateProvider(id, input);
@@ -19760,15 +20154,15 @@ var aiProviderService = {
       resourceType: "ai_provider",
       resourceId: id,
       afterData: input,
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return provider;
   },
   async listModels(providerId) {
     return aiProviderRepository.listModels(providerId);
   },
-  async createModel(caller, input, meta3 = {}) {
+  async createModel(caller, input, meta4 = {}) {
     await this.getProvider(input.providerId);
     if (input.isDefault) await aiProviderRepository.clearDefaultModels(input.providerId);
     const model = await aiProviderRepository.createModel(input);
@@ -19780,12 +20174,12 @@ var aiProviderService = {
       resourceType: "ai_model",
       resourceId: model.id,
       afterData: { providerId: model.providerId, modelId: model.modelId },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return model;
   },
-  async updateModel(caller, id, input, meta3 = {}) {
+  async updateModel(caller, id, input, meta4 = {}) {
     const existing = await aiProviderRepository.getModel(id);
     if (!existing) throw new NotFoundError("AI model not found.");
     if (input.isDefault) await aiProviderRepository.clearDefaultModels(existing.providerId);
@@ -19798,8 +20192,8 @@ var aiProviderService = {
       resourceType: "ai_model",
       resourceId: id,
       afterData: input,
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return model;
   }
@@ -20012,7 +20406,7 @@ var aiToolService = {
       requireApprovalOverride: settingByCode.get(tool2.code)?.requireApprovalOverride ?? null
     }));
   },
-  async updateOrgSetting(caller, toolCode, input, meta3 = {}) {
+  async updateOrgSetting(caller, toolCode, input, meta4 = {}) {
     const tool2 = await aiToolRepository.getToolByCode(toolCode);
     if (!tool2) throw new NotFoundError(`AI tool "${toolCode}" not found.`);
     const setting = await aiToolRepository.upsertOrgSetting(caller.organizationId, toolCode, input);
@@ -20024,8 +20418,8 @@ var aiToolService = {
       resourceType: "ai_tool",
       resourceId: toolCode,
       afterData: { enabled: setting.enabled, requireApprovalOverride: setting.requireApprovalOverride },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return setting;
   }
@@ -20164,7 +20558,7 @@ var aiPromptService = {
   async getTemplate(organizationId, id) {
     return loadTemplateOrThrow2(id, organizationId);
   },
-  async createTemplate(caller, input, meta3 = {}) {
+  async createTemplate(caller, input, meta4 = {}) {
     const existing = await aiPromptRepository.findByKeyInOrg(input.key, caller.organizationId);
     if (existing) throw new ConflictError(`A prompt template with key "${input.key}" already exists in this organization.`);
     const template = await aiPromptRepository.create(caller.organizationId, caller.id, input);
@@ -20176,12 +20570,12 @@ var aiPromptService = {
       resourceType: "ai_prompt_template",
       resourceId: template.id,
       afterData: { key: template.key, name: template.name },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return template;
   },
-  async createVersion(caller, templateId, input, meta3 = {}) {
+  async createVersion(caller, templateId, input, meta4 = {}) {
     await loadTemplateOrThrow2(templateId, caller.organizationId);
     const version = await aiPromptRepository.createVersion(templateId, caller.id, input);
     await auditLogRepository.record({
@@ -20192,12 +20586,12 @@ var aiPromptService = {
       resourceType: "ai_prompt_version",
       resourceId: version.id,
       afterData: { templateId, version: version.version },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return version;
   },
-  async updateTemplate(caller, id, input, meta3 = {}) {
+  async updateTemplate(caller, id, input, meta4 = {}) {
     await loadTemplateOrThrow2(id, caller.organizationId);
     const template = await aiPromptRepository.update(id, caller.id, input);
     await auditLogRepository.record({
@@ -20208,12 +20602,12 @@ var aiPromptService = {
       resourceType: "ai_prompt_template",
       resourceId: id,
       afterData: input,
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return template;
   },
-  async publishVersion(caller, templateId, versionId, meta3 = {}) {
+  async publishVersion(caller, templateId, versionId, meta4 = {}) {
     await loadTemplateOrThrow2(templateId, caller.organizationId);
     const version = await aiPromptRepository.findVersionInTemplate(templateId, versionId);
     if (!version) throw new ValidationError("versionId does not refer to a version of this prompt template.");
@@ -20229,12 +20623,12 @@ var aiPromptService = {
       resourceType: "ai_prompt_template",
       resourceId: templateId,
       afterData: { versionId },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return aiPromptRepository.findByIdInOrg(templateId, caller.organizationId);
   },
-  async deleteTemplate(caller, id, meta3 = {}) {
+  async deleteTemplate(caller, id, meta4 = {}) {
     await loadTemplateOrThrow2(id, caller.organizationId);
     await aiPromptRepository.update(id, caller.id, { status: "ARCHIVED" });
     await auditLogRepository.record({
@@ -20244,8 +20638,8 @@ var aiPromptService = {
       action: "AI_PROMPT_TEMPLATE_ARCHIVED",
       resourceType: "ai_prompt_template",
       resourceId: id,
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
   }
 };
@@ -20519,7 +20913,7 @@ var AI_TOOL_REGISTRY = Object.freeze({
     isMutating: true,
     requiresApproval: false,
     inputSchema: createLeadInput,
-    handler: async (caller, input, meta3) => leadService.createLead(caller, input, meta3)
+    handler: async (caller, input, meta4) => leadService.createLead(caller, input, meta4)
   }),
   "leads.convert": tool({
     code: "leads.convert",
@@ -20530,9 +20924,9 @@ var AI_TOOL_REGISTRY = Object.freeze({
     isMutating: true,
     requiresApproval: false,
     inputSchema: convertLeadInput,
-    handler: async (caller, input, meta3) => {
+    handler: async (caller, input, meta4) => {
       const { leadId, ...rest } = input;
-      return leadService.convertLead(caller, leadId, rest, meta3);
+      return leadService.convertLead(caller, leadId, rest, meta4);
     }
   }),
   "clients.list": tool({
@@ -20558,7 +20952,7 @@ var AI_TOOL_REGISTRY = Object.freeze({
     isMutating: true,
     requiresApproval: false,
     inputSchema: createClientInput,
-    handler: async (caller, input, meta3) => clientService.createClient(caller, input, meta3)
+    handler: async (caller, input, meta4) => clientService.createClient(caller, input, meta4)
   }),
   "content.list_posts": tool({
     code: "content.list_posts",
@@ -20583,7 +20977,7 @@ var AI_TOOL_REGISTRY = Object.freeze({
     isMutating: true,
     requiresApproval: false,
     inputSchema: createDraftPostInput,
-    handler: async (caller, input, meta3) => postService.createPost(caller, input, meta3)
+    handler: async (caller, input, meta4) => postService.createPost(caller, input, meta4)
   }),
   "products.list": tool({
     code: "products.list",
@@ -20608,7 +21002,7 @@ var AI_TOOL_REGISTRY = Object.freeze({
     isMutating: true,
     requiresApproval: true,
     inputSchema: issueInvoiceInput,
-    handler: async (caller, input, meta3) => invoiceService.issueInvoice(caller, input.invoiceId, {}, meta3)
+    handler: async (caller, input, meta4) => invoiceService.issueInvoice(caller, input.invoiceId, {}, meta4)
   }),
   "contracts.activate": tool({
     code: "contracts.activate",
@@ -20619,7 +21013,7 @@ var AI_TOOL_REGISTRY = Object.freeze({
     isMutating: true,
     requiresApproval: true,
     inputSchema: activateContractInput,
-    handler: async (caller, input, meta3) => contractService.activateContract(caller, input.contractId, meta3)
+    handler: async (caller, input, meta4) => contractService.activateContract(caller, input.contractId, meta4)
   })
 });
 function isRegisteredToolCode(code) {
@@ -20648,7 +21042,7 @@ async function assertToolEnabledForOrg(organizationId, toolCode) {
   }
 }
 async function executeGovernedTool(params) {
-  const { caller, toolCode, input, executionId, stepOrder, meta: meta3 = {} } = params;
+  const { caller, toolCode, input, executionId, stepOrder, meta: meta4 = {} } = params;
   if (!isRegisteredToolCode(toolCode)) {
     throw new NotFoundError(`AI tool "${toolCode}" is not registered.`);
   }
@@ -20706,8 +21100,8 @@ async function executeGovernedTool(params) {
       resourceType: "ai_tool",
       resourceId: toolCode,
       afterData: { approvalRequestId: approval.id, toolExecutionId: toolExecution2.id },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return { status: "AWAITING_APPROVAL", toolExecutionId: toolExecution2.id, approvalRequestId: approval.id };
   }
@@ -20723,12 +21117,12 @@ async function executeGovernedTool(params) {
       startedAt
     }
   });
-  return runToolHandler(definition, caller, validatedInput, meta3, toolExecution.id);
+  return runToolHandler(definition, caller, validatedInput, meta4, toolExecution.id);
 }
-async function runToolHandler(definition, caller, validatedInput, meta3, toolExecutionId) {
+async function runToolHandler(definition, caller, validatedInput, meta4, toolExecutionId) {
   const startedAt = /* @__PURE__ */ new Date();
   try {
-    const output = await definition.handler(caller, validatedInput, meta3);
+    const output = await definition.handler(caller, validatedInput, meta4);
     const completedAt = /* @__PURE__ */ new Date();
     await prisma.aIToolExecution.update({
       where: { id: toolExecutionId },
@@ -20748,8 +21142,8 @@ async function runToolHandler(definition, caller, validatedInput, meta3, toolExe
       resourceType: "ai_tool",
       resourceId: definition.code,
       afterData: { toolExecutionId },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return { status: "COMPLETED", output, toolExecutionId };
   } catch (err) {
@@ -20774,8 +21168,8 @@ async function runToolHandler(definition, caller, validatedInput, meta3, toolExe
       resourceId: definition.code,
       result: "FAILURE",
       afterData: { toolExecutionId, error: errorMessage },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return { status: "FAILED", error: errorMessage, toolExecutionId };
   }
@@ -20804,7 +21198,7 @@ var aiWorkflowService = {
   async getWorkflow(organizationId, id) {
     return loadWorkflowOrThrow(id, organizationId);
   },
-  async createWorkflow(caller, input, meta3 = {}) {
+  async createWorkflow(caller, input, meta4 = {}) {
     const existing = await aiWorkflowRepository.findByKeyInOrg(input.key, caller.organizationId);
     if (existing) throw new ConflictError(`A workflow with key "${input.key}" already exists in this organization.`);
     assertStepsValid(input.steps, input.maxSteps ?? 10);
@@ -20817,12 +21211,12 @@ var aiWorkflowService = {
       resourceType: "ai_workflow",
       resourceId: workflow.id,
       afterData: { key: workflow.key, name: workflow.name },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return workflow;
   },
-  async updateWorkflow(caller, id, input, meta3 = {}) {
+  async updateWorkflow(caller, id, input, meta4 = {}) {
     const existing = await loadWorkflowOrThrow(id, caller.organizationId);
     if (input.expectedUpdatedAt && existing.updatedAt.getTime() !== input.expectedUpdatedAt.getTime()) {
       throw new ConflictError("This workflow was modified by someone else since you loaded it.");
@@ -20840,12 +21234,12 @@ var aiWorkflowService = {
       resourceType: "ai_workflow",
       resourceId: id,
       afterData: patch,
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return workflow;
   },
-  async publishWorkflow(caller, id, meta3 = {}) {
+  async publishWorkflow(caller, id, meta4 = {}) {
     await loadWorkflowOrThrow(id, caller.organizationId);
     const workflow = await aiWorkflowRepository.setStatus(id, "ACTIVE", caller.id);
     await auditLogRepository.record({
@@ -20855,12 +21249,12 @@ var aiWorkflowService = {
       action: "AI_WORKFLOW_PUBLISHED",
       resourceType: "ai_workflow",
       resourceId: id,
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return workflow;
   },
-  async archiveWorkflow(caller, id, meta3 = {}) {
+  async archiveWorkflow(caller, id, meta4 = {}) {
     await loadWorkflowOrThrow(id, caller.organizationId);
     const workflow = await aiWorkflowRepository.setStatus(id, "ARCHIVED", caller.id);
     await auditLogRepository.record({
@@ -20870,8 +21264,8 @@ var aiWorkflowService = {
       action: "AI_WORKFLOW_ARCHIVED",
       resourceType: "ai_workflow",
       resourceId: id,
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return workflow;
   },
@@ -20882,7 +21276,7 @@ var aiWorkflowService = {
    * territory); a workflow left AWAITING_APPROVAL is a terminal state here,
    * re-run from scratch once the approval is resolved.
    */
-  async executeWorkflow(caller, id, input, meta3 = {}) {
+  async executeWorkflow(caller, id, input, meta4 = {}) {
     const workflow = await loadWorkflowOrThrow(id, caller.organizationId);
     if (workflow.status !== "ACTIVE") {
       throw new ValidationError("Only an ACTIVE workflow can be executed.");
@@ -20894,7 +21288,7 @@ var aiWorkflowService = {
       userId: caller.id,
       kind: "WORKFLOW",
       workflowId: workflow.id,
-      requestId: meta3.requestId,
+      requestId: meta4.requestId,
       input: input.stepInputs
     });
     await auditLogRepository.record({
@@ -20905,8 +21299,8 @@ var aiWorkflowService = {
       resourceType: "ai_execution",
       resourceId: execution.id,
       afterData: { workflowId: workflow.id, workflowKey: workflow.key },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     const stepResults = [];
     const deadline = Date.now() + workflow.timeoutMs;
@@ -20922,7 +21316,7 @@ var aiWorkflowService = {
         input: stepInput,
         executionId: execution.id,
         stepOrder: step.order,
-        meta: meta3
+        meta: meta4
       });
       stepResults.push({ order: step.order, toolCode: step.toolCode, ...result });
       if (result.status === "AWAITING_APPROVAL") {
@@ -21026,13 +21420,13 @@ var aiExecutionService = {
     return execution;
   },
   /** A single governed tool call, outside of any workflow — e.g. a human coworker's assistant panel invoking one action directly. */
-  async executeTool(caller, input, meta3 = {}) {
+  async executeTool(caller, input, meta4 = {}) {
     const execution = await aiExecutionRepository.create({
       organizationId: caller.organizationId,
       userId: caller.id,
       kind: "TOOL_CALL",
       toolCode: input.toolCode,
-      requestId: meta3.requestId,
+      requestId: meta4.requestId,
       input: input.input
     });
     const result = await executeGovernedTool({
@@ -21040,7 +21434,7 @@ var aiExecutionService = {
       toolCode: input.toolCode,
       input: input.input,
       executionId: execution.id,
-      meta: meta3
+      meta: meta4
     });
     if (result.status === "AWAITING_APPROVAL") {
       return aiExecutionRepository.complete(execution.id, "AWAITING_APPROVAL", result);
@@ -21202,7 +21596,7 @@ var aiQuotaService = {
     const parsed = aiLimitsSchema.safeParse(row?.value);
     return parsed.success ? parsed.data : { dailyRequests: 0, dailyTokens: 0 };
   },
-  async setLimits(organizationId, actorUserId, limits, meta3 = {}) {
+  async setLimits(organizationId, actorUserId, limits, meta4 = {}) {
     const before = await this.getLimits(organizationId);
     await systemSettingRepository.upsert({
       organizationId,
@@ -21220,8 +21614,8 @@ var aiQuotaService = {
       resourceType: "ai_limits",
       beforeData: before,
       afterData: limits,
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return limits;
   },
@@ -21650,8 +22044,126 @@ router50.put(
 );
 var aiHealthRoutes_default = router50;
 
-// server/routes/v1/aiApprovalRoutes.ts
+// server/routes/v1/portalRegistrationRoutes.ts
 import { Router as Router51 } from "express";
+import { z as z47 } from "zod";
+
+// server/services/portalRegistrationService.ts
+function assertOperator(caller) {
+  const agencyId = config.publicWebsiteOrganizationId;
+  const isAgency = !!agencyId && caller.organizationId === agencyId;
+  if (!isAgency && caller.role.key !== "SUPER_ADMIN") {
+    throw new AuthorizationError("Only the agency organization can review portal registrations.");
+  }
+}
+var pendingWhere = {
+  type: "CLIENT",
+  status: "TRIAL",
+  provisionedForClient: null,
+  memberships: { some: { role: { key: "CLIENT_PORTAL" } } }
+};
+var portalRegistrationService = {
+  async list(caller) {
+    assertOperator(caller);
+    const orgs = await prisma.organization.findMany({
+      where: pendingWhere,
+      orderBy: { createdAt: "desc" },
+      take: 100,
+      select: {
+        id: true,
+        name: true,
+        createdAt: true,
+        memberships: { where: { role: { key: "CLIENT_PORTAL" } }, take: 1, select: { user: { select: { firstName: true, lastName: true, email: true, emailVerifiedAt: true } } } }
+      }
+    });
+    return orgs.map((o) => {
+      const u = o.memberships[0]?.user;
+      return {
+        organizationId: o.id,
+        organizationName: o.name,
+        registeredAt: o.createdAt,
+        contactName: u ? `${u.firstName} ${u.lastName}`.trim() : null,
+        contactEmail: u?.email ?? null,
+        emailVerified: !!u?.emailVerifiedAt
+      };
+    });
+  },
+  async link(caller, organizationId, clientId, meta4 = {}) {
+    assertOperator(caller);
+    const org = await prisma.organization.findFirst({ where: { id: organizationId, ...pendingWhere }, select: { id: true } });
+    if (!org) throw new NotFoundError("Pending registration not found.");
+    await prisma.$transaction(async (tx) => {
+      const linked = await tx.client.updateMany({
+        where: { id: clientId, organizationId: caller.organizationId, workspaceOrganizationId: null },
+        data: { workspaceOrganizationId: organizationId }
+      });
+      if (linked.count !== 1) throw new ConflictError("That client does not exist in your organization or is already linked to a workspace.");
+      await tx.organization.update({ where: { id: organizationId }, data: { status: "ACTIVE" } });
+    });
+    await auditLogRepository.record({
+      organizationId: caller.organizationId,
+      actorUserId: caller.id,
+      actorType: "USER",
+      action: "PORTAL_REGISTRATION_LINKED",
+      resourceType: "organization",
+      resourceId: organizationId,
+      afterData: { clientId },
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
+    });
+  },
+  async reject(caller, organizationId, meta4 = {}) {
+    assertOperator(caller);
+    const org = await prisma.organization.findFirst({ where: { id: organizationId, ...pendingWhere }, select: { id: true } });
+    if (!org) throw new NotFoundError("Pending registration not found.");
+    const members = await prisma.organizationMembership.findMany({ where: { organizationId }, select: { userId: true } });
+    await prisma.organization.update({ where: { id: organizationId }, data: { status: "SUSPENDED" } });
+    await Promise.all(members.map((m) => sessionRepository.revokeAllForUser(m.userId)));
+    await auditLogRepository.record({
+      organizationId: caller.organizationId,
+      actorUserId: caller.id,
+      actorType: "USER",
+      action: "PORTAL_REGISTRATION_REJECTED",
+      resourceType: "organization",
+      resourceId: organizationId,
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
+    });
+  }
+};
+
+// server/routes/v1/portalRegistrationRoutes.ts
+var router51 = Router51();
+router51.use(authenticateToken);
+var meta2 = (req) => ({ ip: req.ip, userAgent: req.headers["user-agent"] });
+router51.get(
+  "/",
+  requirePermission("workspaces.read"),
+  asyncHandler(async (req, res) => sendSuccess(res, { registrations: await portalRegistrationService.list(req.user) }))
+);
+router51.post(
+  "/:organizationId/link",
+  requirePermission("workspaces.update"),
+  sensitiveActionLimiter,
+  asyncHandler(async (req, res) => {
+    const { clientId } = z47.object({ clientId: z47.string().uuid() }).parse(req.body);
+    await portalRegistrationService.link(req.user, req.params.organizationId, clientId, meta2(req));
+    sendSuccess(res, { linked: true });
+  })
+);
+router51.post(
+  "/:organizationId/reject",
+  requirePermission("workspaces.suspend"),
+  sensitiveActionLimiter,
+  asyncHandler(async (req, res) => {
+    await portalRegistrationService.reject(req.user, req.params.organizationId, meta2(req));
+    sendSuccess(res, { rejected: true });
+  })
+);
+var portalRegistrationRoutes_default = router51;
+
+// server/routes/v1/aiApprovalRoutes.ts
+import { Router as Router52 } from "express";
 
 // server/services/aiApprovalService.ts
 import crypto3 from "crypto";
@@ -21711,7 +22223,7 @@ var aiApprovalService = {
     if (!approval) throw new NotFoundError("AI approval request not found.");
     return approval;
   },
-  async decide(caller, id, input, meta3 = {}) {
+  async decide(caller, id, input, meta4 = {}) {
     const approval = await this.getApproval(caller.organizationId, id);
     if (approval.status !== "PENDING") {
       throw new ConflictError(`This approval request has already been ${approval.status.toLowerCase()}.`);
@@ -21736,8 +22248,8 @@ var aiApprovalService = {
         resourceType: "ai_approval_request",
         resourceId: id,
         afterData: { rejectionReason: input.rejectionReason },
-        ipAddress: meta3.ip,
-        userAgent: meta3.userAgent
+        ipAddress: meta4.ip,
+        userAgent: meta4.userAgent
       });
       return rejected;
     }
@@ -21760,8 +22272,8 @@ var aiApprovalService = {
       action: "AI_APPROVAL_APPROVED",
       resourceType: "ai_approval_request",
       resourceId: id,
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     const requestingUser = await userRepository.findById(approval.requestedById);
     if (!requestingUser) {
@@ -21771,18 +22283,18 @@ var aiApprovalService = {
     if (!requesterCaller) {
       throw new ConflictError("The user who originally requested this action no longer has access to this organization.");
     }
-    await runToolHandler(definition, requesterCaller, parsed.data, meta3, approval.toolExecutionId);
+    await runToolHandler(definition, requesterCaller, parsed.data, meta4, approval.toolExecutionId);
     return approved;
   }
 };
 
 // server/routes/v1/aiApprovalRoutes.ts
-var router51 = Router51();
-router51.use(authenticateToken);
+var router52 = Router52();
+router52.use(authenticateToken);
 function requestMeta37(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"], requestId: req.requestId };
 }
-router51.get(
+router52.get(
   "/",
   requirePermission("ai.approvals.read"),
   asyncHandler(async (req, res) => {
@@ -21798,7 +22310,7 @@ router51.get(
     sendSuccess(res, { approvals: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router51.get(
+router52.get(
   "/:id",
   requirePermission("ai.approvals.read"),
   asyncHandler(async (req, res) => {
@@ -21806,7 +22318,7 @@ router51.get(
     sendSuccess(res, { approval });
   })
 );
-router51.post(
+router52.post(
   "/:id/decide",
   requirePermission("ai.approvals.decide"),
   asyncHandler(async (req, res) => {
@@ -21815,12 +22327,12 @@ router51.post(
     sendSuccess(res, { approval });
   })
 );
-var aiApprovalRoutes_default = router51;
+var aiApprovalRoutes_default = router52;
 
 // server/routes/v1/automationRoutes.ts
 import { timingSafeEqual as timingSafeEqual2 } from "node:crypto";
-import { Router as Router52 } from "express";
-import { z as z49 } from "zod";
+import { Router as Router53 } from "express";
+import { z as z50 } from "zod";
 
 // server/services/automation/AutomationService.ts
 import crypto11 from "node:crypto";
@@ -21996,7 +22508,7 @@ var ConditionEngine = class {
 };
 
 // server/services/automation/ActionRegistry.ts
-import { z as z47 } from "zod";
+import { z as z48 } from "zod";
 import crypto4 from "node:crypto";
 var ActionRegistry = class _ActionRegistry {
   constructor() {
@@ -22035,19 +22547,19 @@ var ActionRegistry = class _ActionRegistry {
       riskLevel: "LOW",
       requiresApproval: false,
       requiresAudit: true,
-      inputSchema: z47.object({
-        title: z47.string().min(1),
-        description: z47.string().optional(),
-        assignedUserId: z47.string().optional(),
-        assignedRole: z47.string().optional(),
-        priority: z47.enum(["LOW", "MEDIUM", "HIGH", "URGENT"]).default("MEDIUM"),
-        dueDate: z47.string().optional(),
-        sourceEntityType: z47.string().optional(),
-        sourceEntityId: z47.string().optional(),
-        isAiGenerated: z47.boolean().default(true),
-        metadata: z47.record(z47.unknown()).optional()
+      inputSchema: z48.object({
+        title: z48.string().min(1),
+        description: z48.string().optional(),
+        assignedUserId: z48.string().optional(),
+        assignedRole: z48.string().optional(),
+        priority: z48.enum(["LOW", "MEDIUM", "HIGH", "URGENT"]).default("MEDIUM"),
+        dueDate: z48.string().optional(),
+        sourceEntityType: z48.string().optional(),
+        sourceEntityId: z48.string().optional(),
+        isAiGenerated: z48.boolean().default(true),
+        metadata: z48.record(z48.unknown()).optional()
       }),
-      outputSchema: z47.object({ taskId: z47.string(), title: z47.string(), status: z47.string() }),
+      outputSchema: z48.object({ taskId: z48.string(), title: z48.string(), status: z48.string() }),
       execute: async (input, context) => {
         const taskId = crypto4.randomUUID();
         const dueDate = input.dueDate ? new Date(input.dueDate) : null;
@@ -22081,12 +22593,12 @@ var ActionRegistry = class _ActionRegistry {
       riskLevel: "MEDIUM",
       requiresApproval: false,
       requiresAudit: true,
-      inputSchema: z47.object({
-        clientId: z47.string().min(1),
-        status: z47.enum(["PROSPECT", "ACTIVE", "INACTIVE", "SUSPENDED", "ARCHIVED"]).optional(),
-        notes: z47.string().optional()
+      inputSchema: z48.object({
+        clientId: z48.string().min(1),
+        status: z48.enum(["PROSPECT", "ACTIVE", "INACTIVE", "SUSPENDED", "ARCHIVED"]).optional(),
+        notes: z48.string().optional()
       }),
-      outputSchema: z47.object({ clientId: z47.string(), updated: z47.boolean() }),
+      outputSchema: z48.object({ clientId: z48.string(), updated: z48.boolean() }),
       execute: async (input, context) => {
         const client3 = await prisma.client.findFirst({ where: { id: input.clientId, organizationId: context.organizationId } });
         if (!client3) {
@@ -22109,16 +22621,16 @@ var ActionRegistry = class _ActionRegistry {
       riskLevel: "LOW",
       requiresApproval: false,
       requiresAudit: false,
-      inputSchema: z47.object({
-        userId: z47.string().optional(),
-        recipientRole: z47.string().optional(),
-        title: z47.string().min(1),
-        message: z47.string().min(1),
-        level: z47.enum(["INFO", "WARNING", "ERROR", "SUCCESS"]).default("INFO"),
-        channel: z47.enum(["IN_APP", "EMAIL", "SMS", "WEBHOOK"]).default("IN_APP"),
-        metadata: z47.record(z47.unknown()).optional()
+      inputSchema: z48.object({
+        userId: z48.string().optional(),
+        recipientRole: z48.string().optional(),
+        title: z48.string().min(1),
+        message: z48.string().min(1),
+        level: z48.enum(["INFO", "WARNING", "ERROR", "SUCCESS"]).default("INFO"),
+        channel: z48.enum(["IN_APP", "EMAIL", "SMS", "WEBHOOK"]).default("IN_APP"),
+        metadata: z48.record(z48.unknown()).optional()
       }),
-      outputSchema: z47.object({ notificationId: z47.string(), delivered: z47.boolean() }),
+      outputSchema: z48.object({ notificationId: z48.string(), delivered: z48.boolean() }),
       execute: async (input, context) => {
         const notifId = crypto4.randomUUID();
         const autoNotif = await prisma.automationNotification.create({
@@ -22165,12 +22677,12 @@ var ActionRegistry = class _ActionRegistry {
       riskLevel: "MEDIUM",
       requiresApproval: false,
       requiresAudit: true,
-      inputSchema: z47.object({
-        entityType: z47.enum(["LEAD", "CLIENT", "TASK"]),
-        entityId: z47.string().min(1),
-        userId: z47.string().min(1)
+      inputSchema: z48.object({
+        entityType: z48.enum(["LEAD", "CLIENT", "TASK"]),
+        entityId: z48.string().min(1),
+        userId: z48.string().min(1)
       }),
-      outputSchema: z47.object({ entityId: z47.string(), assignedUserId: z47.string(), success: z47.boolean() }),
+      outputSchema: z48.object({ entityId: z48.string(), assignedUserId: z48.string(), success: z48.boolean() }),
       execute: async (input, _context) => {
         if (input.entityType === "LEAD") {
           await prisma.lead.update({ where: { id: input.entityId }, data: { assignedTo: input.userId } });
@@ -22190,8 +22702,8 @@ var ActionRegistry = class _ActionRegistry {
       riskLevel: "LOW",
       requiresApproval: false,
       requiresAudit: true,
-      inputSchema: z47.object({ reportType: z47.string(), title: z47.string(), parameters: z47.record(z47.unknown()).optional() }),
-      outputSchema: z47.object({ reportId: z47.string(), generatedAt: z47.string(), summary: z47.string() }),
+      inputSchema: z48.object({ reportType: z48.string(), title: z48.string(), parameters: z48.record(z48.unknown()).optional() }),
+      outputSchema: z48.object({ reportId: z48.string(), generatedAt: z48.string(), summary: z48.string() }),
       // Phase 1 audit finding (docs/control-center-module-gap-analysis.md):
       // this previously fabricated a reportId/summary with no real report
       // ever generated. No reporting service exists in this codebase
@@ -22212,14 +22724,14 @@ var ActionRegistry = class _ActionRegistry {
       riskLevel: "HIGH",
       requiresApproval: true,
       requiresAudit: true,
-      inputSchema: z47.object({
-        clientId: z47.string().min(1),
-        amountDue: z47.number().positive(),
-        currency: z47.string().default("USD"),
-        dueDate: z47.string().optional(),
-        memo: z47.string().optional()
+      inputSchema: z48.object({
+        clientId: z48.string().min(1),
+        amountDue: z48.number().positive(),
+        currency: z48.string().default("USD"),
+        dueDate: z48.string().optional(),
+        memo: z48.string().optional()
       }),
-      outputSchema: z47.object({ draftCreated: z47.boolean(), invoiceId: z47.string(), invoiceNumber: z47.string(), amountDue: z47.number() }),
+      outputSchema: z48.object({ draftCreated: z48.boolean(), invoiceId: z48.string(), invoiceNumber: z48.string(), amountDue: z48.number() }),
       // Phase 1 audit finding (docs/control-center-module-gap-analysis.md):
       // this previously fabricated an "INV-DRAFT-..." string with no
       // Invoice row ever created. Fixed by real service integration —
@@ -22279,8 +22791,8 @@ var ActionRegistry = class _ActionRegistry {
       riskLevel: "HIGH",
       requiresApproval: false,
       requiresAudit: true,
-      inputSchema: z47.object({ workflowId: z47.string().min(1), status: z47.enum(["ACTIVE", "PAUSED", "ARCHIVED"]) }),
-      outputSchema: z47.object({ workflowId: z47.string(), newStatus: z47.string() }),
+      inputSchema: z48.object({ workflowId: z48.string().min(1), status: z48.enum(["ACTIVE", "PAUSED", "ARCHIVED"]) }),
+      outputSchema: z48.object({ workflowId: z48.string(), newStatus: z48.string() }),
       execute: async (input, _context) => {
         const updated = await prisma.automationWorkflow.update({ where: { id: input.workflowId }, data: { status: input.status } });
         return { workflowId: updated.id, newStatus: updated.status };
@@ -22294,8 +22806,8 @@ var ActionRegistry = class _ActionRegistry {
       riskLevel: "HIGH",
       requiresApproval: true,
       requiresAudit: true,
-      inputSchema: z47.object({ contentType: z47.enum(["PAGE", "POST"]), contentId: z47.string().min(1) }),
-      outputSchema: z47.object({ contentId: z47.string(), published: z47.boolean() }),
+      inputSchema: z48.object({ contentType: z48.enum(["PAGE", "POST"]), contentId: z48.string().min(1) }),
+      outputSchema: z48.object({ contentId: z48.string(), published: z48.boolean() }),
       execute: async (input, context) => {
         const where = { id: input.contentId, organizationId: context.organizationId };
         const result = input.contentType === "PAGE" ? await prisma.page.updateMany({ where, data: { status: "PUBLISHED", publishedAt: /* @__PURE__ */ new Date() } }) : await prisma.post.updateMany({ where, data: { status: "PUBLISHED", publishedAt: /* @__PURE__ */ new Date() } });
@@ -22313,16 +22825,16 @@ var ActionRegistry = class _ActionRegistry {
       riskLevel: "LOW",
       requiresApproval: false,
       requiresAudit: true,
-      inputSchema: z47.object({
-        companyName: z47.string().trim().min(1),
-        contactName: z47.string().trim().optional(),
-        email: z47.string().trim().email().optional(),
-        phone: z47.string().trim().optional(),
-        source: z47.string().trim().max(100).optional(),
-        assignedTo: z47.string().trim().optional(),
-        campaignId: z47.string().trim().optional()
+      inputSchema: z48.object({
+        companyName: z48.string().trim().min(1),
+        contactName: z48.string().trim().optional(),
+        email: z48.string().trim().email().optional(),
+        phone: z48.string().trim().optional(),
+        source: z48.string().trim().max(100).optional(),
+        assignedTo: z48.string().trim().optional(),
+        campaignId: z48.string().trim().optional()
       }),
-      outputSchema: z47.object({ leadId: z47.string(), companyName: z47.string(), status: z47.string() }),
+      outputSchema: z48.object({ leadId: z48.string(), companyName: z48.string(), status: z48.string() }),
       execute: async (input, context) => {
         if (input.email) {
           const duplicates = await leadRepository.findByEmailInOrg(context.organizationId, input.email);
@@ -22360,11 +22872,11 @@ var ActionRegistry = class _ActionRegistry {
       riskLevel: "LOW",
       requiresApproval: false,
       requiresAudit: true,
-      inputSchema: z47.object({
-        leadId: z47.string().trim().min(1),
-        status: z47.enum(["NEW", "CONTACTED", "QUALIFIED", "LOST"])
+      inputSchema: z48.object({
+        leadId: z48.string().trim().min(1),
+        status: z48.enum(["NEW", "CONTACTED", "QUALIFIED", "LOST"])
       }),
-      outputSchema: z47.object({ leadId: z47.string(), fromStatus: z47.string(), toStatus: z47.string() }),
+      outputSchema: z48.object({ leadId: z48.string(), fromStatus: z48.string(), toStatus: z48.string() }),
       execute: async (input, context) => {
         const lead = await prisma.lead.findFirst({ where: { id: input.leadId, organizationId: context.organizationId, deletedAt: null } });
         if (!lead) throw new ValidationError(`update_lead_status: leadId "${input.leadId}" does not refer to a lead in this organization.`);
@@ -22396,8 +22908,8 @@ var ActionRegistry = class _ActionRegistry {
       riskLevel: "MEDIUM",
       requiresApproval: true,
       requiresAudit: true,
-      inputSchema: z47.object({ recipientUserId: z47.string().min(1), title: z47.string().min(1), message: z47.string().min(1) }),
-      outputSchema: z47.object({ sent: z47.boolean() }),
+      inputSchema: z48.object({ recipientUserId: z48.string().min(1), title: z48.string().min(1), message: z48.string().min(1) }),
+      outputSchema: z48.object({ sent: z48.boolean() }),
       execute: async (input, context) => {
         await prisma.automationNotification.create({
           data: {
@@ -24093,13 +24605,13 @@ var KnowledgeService = class {
 };
 
 // server/services/automation/types.ts
-import { z as z48 } from "zod";
-var StructuredAiDecisionSchema = z48.object({
-  decision: z48.string(),
-  reason: z48.string(),
-  confidence: z48.number().min(0).max(1),
-  recommended_action: z48.string().optional(),
-  metadata: z48.record(z48.unknown()).optional()
+import { z as z49 } from "zod";
+var StructuredAiDecisionSchema = z49.object({
+  decision: z49.string(),
+  reason: z49.string(),
+  confidence: z49.number().min(0).max(1),
+  recommended_action: z49.string().optional(),
+  metadata: z49.record(z49.unknown()).optional()
 });
 var DEFAULT_WORKFLOW_LIMITS = {
   maxSteps: 50,
@@ -25441,8 +25953,8 @@ function constantTimeEquals(a, b) {
   const bb = Buffer.from(b);
   return ab.length === bb.length && timingSafeEqual2(ab, bb);
 }
-var router52 = Router52();
-router52.get(
+var router53 = Router53();
+router53.get(
   "/internal/tick",
   asyncHandler(async (req, res) => {
     if (!config.cronSecret) {
@@ -25459,85 +25971,85 @@ router52.get(
     sendSuccess(res, { automation, content, webhookRetries });
   })
 );
-router52.use(authenticateToken);
-var CreateWorkflowSchema = z49.object({
-  name: z49.string().min(1).max(200),
-  description: z49.string().optional(),
-  category: z49.string().default("GENERAL"),
-  triggerType: z49.enum(["EVENT", "SCHEDULE", "MANUAL", "API", "CONDITIONAL"]).default("EVENT"),
-  triggerConfig: z49.record(z49.unknown()).default({}),
-  conditions: z49.unknown().default([]),
-  steps: z49.array(z49.record(z49.unknown())).default([]),
-  retryPolicy: z49.object({
-    maxRetries: z49.number().int().min(0).max(5).default(2),
-    backoffMs: z49.number().int().min(100).max(6e4).default(1e3),
-    exponential: z49.boolean().default(true)
+router53.use(authenticateToken);
+var CreateWorkflowSchema = z50.object({
+  name: z50.string().min(1).max(200),
+  description: z50.string().optional(),
+  category: z50.string().default("GENERAL"),
+  triggerType: z50.enum(["EVENT", "SCHEDULE", "MANUAL", "API", "CONDITIONAL"]).default("EVENT"),
+  triggerConfig: z50.record(z50.unknown()).default({}),
+  conditions: z50.unknown().default([]),
+  steps: z50.array(z50.record(z50.unknown())).default([]),
+  retryPolicy: z50.object({
+    maxRetries: z50.number().int().min(0).max(5).default(2),
+    backoffMs: z50.number().int().min(100).max(6e4).default(1e3),
+    exponential: z50.boolean().default(true)
   }).optional(),
-  limits: z49.object({
-    maxSteps: z49.number().int().min(1).max(100).default(50),
-    maxDurationMs: z49.number().int().min(5e3).max(6e5).default(3e5),
-    maxAiCalls: z49.number().int().min(0).max(50).default(10),
-    maxToolCalls: z49.number().int().min(0).max(50).default(15),
-    maxLoopIterations: z49.number().int().min(1).max(50).default(10)
+  limits: z50.object({
+    maxSteps: z50.number().int().min(1).max(100).default(50),
+    maxDurationMs: z50.number().int().min(5e3).max(6e5).default(3e5),
+    maxAiCalls: z50.number().int().min(0).max(50).default(10),
+    maxToolCalls: z50.number().int().min(0).max(50).default(15),
+    maxLoopIterations: z50.number().int().min(1).max(50).default(10)
   }).optional()
 });
 var UpdateWorkflowSchema = CreateWorkflowSchema.partial().extend({
-  status: z49.enum(["DRAFT", "ACTIVE", "PAUSED", "ARCHIVED"]).optional()
+  status: z50.enum(["DRAFT", "ACTIVE", "PAUSED", "ARCHIVED"]).optional()
 });
-var TriggerWorkflowSchema = z49.object({
-  input: z49.record(z49.unknown()).default({}),
-  correlationId: z49.string().optional()
+var TriggerWorkflowSchema = z50.object({
+  input: z50.record(z50.unknown()).default({}),
+  correlationId: z50.string().optional()
 });
-var DecideApprovalSchema = z49.object({
-  decision: z49.enum(["APPROVED", "REJECTED"]),
-  reason: z49.string().optional()
+var DecideApprovalSchema = z50.object({
+  decision: z50.enum(["APPROVED", "REJECTED"]),
+  reason: z50.string().optional()
 });
-var CreateTaskSchema = z49.object({
-  title: z49.string().min(1),
-  description: z49.string().optional(),
-  assignedUserId: z49.string().optional(),
-  assignedRole: z49.string().optional(),
-  priority: z49.enum(["LOW", "MEDIUM", "HIGH", "URGENT"]).default("MEDIUM"),
-  dueDate: z49.string().optional(),
-  sourceWorkflowId: z49.string().optional(),
-  sourceExecutionId: z49.string().optional(),
-  sourceEntityType: z49.string().optional(),
-  sourceEntityId: z49.string().optional(),
-  isAiGenerated: z49.boolean().default(false),
-  metadata: z49.record(z49.unknown()).optional()
+var CreateTaskSchema = z50.object({
+  title: z50.string().min(1),
+  description: z50.string().optional(),
+  assignedUserId: z50.string().optional(),
+  assignedRole: z50.string().optional(),
+  priority: z50.enum(["LOW", "MEDIUM", "HIGH", "URGENT"]).default("MEDIUM"),
+  dueDate: z50.string().optional(),
+  sourceWorkflowId: z50.string().optional(),
+  sourceExecutionId: z50.string().optional(),
+  sourceEntityType: z50.string().optional(),
+  sourceEntityId: z50.string().optional(),
+  isAiGenerated: z50.boolean().default(false),
+  metadata: z50.record(z50.unknown()).optional()
 });
-var UpdateTaskSchema = z49.object({
-  status: z49.enum(["PENDING", "IN_PROGRESS", "COMPLETED", "CANCELLED"]).optional(),
-  assignedUserId: z49.string().optional(),
-  priority: z49.enum(["LOW", "MEDIUM", "HIGH", "URGENT"]).optional(),
-  dueDate: z49.string().optional()
+var UpdateTaskSchema = z50.object({
+  status: z50.enum(["PENDING", "IN_PROGRESS", "COMPLETED", "CANCELLED"]).optional(),
+  assignedUserId: z50.string().optional(),
+  priority: z50.enum(["LOW", "MEDIUM", "HIGH", "URGENT"]).optional(),
+  dueDate: z50.string().optional()
 });
-var AddTaskCommentSchema = z49.object({
-  text: z49.string().trim().min(1).max(4e3)
+var AddTaskCommentSchema = z50.object({
+  text: z50.string().trim().min(1).max(4e3)
 });
-var CreateScheduleSchema = z49.object({
-  workflowId: z49.string().uuid(),
-  name: z49.string().min(1),
-  description: z49.string().optional(),
-  scheduleType: z49.enum(["ONE_TIME", "RECURRING", "CRON"]).default("RECURRING"),
-  cronExpression: z49.string().optional(),
-  timezone: z49.string().default("UTC"),
-  intervalSeconds: z49.number().int().positive().optional(),
-  config: z49.record(z49.unknown()).optional()
+var CreateScheduleSchema = z50.object({
+  workflowId: z50.string().uuid(),
+  name: z50.string().min(1),
+  description: z50.string().optional(),
+  scheduleType: z50.enum(["ONE_TIME", "RECURRING", "CRON"]).default("RECURRING"),
+  cronExpression: z50.string().optional(),
+  timezone: z50.string().default("UTC"),
+  intervalSeconds: z50.number().int().positive().optional(),
+  config: z50.record(z50.unknown()).optional()
 });
-var EmitEventSchema = z49.object({
-  eventType: z49.string().min(1),
-  entityType: z49.string().min(1),
-  entityId: z49.string().min(1),
-  sourceModule: z49.string().optional(),
-  payload: z49.record(z49.unknown()).default({}),
-  correlationId: z49.string().optional()
+var EmitEventSchema = z50.object({
+  eventType: z50.string().min(1),
+  entityType: z50.string().min(1),
+  entityId: z50.string().min(1),
+  sourceModule: z50.string().optional(),
+  payload: z50.record(z50.unknown()).default({}),
+  correlationId: z50.string().optional()
 });
-var ExecuteActionSchema = z49.object({
-  actionId: z49.string().min(1),
-  input: z49.record(z49.unknown()).default({})
+var ExecuteActionSchema = z50.object({
+  actionId: z50.string().min(1),
+  input: z50.record(z50.unknown()).default({})
 });
-router52.get(
+router53.get(
   "/dashboard",
   requirePermission("automation.read"),
   asyncHandler(async (req, res) => {
@@ -25545,7 +26057,7 @@ router52.get(
     sendSuccess(res, data);
   })
 );
-router52.get(
+router53.get(
   "/workflows",
   requirePermission("automation.read"),
   asyncHandler(async (req, res) => {
@@ -25561,7 +26073,7 @@ router52.get(
     sendSuccess(res, result);
   })
 );
-router52.post(
+router53.post(
   "/workflows",
   requirePermission("automation.create"),
   asyncHandler(async (req, res) => {
@@ -25582,7 +26094,7 @@ router52.post(
     sendSuccess(res, { workflow }, 201);
   })
 );
-router52.get(
+router53.get(
   "/workflows/:id",
   requirePermission("automation.read"),
   asyncHandler(async (req, res) => {
@@ -25590,7 +26102,7 @@ router52.get(
     sendSuccess(res, { workflow });
   })
 );
-router52.put(
+router53.put(
   "/workflows/:id",
   requirePermission("automation.edit"),
   asyncHandler(async (req, res) => {
@@ -25613,11 +26125,11 @@ router52.put(
     sendSuccess(res, { workflow: updated });
   })
 );
-router52.post(
+router53.post(
   "/workflows/:id/publish",
   requirePermission("automation.publish"),
   asyncHandler(async (req, res) => {
-    const body = z49.object({ changeSummary: z49.string().optional() }).parse(req.body || {});
+    const body = z50.object({ changeSummary: z50.string().optional() }).parse(req.body || {});
     const published = await automationService.publishWorkflow({
       id: req.params.id,
       organizationId: req.user.organizationId,
@@ -25627,7 +26139,7 @@ router52.post(
     sendSuccess(res, { workflow: published });
   })
 );
-router52.get(
+router53.get(
   "/workflows/:id/versions",
   requirePermission("automation.read"),
   asyncHandler(async (req, res) => {
@@ -25635,7 +26147,7 @@ router52.get(
     sendSuccess(res, { versions });
   })
 );
-router52.post(
+router53.post(
   "/workflows/:id/trigger",
   requirePermission("automation.execute"),
   asyncHandler(async (req, res) => {
@@ -25651,7 +26163,7 @@ router52.post(
     sendSuccess(res, result, 202);
   })
 );
-router52.get(
+router53.get(
   "/executions",
   requirePermission("automation.read"),
   asyncHandler(async (req, res) => {
@@ -25666,7 +26178,7 @@ router52.get(
     sendSuccess(res, result);
   })
 );
-router52.get(
+router53.get(
   "/executions/:id",
   requirePermission("automation.read"),
   asyncHandler(async (req, res) => {
@@ -25674,7 +26186,7 @@ router52.get(
     sendSuccess(res, { execution });
   })
 );
-router52.post(
+router53.post(
   "/executions/:id/retry",
   requirePermission("automation.execute"),
   asyncHandler(async (req, res) => {
@@ -25682,16 +26194,16 @@ router52.post(
     sendSuccess(res, { execution: result });
   })
 );
-router52.post(
+router53.post(
   "/executions/:id/cancel",
   requirePermission("automation.manage"),
   asyncHandler(async (req, res) => {
-    const body = z49.object({ reason: z49.string().optional() }).parse(req.body || {});
+    const body = z50.object({ reason: z50.string().optional() }).parse(req.body || {});
     const result = await automationService.cancelExecution(req.params.id, req.user.organizationId, body.reason);
     sendSuccess(res, { execution: result });
   })
 );
-router52.get(
+router53.get(
   "/approvals",
   requirePermission("automation.read"),
   asyncHandler(async (req, res) => {
@@ -25705,7 +26217,7 @@ router52.get(
     sendSuccess(res, result);
   })
 );
-router52.post(
+router53.post(
   "/approvals/:id/decide",
   requirePermission("automation.approve"),
   asyncHandler(async (req, res) => {
@@ -25721,7 +26233,7 @@ router52.post(
     sendSuccess(res, result);
   })
 );
-router52.get(
+router53.get(
   "/tasks",
   requirePermission("automation.read"),
   asyncHandler(async (req, res) => {
@@ -25737,7 +26249,7 @@ router52.get(
     sendSuccess(res, result);
   })
 );
-router52.post(
+router53.post(
   "/tasks",
   requirePermission("automation.execute"),
   asyncHandler(async (req, res) => {
@@ -25749,7 +26261,7 @@ router52.post(
     sendSuccess(res, { task }, 201);
   })
 );
-router52.patch(
+router53.patch(
   "/tasks/:id",
   requirePermission("automation.execute"),
   asyncHandler(async (req, res) => {
@@ -25763,7 +26275,7 @@ router52.patch(
     sendSuccess(res, { task: updated });
   })
 );
-router52.post(
+router53.post(
   "/tasks/:id/comments",
   requirePermission("automation.execute"),
   asyncHandler(async (req, res) => {
@@ -25777,7 +26289,7 @@ router52.post(
     sendSuccess(res, result, 201);
   })
 );
-router52.get(
+router53.get(
   "/my-work",
   requirePermission("automation.read"),
   asyncHandler(async (req, res) => {
@@ -25785,7 +26297,7 @@ router52.get(
     sendSuccess(res, result);
   })
 );
-router52.get(
+router53.get(
   "/schedules",
   requirePermission("automation.read"),
   asyncHandler(async (req, res) => {
@@ -25800,7 +26312,7 @@ router52.get(
     sendSuccess(res, result);
   })
 );
-router52.post(
+router53.post(
   "/schedules",
   requirePermission("automation.manage"),
   asyncHandler(async (req, res) => {
@@ -25812,16 +26324,16 @@ router52.post(
     sendSuccess(res, { schedule }, 201);
   })
 );
-router52.patch(
+router53.patch(
   "/schedules/:id/toggle",
   requirePermission("automation.manage"),
   asyncHandler(async (req, res) => {
-    const body = z49.object({ isActive: z49.boolean().optional() }).parse(req.body || {});
+    const body = z50.object({ isActive: z50.boolean().optional() }).parse(req.body || {});
     const schedule = await automationService.toggleSchedule(req.params.id, req.user.organizationId, body.isActive);
     sendSuccess(res, { schedule });
   })
 );
-router52.delete(
+router53.delete(
   "/schedules/:id",
   requirePermission("automation.manage"),
   asyncHandler(async (req, res) => {
@@ -25829,7 +26341,7 @@ router52.delete(
     sendSuccess(res, result);
   })
 );
-router52.get(
+router53.get(
   "/events/types",
   requirePermission("automation.read"),
   asyncHandler(async (_req, res) => {
@@ -25837,7 +26349,7 @@ router52.get(
     sendSuccess(res, { types });
   })
 );
-router52.get(
+router53.get(
   "/events",
   requirePermission("automation.read"),
   asyncHandler(async (req, res) => {
@@ -25851,7 +26363,7 @@ router52.get(
     sendSuccess(res, result);
   })
 );
-router52.post(
+router53.post(
   "/events",
   requirePermission("automation.execute"),
   asyncHandler(async (req, res) => {
@@ -25865,7 +26377,7 @@ router52.post(
     sendSuccess(res, { event }, 202);
   })
 );
-router52.get(
+router53.get(
   "/actions",
   requirePermission("automation.read"),
   asyncHandler(async (_req, res) => {
@@ -25873,7 +26385,7 @@ router52.get(
     sendSuccess(res, { actions });
   })
 );
-router52.post(
+router53.post(
   "/actions/execute",
   requirePermission("automation.execute"),
   asyncHandler(async (req, res) => {
@@ -25888,16 +26400,16 @@ router52.post(
     sendSuccess(res, { result });
   })
 );
-var automationRoutes_default = router52;
+var automationRoutes_default = router53;
 
 // server/routes/v1/knowledgeRoutes.ts
-import { Router as Router53 } from "express";
+import { Router as Router54 } from "express";
 import express3 from "express";
 
 // server/schemas/knowledgeSchemas.ts
-import { z as z50 } from "zod";
-var knowledgeAccessPolicySchema = z50.enum(["PUBLIC", "RESTRICTED", "ROLE_BASED", "OWNER_ONLY"]);
-var knowledgeSourceTypeSchema = z50.enum([
+import { z as z51 } from "zod";
+var knowledgeAccessPolicySchema = z51.enum(["PUBLIC", "RESTRICTED", "ROLE_BASED", "OWNER_ONLY"]);
+var knowledgeSourceTypeSchema = z51.enum([
   "UPLOADED_DOCUMENT",
   "MEDIA_ASSET",
   "CMS_CONTENT",
@@ -25909,53 +26421,53 @@ var knowledgeSourceTypeSchema = z50.enum([
   "MANUAL_ENTRY",
   "EXTERNAL_CONNECTOR"
 ]);
-var createCollectionSchema = z50.object({
-  name: z50.string().trim().min(1).max(200),
-  description: z50.string().trim().max(2e3).optional(),
+var createCollectionSchema = z51.object({
+  name: z51.string().trim().min(1).max(200),
+  description: z51.string().trim().max(2e3).optional(),
   accessPolicy: knowledgeAccessPolicySchema.optional(),
-  allowedRoles: z50.array(z50.string().trim().min(1)).max(50).optional(),
-  metadata: z50.record(z50.unknown()).optional()
+  allowedRoles: z51.array(z51.string().trim().min(1)).max(50).optional(),
+  metadata: z51.record(z51.unknown()).optional()
 });
-var registerSourceSchema = z50.object({
-  collectionId: z50.string().trim().uuid().optional(),
-  name: z50.string().trim().min(1).max(200),
+var registerSourceSchema = z51.object({
+  collectionId: z51.string().trim().uuid().optional(),
+  name: z51.string().trim().min(1).max(200),
   sourceType: knowledgeSourceTypeSchema,
-  entityType: z50.string().trim().max(100).optional(),
-  entityId: z50.string().trim().max(200).optional(),
-  config: z50.record(z50.unknown()).optional()
+  entityType: z51.string().trim().max(100).optional(),
+  entityId: z51.string().trim().max(200).optional(),
+  config: z51.record(z51.unknown()).optional()
 });
-var listDocumentsQuerySchema = z50.object({
-  collectionId: z50.string().trim().uuid().optional(),
-  sourceId: z50.string().trim().uuid().optional(),
-  status: z50.enum(["UPLOADED", "PROCESSING", "EXTRACTED", "CHUNKED", "INDEXING", "INDEXED", "FAILED", "ARCHIVED"]).optional()
+var listDocumentsQuerySchema = z51.object({
+  collectionId: z51.string().trim().uuid().optional(),
+  sourceId: z51.string().trim().uuid().optional(),
+  status: z51.enum(["UPLOADED", "PROCESSING", "EXTRACTED", "CHUNKED", "INDEXING", "INDEXED", "FAILED", "ARCHIVED"]).optional()
 });
-var uploadDocumentSchema = z50.object({
-  text: z50.string().max(2e6).optional(),
-  contentBase64: z50.string().max(4e7).optional(),
-  mimeType: z50.string().trim().max(100).optional(),
-  filename: z50.string().trim().max(300).optional(),
-  title: z50.string().trim().max(300).optional(),
-  description: z50.string().trim().max(2e3).optional(),
-  collectionId: z50.string().trim().uuid().optional(),
-  sourceId: z50.string().trim().uuid().optional(),
-  securityScope: z50.string().trim().max(100).optional(),
-  requiredRole: z50.string().trim().max(100).optional(),
-  metadata: z50.record(z50.unknown()).optional()
+var uploadDocumentSchema = z51.object({
+  text: z51.string().max(2e6).optional(),
+  contentBase64: z51.string().max(4e7).optional(),
+  mimeType: z51.string().trim().max(100).optional(),
+  filename: z51.string().trim().max(300).optional(),
+  title: z51.string().trim().max(300).optional(),
+  description: z51.string().trim().max(2e3).optional(),
+  collectionId: z51.string().trim().uuid().optional(),
+  sourceId: z51.string().trim().uuid().optional(),
+  securityScope: z51.string().trim().max(100).optional(),
+  requiredRole: z51.string().trim().max(100).optional(),
+  metadata: z51.record(z51.unknown()).optional()
 }).refine((v) => v.contentBase64 !== void 0 || v.text !== void 0, {
   message: "Either text or contentBase64 is required."
 });
-var searchKnowledgeSchema = z50.object({
-  query: z50.string().trim().min(1).max(2e3),
-  mode: z50.enum(["KEYWORD", "SEMANTIC", "HYBRID"]).optional(),
-  limit: z50.coerce.number().int().positive().max(50).optional(),
-  minScore: z50.coerce.number().min(0).max(1).optional(),
-  filter: z50.record(z50.unknown()).optional()
+var searchKnowledgeSchema = z51.object({
+  query: z51.string().trim().min(1).max(2e3),
+  mode: z51.enum(["KEYWORD", "SEMANTIC", "HYBRID"]).optional(),
+  limit: z51.coerce.number().int().positive().max(50).optional(),
+  minScore: z51.coerce.number().min(0).max(1).optional(),
+  filter: z51.record(z51.unknown()).optional()
 });
 
 // server/routes/v1/knowledgeRoutes.ts
-var router53 = Router53();
-router53.use(authenticateToken);
-router53.get(
+var router54 = Router54();
+router54.use(authenticateToken);
+router54.get(
   "/collections",
   requirePermission("knowledge.read"),
   asyncHandler(async (req, res) => {
@@ -25963,7 +26475,7 @@ router53.get(
     sendSuccess(res, { collections });
   })
 );
-router53.post(
+router54.post(
   "/collections",
   requirePermission("knowledge.create"),
   asyncHandler(async (req, res) => {
@@ -25976,7 +26488,7 @@ router53.post(
     sendSuccess(res, { collection }, 201);
   })
 );
-router53.get(
+router54.get(
   "/collections/:id",
   requirePermission("knowledge.read"),
   asyncHandler(async (req, res) => {
@@ -25984,7 +26496,7 @@ router53.get(
     sendSuccess(res, { collection });
   })
 );
-router53.post(
+router54.post(
   "/sources",
   requirePermission("knowledge.create"),
   asyncHandler(async (req, res) => {
@@ -25996,7 +26508,7 @@ router53.post(
     sendSuccess(res, { source }, 201);
   })
 );
-router53.get(
+router54.get(
   "/sources",
   requirePermission("knowledge.read"),
   asyncHandler(async (req, res) => {
@@ -26010,7 +26522,7 @@ router53.get(
     sendSuccess(res, { sources });
   })
 );
-router53.get(
+router54.get(
   "/documents",
   requirePermission("knowledge.read"),
   asyncHandler(async (req, res) => {
@@ -26032,7 +26544,7 @@ router53.get(
     sendSuccess(res, { documents });
   })
 );
-router53.get(
+router54.get(
   "/documents/:id",
   requirePermission("knowledge.read"),
   asyncHandler(async (req, res) => {
@@ -26051,7 +26563,7 @@ router53.get(
     sendSuccess(res, { document });
   })
 );
-router53.post(
+router54.post(
   "/documents/upload",
   requirePermission("knowledge.upload"),
   express3.json({ limit: "25mb" }),
@@ -26083,7 +26595,7 @@ router53.post(
     sendSuccess(res, result, 201);
   })
 );
-router53.post(
+router54.post(
   "/documents/:id/reindex",
   requirePermission("knowledge.reindex"),
   asyncHandler(async (req, res) => {
@@ -26091,7 +26603,7 @@ router53.post(
     sendSuccess(res, result);
   })
 );
-router53.post(
+router54.post(
   "/search",
   requirePermission("knowledge.search"),
   asyncHandler(async (req, res) => {
@@ -26114,10 +26626,10 @@ router53.post(
     sendSuccess(res, { results, count: results.length });
   })
 );
-var knowledgeRoutes_default = router53;
+var knowledgeRoutes_default = router54;
 
 // server/routes/v1/copilotRoutes.ts
-import { Router as Router54 } from "express";
+import { Router as Router55 } from "express";
 
 // server/services/copilot/CopilotService.ts
 import crypto12 from "crypto";
@@ -26930,54 +27442,54 @@ ${JSON.stringify(executionResult, null, 2)}
 };
 
 // server/schemas/copilotSchemas.ts
-import { z as z51 } from "zod";
-var conversationModeSchema = z51.enum(["ANSWER", "EXPLAIN", "SUMMARIZE", "ANALYZE", "RECOMMEND", "DRAFT", "EXECUTE"]);
-var createWorkspaceSchema = z51.object({
-  name: z51.string().trim().min(1).max(200),
-  slug: z51.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)").optional(),
-  description: z51.string().trim().max(2e3).optional(),
-  icon: z51.string().trim().max(100).optional(),
-  allowedTools: z51.array(z51.string().trim().min(1)).max(100).optional(),
-  allowedModules: z51.array(z51.string().trim().min(1)).max(100).optional(),
-  requiredPermissions: z51.array(z51.string().trim().min(1)).max(100).optional(),
-  systemInstruction: z51.string().trim().max(1e4).optional(),
+import { z as z52 } from "zod";
+var conversationModeSchema = z52.enum(["ANSWER", "EXPLAIN", "SUMMARIZE", "ANALYZE", "RECOMMEND", "DRAFT", "EXECUTE"]);
+var createWorkspaceSchema = z52.object({
+  name: z52.string().trim().min(1).max(200),
+  slug: z52.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)").optional(),
+  description: z52.string().trim().max(2e3).optional(),
+  icon: z52.string().trim().max(100).optional(),
+  allowedTools: z52.array(z52.string().trim().min(1)).max(100).optional(),
+  allowedModules: z52.array(z52.string().trim().min(1)).max(100).optional(),
+  requiredPermissions: z52.array(z52.string().trim().min(1)).max(100).optional(),
+  systemInstruction: z52.string().trim().max(1e4).optional(),
   defaultMode: conversationModeSchema.optional(),
-  temperature: z51.coerce.number().min(0).max(2).optional(),
-  maxTokens: z51.coerce.number().int().positive().max(32e3).optional(),
-  requireCitations: z51.coerce.boolean().optional()
+  temperature: z52.coerce.number().min(0).max(2).optional(),
+  maxTokens: z52.coerce.number().int().positive().max(32e3).optional(),
+  requireCitations: z52.coerce.boolean().optional()
 });
-var createConversationSchema = z51.object({
-  workspaceId: z51.string().trim().uuid().optional(),
-  title: z51.string().trim().max(300).optional(),
-  contextMetadata: z51.record(z51.unknown()).optional()
+var createConversationSchema = z52.object({
+  workspaceId: z52.string().trim().uuid().optional(),
+  title: z52.string().trim().max(300).optional(),
+  contextMetadata: z52.record(z52.unknown()).optional()
 });
-var listConversationsQuerySchema = z51.object({
-  workspaceId: z51.string().trim().uuid().optional(),
-  status: z51.string().trim().max(50).optional(),
-  search: z51.string().trim().max(300).optional(),
-  limit: z51.coerce.number().int().positive().max(100).optional(),
-  offset: z51.coerce.number().int().nonnegative().optional()
+var listConversationsQuerySchema = z52.object({
+  workspaceId: z52.string().trim().uuid().optional(),
+  status: z52.string().trim().max(50).optional(),
+  search: z52.string().trim().max(300).optional(),
+  limit: z52.coerce.number().int().positive().max(100).optional(),
+  offset: z52.coerce.number().int().nonnegative().optional()
 });
-var contextMetadataSchema = z51.object({
-  currentModule: z51.string().trim().max(200).optional(),
-  currentPage: z51.string().trim().max(200).optional(),
-  selectedClientId: z51.string().trim().uuid().optional(),
-  selectedInvoiceId: z51.string().trim().uuid().optional(),
-  selectedDocumentId: z51.string().trim().uuid().optional(),
-  selectedWorkflowId: z51.string().trim().uuid().optional()
-}).catchall(z51.unknown()).optional();
-var sendMessageSchema = z51.object({
-  conversationId: z51.string().trim().uuid().optional(),
-  workspaceId: z51.string().trim().uuid().optional(),
-  content: z51.string().trim().min(1).max(2e4),
+var contextMetadataSchema = z52.object({
+  currentModule: z52.string().trim().max(200).optional(),
+  currentPage: z52.string().trim().max(200).optional(),
+  selectedClientId: z52.string().trim().uuid().optional(),
+  selectedInvoiceId: z52.string().trim().uuid().optional(),
+  selectedDocumentId: z52.string().trim().uuid().optional(),
+  selectedWorkflowId: z52.string().trim().uuid().optional()
+}).catchall(z52.unknown()).optional();
+var sendMessageSchema = z52.object({
+  conversationId: z52.string().trim().uuid().optional(),
+  workspaceId: z52.string().trim().uuid().optional(),
+  content: z52.string().trim().min(1).max(2e4),
   mode: conversationModeSchema.optional(),
   contextMetadata: contextMetadataSchema
 });
 
 // server/routes/v1/copilotRoutes.ts
-var router54 = Router54();
-router54.use(authenticateToken);
-router54.get(
+var router55 = Router55();
+router55.use(authenticateToken);
+router55.get(
   "/workspaces",
   asyncHandler(async (req, res) => {
     const permissions = req.user.role.permissions || [];
@@ -26985,7 +27497,7 @@ router54.get(
     sendSuccess(res, { workspaces });
   })
 );
-router54.post(
+router55.post(
   "/workspaces",
   requirePermission("copilot.manage"),
   asyncHandler(async (req, res) => {
@@ -26994,7 +27506,7 @@ router54.post(
     sendSuccess(res, { workspace }, 201);
   })
 );
-router54.get(
+router55.get(
   "/workspaces/:id",
   asyncHandler(async (req, res) => {
     const permissions = req.user.role.permissions || [];
@@ -27002,7 +27514,7 @@ router54.get(
     sendSuccess(res, { workspace });
   })
 );
-router54.get(
+router55.get(
   "/conversations",
   requirePermission("copilot.read"),
   asyncHandler(async (req, res) => {
@@ -27017,7 +27529,7 @@ router54.get(
     sendSuccess(res, result);
   })
 );
-router54.post(
+router55.post(
   "/conversations",
   requirePermission("copilot.use"),
   asyncHandler(async (req, res) => {
@@ -27026,7 +27538,7 @@ router54.post(
     sendSuccess(res, { conversation }, 201);
   })
 );
-router54.get(
+router55.get(
   "/conversations/:id",
   requirePermission("copilot.read"),
   asyncHandler(async (req, res) => {
@@ -27034,7 +27546,7 @@ router54.get(
     sendSuccess(res, { conversation });
   })
 );
-router54.post(
+router55.post(
   "/conversations/:id/archive",
   requirePermission("copilot.use"),
   asyncHandler(async (req, res) => {
@@ -27042,7 +27554,7 @@ router54.post(
     sendSuccess(res, { conversation: updated });
   })
 );
-router54.delete(
+router55.delete(
   "/conversations/:id",
   requirePermission("copilot.use"),
   asyncHandler(async (req, res) => {
@@ -27050,7 +27562,7 @@ router54.delete(
     sendSuccess(res, result);
   })
 );
-router54.post(
+router55.post(
   "/messages",
   requirePermission("copilot.use"),
   asyncHandler(async (req, res) => {
@@ -27068,7 +27580,7 @@ router54.post(
     sendSuccess(res, result);
   })
 );
-router54.post(
+router55.post(
   "/messages/stream",
   requirePermission("copilot.use"),
   asyncHandler(async (req, res) => {
@@ -27121,7 +27633,7 @@ data: ${JSON.stringify(data)}
     }
   })
 );
-router54.post(
+router55.post(
   "/actions/:id/confirm",
   requirePermission("copilot.use"),
   asyncHandler(async (req, res) => {
@@ -27134,7 +27646,7 @@ router54.post(
     sendSuccess(res, result);
   })
 );
-router54.post(
+router55.post(
   "/actions/:id/reject",
   requirePermission("copilot.use"),
   asyncHandler(async (req, res) => {
@@ -27147,7 +27659,7 @@ router54.post(
     sendSuccess(res, result);
   })
 );
-router54.get(
+router55.get(
   "/dashboard",
   requirePermission("copilot.read"),
   asyncHandler(async (req, res) => {
@@ -27155,11 +27667,11 @@ router54.get(
     sendSuccess(res, stats);
   })
 );
-var copilotRoutes_default = router54;
+var copilotRoutes_default = router55;
 
 // server/routes/v1/adminRoutes.ts
-import { Router as Router55 } from "express";
-import { z as z52 } from "zod";
+import { Router as Router56 } from "express";
+import { z as z53 } from "zod";
 
 // server/services/admin/adminOverviewService.ts
 var SECURITY_EVENT_ACTIONS = [
@@ -27291,12 +27803,12 @@ var adminOverviewService = {
 };
 
 // server/routes/v1/adminRoutes.ts
-var router55 = Router55();
-router55.use(authenticateToken);
-router55.get("/overview", requirePermission("security.read"), asyncHandler(async (req, res) => sendSuccess(res, { overview: await adminOverviewService.overview(req.user) })));
-router55.get("/security/policy", requirePermission("security.read"), (_req, res) => sendSuccess(res, { policy: adminOverviewService.policy() }));
-var pageQuery = z52.object({ page: z52.coerce.number().int().positive().default(1), limit: z52.coerce.number().int().positive().max(100).default(20) });
-router55.get(
+var router56 = Router56();
+router56.use(authenticateToken);
+router56.get("/overview", requirePermission("security.read"), asyncHandler(async (req, res) => sendSuccess(res, { overview: await adminOverviewService.overview(req.user) })));
+router56.get("/security/policy", requirePermission("security.read"), (_req, res) => sendSuccess(res, { policy: adminOverviewService.policy() }));
+var pageQuery = z53.object({ page: z53.coerce.number().int().positive().default(1), limit: z53.coerce.number().int().positive().max(100).default(20) });
+router56.get(
   "/security/events",
   requirePermission("security.read"),
   asyncHandler(async (req, res) => {
@@ -27305,7 +27817,7 @@ router55.get(
     sendSuccess(res, { events: rows.map((r) => ({ ...r, severity: auditSeverity(r) })) }, 200, { page, limit, total });
   })
 );
-router55.get(
+router56.get(
   "/sessions",
   requirePermission("security.read"),
   asyncHandler(async (req, res) => {
@@ -27314,7 +27826,7 @@ router55.get(
     sendSuccess(res, { sessions }, 200, { page, limit, total });
   })
 );
-router55.post(
+router56.post(
   "/sessions/:id/revoke",
   requirePermission("security.manage"),
   sensitiveActionLimiter,
@@ -27323,10 +27835,10 @@ router55.post(
     sendSuccess(res, { message: "Session revoked." });
   })
 );
-var adminRoutes_default = router55;
+var adminRoutes_default = router56;
 
 // server/routes/v1/integrationRoutes.ts
-import { Router as Router56 } from "express";
+import { Router as Router57 } from "express";
 
 // server/services/admin/integrationService.ts
 var INTEGRATION_CATALOG = [
@@ -27508,7 +28020,7 @@ var integrationService = {
       encryption: { source: encryptionKeySource() }
     };
   },
-  async upsert(caller, provider, input, meta3 = {}) {
+  async upsert(caller, provider, input, meta4 = {}) {
     const entry = catalogEntry(provider);
     const existing = await prisma.integration.findUnique({ where: { organizationId_provider: { organizationId: caller.organizationId, provider } } });
     let cfg = existing?.config ?? {};
@@ -27542,12 +28054,12 @@ var integrationService = {
       resourceId: row.id,
       afterData: { provider, enabled: row.enabled, configKeys: Object.keys(cfg), credentialRotated: input.secret !== void 0 },
       // never the secret
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return projectIntegration(row);
   },
-  async test(caller, provider, meta3 = {}) {
+  async test(caller, provider, meta4 = {}) {
     catalogEntry(provider);
     const row = await prisma.integration.findUnique({ where: { organizationId_provider: { organizationId: caller.organizationId, provider } } });
     if (!row || deriveStatus(row) === "NOT_CONFIGURED") throw new ValidationError("Configure this integration before testing it.");
@@ -27566,12 +28078,12 @@ var integrationService = {
       resourceId: row.id,
       result: result.ok ? "SUCCESS" : "FAILURE",
       afterData: { provider, ok: result.ok },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return projectIntegration(updated);
   },
-  async clearSecret(caller, provider, meta3 = {}) {
+  async clearSecret(caller, provider, meta4 = {}) {
     catalogEntry(provider);
     const row = await prisma.integration.findUnique({ where: { organizationId_provider: { organizationId: caller.organizationId, provider } } });
     if (!row) throw new NotFoundError("Integration not configured.");
@@ -27587,8 +28099,8 @@ var integrationService = {
       resourceType: "integration",
       resourceId: row.id,
       afterData: { provider },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return projectIntegration(updated);
   }
@@ -27635,7 +28147,7 @@ var apiKeyService = {
     const keys = await prisma.apiKey.findMany({ where: { organizationId }, orderBy: { createdAt: "desc" } });
     return keys.map(projectApiKey);
   },
-  async create(caller, input, meta3 = {}) {
+  async create(caller, input, meta4 = {}) {
     const active = await prisma.apiKey.count({ where: { organizationId: caller.organizationId, revokedAt: null } });
     if (active >= MAX_ACTIVE_KEYS) throw new ConflictError(`An organization can have at most ${MAX_ACTIVE_KEYS} active API keys.`);
     const scopes = validateScopes(caller, input.scopes);
@@ -27662,12 +28174,12 @@ var apiKeyService = {
       resourceType: "api_key",
       resourceId: record.id,
       afterData: { name: record.name, scopes, expiresAt: record.expiresAt?.toISOString() ?? null },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return { apiKey: projectApiKey(record), key: key2 };
   },
-  async revoke(caller, id, meta3 = {}) {
+  async revoke(caller, id, meta4 = {}) {
     const existing = await prisma.apiKey.findFirst({ where: { id, organizationId: caller.organizationId } });
     if (!existing) throw new NotFoundError("API key not found.");
     if (existing.revokedAt) return projectApiKey(existing);
@@ -27680,8 +28192,8 @@ var apiKeyService = {
       resourceType: "api_key",
       resourceId: id,
       beforeData: { name: existing.name },
-      ipAddress: meta3.ip,
-      userAgent: meta3.userAgent
+      ipAddress: meta4.ip,
+      userAgent: meta4.userAgent
     });
     return projectApiKey(updated);
   },
@@ -27699,9 +28211,9 @@ var apiKeyService = {
 };
 
 // server/routes/v1/integrationRoutes.ts
-var meta2 = (req) => ({ ip: req.ip, userAgent: req.headers["user-agent"] });
+var meta3 = (req) => ({ ip: req.ip, userAgent: req.headers["user-agent"] });
 var noStore = (res) => res.setHeader("Cache-Control", "no-store");
-var integrationsRouter = Router56();
+var integrationsRouter = Router57();
 integrationsRouter.use(authenticateToken);
 integrationsRouter.get("/", requirePermission("integrations.read"), asyncHandler(async (req, res) => sendSuccess(res, await integrationService.overview(req.user.organizationId))));
 integrationsRouter.put(
@@ -27710,22 +28222,22 @@ integrationsRouter.put(
   sensitiveActionLimiter,
   asyncHandler(async (req, res) => {
     const input = upsertIntegrationSchema.parse(req.body);
-    sendSuccess(res, { integration: await integrationService.upsert(req.user, req.params.provider, input, meta2(req)) });
+    sendSuccess(res, { integration: await integrationService.upsert(req.user, req.params.provider, input, meta3(req)) });
   })
 );
 integrationsRouter.post(
   "/:provider/test",
   requirePermission("integrations.manage"),
   sensitiveActionLimiter,
-  asyncHandler(async (req, res) => sendSuccess(res, { integration: await integrationService.test(req.user, req.params.provider, meta2(req)) }))
+  asyncHandler(async (req, res) => sendSuccess(res, { integration: await integrationService.test(req.user, req.params.provider, meta3(req)) }))
 );
 integrationsRouter.delete(
   "/:provider/secret",
   requirePermission("integrations.manage"),
   sensitiveActionLimiter,
-  asyncHandler(async (req, res) => sendSuccess(res, { integration: await integrationService.clearSecret(req.user, req.params.provider, meta2(req)) }))
+  asyncHandler(async (req, res) => sendSuccess(res, { integration: await integrationService.clearSecret(req.user, req.params.provider, meta3(req)) }))
 );
-var webhookEndpointsRouter = Router56();
+var webhookEndpointsRouter = Router57();
 webhookEndpointsRouter.use(authenticateToken);
 webhookEndpointsRouter.get("/events", requirePermission("webhooks.read"), (_req, res) => sendSuccess(res, { events: supportedEvents() }));
 webhookEndpointsRouter.get("/", requirePermission("webhooks.read"), asyncHandler(async (req, res) => sendSuccess(res, { endpoints: await webhookEndpointService.list(req.user.organizationId) })));
@@ -27736,13 +28248,13 @@ webhookEndpointsRouter.post(
   asyncHandler(async (req, res) => {
     const input = createWebhookEndpointSchema.parse(req.body);
     noStore(res);
-    sendSuccess(res, await webhookEndpointService.create(req.user, input, meta2(req)), 201);
+    sendSuccess(res, await webhookEndpointService.create(req.user, input, meta3(req)), 201);
   })
 );
 webhookEndpointsRouter.patch(
   "/:id",
   requirePermission("webhooks.manage"),
-  asyncHandler(async (req, res) => sendSuccess(res, { endpoint: await webhookEndpointService.update(req.user, req.params.id, updateWebhookEndpointSchema.parse(req.body), meta2(req)) }))
+  asyncHandler(async (req, res) => sendSuccess(res, { endpoint: await webhookEndpointService.update(req.user, req.params.id, updateWebhookEndpointSchema.parse(req.body), meta3(req)) }))
 );
 webhookEndpointsRouter.post(
   "/:id/rotate-secret",
@@ -27750,7 +28262,7 @@ webhookEndpointsRouter.post(
   sensitiveActionLimiter,
   asyncHandler(async (req, res) => {
     noStore(res);
-    sendSuccess(res, await webhookEndpointService.rotateSecret(req.user, req.params.id, meta2(req)));
+    sendSuccess(res, await webhookEndpointService.rotateSecret(req.user, req.params.id, meta3(req)));
   })
 );
 webhookEndpointsRouter.post(
@@ -27763,7 +28275,7 @@ webhookEndpointsRouter.delete(
   "/:id",
   requirePermission("webhooks.manage"),
   asyncHandler(async (req, res) => {
-    await webhookEndpointService.remove(req.user, req.params.id, meta2(req));
+    await webhookEndpointService.remove(req.user, req.params.id, meta3(req));
     sendSuccess(res, { message: "Webhook endpoint deleted." });
   })
 );
@@ -27782,7 +28294,7 @@ webhookEndpointsRouter.post(
   sensitiveActionLimiter,
   asyncHandler(async (req, res) => sendSuccess(res, { delivery: await webhookEndpointService.retryDelivery(req.user, req.params.deliveryId) }))
 );
-var apiKeysRouter = Router56();
+var apiKeysRouter = Router57();
 apiKeysRouter.use(authenticateToken);
 apiKeysRouter.get("/", requirePermission("api_keys.read"), asyncHandler(async (req, res) => sendSuccess(res, { apiKeys: await apiKeyService.list(req.user.organizationId) })));
 apiKeysRouter.post(
@@ -27792,18 +28304,18 @@ apiKeysRouter.post(
   asyncHandler(async (req, res) => {
     const input = createApiKeySchema.parse(req.body);
     noStore(res);
-    sendSuccess(res, await apiKeyService.create(req.user, input, meta2(req)), 201);
+    sendSuccess(res, await apiKeyService.create(req.user, input, meta3(req)), 201);
   })
 );
 apiKeysRouter.post(
   "/:id/revoke",
   requirePermission("api_keys.manage"),
   sensitiveActionLimiter,
-  asyncHandler(async (req, res) => sendSuccess(res, { apiKey: await apiKeyService.revoke(req.user, req.params.id, meta2(req)) }))
+  asyncHandler(async (req, res) => sendSuccess(res, { apiKey: await apiKeyService.revoke(req.user, req.params.id, meta3(req)) }))
 );
 
 // server/routes/v1/externalRoutes.ts
-import { Router as Router57 } from "express";
+import { Router as Router58 } from "express";
 
 // server/middleware/apiKeyAuth.ts
 var authenticateApiKey = asyncHandler(async (req, _res, next) => {
@@ -27816,19 +28328,19 @@ var authenticateApiKey = asyncHandler(async (req, _res, next) => {
 });
 
 // server/routes/v1/externalRoutes.ts
-var router56 = Router57();
-router56.use(generalApiLimiter, authenticateApiKey);
-router56.get(
+var router57 = Router58();
+router57.use(generalApiLimiter, authenticateApiKey);
+router57.get(
   "/whoami",
   asyncHandler(async (req, res) => {
     const org = await prisma.organization.findUnique({ where: { id: req.apiKey.organizationId }, select: { id: true, name: true, slug: true } });
     sendSuccess(res, { organization: org, apiKey: { id: req.apiKey.id, scopes: req.apiKey.scopes } });
   })
 );
-var externalRoutes_default = router56;
+var externalRoutes_default = router57;
 
 // server/routes/v1/analyticsRoutes.ts
-import { Router as Router58 } from "express";
+import { Router as Router59 } from "express";
 
 // server/services/analyticsReportingService.ts
 var DEFAULT_RANGE_DAYS = 30;
@@ -28013,9 +28525,9 @@ var analyticsReportingService = {
 };
 
 // server/routes/v1/analyticsRoutes.ts
-var router57 = Router58();
-router57.use(authenticateToken);
-router57.get(
+var router58 = Router59();
+router58.use(authenticateToken);
+router58.get(
   "/overview",
   requirePermission("analytics.read"),
   asyncHandler(async (req, res) => {
@@ -28024,7 +28536,7 @@ router57.get(
     sendSuccess(res, overview);
   })
 );
-router57.get(
+router58.get(
   "/content/top-pages",
   requirePermission("analytics.read"),
   asyncHandler(async (req, res) => {
@@ -28033,10 +28545,10 @@ router57.get(
     sendSuccess(res, { topPages });
   })
 );
-var analyticsRoutes_default = router57;
+var analyticsRoutes_default = router58;
 
 // server/routes/v1/reportsRoutes.ts
-import { Router as Router59 } from "express";
+import { Router as Router60 } from "express";
 
 // server/utils/csv.ts
 function escapeCsvCell(value) {
@@ -28056,8 +28568,8 @@ function sendCsv(res, filename, csv) {
 }
 
 // server/routes/v1/reportsRoutes.ts
-var router58 = Router59();
-router58.use(authenticateToken);
+var router59 = Router60();
+router59.use(authenticateToken);
 function assertReportType(value) {
   if (REPORT_TYPES.includes(value)) return value;
   throw new NotFoundError("Unknown report type.");
@@ -28078,7 +28590,7 @@ function reportToCsvRows(data) {
   }
   return { header: ["value"], rows: [[data]] };
 }
-router58.get(
+router59.get(
   "/:type",
   requirePermission("reports.read"),
   asyncHandler(async (req, res) => {
@@ -28088,7 +28600,7 @@ router58.get(
     sendSuccess(res, { type, range: { from: query.from ?? null, to: query.to ?? null }, report });
   })
 );
-router58.get(
+router59.get(
   "/:type/export",
   requirePermission("reports.export"),
   asyncHandler(async (req, res) => {
@@ -28099,11 +28611,11 @@ router58.get(
     sendCsv(res, `${type}.csv`, toCsv(header, rows));
   })
 );
-var reportsRoutes_default = router58;
+var reportsRoutes_default = router59;
 
 // server/routes/v1/contentApprovalRoutes.ts
-import { Router as Router60 } from "express";
-import { z as z53 } from "zod";
+import { Router as Router61 } from "express";
+import { z as z54 } from "zod";
 
 // server/services/automation/ContentApprovalService.ts
 import crypto13 from "node:crypto";
@@ -28282,17 +28794,17 @@ var contentApprovalService = {
 };
 
 // server/routes/v1/contentApprovalRoutes.ts
-var router59 = Router60();
-router59.use(authenticateToken);
-var SubmitSchema = z53.object({
-  contentType: z53.enum(["page", "post"]),
-  contentId: z53.string().min(1)
+var router60 = Router61();
+router60.use(authenticateToken);
+var SubmitSchema = z54.object({
+  contentType: z54.enum(["page", "post"]),
+  contentId: z54.string().min(1)
 });
-var DecideSchema = z53.object({
-  decision: z53.enum(["APPROVED", "REJECTED", "CHANGES_REQUESTED"]),
-  reason: z53.string().max(2e3).optional()
+var DecideSchema = z54.object({
+  decision: z54.enum(["APPROVED", "REJECTED", "CHANGES_REQUESTED"]),
+  reason: z54.string().max(2e3).optional()
 });
-router59.get(
+router60.get(
   "/",
   requirePermission("content.update"),
   asyncHandler(async (req, res) => {
@@ -28305,7 +28817,7 @@ router59.get(
     sendSuccess(res, result);
   })
 );
-router59.post(
+router60.post(
   "/",
   requirePermission("content.update"),
   asyncHandler(async (req, res) => {
@@ -28314,7 +28826,7 @@ router59.post(
     sendSuccess(res, result, 201);
   })
 );
-router59.post(
+router60.post(
   "/:id/decide",
   requirePermission("content.publish"),
   asyncHandler(async (req, res) => {
@@ -28323,10 +28835,10 @@ router59.post(
     sendSuccess(res, result);
   })
 );
-var contentApprovalRoutes_default = router59;
+var contentApprovalRoutes_default = router60;
 
 // server/routes/v1/index.ts
-var v1Router = Router61();
+var v1Router = Router62();
 v1Router.use("/auth", authRoutes_default);
 v1Router.use("/webhooks", webhookRoutes_default);
 v1Router.use("/system", systemRoutes_default);
@@ -28370,6 +28882,7 @@ v1Router.use("/subscriptions", subscriptionRoutes_default);
 v1Router.use("/invoices", invoiceRoutes_default);
 v1Router.use("/payments", paymentRoutes_default);
 v1Router.use("/portal", portalRoutes_default);
+v1Router.use("/portal-registrations", portalRegistrationRoutes_default);
 v1Router.use("/public", publicRoutes_default);
 v1Router.use("/ai", aiHealthRoutes_default);
 v1Router.use("/ai/providers", aiProviderRoutes_default);

@@ -83,6 +83,33 @@ export const authLimiter = rateLimit({
   },
 });
 
+/** Public client-portal registration — a hard per-IP cap on new accounts, independent of the email used. */
+export const registerLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  limit: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: rateLimitHandler,
+  store: makeStore("register"),
+  passOnStoreError: true,
+  keyGenerator: (req: Request) => req.ip ?? "unknown-ip",
+});
+
+/** Email-verification confirm/resend. */
+export const verificationLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  limit: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: rateLimitHandler,
+  store: makeStore("verification"),
+  passOnStoreError: true,
+  keyGenerator: (req: Request) => {
+    const email = typeof req.body?.email === "string" ? req.body.email.toLowerCase() : "unknown";
+    return `${req.ip ?? "unknown-ip"}:${email}`;
+  },
+});
+
 export const webhookLimiter = rateLimit({
   windowMs: 5 * 60 * 1000,
   limit: 100,

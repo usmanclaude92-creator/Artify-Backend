@@ -14,6 +14,10 @@ export function generateSessionToken(): string {
 /** Same entropy/shape family as generateSessionToken, distinct prefix so a
  * reset credential can never be confused with (or accidentally accepted
  * as) a session token by a caller that forgets which endpoint it's for. */
+export function generateEmailVerificationToken(): string {
+  return `art_verify_${randomBytes(32).toString("hex")}`;
+}
+
 export function generateResetToken(): string {
   return `art_reset_${randomBytes(32).toString("hex")}`;
 }

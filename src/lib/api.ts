@@ -1384,6 +1384,21 @@ export const onboardingApi = {
   updateTemplate: (steps: OnboardingTemplateStep[]) => apiClient.put<OnboardingTemplate>("/onboarding/template", steps),
 };
 
+export interface PortalRegistration {
+  organizationId: string;
+  organizationName: string;
+  registeredAt: string;
+  contactName: string | null;
+  contactEmail: string | null;
+  emailVerified: boolean;
+}
+
+export const portalRegistrationsApi = {
+  list: () => apiClient.get<{ registrations: PortalRegistration[] }>("/portal-registrations"),
+  link: (organizationId: string, clientId: string) => apiClient.post<{ linked: boolean }>(`/portal-registrations/${organizationId}/link`, { clientId }),
+  reject: (organizationId: string) => apiClient.post<{ rejected: boolean }>(`/portal-registrations/${organizationId}/reject`, {}),
+};
+
 export const workspacesApi = {
   list: (params: { page?: number; limit?: number; status?: WorkspaceStatusValue; search?: string } = {}) =>
     paginatedGet<Workspace>("/workspaces", "workspaces", params),
