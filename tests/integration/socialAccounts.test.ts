@@ -180,8 +180,10 @@ describe("social accounts", () => {
     const bad = (await connect(admin3Token, "norefresh")).cb.body.data.account.id as string;
     const soon = new Date(Date.now() + 3 * 86400_000);
     await prisma.socialAccount.updateMany({ where: { id: { in: [ok, bad] } }, data: { tokenExpiresAt: soon } });
-    const summary = await socialAccountService.runTokenHealthJob();
+    const summary = await socialAccountService.runTokenHealthJob(500, 0);
     expect(summary.checked).toBeGreaterThanOrEqual(2);
+    // The 5-minute cron tick must not re-check accounts that were just checked.
+    expect((await socialAccountService.runTokenHealthJob()).checked).toBe(0);
 
     const okAfter = await prisma.socialAccount.findUnique({ where: { id: ok } });
     expect(okAfter!.status).toBe("CONNECTED");

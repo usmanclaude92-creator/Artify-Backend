@@ -290,7 +290,14 @@ var envSchema = z.object({
   META_APP_ID: z.string().optional().default(""),
   META_APP_SECRET: z.string().optional().default(""),
   LINKEDIN_CLIENT_ID: z.string().optional().default(""),
-  LINKEDIN_CLIENT_SECRET: z.string().optional().default("")
+  LINKEDIN_CLIENT_SECRET: z.string().optional().default(""),
+  LINKEDIN_API_VERSION: z.string().regex(/^\d{6}$/, "LINKEDIN_API_VERSION must look like YYYYMM").optional().default("202504"),
+  // Hard environment kill switch: "true" stops ALL social publishing regardless of database settings.
+  SOCIAL_PUBLISHING_DISABLED: z.enum(["true", "false"]).optional().default("false"),
+  SOCIAL_PUBLISH_BATCH_SIZE: z.coerce.number().int().min(1).max(100).optional().default(20),
+  SOCIAL_PUBLISH_CONCURRENCY: z.coerce.number().int().min(1).max(10).optional().default(3),
+  SOCIAL_PUBLISH_PER_ACCOUNT_LIMIT: z.coerce.number().int().min(1).max(10).optional().default(2),
+  SOCIAL_PUBLISH_TIME_BUDGET_MS: z.coerce.number().int().min(1e3).max(5e4).optional().default(8e3)
 }).superRefine((val, ctx) => {
   const isProdLike = val.NODE_ENV === "production" || val.NODE_ENV === "staging";
   if (val.INTEGRATIONS_ENCRYPTION_KEY && val.INTEGRATIONS_ENCRYPTION_KEY.length < 32) {
@@ -441,7 +448,13 @@ function validateEnv(raw) {
       metaAppId: env.META_APP_ID,
       metaAppSecret: env.META_APP_SECRET,
       linkedinClientId: env.LINKEDIN_CLIENT_ID,
-      linkedinClientSecret: env.LINKEDIN_CLIENT_SECRET
+      linkedinClientSecret: env.LINKEDIN_CLIENT_SECRET,
+      linkedinApiVersion: env.LINKEDIN_API_VERSION,
+      socialPublishingDisabled: env.SOCIAL_PUBLISHING_DISABLED === "true",
+      socialPublishBatchSize: env.SOCIAL_PUBLISH_BATCH_SIZE,
+      socialPublishConcurrency: env.SOCIAL_PUBLISH_CONCURRENCY,
+      socialPublishPerAccountLimit: env.SOCIAL_PUBLISH_PER_ACCOUNT_LIMIT,
+      socialPublishTimeBudgetMs: env.SOCIAL_PUBLISH_TIME_BUDGET_MS
     })
   };
 }
@@ -979,7 +992,7 @@ var webhookEndpointService = {
       }
     }));
   },
-  async create(caller, input, meta6 = {}) {
+  async create(caller, input, meta7 = {}) {
     const count = await prisma.webhookEndpoint.count({ where: { organizationId: caller.organizationId, deletedAt: null } });
     if (count >= MAX_ENDPOINTS_PER_ORG) throw new ConflictError(`An organization can have at most ${MAX_ENDPOINTS_PER_ORG} webhook endpoints.`);
     await assertSafeOutboundUrl(input.url);
@@ -1004,12 +1017,12 @@ var webhookEndpointService = {
       resourceType: "webhook_endpoint",
       resourceId: endpoint.id,
       afterData: { name: endpoint.name, url: endpoint.url, events },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return { endpoint: projectEndpoint(endpoint), secret };
   },
-  async update(caller, id2, input, meta6 = {}) {
+  async update(caller, id2, input, meta7 = {}) {
     const existing = await loadInOrg(id2, caller.organizationId);
     if (input.url !== void 0) await assertSafeOutboundUrl(input.url);
     const endpoint = await prisma.webhookEndpoint.update({
@@ -1030,12 +1043,12 @@ var webhookEndpointService = {
       resourceId: id2,
       beforeData: { url: existing.url, events: existing.events, enabled: existing.enabled },
       afterData: { url: endpoint.url, events: endpoint.events, enabled: endpoint.enabled },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return projectEndpoint(endpoint);
   },
-  async rotateSecret(caller, id2, meta6 = {}) {
+  async rotateSecret(caller, id2, meta7 = {}) {
     const existing = await loadInOrg(id2, caller.organizationId);
     const secret = newSigningSecret();
     const endpoint = await prisma.webhookEndpoint.update({ where: { id: existing.id }, data: { secretCiphertext: encryptSecret(secret), secretLast4: last4(secret) } });
@@ -1046,12 +1059,12 @@ var webhookEndpointService = {
       action: "WEBHOOK_SECRET_ROTATED",
       resourceType: "webhook_endpoint",
       resourceId: id2,
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return { endpoint: projectEndpoint(endpoint), secret };
   },
-  async remove(caller, id2, meta6 = {}) {
+  async remove(caller, id2, meta7 = {}) {
     const existing = await loadInOrg(id2, caller.organizationId);
     await prisma.webhookEndpoint.update({ where: { id: existing.id }, data: { deletedAt: /* @__PURE__ */ new Date(), enabled: false } });
     await auditLogRepository.record({
@@ -1062,8 +1075,8 @@ var webhookEndpointService = {
       resourceType: "webhook_endpoint",
       resourceId: id2,
       beforeData: { name: existing.name, url: existing.url },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
   },
   async test(caller, id2) {
@@ -1419,7 +1432,7 @@ var aiExecutionLimiter = rateLimit({
 });
 
 // server/routes/v1/index.ts
-import { Router as Router66 } from "express";
+import { Router as Router67 } from "express";
 
 // server/routes/v1/authRoutes.ts
 import { Router } from "express";
@@ -2258,7 +2271,7 @@ var authService = {
    * Issues a single-use code that lets the caller's CURRENT, already-authenticated session continue
    * on the Control Center origin. Client-portal accounts never get one — they have nothing to open there.
    */
-  async issueHandoffCode(user, meta6 = {}) {
+  async issueHandoffCode(user, meta7 = {}) {
     if (user.role.key === PORTAL_REGISTRATION_ROLE_KEY) {
       throw new AuthorizationError("This account does not have Control Center access.");
     }
@@ -2272,13 +2285,13 @@ var authService = {
       action: "AUTH_HANDOFF_ISSUED",
       resourceType: "session",
       resourceId: user.id,
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return { code, expiresAt };
   },
   /** Exchanges a handoff code for a brand-new session (the originating session/token is never shared). */
-  async exchangeHandoffCode(code, meta6 = {}) {
+  async exchangeHandoffCode(code, meta7 = {}) {
     const claimed = await authHandoffRepository.consume(code);
     const failure = () => new AuthenticationError("This sign-in link is invalid or has expired. Please sign in again.");
     if (!claimed) throw failure();
@@ -2293,8 +2306,8 @@ var authService = {
       userId: user.id,
       organizationId: claimed.organizationId,
       expiresAt,
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     await auditLogRepository.record({
       organizationId: claimed.organizationId,
@@ -2304,12 +2317,12 @@ var authService = {
       action: "AUTH_HANDOFF_EXCHANGED",
       resourceType: "session",
       resourceId: user.id,
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return { session: { token, expiresAt }, user: sanitized };
   },
-  async login(email, password, meta6 = {}, targetOrganizationId) {
+  async login(email, password, meta7 = {}, targetOrganizationId) {
     const user = await userRepository.findByEmail(email);
     const genericFailure = () => new AuthenticationError("Invalid email or password credentials.");
     if (!user) throw genericFailure();
@@ -2329,8 +2342,8 @@ var authService = {
         resourceType: "session",
         resourceId: user.id,
         result: "FAILURE",
-        ipAddress: meta6.ip,
-        userAgent: meta6.userAgent
+        ipAddress: meta7.ip,
+        userAgent: meta7.userAgent
       });
       if (nowLocked) {
         logger.warn({ event: "account_locked", userId: user.id }, "Account locked after repeated failed logins");
@@ -2342,8 +2355,8 @@ var authService = {
           resourceType: "user",
           resourceId: user.id,
           result: "FAILURE",
-          ipAddress: meta6.ip,
-          userAgent: meta6.userAgent
+          ipAddress: meta7.ip,
+          userAgent: meta7.userAgent
         });
       }
       throw genericFailure();
@@ -2367,8 +2380,8 @@ var authService = {
       userId: user.id,
       organizationId,
       expiresAt,
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     await auditLogRepository.record({
       organizationId,
@@ -2378,8 +2391,8 @@ var authService = {
       action: "AUTH_LOGIN",
       resourceType: "session",
       resourceId: user.id,
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return { session: { token, expiresAt }, user: sanitized };
   },
@@ -2445,7 +2458,7 @@ var authService = {
    * link it to a CRM client. Without email delivery it falls back to the
    * degraded mode: immediate sign-in, and a duplicate address returns 409.
    */
-  async registerPortalAccount(payload, meta6 = {}) {
+  async registerPortalAccount(payload, meta7 = {}) {
     const emailOn = emailService.isEnabled();
     const email = payload.email.trim().toLowerCase();
     const existing = await userRepository.findByEmail(email);
@@ -2489,8 +2502,8 @@ var authService = {
       action: "AUTH_PORTAL_REGISTERED",
       resourceType: "user",
       resourceId: created.user.id,
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     void this.notifyOperatorsOfRegistration(created.organization.id, created.organization.name, `${payload.firstName} ${payload.lastName}`.trim());
     if (emailOn) {
@@ -2499,7 +2512,7 @@ var authService = {
       );
       return { status: "verification_required" };
     }
-    const login = await this.login(email, payload.password, meta6);
+    const login = await this.login(email, payload.password, meta7);
     return { status: "registered", ...login };
   },
   /** Tells the agency's own admins (the public website organization) that a new client account is waiting to be linked. Best-effort. */
@@ -2535,7 +2548,7 @@ var authService = {
     await emailVerificationRepository.create({ token, userId, expiresAt: new Date(Date.now() + config.emailVerificationTtlHours * 60 * 60 * 1e3) });
     await emailService.sendVerification(email, firstName, token);
   },
-  async verifyEmail(token, meta6 = {}) {
+  async verifyEmail(token, meta7 = {}) {
     const row = await emailVerificationRepository.findValidByToken(token);
     if (!row) throw new AuthenticationError("This verification link is invalid or has expired.");
     const user = await userRepository.findById(row.userId);
@@ -2550,8 +2563,8 @@ var authService = {
       action: "AUTH_EMAIL_VERIFIED",
       resourceType: "user",
       resourceId: user.id,
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
   },
   /** Always resolves silently — never reveals whether the address exists or is already verified. */
@@ -2573,7 +2586,7 @@ var authService = {
     void sessionRepository.touchLastUsed(session.id);
     return sanitized;
   },
-  async logout(token, actor, meta6 = {}) {
+  async logout(token, actor, meta7 = {}) {
     await sessionRepository.revoke(token);
     if (actor) {
       await auditLogRepository.record({
@@ -2582,13 +2595,13 @@ var authService = {
         actorType: "USER",
         action: "AUTH_LOGOUT",
         resourceType: "session",
-        ipAddress: meta6.ip,
-        userAgent: meta6.userAgent
+        ipAddress: meta7.ip,
+        userAgent: meta7.userAgent
       });
     }
   },
   /** Revokes every active session for the user (all devices/tabs) — a broader action than logout(), which only revokes the caller's current session. */
-  async logoutAll(user, meta6 = {}) {
+  async logoutAll(user, meta7 = {}) {
     await sessionRepository.revokeAllForUser(user.id);
     await auditLogRepository.record({
       organizationId: user.organizationId,
@@ -2597,11 +2610,11 @@ var authService = {
       action: "AUTH_LOGOUT_ALL",
       resourceType: "user",
       resourceId: user.id,
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
   },
-  async changePassword(user, currentSessionToken, currentPassword, newPassword, meta6 = {}) {
+  async changePassword(user, currentSessionToken, currentPassword, newPassword, meta7 = {}) {
     const fullUser = await userRepository.findById(user.id);
     if (!fullUser) throw new InternalError("User record could not be loaded.");
     const validCurrent = await verifyPassword(currentPassword, fullUser.passwordHash);
@@ -2618,8 +2631,8 @@ var authService = {
       action: "AUTH_PASSWORD_CHANGE",
       resourceType: "user",
       resourceId: user.id,
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
   },
   /**
@@ -2630,7 +2643,7 @@ var authService = {
    * undefined; the raw token is never logged, never included in a
    * production response, and never persisted anywhere but as a hash.
    */
-  async requestPasswordReset(email, meta6 = {}) {
+  async requestPasswordReset(email, meta7 = {}) {
     const user = await userRepository.findByEmail(email);
     if (!user || user.status !== "ACTIVE") {
       return {};
@@ -2642,8 +2655,8 @@ var authService = {
       token,
       userId: user.id,
       expiresAt,
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     await auditLogRepository.record({
       organizationId: user.organizationId,
@@ -2652,8 +2665,8 @@ var authService = {
       action: "AUTH_PASSWORD_RESET_REQUESTED",
       resourceType: "user",
       resourceId: user.id,
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     if (emailService.isEnabled()) {
       await emailService.sendPasswordReset(user.email, user.firstName, token).catch(
@@ -2663,7 +2676,7 @@ var authService = {
     }
     return config.isProduction ? {} : { devToken: token };
   },
-  async confirmPasswordReset(token, newPassword, meta6 = {}) {
+  async confirmPasswordReset(token, newPassword, meta7 = {}) {
     const resetRow = await passwordResetRepository.findValidByToken(token);
     if (!resetRow) {
       throw new AuthenticationError("This password reset link is invalid or has expired.");
@@ -2685,8 +2698,8 @@ var authService = {
       action: "AUTH_PASSWORD_RESET_COMPLETED",
       resourceType: "user",
       resourceId: user.id,
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
   },
   /**
@@ -2697,7 +2710,7 @@ var authService = {
    * rotation (new token issued, old one revoked) rather than mutating the
    * existing session row in place.
    */
-  async switchOrganization(user, currentSessionToken, targetOrganizationId, meta6 = {}) {
+  async switchOrganization(user, currentSessionToken, targetOrganizationId, meta7 = {}) {
     const fullUser = await userRepository.findById(user.id);
     if (!fullUser) throw new InternalError("User record could not be loaded.");
     const sanitized = await resolveSanitizedUserForOrganization(fullUser, targetOrganizationId);
@@ -2711,8 +2724,8 @@ var authService = {
       userId: user.id,
       organizationId: targetOrganizationId,
       expiresAt,
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     await sessionRepository.revoke(currentSessionToken);
     await auditLogRepository.record({
@@ -2724,8 +2737,8 @@ var authService = {
       resourceId: user.id,
       beforeData: { organizationId: user.organizationId },
       afterData: { organizationId: targetOrganizationId },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return { session: { token, expiresAt }, user: sanitized };
   },
@@ -4319,7 +4332,7 @@ var userService = {
   async getUser(organizationId, userId) {
     return loadUserInOrgOrThrow(userId, organizationId);
   },
-  async createUser(caller, input, meta6 = {}) {
+  async createUser(caller, input, meta7 = {}) {
     const existing = await userRepository.findByEmail(input.email);
     if (existing) throw new ConflictError("An account with this email address already exists.");
     const role = await resolveRoleOrThrow(input.roleKey);
@@ -4348,12 +4361,12 @@ var userService = {
       resourceType: "user",
       resourceId: user.id,
       afterData: { email: user.email, roleKey: role.key },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return sanitizeUser({ ...user, organizationId: caller.organizationId }, { id: role.id, key: role.key, name: role.name, permissions: [] });
   },
-  async updateUser(caller, targetUserId, input, callerPermissions, meta6 = {}) {
+  async updateUser(caller, targetUserId, input, callerPermissions, meta7 = {}) {
     const membership = await organizationMembershipRepository.findByUserAndOrg(targetUserId, caller.organizationId);
     if (!membership) throw new NotFoundError("User not found.");
     const beforeRoleKey = membership.role.key;
@@ -4380,8 +4393,8 @@ var userService = {
         resourceId: targetUserId,
         beforeData: { roleKey: beforeRoleKey },
         afterData: { roleKey: newRole.key },
-        ipAddress: meta6.ip,
-        userAgent: meta6.userAgent
+        ipAddress: meta7.ip,
+        userAgent: meta7.userAgent
       });
     }
     const profilePatch = {};
@@ -4401,8 +4414,8 @@ var userService = {
           resourceType: "user",
           resourceId: targetUserId,
           afterData: { status: input.status },
-          ipAddress: meta6.ip,
-          userAgent: meta6.userAgent
+          ipAddress: meta7.ip,
+          userAgent: meta7.userAgent
         });
         if (input.status === "DISABLED") {
           await sessionRepository.revokeAllForUser(targetUserId);
@@ -4416,8 +4429,8 @@ var userService = {
           resourceType: "user",
           resourceId: targetUserId,
           afterData: profilePatch,
-          ipAddress: meta6.ip,
-          userAgent: meta6.userAgent
+          ipAddress: meta7.ip,
+          userAgent: meta7.userAgent
         });
       }
     }
@@ -4445,7 +4458,7 @@ var userSecurityService = {
       orderBy: { createdAt: "desc" }
     });
   },
-  async revokeAllForUser(caller, userId, meta6 = {}) {
+  async revokeAllForUser(caller, userId, meta7 = {}) {
     const membership = await loadMember(caller, userId);
     assertCallerMayManageTarget(caller, membership.role.key);
     const result = await prisma.session.updateMany({ where: { userId, revokedAt: null }, data: { revokedAt: /* @__PURE__ */ new Date() } });
@@ -4457,13 +4470,13 @@ var userSecurityService = {
       resourceType: "user",
       resourceId: userId,
       afterData: { revoked: result.count },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return { revoked: result.count };
   },
   /** Clears a lockout caused by repeated failed sign-ins. */
-  async unlock(caller, userId, meta6 = {}) {
+  async unlock(caller, userId, meta7 = {}) {
     const membership = await loadMember(caller, userId);
     assertCallerMayManageTarget(caller, membership.role.key);
     await prisma.user.update({ where: { id: userId }, data: { failedLoginAttempts: 0, lockedUntil: null } });
@@ -4474,8 +4487,8 @@ var userSecurityService = {
       action: "USER_UNLOCKED",
       resourceType: "user",
       resourceId: userId,
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
   },
   /** Active sessions across the caller's organization (security.read). */
@@ -4493,7 +4506,7 @@ var userSecurityService = {
     ]);
     return { sessions: rows, total };
   },
-  async revokeOrganizationSession(caller, sessionId, meta6 = {}) {
+  async revokeOrganizationSession(caller, sessionId, meta7 = {}) {
     const session = await prisma.session.findFirst({ where: { id: sessionId, organizationId: caller.organizationId, revokedAt: null } });
     if (!session) throw new NotFoundError("Session not found.");
     if (session.userId !== caller.id) {
@@ -4509,8 +4522,8 @@ var userSecurityService = {
       resourceType: "session",
       resourceId: sessionId,
       afterData: { userId: session.userId },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
   }
 };
@@ -4680,7 +4693,7 @@ var roleAdminService = {
       permissions: r.rolePermissions.map((rp) => rp.permission.key).sort()
     }));
   },
-  async create(caller, input, meta6 = {}) {
+  async create(caller, input, meta7 = {}) {
     requireSuperAdmin(caller);
     const key2 = slugKey(input.name);
     if (key2 === "CUSTOM_") throw new ValidationError("Role name must contain letters or digits.");
@@ -4703,12 +4716,12 @@ var roleAdminService = {
       resourceType: "role",
       resourceId: role.id,
       afterData: { key: key2, permissions: perms.map((p) => p.key).sort() },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return role;
   },
-  async update(caller, id2, input, meta6 = {}) {
+  async update(caller, id2, input, meta7 = {}) {
     requireSuperAdmin(caller);
     const role = await loadCustomRole(id2);
     const updated = await prisma.role.update({ where: { id: id2 }, data: { name: input.name, description: input.description } });
@@ -4721,12 +4734,12 @@ var roleAdminService = {
       resourceId: id2,
       beforeData: { name: role.name, description: role.description },
       afterData: { name: updated.name, description: updated.description },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return updated;
   },
-  async setPermissions(caller, id2, permissionKeys2, confirmCritical, meta6 = {}) {
+  async setPermissions(caller, id2, permissionKeys2, confirmCritical, meta7 = {}) {
     requireSuperAdmin(caller);
     const role = await loadCustomRole(id2);
     const perms = await resolvePermissionIds(permissionKeys2, confirmCritical);
@@ -4745,12 +4758,12 @@ var roleAdminService = {
       resourceId: id2,
       beforeData: { permissions: before },
       afterData: { permissions: after, added: after.filter((k) => !before.includes(k)), removed: before.filter((k) => !after.includes(k)) },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return { id: id2, key: role.key, permissions: after };
   },
-  async remove(caller, id2, meta6 = {}) {
+  async remove(caller, id2, meta7 = {}) {
     requireSuperAdmin(caller);
     const role = await loadCustomRole(id2);
     const [memberships, invitations] = await Promise.all([
@@ -4775,8 +4788,8 @@ var roleAdminService = {
       resourceType: "role",
       resourceId: id2,
       beforeData: { key: role.key, name: role.name },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
   }
 };
@@ -4933,7 +4946,7 @@ var organizationService = {
     if (!org) throw new NotFoundError("Organization not found.");
     return org;
   },
-  async addMember(caller, organizationId, input, meta6 = {}) {
+  async addMember(caller, organizationId, input, meta7 = {}) {
     if (caller.role.key !== "SUPER_ADMIN" && organizationId !== caller.organizationId) {
       throw new AuthorizationError("Access denied: resource belongs to a different organization");
     }
@@ -4956,12 +4969,12 @@ var organizationService = {
       resourceType: "organization_membership",
       resourceId: membership.id,
       afterData: { userId: input.userId, roleKey: role.key },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return membership;
   },
-  async updateMember(caller, organizationId, targetUserId, input, callerPermissions, meta6 = {}) {
+  async updateMember(caller, organizationId, targetUserId, input, callerPermissions, meta7 = {}) {
     if (caller.role.key !== "SUPER_ADMIN" && organizationId !== caller.organizationId) {
       throw new AuthorizationError("Access denied: resource belongs to a different organization");
     }
@@ -4986,8 +4999,8 @@ var organizationService = {
         resourceId: membership.id,
         beforeData: { roleKey: membership.role.key },
         afterData: { roleKey: role.key },
-        ipAddress: meta6.ip,
-        userAgent: meta6.userAgent
+        ipAddress: meta7.ip,
+        userAgent: meta7.userAgent
       });
     }
     if (input.status !== void 0) {
@@ -5000,13 +5013,13 @@ var organizationService = {
         resourceType: "organization_membership",
         resourceId: membership.id,
         afterData: { status: input.status },
-        ipAddress: meta6.ip,
-        userAgent: meta6.userAgent
+        ipAddress: meta7.ip,
+        userAgent: meta7.userAgent
       });
     }
     return organizationMembershipRepository.findById(membership.id);
   },
-  async removeMember(caller, organizationId, targetUserId, meta6 = {}) {
+  async removeMember(caller, organizationId, targetUserId, meta7 = {}) {
     if (caller.role.key !== "SUPER_ADMIN" && organizationId !== caller.organizationId) {
       throw new AuthorizationError("Access denied: resource belongs to a different organization");
     }
@@ -5024,8 +5037,8 @@ var organizationService = {
       resourceType: "organization_membership",
       resourceId: targetUserId,
       beforeData: { roleKey: membership.role.key },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
   }
 };
@@ -6025,9 +6038,9 @@ function getStorageProvider() {
 // server/utils/storageKey.ts
 function sanitizeFilename(original) {
   const base = original.split(/[/\\]/).pop() ?? "file";
-  let safe = base.normalize("NFKD").replace(/[^a-zA-Z0-9.\-_]/g, "-").replace(/-{2,}/g, "-").replace(/^[.\-]+/, "").slice(0, 150);
-  if (!safe || safe === "." || safe === "..") safe = "file";
-  return safe;
+  let safe2 = base.normalize("NFKD").replace(/[^a-zA-Z0-9.\-_]/g, "-").replace(/-{2,}/g, "-").replace(/^[.\-]+/, "").slice(0, 150);
+  if (!safe2 || safe2 === "." || safe2 === "..") safe2 = "file";
+  return safe2;
 }
 function buildStorageKey(organizationId, mediaId, originalFilename) {
   return `organizations/${organizationId}/media/${mediaId}/${sanitizeFilename(originalFilename)}`;
@@ -6116,7 +6129,7 @@ var mediaService = {
   async getMedia(organizationId, id2) {
     return toApiMedia(await loadMediaOrThrow(id2, organizationId));
   },
-  async createUploadSession(caller, input, meta6 = {}) {
+  async createUploadSession(caller, input, meta7 = {}) {
     const organizationId = caller.organizationId;
     if (!extensionMatchesMimeType(input.filename, input.mimeType)) {
       throw new ValidationError(`The file extension does not match the declared type (${input.mimeType}).`);
@@ -6173,12 +6186,12 @@ var mediaService = {
       resourceType: "media",
       resourceId: mediaId,
       afterData: { originalFilename: input.filename, mimeType: input.mimeType, sizeBytes: input.sizeBytes },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return { media: toApiMedia(media), upload, uploadToken: rawToken };
   },
-  async completeUpload(caller, id2, token, meta6 = {}) {
+  async completeUpload(caller, id2, token, meta7 = {}) {
     const organizationId = caller.organizationId;
     const media = await loadMediaOrThrow(id2, organizationId);
     if (media.status !== "PENDING") {
@@ -6221,8 +6234,8 @@ var mediaService = {
       resourceType: "media",
       resourceId: id2,
       afterData: { sizeBytes: verifiedSize },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return toApiMedia(activated);
   },
@@ -6237,7 +6250,7 @@ var mediaService = {
    * caller with media.update can choose to make this specific image
    * public by embedding it, audited like any other visibility change.
    */
-  async getEmbedUrl(caller, id2, meta6 = {}) {
+  async getEmbedUrl(caller, id2, meta7 = {}) {
     const organizationId = caller.organizationId;
     const media = await loadMediaOrThrow(id2, organizationId);
     if (media.status !== "ACTIVE") throw new ConflictError("This media has no readable object yet.");
@@ -6253,15 +6266,15 @@ var mediaService = {
         resourceId: id2,
         beforeData: { visibility: media.visibility },
         afterData: { visibility: "PUBLIC" },
-        ipAddress: meta6.ip,
-        userAgent: meta6.userAgent
+        ipAddress: meta7.ip,
+        userAgent: meta7.userAgent
       });
     }
     const provider = getStorageProvider();
     const url = provider.getPublicUrl(media.storageKey) ?? await provider.createSignedReadUrl({ key: media.storageKey, expiresInSeconds: config.mediaPublicSignedUrlTtlSeconds });
     return { url };
   },
-  async getReadUrl(caller, id2, meta6 = {}) {
+  async getReadUrl(caller, id2, meta7 = {}) {
     const organizationId = caller.organizationId;
     const media = await loadMediaOrThrow(id2, organizationId);
     if (media.status !== "ACTIVE" && media.status !== "ARCHIVED") {
@@ -6278,12 +6291,12 @@ var mediaService = {
       resourceType: "media",
       resourceId: id2,
       afterData: { expiresAt: expiresAt.toISOString() },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return { url, expiresAt: expiresAt.toISOString() };
   },
-  async updateMedia(caller, id2, input, meta6 = {}) {
+  async updateMedia(caller, id2, input, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadMediaOrThrow(id2, organizationId);
     const patch = {};
@@ -6308,12 +6321,12 @@ var mediaService = {
       resourceId: id2,
       beforeData: { displayName: existing.displayName, altText: existing.altText, caption: existing.caption, visibility: existing.visibility },
       afterData: patch,
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return toApiMedia(updated);
   },
-  async archiveMedia(caller, id2, meta6 = {}) {
+  async archiveMedia(caller, id2, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadMediaOrThrow(id2, organizationId);
     if (existing.status === "ARCHIVED") throw new ConflictError("This media is already archived.");
@@ -6328,12 +6341,12 @@ var mediaService = {
       resourceType: "media",
       resourceId: id2,
       beforeData: { status: existing.status },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return toApiMedia(updated);
   },
-  async deleteMedia(caller, id2, meta6 = {}) {
+  async deleteMedia(caller, id2, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadMediaOrThrow(id2, organizationId);
     const referenceCount = await mediaRepository.countContentReferences(id2);
@@ -6351,8 +6364,8 @@ var mediaService = {
       resourceType: "media",
       resourceId: id2,
       beforeData: { status: existing.status, originalFilename: existing.originalFilename },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
   }
 };
@@ -6513,7 +6526,7 @@ async function assertSiteIdentityMediaUsable(input, organizationId) {
     if (mediaId) await assertFeaturedMediaUsable(mediaId, organizationId);
   }
 }
-async function publishGroup(caller, publishedKey, draftKey, schema, revalidate, auditResourceType, meta6) {
+async function publishGroup(caller, publishedKey, draftKey, schema, revalidate, auditResourceType, meta7) {
   const organizationId = caller.organizationId;
   const draftRow = await systemSettingRepository.findByKey(organizationId, draftKey);
   const value = schema.parse(draftRow?.value ?? {});
@@ -6529,12 +6542,12 @@ async function publishGroup(caller, publishedKey, draftKey, schema, revalidate, 
     action: "SETTINGS_PUBLISHED",
     resourceType: auditResourceType,
     resourceId: publishedKey,
-    ipAddress: meta6.ip,
-    userAgent: meta6.userAgent
+    ipAddress: meta7.ip,
+    userAgent: meta7.userAgent
   });
   return value;
 }
-async function revertGroup(caller, publishedKey, draftKey, schema, auditResourceType, meta6) {
+async function revertGroup(caller, publishedKey, draftKey, schema, auditResourceType, meta7) {
   const organizationId = caller.organizationId;
   const publishedRow = await systemSettingRepository.findByKey(organizationId, publishedKey);
   const value = schema.parse(publishedRow?.value ?? {});
@@ -6546,8 +6559,8 @@ async function revertGroup(caller, publishedKey, draftKey, schema, auditResource
     action: "SETTINGS_REVERTED",
     resourceType: auditResourceType,
     resourceId: draftKey,
-    ipAddress: meta6.ip,
-    userAgent: meta6.userAgent
+    ipAddress: meta7.ip,
+    userAgent: meta7.userAgent
   });
   return value;
 }
@@ -6567,7 +6580,7 @@ var siteSettingsService = {
     const row = await systemSettingRepository.findByKey(organizationId, GLOBAL_STYLES_KEY);
     return globalStylesSchema.parse(row?.value ?? {});
   },
-  async saveSiteIdentityDraft(caller, input, meta6 = {}) {
+  async saveSiteIdentityDraft(caller, input, meta7 = {}) {
     const organizationId = caller.organizationId;
     await assertSiteIdentityMediaUsable(input, organizationId);
     await saveDraft(organizationId, SITE_IDENTITY_DRAFT_KEY, input, caller.id);
@@ -6578,12 +6591,12 @@ var siteSettingsService = {
       action: "SETTINGS_UPDATED",
       resourceType: "site_identity",
       resourceId: SITE_IDENTITY_DRAFT_KEY,
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return input;
   },
-  async saveGlobalStylesDraft(caller, input, meta6 = {}) {
+  async saveGlobalStylesDraft(caller, input, meta7 = {}) {
     const organizationId = caller.organizationId;
     await saveDraft(organizationId, GLOBAL_STYLES_DRAFT_KEY, input, caller.id);
     await auditLogRepository.record({
@@ -6593,12 +6606,12 @@ var siteSettingsService = {
       action: "SETTINGS_UPDATED",
       resourceType: "global_styles",
       resourceId: GLOBAL_STYLES_DRAFT_KEY,
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return input;
   },
-  async publishSiteIdentity(caller, meta6 = {}) {
+  async publishSiteIdentity(caller, meta7 = {}) {
     return publishGroup(
       caller,
       SITE_IDENTITY_KEY,
@@ -6606,17 +6619,17 @@ var siteSettingsService = {
       siteIdentitySchema,
       (value) => assertSiteIdentityMediaUsable(value, caller.organizationId),
       "site_identity",
-      meta6
+      meta7
     );
   },
-  async publishGlobalStyles(caller, meta6 = {}) {
-    return publishGroup(caller, GLOBAL_STYLES_KEY, GLOBAL_STYLES_DRAFT_KEY, globalStylesSchema, async () => void 0, "global_styles", meta6);
+  async publishGlobalStyles(caller, meta7 = {}) {
+    return publishGroup(caller, GLOBAL_STYLES_KEY, GLOBAL_STYLES_DRAFT_KEY, globalStylesSchema, async () => void 0, "global_styles", meta7);
   },
-  async revertSiteIdentityDraft(caller, meta6 = {}) {
-    return revertGroup(caller, SITE_IDENTITY_KEY, SITE_IDENTITY_DRAFT_KEY, siteIdentitySchema, "site_identity", meta6);
+  async revertSiteIdentityDraft(caller, meta7 = {}) {
+    return revertGroup(caller, SITE_IDENTITY_KEY, SITE_IDENTITY_DRAFT_KEY, siteIdentitySchema, "site_identity", meta7);
   },
-  async revertGlobalStylesDraft(caller, meta6 = {}) {
-    return revertGroup(caller, GLOBAL_STYLES_KEY, GLOBAL_STYLES_DRAFT_KEY, globalStylesSchema, "global_styles", meta6);
+  async revertGlobalStylesDraft(caller, meta7 = {}) {
+    return revertGroup(caller, GLOBAL_STYLES_KEY, GLOBAL_STYLES_DRAFT_KEY, globalStylesSchema, "global_styles", meta7);
   }
 };
 
@@ -7207,7 +7220,7 @@ var leadService = {
   async getLead(organizationId, id2) {
     return loadLeadInOrgOrThrow(id2, organizationId);
   },
-  async createLead(caller, input, meta6 = {}) {
+  async createLead(caller, input, meta7 = {}) {
     const email = input.email || void 0;
     if (email) {
       const duplicates = await leadRepository.findByEmailInOrg(caller.organizationId, email);
@@ -7236,8 +7249,8 @@ var leadService = {
       resourceType: "lead",
       resourceId: lead.id,
       afterData: { companyName: lead.companyName, status: lead.status },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     if (lead.assignedTo && lead.assignedTo !== caller.id) {
       await notificationService.notify({
@@ -7263,7 +7276,7 @@ var leadService = {
     }
     return lead;
   },
-  async updateLead(caller, id2, input, meta6 = {}) {
+  async updateLead(caller, id2, input, meta7 = {}) {
     const existing = await loadLeadInOrgOrThrow(id2, caller.organizationId);
     if (input.status !== void 0) {
       assertValidTransition(existing.status, input.status);
@@ -7289,8 +7302,8 @@ var leadService = {
       resourceId: id2,
       beforeData: { status: existing.status },
       afterData: patch,
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     if (input.status !== void 0 && input.status !== existing.status) {
       try {
@@ -7318,7 +7331,7 @@ var leadService = {
     }
     return updated;
   },
-  async deleteLead(caller, id2, meta6 = {}) {
+  async deleteLead(caller, id2, meta7 = {}) {
     await loadLeadInOrgOrThrow(id2, caller.organizationId);
     await leadRepository.softDelete(id2);
     await auditLogRepository.record({
@@ -7328,8 +7341,8 @@ var leadService = {
       action: "LEAD_ARCHIVED",
       resourceType: "lead",
       resourceId: id2,
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
   },
   /**
@@ -7340,7 +7353,7 @@ var leadService = {
    * rolls back the whole transaction (including the client/contact rows
    * already created in it), rather than racing on a read-then-write.
    */
-  async convertLead(caller, id2, input, meta6 = {}) {
+  async convertLead(caller, id2, input, meta7 = {}) {
     const lead = await loadLeadInOrgOrThrow(id2, caller.organizationId);
     if (lead.status === "CONVERTED") {
       throw new ConflictError("This lead has already been converted.", { convertedClientId: lead.convertedClientId });
@@ -7413,8 +7426,8 @@ var leadService = {
       resourceType: "client",
       resourceId: result.client.id,
       afterData: { clientCode: result.client.clientCode, name: result.client.name, convertedFromLeadId: id2 },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     await auditLogRepository.record({
       organizationId: caller.organizationId,
@@ -7424,8 +7437,8 @@ var leadService = {
       resourceType: "lead",
       resourceId: id2,
       afterData: { clientId: result.client.id, clientCode: result.client.clientCode },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     await analyticsEventService.recordBusinessEvent({
       organizationId: caller.organizationId,
@@ -7606,7 +7619,7 @@ var clientService = {
     const client3 = await loadClientInOrgOrThrow(id2, organizationId);
     return withProvisioningStatus(client3);
   },
-  async createClient(caller, input, meta6 = {}) {
+  async createClient(caller, input, meta7 = {}) {
     const [byCode, byName] = await Promise.all([
       clientRepository.findByCodeInOrg(caller.organizationId, input.clientCode),
       clientRepository.findByNameInOrg(caller.organizationId, input.name)
@@ -7641,8 +7654,8 @@ var clientService = {
       resourceType: "client",
       resourceId: client3.id,
       afterData: { clientCode: client3.clientCode, name: client3.name, status: client3.status },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     try {
       await eventEngine.emit({
@@ -7659,7 +7672,7 @@ var clientService = {
     }
     return client3;
   },
-  async updateClient(caller, id2, input, meta6 = {}) {
+  async updateClient(caller, id2, input, meta7 = {}) {
     const existing = await loadClientInOrgOrThrow(id2, caller.organizationId);
     if (input.name !== void 0 && input.name.toLowerCase() !== existing.name.toLowerCase()) {
       const dup = await clientRepository.findByNameInOrg(caller.organizationId, input.name);
@@ -7692,12 +7705,12 @@ var clientService = {
       resourceId: id2,
       beforeData: { status: existing.status },
       afterData: patch,
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return updated;
   },
-  async deleteClient(caller, id2, meta6 = {}) {
+  async deleteClient(caller, id2, meta7 = {}) {
     await loadClientInOrgOrThrow(id2, caller.organizationId);
     await clientRepository.softDelete(id2);
     await auditLogRepository.record({
@@ -7707,8 +7720,8 @@ var clientService = {
       action: "CLIENT_ARCHIVED",
       resourceType: "client",
       resourceId: id2,
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
   },
   async dashboardCounts(organizationId) {
@@ -7823,7 +7836,7 @@ var contactService = {
   async getContact(organizationId, id2) {
     return loadContactInOrgOrThrow(id2, organizationId);
   },
-  async createForClient(caller, clientId, input, meta6 = {}) {
+  async createForClient(caller, clientId, input, meta7 = {}) {
     await assertClientInOrg(clientId, caller.organizationId);
     const email = input.email || void 0;
     if (email) {
@@ -7855,12 +7868,12 @@ var contactService = {
       resourceType: "contact",
       resourceId: contact.id,
       afterData: { clientId, firstName: contact.firstName, lastName: contact.lastName },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return contact;
   },
-  async updateContact(caller, id2, input, meta6 = {}) {
+  async updateContact(caller, id2, input, meta7 = {}) {
     const existing = await loadContactInOrgOrThrow(id2, caller.organizationId);
     if (input.email) {
       const dup = existing.clientId ? await contactRepository.findByEmailForClient(existing.clientId, caller.organizationId, input.email) : null;
@@ -7893,12 +7906,12 @@ var contactService = {
       resourceType: "contact",
       resourceId: id2,
       afterData: patch,
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return updated;
   },
-  async deleteContact(caller, id2, meta6 = {}) {
+  async deleteContact(caller, id2, meta7 = {}) {
     await loadContactInOrgOrThrow(id2, caller.organizationId);
     await contactRepository.softDelete(id2);
     await auditLogRepository.record({
@@ -7908,8 +7921,8 @@ var contactService = {
       action: "CONTACT_DELETED",
       resourceType: "contact",
       resourceId: id2,
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
   }
 };
@@ -7950,7 +7963,7 @@ var onboardingService = {
     const steps = await getCustomTemplateSteps(organizationId);
     return { steps: steps ?? defaultOnboardingTemplateSteps(), isCustom: !!steps };
   },
-  async updateTemplate(caller, steps, meta6 = {}) {
+  async updateTemplate(caller, steps, meta7 = {}) {
     await systemSettingRepository.upsert({
       organizationId: caller.organizationId,
       key: TEMPLATE_SETTING_KEY,
@@ -7967,12 +7980,12 @@ var onboardingService = {
       resourceType: "system_setting",
       resourceId: TEMPLATE_SETTING_KEY,
       afterData: { stepCount: steps.length },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return { steps, isCustom: true };
   },
-  async startOnboarding(caller, clientId, input = {}, meta6 = {}) {
+  async startOnboarding(caller, clientId, input = {}, meta7 = {}) {
     await loadClientInOrgOrThrow2(clientId, caller.organizationId);
     const existing = await clientOnboardingRepository.findByClientId(clientId);
     if (existing) {
@@ -7995,8 +8008,8 @@ var onboardingService = {
       resourceType: "client_onboarding",
       resourceId: record2.id,
       afterData: { clientId, status: record2.status },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     if (record2.ownerId && record2.ownerId !== caller.id) {
       await notificationService.notify({
@@ -8022,7 +8035,7 @@ var onboardingService = {
     }
     return record2;
   },
-  async updateOnboarding(caller, id2, input, meta6 = {}) {
+  async updateOnboarding(caller, id2, input, meta7 = {}) {
     const existing = await loadOnboardingInOrgOrThrow(id2, caller.organizationId);
     if (TERMINAL_STATUSES2.has(existing.status)) {
       throw new ConflictError(`This onboarding is already ${existing.status.toLowerCase()} and can no longer be changed.`);
@@ -8038,13 +8051,13 @@ var onboardingService = {
         resourceId: id2,
         beforeData: { status: existing.status },
         afterData: { status: "CANCELLED" },
-        ipAddress: meta6.ip,
-        userAgent: meta6.userAgent
+        ipAddress: meta7.ip,
+        userAgent: meta7.userAgent
       });
       return updated;
     }
     if (input.completeStep) {
-      return this.completeStep(caller, id2, input.completeStep, meta6);
+      return this.completeStep(caller, id2, input.completeStep, meta7);
     }
     if (input.ownerId !== void 0 || input.dueDate !== void 0) {
       const patch = {};
@@ -8059,8 +8072,8 @@ var onboardingService = {
         resourceType: "client_onboarding",
         resourceId: id2,
         afterData: patch,
-        ipAddress: meta6.ip,
-        userAgent: meta6.userAgent
+        ipAddress: meta7.ip,
+        userAgent: meta7.userAgent
       });
       if (input.ownerId && input.ownerId !== existing.ownerId && input.ownerId !== caller.id) {
         await notificationService.notify({
@@ -8082,7 +8095,7 @@ var onboardingService = {
    * ignored, since this is an explicit staff action (unlike
    * completeStepForClient's system-triggered no-op).
    */
-  async updateStep(caller, onboardingId, step, input, meta6 = {}) {
+  async updateStep(caller, onboardingId, step, input, meta7 = {}) {
     const record2 = await loadOnboardingInOrgOrThrow(onboardingId, caller.organizationId);
     if (TERMINAL_STATUSES2.has(record2.status)) {
       throw new ConflictError(`This onboarding is already ${record2.status.toLowerCase()} and can no longer be changed.`);
@@ -8107,8 +8120,8 @@ var onboardingService = {
       resourceType: "client_onboarding",
       resourceId: record2.id,
       afterData: { step, ...input, dueDate: input.dueDate ? input.dueDate.toISOString() : input.dueDate },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     if (input.assignedTo && input.assignedTo !== caller.id) {
       await notificationService.notify({
@@ -8129,7 +8142,7 @@ var onboardingService = {
    * READY once every step is done — completion itself is a separate,
    * explicit action (completeOnboarding), never inferred (§7).
    */
-  async completeStep(caller, onboardingId, step, meta6 = {}) {
+  async completeStep(caller, onboardingId, step, meta7 = {}) {
     const record2 = await loadOnboardingInOrgOrThrow(onboardingId, caller.organizationId);
     if (TERMINAL_STATUSES2.has(record2.status)) return record2;
     const checklist = record2.checklist ?? freshChecklist();
@@ -8153,8 +8166,8 @@ var onboardingService = {
       resourceType: "client_onboarding",
       resourceId: record2.id,
       afterData: { step, status: updated.status },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     if (record2.ownerId && record2.ownerId !== caller.id) {
       await notificationService.notify({
@@ -8193,7 +8206,7 @@ var onboardingService = {
       afterData: { step }
     });
   },
-  async completeOnboarding(caller, id2, meta6 = {}) {
+  async completeOnboarding(caller, id2, meta7 = {}) {
     const existing = await loadOnboardingInOrgOrThrow(id2, caller.organizationId);
     if (existing.status === "COMPLETED") {
       throw new ConflictError("This onboarding has already been completed.");
@@ -8214,8 +8227,8 @@ var onboardingService = {
       resourceType: "client_onboarding",
       resourceId: id2,
       afterData: { status: "COMPLETED" },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     if (existing.ownerId && existing.ownerId !== caller.id) {
       await notificationService.notify({
@@ -8348,7 +8361,7 @@ var workspaceService = {
    * client both succeeding — the loser's transaction rolls back entirely,
    * including the Organization row it just created.
    */
-  async provisionWorkspace(caller, clientId, input, meta6 = {}) {
+  async provisionWorkspace(caller, clientId, input, meta7 = {}) {
     const client3 = await loadClientInOrgOrThrow3(clientId, caller.organizationId);
     if (client3.workspaceOrganizationId) {
       throw new ConflictError("This client has already been provisioned into a workspace.", {
@@ -8412,13 +8425,13 @@ var workspaceService = {
       resourceType: "organization",
       resourceId: result.workspace.id,
       afterData: { clientId, name: result.workspace.name, status: result.workspace.status },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     await onboardingService.completeStepForClient(clientId, "WORKSPACE_CREATED", caller.id);
     return result.workspace;
   },
-  async updateWorkspace(caller, id2, input, callerPermissions, meta6 = {}) {
+  async updateWorkspace(caller, id2, input, callerPermissions, meta7 = {}) {
     const existing = await loadWorkspaceForOwnerOrThrow(id2, caller.organizationId);
     if (input.status !== void 0) {
       assertValidWorkspaceTransition(existing.status, input.status);
@@ -8447,8 +8460,8 @@ var workspaceService = {
       resourceId: id2,
       beforeData: { status: existing.status },
       afterData: patch,
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     if (input.name !== void 0 || Object.keys(patch).some((k) => ["timezone", "currency", "locale", "email", "phone", "address"].includes(k))) {
       await onboardingService.completeStepForClient(existing.provisionedForClient.id, "WORKSPACE_CONFIGURED", caller.id);
@@ -9046,7 +9059,7 @@ var opportunityService = {
   async getOpportunity(organizationId, id2) {
     return loadOpportunityOrThrow(id2, organizationId);
   },
-  async createOpportunity(caller, input, meta6 = {}) {
+  async createOpportunity(caller, input, meta7 = {}) {
     const organizationId = caller.organizationId;
     if (input.clientId) {
       const client3 = await clientRepository.findByIdInOrg(input.clientId, organizationId);
@@ -9087,8 +9100,8 @@ var opportunityService = {
       resourceType: "opportunity",
       resourceId: opportunity.id,
       afterData: { name: opportunity.name, stage: opportunity.stage, clientId: opportunity.clientId, leadId: opportunity.leadId, value: opportunity.value.toString() },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     await analyticsEventService.recordBusinessEvent({
       organizationId,
@@ -9122,7 +9135,7 @@ var opportunityService = {
     }
     return opportunity;
   },
-  async updateOpportunity(caller, id2, input, meta6 = {}) {
+  async updateOpportunity(caller, id2, input, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadOpportunityOrThrow(id2, organizationId);
     if (input.stage !== void 0) {
@@ -9155,15 +9168,15 @@ var opportunityService = {
       resourceId: id2,
       beforeData: { stage: existing.stage, value: existing.value.toString() },
       afterData: { ...patch, value: patch.value !== void 0 ? patch.value.toString() : void 0 },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     if (input.stage !== void 0 && input.stage !== existing.stage) {
       await emitStageChangedEvent(organizationId, id2, caller.id, existing.stage, input.stage);
     }
     return updated;
   },
-  async deleteOpportunity(caller, id2, meta6 = {}) {
+  async deleteOpportunity(caller, id2, meta7 = {}) {
     const organizationId = caller.organizationId;
     await loadOpportunityOrThrow(id2, organizationId);
     await opportunityRepository.softDelete(id2);
@@ -9174,11 +9187,11 @@ var opportunityService = {
       action: "OPPORTUNITY_DELETED",
       resourceType: "opportunity",
       resourceId: id2,
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
   },
-  async winOpportunity(caller, id2, meta6 = {}) {
+  async winOpportunity(caller, id2, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadOpportunityOrThrow(id2, organizationId);
     if (TERMINAL_STAGES.has(existing.stage)) {
@@ -9197,8 +9210,8 @@ var opportunityService = {
       resourceId: id2,
       beforeData: { stage: existing.stage },
       afterData: { stage: "CLOSED_WON", value: existing.value.toString() },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     await notifyClose({
       organizationId,
@@ -9212,7 +9225,7 @@ var opportunityService = {
     await emitStageChangedEvent(organizationId, id2, caller.id, existing.stage, "CLOSED_WON");
     return updated;
   },
-  async loseOpportunity(caller, id2, input, meta6 = {}) {
+  async loseOpportunity(caller, id2, input, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadOpportunityOrThrow(id2, organizationId);
     if (TERMINAL_STAGES.has(existing.stage)) {
@@ -9232,8 +9245,8 @@ var opportunityService = {
       resourceId: id2,
       beforeData: { stage: existing.stage },
       afterData: { stage: "CLOSED_LOST", lostReason: input.lostReason ?? null },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     await notifyClose({
       organizationId,
@@ -9261,7 +9274,7 @@ var opportunityService = {
    * converts anything itself (reuse leadService.convertLead for that) —
    * this only links two already-real records together.
    */
-  async linkClient(caller, id2, input, meta6 = {}) {
+  async linkClient(caller, id2, input, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadOpportunityOrThrow(id2, organizationId);
     if (TERMINAL_STAGES.has(existing.stage)) {
@@ -9282,8 +9295,8 @@ var opportunityService = {
       resourceId: id2,
       beforeData: { clientId: null },
       afterData: { clientId: input.clientId },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return updated;
   },
@@ -9933,7 +9946,7 @@ var redirectService = {
   async getRedirect(organizationId, id2) {
     return loadRedirectOrThrow(id2, organizationId);
   },
-  async createRedirect(caller, input, meta6 = {}) {
+  async createRedirect(caller, input, meta7 = {}) {
     const organizationId = caller.organizationId;
     const dup = await redirectRepository.findByFromPathInOrg(organizationId, input.fromPath);
     if (dup) throw new ConflictError(`A redirect from "${input.fromPath}" already exists.`, { existingRedirectId: dup.id });
@@ -9960,12 +9973,12 @@ var redirectService = {
       resourceType: "redirect",
       resourceId: redirect.id,
       afterData: { fromPath: redirect.fromPath, toPath: redirect.toPath, statusCode: redirect.statusCode },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return redirect;
   },
-  async updateRedirect(caller, id2, input, meta6 = {}) {
+  async updateRedirect(caller, id2, input, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadRedirectOrThrow(id2, organizationId);
     if (input.toPath !== void 0) {
@@ -9986,12 +9999,12 @@ var redirectService = {
       resourceId: id2,
       beforeData: { toPath: existing.toPath, statusCode: existing.statusCode },
       afterData: patch,
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return updated;
   },
-  async deleteRedirect(caller, id2, meta6 = {}) {
+  async deleteRedirect(caller, id2, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadRedirectOrThrow(id2, organizationId);
     await redirectRepository.delete(id2);
@@ -10003,8 +10016,8 @@ var redirectService = {
       resourceType: "redirect",
       resourceId: id2,
       beforeData: { fromPath: existing.fromPath, toPath: existing.toPath },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
   },
   /**
@@ -10061,7 +10074,7 @@ var postService = {
     await loadPostOrThrow(id2, organizationId);
     return postRepository.listRevisions(id2);
   },
-  async createPost(caller, input, meta6 = {}) {
+  async createPost(caller, input, meta7 = {}) {
     const organizationId = caller.organizationId;
     const body = sanitizeContentHtml(input.body);
     await assertCategoryInOrg(input.categoryId, organizationId);
@@ -10116,12 +10129,12 @@ var postService = {
       resourceType: "post",
       resourceId: createdId,
       afterData: { title: input.title, slug },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return loadPostOrThrow(createdId, organizationId);
   },
-  async updatePost(caller, id2, input, meta6 = {}) {
+  async updatePost(caller, id2, input, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadPostOrThrow(id2, organizationId);
     const sanitizedBody = input.body !== void 0 ? sanitizeContentHtml(input.body) : void 0;
@@ -10208,8 +10221,8 @@ var postService = {
       resourceId: id2,
       beforeData: { status: existing.status, title: existing.title },
       afterData: { status: input.status, title: input.title, slug: input.slug },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     if (input.slug !== void 0 && input.slug !== existing.slug) {
       const finalStatus = input.status ?? existing.status;
@@ -10233,13 +10246,13 @@ var postService = {
         resourceId: id2,
         beforeData: { featuredMediaId: existing.featuredMediaId },
         afterData: { featuredMediaId: input.featuredMediaId ?? null },
-        ipAddress: meta6.ip,
-        userAgent: meta6.userAgent
+        ipAddress: meta7.ip,
+        userAgent: meta7.userAgent
       });
     }
     return loadPostOrThrow(id2, organizationId);
   },
-  async submitForReview(caller, id2, meta6 = {}) {
+  async submitForReview(caller, id2, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadPostOrThrow(id2, organizationId);
     if (existing.status !== "DRAFT") throw new ConflictError(`Only a DRAFT post can be submitted for review (current status: ${existing.status}).`);
@@ -10256,8 +10269,8 @@ var postService = {
       resourceId: id2,
       beforeData: { status: existing.status },
       afterData: { status: "IN_REVIEW" },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     try {
       await eventEngine.emit({
@@ -10274,7 +10287,7 @@ var postService = {
     }
     return loadPostOrThrow(id2, organizationId);
   },
-  async publishPost(caller, id2, meta6 = {}) {
+  async publishPost(caller, id2, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadPostOrThrow(id2, organizationId);
     if (existing.status === "ARCHIVED") throw new ConflictError("An archived post must be restored before it can be published.");
@@ -10295,8 +10308,8 @@ var postService = {
       resourceId: id2,
       beforeData: { status: existing.status },
       afterData: { status: "PUBLISHED" },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     if (existing.createdById && existing.createdById !== caller.id) {
       await notificationService.notify({
@@ -10309,7 +10322,7 @@ var postService = {
     }
     return loadPostOrThrow(id2, organizationId);
   },
-  async schedulePost(caller, id2, input, meta6 = {}) {
+  async schedulePost(caller, id2, input, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadPostOrThrow(id2, organizationId);
     if (existing.status === "ARCHIVED") throw new ConflictError("An archived post must be restored before it can be scheduled.");
@@ -10325,12 +10338,12 @@ var postService = {
       resourceId: id2,
       beforeData: { status: existing.status },
       afterData: { status: "SCHEDULED", scheduledAt: input.scheduledAt },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return loadPostOrThrow(id2, organizationId);
   },
-  async archivePost(caller, id2, meta6 = {}) {
+  async archivePost(caller, id2, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadPostOrThrow(id2, organizationId);
     if (existing.status === "ARCHIVED") throw new ConflictError("This post is already archived.");
@@ -10344,12 +10357,12 @@ var postService = {
       resourceId: id2,
       beforeData: { status: existing.status },
       afterData: { status: "ARCHIVED" },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return loadPostOrThrow(id2, organizationId);
   },
-  async revertPost(caller, id2, input, meta6 = {}) {
+  async revertPost(caller, id2, input, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadPostOrThrow(id2, organizationId);
     if (existing.status === "ARCHIVED") throw new ConflictError("An archived post must be restored before its content can be reverted.");
@@ -10386,12 +10399,12 @@ var postService = {
       resourceId: id2,
       beforeData: { fromVersion: current?.version, revertedToRevisionId: target.id, revertedToVersion: target.version },
       afterData: { newVersion: nextVersion },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return loadPostOrThrow(id2, organizationId);
   },
-  async deletePost(caller, id2, meta6 = {}) {
+  async deletePost(caller, id2, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadPostOrThrow(id2, organizationId);
     await postRepository.softDelete(id2);
@@ -10403,15 +10416,15 @@ var postService = {
       resourceType: "post",
       resourceId: id2,
       beforeData: { status: existing.status, title: existing.title },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
   },
   /** Phase 7 — Trash view (Content Dashboard): soft-deleted posts, paginated. */
   async listTrash(organizationId, page, limit) {
     return postRepository.listTrash(organizationId, page, limit);
   },
-  async restorePost(caller, id2, meta6 = {}) {
+  async restorePost(caller, id2, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await postRepository.findTrashedByIdInOrg(id2, organizationId);
     if (!existing) throw new NotFoundError("Post not found in trash.");
@@ -10424,8 +10437,8 @@ var postService = {
       resourceType: "post",
       resourceId: id2,
       beforeData: { status: existing.status, title: existing.title },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
   },
   /**
@@ -10437,14 +10450,14 @@ var postService = {
    * the rest of the batch — mirrors contentSchedulingService's per-item
    * isolation for the same reason.
    */
-  async bulkAction(caller, action, ids, meta6 = {}) {
+  async bulkAction(caller, action, ids, meta7 = {}) {
     const succeeded = [];
     const failed = [];
     for (const id2 of ids) {
       try {
-        if (action === "archive") await this.archivePost(caller, id2, meta6);
-        else if (action === "trash") await this.deletePost(caller, id2, meta6);
-        else await this.restorePost(caller, id2, meta6);
+        if (action === "archive") await this.archivePost(caller, id2, meta7);
+        else if (action === "trash") await this.deletePost(caller, id2, meta7);
+        else await this.restorePost(caller, id2, meta7);
         succeeded.push(id2);
       } catch (err) {
         failed.push({ id: id2, error: err instanceof Error ? err.message : "Action failed." });
@@ -10644,7 +10657,7 @@ var productService = {
     await loadProductOrThrow(id2);
     return productRepository.listRevisions(id2);
   },
-  async createProduct(caller, input, meta6 = {}) {
+  async createProduct(caller, input, meta7 = {}) {
     const existingCode = await productRepository.findByCode(input.code);
     if (existingCode) throw new ConflictError(`A product with code "${input.code}" already exists.`, { existingProductId: existingCode.id });
     let slug;
@@ -10701,12 +10714,12 @@ var productService = {
       resourceType: "product",
       resourceId: productId,
       afterData: { code: input.code, name: input.name, type: input.type, status: input.status ?? "DRAFT" },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return loadProductDetailOrThrow(productId);
   },
-  async updateProduct(caller, id2, input, meta6 = {}) {
+  async updateProduct(caller, id2, input, meta7 = {}) {
     const existing = await loadProductDetailOrThrow(id2);
     if (TERMINAL_STATUSES3.has(existing.status)) {
       throw new ConflictError("This product is archived and can no longer be edited.");
@@ -10768,12 +10781,12 @@ var productService = {
       resourceId: id2,
       beforeData: { status: existing.status, name: existing.name },
       afterData: patch,
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return loadProductDetailOrThrow(id2);
   },
-  async revertProduct(caller, id2, revisionId, meta6 = {}) {
+  async revertProduct(caller, id2, revisionId, meta7 = {}) {
     const existing = await loadProductDetailOrThrow(id2);
     if (TERMINAL_STATUSES3.has(existing.status)) throw new ConflictError("This product is archived and can no longer be edited.");
     const target = await productRepository.findRevision(id2, revisionId);
@@ -10789,12 +10802,12 @@ var productService = {
       resourceId: id2,
       beforeData: { fromVersion: existing.currentRevision?.version, revertedToVersion: target.version },
       afterData: { newVersion: nextVersion },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return loadProductDetailOrThrow(id2);
   },
-  async duplicateProduct(caller, id2, name, meta6 = {}) {
+  async duplicateProduct(caller, id2, name, meta7 = {}) {
     const existing = await loadProductDetailOrThrow(id2);
     const baseName = name ?? `${existing.name} (Copy)`;
     const slug = await productRepository.findUniqueSlug(baseName);
@@ -10843,12 +10856,12 @@ var productService = {
       resourceType: "product",
       resourceId: productId,
       afterData: { duplicatedFromId: id2, name: baseName },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return loadProductDetailOrThrow(productId);
   },
-  async archiveProduct(caller, id2, meta6 = {}) {
+  async archiveProduct(caller, id2, meta7 = {}) {
     const existing = await loadProductOrThrow(id2);
     if (existing.status === "ARCHIVED") {
       throw new ConflictError("This product is already archived.");
@@ -10861,18 +10874,18 @@ var productService = {
       resourceType: "product",
       resourceId: id2,
       beforeData: { status: existing.status },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return archived;
   },
   /** Phase 10 — bulk archive, the one bulk action that's unambiguous and safe for a catalog that's never hard-deleted. */
-  async bulkArchiveProducts(caller, ids, meta6 = {}) {
+  async bulkArchiveProducts(caller, ids, meta7 = {}) {
     const skipped = [];
     let archived = 0;
     for (const id2 of ids) {
       try {
-        await productService.archiveProduct(caller, id2, meta6);
+        await productService.archiveProduct(caller, id2, meta7);
         archived += 1;
       } catch {
         skipped.push(id2);
@@ -11297,7 +11310,7 @@ var invoiceService = {
   async getInvoice(organizationId, id2) {
     return withEffectiveStatus(await loadInvoiceOrThrow(id2, organizationId));
   },
-  async createInvoice(caller, input, meta6 = {}) {
+  async createInvoice(caller, input, meta7 = {}) {
     const organizationId = caller.organizationId;
     const client3 = await clientRepository.findByIdInOrg(input.clientId, organizationId);
     if (!client3) throw new ValidationError("The specified client does not exist in this organization.");
@@ -11348,12 +11361,12 @@ var invoiceService = {
       resourceType: "invoice",
       resourceId: invoice.id,
       afterData: { invoiceNumber, clientId: input.clientId, total: total.toString(), currency },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return withEffectiveStatus(invoice);
   },
-  async updateInvoice(caller, id2, input, meta6 = {}) {
+  async updateInvoice(caller, id2, input, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadInvoiceOrThrow(id2, organizationId);
     if (existing.status !== "DRAFT") {
@@ -11400,12 +11413,12 @@ var invoiceService = {
       resourceType: "invoice",
       resourceId: id2,
       beforeData: { total: existing.total.toString() },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return this.getInvoice(organizationId, id2);
   },
-  async issueInvoice(caller, id2, input, meta6 = {}) {
+  async issueInvoice(caller, id2, input, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadInvoiceOrThrow(id2, organizationId);
     if (existing.items.length === 0) throw new ValidationError("An invoice needs at least one line item before it can be issued.");
@@ -11427,12 +11440,12 @@ var invoiceService = {
       resourceId: id2,
       beforeData: { status: existing.status },
       afterData: { status: "ISSUED", total: existing.total.toString() },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return this.getInvoice(organizationId, id2);
   },
-  async voidInvoice(caller, id2, input, meta6 = {}) {
+  async voidInvoice(caller, id2, input, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadInvoiceOrThrow(id2, organizationId);
     if (existing.status === "VOID" || existing.status === "CANCELLED" || existing.status === "PAID") {
@@ -11453,12 +11466,12 @@ var invoiceService = {
       resourceId: id2,
       beforeData: { status: existing.status },
       afterData: { status: targetStatus, reason: input.reason },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return this.getInvoice(organizationId, id2);
   },
-  async recordPayment(caller, invoiceId, input, meta6 = {}) {
+  async recordPayment(caller, invoiceId, input, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadInvoiceOrThrow(invoiceId, organizationId);
     const amount = toMoney(input.amount);
@@ -11502,8 +11515,8 @@ var invoiceService = {
       resourceType: "payment",
       resourceId: payment.id,
       afterData: { invoiceId, amount: amount.toString(), currency, method: input.method },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return payment;
   }
@@ -11534,7 +11547,7 @@ var contractService = {
   async getContract(organizationId, id2) {
     return withCurrentValue(await loadContractOrThrow(id2, organizationId));
   },
-  async createContract(caller, input, meta6 = {}) {
+  async createContract(caller, input, meta7 = {}) {
     const organizationId = caller.organizationId;
     await assertClientInOrg2(input.clientId, organizationId);
     if (input.endDate && input.endDate.getTime() < input.startDate.getTime()) {
@@ -11562,12 +11575,12 @@ var contractService = {
       resourceType: "contract",
       resourceId: contract.id,
       afterData: { contractNumber, clientId: input.clientId, contractValue: contract.contractValue.toString(), currency: contract.currency },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return this.getContract(organizationId, contract.id);
   },
-  async updateContract(caller, id2, input, meta6 = {}) {
+  async updateContract(caller, id2, input, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadContractOrThrow(id2, organizationId);
     if (existing.status === "TERMINATED" || existing.status === "EXPIRED") {
@@ -11592,12 +11605,12 @@ var contractService = {
       resourceId: id2,
       beforeData: { title: existing.title },
       afterData: patch,
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return this.getContract(organizationId, id2);
   },
-  async activateContract(caller, id2, meta6 = {}) {
+  async activateContract(caller, id2, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadContractOrThrow(id2, organizationId);
     const count = await contractRepository.transitionStatus(id2, ACTIVATABLE_FROM, "ACTIVE");
@@ -11611,12 +11624,12 @@ var contractService = {
       resourceId: id2,
       beforeData: { status: existing.status },
       afterData: { status: "ACTIVE" },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return this.getContract(organizationId, id2);
   },
-  async suspendContract(caller, id2, meta6 = {}) {
+  async suspendContract(caller, id2, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadContractOrThrow(id2, organizationId);
     const count = await contractRepository.transitionStatus(id2, SUSPENDABLE_FROM, "SUSPENDED");
@@ -11630,12 +11643,12 @@ var contractService = {
       resourceId: id2,
       beforeData: { status: existing.status },
       afterData: { status: "SUSPENDED" },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return this.getContract(organizationId, id2);
   },
-  async terminateContract(caller, id2, input, meta6 = {}) {
+  async terminateContract(caller, id2, input, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadContractOrThrow(id2, organizationId);
     const count = await contractRepository.transitionStatus(id2, TERMINABLE_FROM, "TERMINATED");
@@ -11649,12 +11662,12 @@ var contractService = {
       resourceId: id2,
       beforeData: { status: existing.status },
       afterData: { status: "TERMINATED", reason: input.reason },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return this.getContract(organizationId, id2);
   },
-  async createVariation(caller, contractId, input, meta6 = {}) {
+  async createVariation(caller, contractId, input, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadContractOrThrow(contractId, organizationId);
     if (existing.status === "TERMINATED" || existing.status === "EXPIRED") {
@@ -11677,8 +11690,8 @@ var contractService = {
       resourceType: "contract",
       resourceId: contractId,
       afterData: { amount: amount.toString(), effectiveDate: input.effectiveDate, reason: input.reason },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return this.getContract(organizationId, contractId);
   }
@@ -11769,7 +11782,7 @@ var AI_TOOL_REGISTRY = Object.freeze({
     isMutating: true,
     requiresApproval: false,
     inputSchema: createLeadInput,
-    handler: async (caller, input, meta6) => leadService.createLead(caller, input, meta6)
+    handler: async (caller, input, meta7) => leadService.createLead(caller, input, meta7)
   }),
   "leads.convert": tool({
     code: "leads.convert",
@@ -11780,9 +11793,9 @@ var AI_TOOL_REGISTRY = Object.freeze({
     isMutating: true,
     requiresApproval: false,
     inputSchema: convertLeadInput,
-    handler: async (caller, input, meta6) => {
+    handler: async (caller, input, meta7) => {
       const { leadId, ...rest } = input;
-      return leadService.convertLead(caller, leadId, rest, meta6);
+      return leadService.convertLead(caller, leadId, rest, meta7);
     }
   }),
   "clients.list": tool({
@@ -11808,7 +11821,7 @@ var AI_TOOL_REGISTRY = Object.freeze({
     isMutating: true,
     requiresApproval: false,
     inputSchema: createClientInput,
-    handler: async (caller, input, meta6) => clientService.createClient(caller, input, meta6)
+    handler: async (caller, input, meta7) => clientService.createClient(caller, input, meta7)
   }),
   "content.list_posts": tool({
     code: "content.list_posts",
@@ -11833,7 +11846,7 @@ var AI_TOOL_REGISTRY = Object.freeze({
     isMutating: true,
     requiresApproval: false,
     inputSchema: createDraftPostInput,
-    handler: async (caller, input, meta6) => postService.createPost(caller, input, meta6)
+    handler: async (caller, input, meta7) => postService.createPost(caller, input, meta7)
   }),
   "products.list": tool({
     code: "products.list",
@@ -11858,7 +11871,7 @@ var AI_TOOL_REGISTRY = Object.freeze({
     isMutating: true,
     requiresApproval: true,
     inputSchema: issueInvoiceInput,
-    handler: async (caller, input, meta6) => invoiceService.issueInvoice(caller, input.invoiceId, {}, meta6)
+    handler: async (caller, input, meta7) => invoiceService.issueInvoice(caller, input.invoiceId, {}, meta7)
   }),
   "contracts.activate": tool({
     code: "contracts.activate",
@@ -11869,7 +11882,7 @@ var AI_TOOL_REGISTRY = Object.freeze({
     isMutating: true,
     requiresApproval: true,
     inputSchema: activateContractInput,
-    handler: async (caller, input, meta6) => contractService.activateContract(caller, input.contractId, meta6)
+    handler: async (caller, input, meta7) => contractService.activateContract(caller, input.contractId, meta7)
   })
 });
 function isRegisteredToolCode(code) {
@@ -11898,7 +11911,7 @@ async function assertToolEnabledForOrg(organizationId, toolCode) {
   }
 }
 async function executeGovernedTool(params) {
-  const { caller, toolCode, input, executionId, stepOrder, meta: meta6 = {} } = params;
+  const { caller, toolCode, input, executionId, stepOrder, meta: meta7 = {} } = params;
   if (!isRegisteredToolCode(toolCode)) {
     throw new NotFoundError(`AI tool "${toolCode}" is not registered.`);
   }
@@ -11956,8 +11969,8 @@ async function executeGovernedTool(params) {
       resourceType: "ai_tool",
       resourceId: toolCode,
       afterData: { approvalRequestId: approval.id, toolExecutionId: toolExecution2.id },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return { status: "AWAITING_APPROVAL", toolExecutionId: toolExecution2.id, approvalRequestId: approval.id };
   }
@@ -11973,12 +11986,12 @@ async function executeGovernedTool(params) {
       startedAt
     }
   });
-  return runToolHandler(definition, caller, validatedInput, meta6, toolExecution.id);
+  return runToolHandler(definition, caller, validatedInput, meta7, toolExecution.id);
 }
-async function runToolHandler(definition, caller, validatedInput, meta6, toolExecutionId) {
+async function runToolHandler(definition, caller, validatedInput, meta7, toolExecutionId) {
   const startedAt = /* @__PURE__ */ new Date();
   try {
-    const output = await definition.handler(caller, validatedInput, meta6);
+    const output = await definition.handler(caller, validatedInput, meta7);
     const completedAt = /* @__PURE__ */ new Date();
     await prisma.aIToolExecution.update({
       where: { id: toolExecutionId },
@@ -11998,8 +12011,8 @@ async function runToolHandler(definition, caller, validatedInput, meta6, toolExe
       resourceType: "ai_tool",
       resourceId: definition.code,
       afterData: { toolExecutionId },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return { status: "COMPLETED", output, toolExecutionId };
   } catch (err) {
@@ -12024,8 +12037,8 @@ async function runToolHandler(definition, caller, validatedInput, meta6, toolExe
       resourceId: definition.code,
       result: "FAILURE",
       afterData: { toolExecutionId, error: errorMessage },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return { status: "FAILED", error: errorMessage, toolExecutionId };
   }
@@ -12045,7 +12058,7 @@ var aiApprovalService = {
     if (!approval) throw new NotFoundError("AI approval request not found.");
     return approval;
   },
-  async decide(caller, id2, input, meta6 = {}) {
+  async decide(caller, id2, input, meta7 = {}) {
     const approval = await this.getApproval(caller.organizationId, id2);
     if (approval.status !== "PENDING") {
       throw new ConflictError(`This approval request has already been ${approval.status.toLowerCase()}.`);
@@ -12070,8 +12083,8 @@ var aiApprovalService = {
         resourceType: "ai_approval_request",
         resourceId: id2,
         afterData: { rejectionReason: input.rejectionReason },
-        ipAddress: meta6.ip,
-        userAgent: meta6.userAgent
+        ipAddress: meta7.ip,
+        userAgent: meta7.userAgent
       });
       return rejected;
     }
@@ -12094,8 +12107,8 @@ var aiApprovalService = {
       action: "AI_APPROVAL_APPROVED",
       resourceType: "ai_approval_request",
       resourceId: id2,
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     const requestingUser = await userRepository.findById(approval.requestedById);
     if (!requestingUser) {
@@ -12105,7 +12118,7 @@ var aiApprovalService = {
     if (!requesterCaller) {
       throw new ConflictError("The user who originally requested this action no longer has access to this organization.");
     }
-    await runToolHandler(definition, requesterCaller, parsed.data, meta6, approval.toolExecutionId);
+    await runToolHandler(definition, requesterCaller, parsed.data, meta7, approval.toolExecutionId);
     return approved;
   }
 };
@@ -13432,7 +13445,7 @@ var aiQuotaService = {
     const parsed = aiLimitsSchema.safeParse(row?.value);
     return parsed.success ? parsed.data : { dailyRequests: 0, dailyTokens: 0 };
   },
-  async setLimits(organizationId, actorUserId, limits, meta6 = {}) {
+  async setLimits(organizationId, actorUserId, limits, meta7 = {}) {
     const before = await this.getLimits(organizationId);
     await systemSettingRepository.upsert({
       organizationId,
@@ -13450,8 +13463,8 @@ var aiQuotaService = {
       resourceType: "ai_limits",
       beforeData: before,
       afterData: limits,
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return limits;
   },
@@ -16397,7 +16410,7 @@ var pageService = {
     await loadPageOrThrow(id2, organizationId);
     return pageRepository.listChildren(id2, organizationId);
   },
-  async createPage(caller, input, meta6 = {}) {
+  async createPage(caller, input, meta7 = {}) {
     const organizationId = caller.organizationId;
     const body = sanitizeContentHtml(input.body);
     const editorBlocks = input.editorBlocks ? sanitizeEditorDocument(input.editorBlocks) : void 0;
@@ -16457,12 +16470,12 @@ var pageService = {
       resourceType: "page",
       resourceId: createdId,
       afterData: { title: input.title, slug },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return loadPageOrThrow(createdId, organizationId);
   },
-  async updatePage(caller, id2, input, meta6 = {}) {
+  async updatePage(caller, id2, input, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadPageOrThrow(id2, organizationId);
     const sanitizedBody = input.body !== void 0 ? sanitizeContentHtml(input.body) : void 0;
@@ -16548,8 +16561,8 @@ var pageService = {
       resourceId: id2,
       beforeData: { status: existing.status, title: existing.title },
       afterData: { status: input.status, title: input.title, slug: input.slug },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     if (hasFeaturedMediaEdit && input.featuredMediaId !== existing.featuredMediaId) {
       await auditLogRepository.record({
@@ -16561,8 +16574,8 @@ var pageService = {
         resourceId: id2,
         beforeData: { featuredMediaId: existing.featuredMediaId },
         afterData: { featuredMediaId: input.featuredMediaId ?? null },
-        ipAddress: meta6.ip,
-        userAgent: meta6.userAgent
+        ipAddress: meta7.ip,
+        userAgent: meta7.userAgent
       });
     }
     if (input.slug !== void 0 && input.slug !== existing.slug) {
@@ -16579,7 +16592,7 @@ var pageService = {
     }
     return loadPageOrThrow(id2, organizationId);
   },
-  async submitForReview(caller, id2, meta6 = {}) {
+  async submitForReview(caller, id2, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadPageOrThrow(id2, organizationId);
     if (existing.status !== "DRAFT") throw new ConflictError(`Only a DRAFT page can be submitted for review (current status: ${existing.status}).`);
@@ -16596,8 +16609,8 @@ var pageService = {
       resourceId: id2,
       beforeData: { status: existing.status },
       afterData: { status: "IN_REVIEW" },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     try {
       await eventEngine.emit({
@@ -16614,7 +16627,7 @@ var pageService = {
     }
     return loadPageOrThrow(id2, organizationId);
   },
-  async publishPage(caller, id2, meta6 = {}) {
+  async publishPage(caller, id2, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadPageOrThrow(id2, organizationId);
     if (existing.status === "ARCHIVED") throw new ConflictError("An archived page must be restored before it can be published.");
@@ -16635,8 +16648,8 @@ var pageService = {
       resourceId: id2,
       beforeData: { status: existing.status },
       afterData: { status: "PUBLISHED" },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     if (existing.createdById && existing.createdById !== caller.id) {
       await notificationService.notify({
@@ -16649,7 +16662,7 @@ var pageService = {
     }
     return loadPageOrThrow(id2, organizationId);
   },
-  async schedulePage(caller, id2, input, meta6 = {}) {
+  async schedulePage(caller, id2, input, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadPageOrThrow(id2, organizationId);
     if (existing.status === "ARCHIVED") throw new ConflictError("An archived page must be restored before it can be scheduled.");
@@ -16665,12 +16678,12 @@ var pageService = {
       resourceId: id2,
       beforeData: { status: existing.status },
       afterData: { status: "SCHEDULED", scheduledAt: input.scheduledAt },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return loadPageOrThrow(id2, organizationId);
   },
-  async archivePage(caller, id2, meta6 = {}) {
+  async archivePage(caller, id2, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadPageOrThrow(id2, organizationId);
     if (existing.status === "ARCHIVED") throw new ConflictError("This page is already archived.");
@@ -16684,12 +16697,12 @@ var pageService = {
       resourceId: id2,
       beforeData: { status: existing.status },
       afterData: { status: "ARCHIVED" },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return loadPageOrThrow(id2, organizationId);
   },
-  async revertPage(caller, id2, input, meta6 = {}) {
+  async revertPage(caller, id2, input, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadPageOrThrow(id2, organizationId);
     if (existing.status === "ARCHIVED") throw new ConflictError("An archived page must be restored before its content can be reverted.");
@@ -16727,12 +16740,12 @@ var pageService = {
       resourceId: id2,
       beforeData: { fromVersion: current?.version, revertedToRevisionId: target.id, revertedToVersion: target.version },
       afterData: { newVersion: nextVersion },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return loadPageOrThrow(id2, organizationId);
   },
-  async deletePage(caller, id2, meta6 = {}) {
+  async deletePage(caller, id2, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadPageOrThrow(id2, organizationId);
     await pageRepository.softDelete(id2);
@@ -16744,15 +16757,15 @@ var pageService = {
       resourceType: "page",
       resourceId: id2,
       beforeData: { status: existing.status, title: existing.title },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
   },
   /** Phase 7 — Trash view (Content Dashboard): soft-deleted pages, paginated. */
   async listTrash(organizationId, page, limit) {
     return pageRepository.listTrash(organizationId, page, limit);
   },
-  async restorePage(caller, id2, meta6 = {}) {
+  async restorePage(caller, id2, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await pageRepository.findTrashedByIdInOrg(id2, organizationId);
     if (!existing) throw new NotFoundError("Page not found in trash.");
@@ -16765,19 +16778,19 @@ var pageService = {
       resourceType: "page",
       resourceId: id2,
       beforeData: { status: existing.status, title: existing.title },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
   },
   /** Phase 7 — bulk workflow actions, same per-item isolation as postService.bulkAction. */
-  async bulkAction(caller, action, ids, meta6 = {}) {
+  async bulkAction(caller, action, ids, meta7 = {}) {
     const succeeded = [];
     const failed = [];
     for (const id2 of ids) {
       try {
-        if (action === "archive") await this.archivePage(caller, id2, meta6);
-        else if (action === "trash") await this.deletePage(caller, id2, meta6);
-        else await this.restorePage(caller, id2, meta6);
+        if (action === "archive") await this.archivePage(caller, id2, meta7);
+        else if (action === "trash") await this.deletePage(caller, id2, meta7);
+        else await this.restorePage(caller, id2, meta7);
         succeeded.push(id2);
       } catch (err) {
         failed.push({ id: id2, error: err instanceof Error ? err.message : "Action failed." });
@@ -16969,6 +16982,24 @@ init_errors();
 // server/services/social/connectors/mockProvider.ts
 import { randomBytes as randomBytes4 } from "node:crypto";
 
+// server/services/social/publishing/publishErrors.ts
+var SocialPublishError = class extends Error {
+  constructor(kind, message, opts = {}) {
+    super(message);
+    this.name = "SocialPublishError";
+    this.kind = kind;
+    this.httpStatus = opts.httpStatus;
+    this.retryAfterMs = opts.retryAfterMs;
+  }
+};
+function classifyHttpStatus(status) {
+  if (status === 401) return "auth";
+  if (status === 403) return "auth";
+  if (status === 408 || status === 429) return "transient";
+  if (status >= 500) return "transient";
+  return "permanent";
+}
+
 // server/services/social/connectors/types.ts
 var DEFAULT_CONSTRAINTS = {
   maxChars: 280,
@@ -16988,6 +17019,8 @@ var ConnectorNotImplementedError = class extends Error {
 };
 
 // server/services/social/connectors/mockProvider.ts
+var mockPublishLog = [];
+var onceSeen = /* @__PURE__ */ new Set();
 var tokenFor = (name, kind) => `mock_${kind}_${name}_${randomBytes4(8).toString("hex")}`;
 var mockProvider = {
   key: "mock",
@@ -17020,6 +17053,277 @@ var mockProvider = {
   async healthCheck(tokens2) {
     if (tokens2.accessToken.includes("expired") || String(tokens2.mockName) === "expired") return { ok: false, error: "The access token was rejected by the provider." };
     return { ok: true, expiresAt: tokens2.expiresAt ?? null };
+  },
+  /**
+   * Behaviour is driven by markers in the text (dev/test only): [[fail-transient]], [[transient-once]] (fails the first attempt),
+   * [[fail-permanent]], [[fail-auth]], [[timeout]] (outcome unknown). No marker = success.
+   */
+  async publish(_tokens, input) {
+    const t = input.text;
+    mockPublishLog.push({ idempotencyKey: input.idempotencyKey, attempt: input.attempt, text: t });
+    if (t.includes("[[fail-transient]]")) throw new SocialPublishError("transient", "Mock: service unavailable.", { httpStatus: 503 });
+    if (t.includes("[[transient-once]]") && !onceSeen.has(input.idempotencyKey)) {
+      onceSeen.add(input.idempotencyKey);
+      throw new SocialPublishError("transient", "Mock: rate limited.", { httpStatus: 429, retryAfterMs: 1e3 });
+    }
+    if (t.includes("[[fail-permanent]]")) throw new SocialPublishError("permanent", "Mock: content rejected by the network.", { httpStatus: 422 });
+    if (t.includes("[[fail-auth]]")) throw new SocialPublishError("auth", "Mock: access token revoked.", { httpStatus: 401 });
+    if (t.includes("[[timeout]]")) throw new SocialPublishError("uncertain", "Mock: request timed out after being sent.");
+    const id2 = `mockpost_${input.idempotencyKey.slice(0, 12)}`;
+    return { externalPostId: id2, externalUrl: `https://mock.example/posts/${id2}` };
+  }
+};
+
+// server/services/social/tokenVault.ts
+import { createCipheriv as createCipheriv2, createDecipheriv as createDecipheriv2, hkdfSync as hkdfSync2, randomBytes as randomBytes5 } from "node:crypto";
+var FORMAT = "sv1";
+function keyRing() {
+  const ring = /* @__PURE__ */ new Map();
+  for (const entry of config.socialVaultKeys.split(",").map((e) => e.trim()).filter(Boolean)) {
+    const sep = entry.indexOf(":");
+    const version = Number(entry.slice(0, sep));
+    const secret = entry.slice(sep + 1);
+    if (!Number.isInteger(version) || version < 1 || secret.length < 32) {
+      throw new Error("SOCIAL_VAULT_KEYS must look like '1:<secret>,2:<secret>' with secrets of at least 32 characters.");
+    }
+    ring.set(version, Buffer.from(hkdfSync2("sha256", secret, "artify-social-vault-salt", `artify/social/token-vault/v${version}`, 32)));
+  }
+  if (ring.size === 0) {
+    const ikm = config.integrationsEncryptionKey || config.sessionSecret;
+    ring.set(1, Buffer.from(hkdfSync2("sha256", ikm, "artify-social-vault-salt", "artify/social/token-vault/derived", 32)));
+  }
+  return ring;
+}
+function activeKeyVersion() {
+  const ring = keyRing();
+  const wanted = config.socialVaultActiveKeyVersion ?? Math.max(...ring.keys());
+  if (!ring.has(wanted)) throw new Error(`SOCIAL_VAULT_ACTIVE_KEY_VERSION ${wanted} is not in SOCIAL_VAULT_KEYS.`);
+  return wanted;
+}
+var tokenVault = {
+  encrypt(tokens2, accountId) {
+    const keyVersion = activeKeyVersion();
+    const key2 = keyRing().get(keyVersion);
+    const iv = randomBytes5(12);
+    const cipher = createCipheriv2("aes-256-gcm", key2, iv);
+    cipher.setAAD(Buffer.from(accountId));
+    const ct = Buffer.concat([cipher.update(JSON.stringify(tokens2), "utf8"), cipher.final()]);
+    const ciphertext = [FORMAT, iv.toString("base64url"), cipher.getAuthTag().toString("base64url"), ct.toString("base64url")].join(".");
+    return { ciphertext, keyVersion };
+  },
+  decrypt(ciphertext, keyVersion, accountId) {
+    const key2 = keyRing().get(keyVersion);
+    if (!key2) throw new Error(`Social vault key version ${keyVersion} is not available.`);
+    const [format, iv, tag, ct] = ciphertext.split(".");
+    if (format !== FORMAT || !iv || !tag || !ct) throw new Error("Unsupported credential format.");
+    const decipher = createDecipheriv2("aes-256-gcm", key2, Buffer.from(iv, "base64url"));
+    decipher.setAAD(Buffer.from(accountId));
+    decipher.setAuthTag(Buffer.from(tag, "base64url"));
+    try {
+      return JSON.parse(Buffer.concat([decipher.update(Buffer.from(ct, "base64url")), decipher.final()]).toString("utf8"));
+    } catch {
+      throw new Error("Stored credentials could not be decrypted.");
+    }
+  },
+  /** True when a record is encrypted with a key version other than the active one. */
+  needsRotation(keyVersion) {
+    return keyVersion !== activeKeyVersion();
+  },
+  /** Re-encrypts a record under the active key version. */
+  rotate(ciphertext, keyVersion, accountId) {
+    return this.encrypt(this.decrypt(ciphertext, keyVersion, accountId), accountId);
+  }
+};
+var PATTERNS = [
+  /(bearer\s+)[a-z0-9._~+/=-]{8,}/gi,
+  /((?:access|refresh|id)_?token["'\s:=]+)[a-z0-9._~+/=-]{8,}/gi,
+  /((?:client_)?secret["'\s:=]+)[a-z0-9._~+/=-]{8,}/gi,
+  /(code=)[a-z0-9._~+/=-]{8,}/gi
+];
+function redactSecrets(input, knownSecrets = []) {
+  let text = input instanceof Error ? input.message : typeof input === "string" ? input : JSON.stringify(input) ?? "";
+  for (const secret of knownSecrets) if (secret && secret.length >= 6) text = text.split(secret).join("[redacted]");
+  for (const pattern of PATTERNS) text = text.replace(pattern, "$1[redacted]");
+  return text;
+}
+
+// server/services/social/connectors/linkedinApi.ts
+var LINKEDIN = {
+  authorizeUrl: "https://www.linkedin.com/oauth/v2/authorization",
+  tokenUrl: "https://www.linkedin.com/oauth/v2/accessToken",
+  userInfoUrl: "https://api.linkedin.com/v2/userinfo",
+  postsUrl: "https://api.linkedin.com/rest/posts",
+  imagesInitUrl: "https://api.linkedin.com/rest/images?action=initializeUpload",
+  scopes: ["openid", "profile", "w_member_social"],
+  postUrl: (urn) => `https://www.linkedin.com/feed/update/${urn}/`
+};
+var RESERVED = /[\\|{}@[\]()<>*_~]/g;
+var escapeCommentary = (text) => text.replace(RESERVED, (c) => `\\${c}`);
+function restHeaders(accessToken, apiVersion) {
+  return { Authorization: `Bearer ${accessToken}`, "Linkedin-Version": apiVersion, "X-Restli-Protocol-Version": "2.0.0", "Content-Type": "application/json" };
+}
+var personUrn = (sub) => `urn:li:person:${sub}`;
+function buildAuthUrl(p) {
+  const q = new URLSearchParams({ response_type: "code", client_id: p.clientId, redirect_uri: p.redirectUri, state: p.state, scope: (p.scopes?.length ? p.scopes : [...LINKEDIN.scopes]).join(" ") });
+  return `${LINKEDIN.authorizeUrl}?${q.toString()}`;
+}
+var tokenRequestBody = (grant, creds2) => new URLSearchParams(
+  "code" in grant ? { grant_type: "authorization_code", code: grant.code, redirect_uri: grant.redirectUri, client_id: creds2.clientId, client_secret: creds2.clientSecret } : { grant_type: "refresh_token", refresh_token: grant.refreshToken, client_id: creds2.clientId, client_secret: creds2.clientSecret }
+).toString();
+function buildImageInitBody(ownerUrn) {
+  return { initializeUploadRequest: { owner: ownerUrn } };
+}
+function buildPostBody(i) {
+  const body = {
+    author: i.authorUrn,
+    commentary: escapeCommentary(i.text),
+    visibility: "PUBLIC",
+    distribution: { feedDistribution: "MAIN_FEED", targetEntities: [], thirdPartyDistributionChannels: [] },
+    lifecycleState: "PUBLISHED",
+    isReshareDisabledByAuthor: false
+  };
+  if (i.imageUrn) body.content = { media: { id: i.imageUrn, ...i.altText ? { altText: i.altText.slice(0, 4086) } : {} } };
+  else if (i.linkUrl) {
+    let title = i.linkUrl;
+    try {
+      title = new URL(i.linkUrl).hostname;
+    } catch {
+    }
+    body.content = { article: { source: i.linkUrl, title } };
+  }
+  return body;
+}
+function validatePublishInput(input) {
+  if (!input.text.trim()) throw new SocialPublishError("permanent", "The post text is empty.");
+  if (input.media.length > 1) throw new SocialPublishError("permanent", "LinkedIn publishing currently supports one image per post.");
+  if (input.media[0] && !["image/jpeg", "image/png", "image/gif"].includes(input.media[0].mimeType)) throw new SocialPublishError("permanent", "LinkedIn supports JPEG, PNG or GIF images.");
+}
+var retryAfter = (h) => {
+  const n = Number(h);
+  return Number.isFinite(n) && n > 0 ? Math.min(n * 1e3, 36e5) : void 0;
+};
+function errorFromResponse(status, retryAfterHeader, bodyHint) {
+  const kind = classifyHttpStatus(status);
+  const base = kind === "auth" ? "LinkedIn rejected the credentials" : kind === "transient" ? "LinkedIn is temporarily unavailable or rate limiting" : "LinkedIn rejected the post";
+  const hint = bodyHint ? `: ${bodyHint.replace(/\s+/g, " ").slice(0, 160)}` : "";
+  return new SocialPublishError(kind, `${base} (HTTP ${status})${hint}`, { httpStatus: status, retryAfterMs: retryAfter(retryAfterHeader) });
+}
+function errorFromNetwork(err, phase) {
+  const code = err?.cause?.code ?? err?.code;
+  const name = err?.name;
+  if (phase === "before_post") return new SocialPublishError("transient", `Network error before publishing (${code ?? name ?? "unknown"}).`);
+  if (code === "ECONNREFUSED" || code === "ENOTFOUND" || code === "EAI_AGAIN") return new SocialPublishError("transient", `Could not reach LinkedIn (${code}).`);
+  return new SocialPublishError("uncertain", `No response from LinkedIn after sending (${code ?? name ?? "timeout"}); the post may have been published.`);
+}
+function postUrnFromResponse(status, headers) {
+  const id2 = headers.get("x-restli-id") ?? headers.get("x-linkedin-id");
+  if (status >= 200 && status < 300 && id2) return decodeURIComponent(id2);
+  throw new SocialPublishError("uncertain", `LinkedIn answered HTTP ${status} without a post id; the post may have been published.`, { httpStatus: status });
+}
+
+// server/services/social/connectors/linkedinProvider.ts
+var TIMEOUT_MS = 2e4;
+var linkedinHttp = { fetch: (...args) => fetch(...args) };
+async function call(url, init) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
+  try {
+    return await linkedinHttp.fetch(url, { ...init, signal: ctrl.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+var creds = () => ({ clientId: config.linkedinClientId, clientSecret: config.linkedinClientSecret });
+async function exchange(body) {
+  let res;
+  try {
+    res = await call(LINKEDIN.tokenUrl, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body });
+  } catch (err) {
+    throw new Error(`LinkedIn token request failed (${err.name}).`);
+  }
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok || !json.access_token) throw new Error(`LinkedIn rejected the token request (HTTP ${res.status}${json.error ? `, ${json.error}` : ""}).`);
+  return {
+    accessToken: json.access_token,
+    ...json.refresh_token ? { refreshToken: json.refresh_token } : {},
+    expiresAt: json.expires_in ? new Date(Date.now() + json.expires_in * 1e3).toISOString() : null,
+    scopes: json.scope ? json.scope.split(/[ ,]+/).filter(Boolean) : [...LINKEDIN.scopes]
+  };
+}
+async function userInfo(accessToken) {
+  const res = await call(LINKEDIN.userInfoUrl, { headers: { Authorization: `Bearer ${accessToken}` } });
+  if (!res.ok) throw new Error(`LinkedIn profile request failed (HTTP ${res.status}).`);
+  const json = await res.json();
+  if (!json.sub) throw new Error("LinkedIn did not return a member id.");
+  return { sub: json.sub, name: json.name, picture: json.picture };
+}
+var toProfile = (u) => ({ externalAccountId: u.sub, displayName: u.name ?? "LinkedIn member", handle: null, avatarUrl: u.picture ?? null, accountType: "PROFILE" });
+async function uploadImage(tokens2, owner, media) {
+  const headers = restHeaders(tokens2.accessToken, config.linkedinApiVersion);
+  let init;
+  try {
+    init = await call(LINKEDIN.imagesInitUrl, { method: "POST", headers, body: JSON.stringify(buildImageInitBody(owner)) });
+  } catch (err) {
+    throw errorFromNetwork(err, "before_post");
+  }
+  if (!init.ok) throw errorFromResponse(init.status, init.headers.get("retry-after"));
+  const value = (await init.json().catch(() => ({}))).value;
+  if (!value?.uploadUrl || !value.image) throw new SocialPublishError("permanent", "LinkedIn did not return an image upload URL.");
+  const bytes = await media.load();
+  let put;
+  try {
+    put = await call(value.uploadUrl, { method: "PUT", headers: { Authorization: `Bearer ${tokens2.accessToken}`, "Content-Type": media.mimeType }, body: new Uint8Array(bytes) });
+  } catch (err) {
+    throw errorFromNetwork(err, "before_post");
+  }
+  if (!put.ok) throw errorFromResponse(put.status, put.headers.get("retry-after"));
+  return value.image;
+}
+var linkedinProvider = {
+  key: "linkedin",
+  label: "LinkedIn",
+  implemented: true,
+  defaultScopes: [...LINKEDIN.scopes],
+  isConfigured: () => !!config.linkedinClientId && !!config.linkedinClientSecret,
+  getConstraints: () => ({ ...DEFAULT_CONSTRAINTS, maxChars: 3e3, maxHashtags: 5, maxMedia: 1, allowedMediaTypes: ["image/jpeg", "image/png", "image/gif"], supportsLink: true }),
+  getAuthUrl: ({ state, redirectUri: redirectUri2, scopes }) => buildAuthUrl({ clientId: config.linkedinClientId, redirectUri: redirectUri2, state, scopes }),
+  async handleCallback({ code, redirectUri: redirectUri2 }) {
+    const tokens2 = await exchange(tokenRequestBody({ code, redirectUri: redirectUri2 }, creds()));
+    return { profile: toProfile(await userInfo(tokens2.accessToken)), tokens: tokens2 };
+  },
+  async refreshToken(tokens2) {
+    if (!tokens2.refreshToken) throw new Error("LinkedIn did not issue a refresh token for this connection; please reconnect.");
+    const next = await exchange(tokenRequestBody({ refreshToken: tokens2.refreshToken }, creds()));
+    return { ...next, refreshToken: next.refreshToken ?? tokens2.refreshToken };
+  },
+  async getProfile(tokens2) {
+    return toProfile(await userInfo(tokens2.accessToken));
+  },
+  async healthCheck(tokens2) {
+    try {
+      await userInfo(tokens2.accessToken);
+      return { ok: true, expiresAt: tokens2.expiresAt ?? null };
+    } catch (err) {
+      return { ok: false, error: redactSecrets(err, [tokens2.accessToken]).slice(0, 200) };
+    }
+  },
+  async publish(tokens2, input) {
+    validatePublishInput(input);
+    const author = personUrn(input.accountExternalId);
+    const imageUrn = input.media[0] ? await uploadImage(tokens2, author, input.media[0]) : null;
+    const body = buildPostBody({ authorUrn: author, text: input.text, linkUrl: input.linkUrl, imageUrn, altText: input.media[0]?.altText });
+    let res;
+    try {
+      res = await call(LINKEDIN.postsUrl, { method: "POST", headers: restHeaders(tokens2.accessToken, config.linkedinApiVersion), body: JSON.stringify(body) });
+    } catch (err) {
+      throw errorFromNetwork(err, "post");
+    }
+    if (!res.ok) {
+      const hint = await res.text().then((t) => redactSecrets(t, [tokens2.accessToken]).slice(0, 200)).catch(() => "");
+      throw errorFromResponse(res.status, res.headers.get("retry-after"), hint);
+    }
+    const urn = postUrnFromResponse(res.status, res.headers);
+    return { externalPostId: urn, externalUrl: LINKEDIN.postUrl(urn) };
   }
 };
 
@@ -17049,12 +17353,6 @@ var metaProvider = stub(
   ["pages_show_list", "instagram_basic"],
   (accountType) => accountType === "INSTAGRAM" ? { ...DEFAULT_CONSTRAINTS, maxChars: 2200, maxHashtags: 30, maxMedia: 10, requiresMedia: true, supportsLink: false } : { ...DEFAULT_CONSTRAINTS, maxChars: 63206, maxHashtags: 30, maxMedia: 10 }
 );
-var linkedinProvider = stub("linkedin", "LinkedIn", () => !!config.linkedinClientId && !!config.linkedinClientSecret, ["r_liteprofile", "w_member_social"], () => ({
-  ...DEFAULT_CONSTRAINTS,
-  maxChars: 3e3,
-  maxHashtags: 5,
-  maxMedia: 9
-}));
 
 // server/services/social/connectors/registry.ts
 var CONNECTORS = [metaProvider, linkedinProvider, mockProvider];
@@ -17198,7 +17496,7 @@ function projectPost(post) {
     createdAt: post.createdAt,
     updatedAt: post.updatedAt,
     createdBy: post.createdBy ? { id: post.createdBy.id, name: `${post.createdBy.firstName} ${post.createdBy.lastName}`.trim() } : null,
-    targets: post.targets.map((t) => ({ id: t.id, accountId: t.socialAccountId, bodyOverride: t.bodyOverride, status: t.status, scheduledAt: t.scheduledAt, account: t.account }))
+    targets: post.targets.map((t) => ({ id: t.id, accountId: t.socialAccountId, bodyOverride: t.bodyOverride, status: t.status, scheduledAt: t.scheduledAt, publishedAt: t.publishedAt, externalUrl: t.externalUrl, account: t.account }))
   };
 }
 async function loadPost(organizationId, id2) {
@@ -17259,7 +17557,7 @@ async function userIdsWithPermission(organizationId, permission) {
   return rows.map((r) => r.userId);
 }
 var has = (caller, key2) => caller.role.permissions.includes(key2);
-async function record(caller, action, post, meta6, extra = {}) {
+async function record(caller, action, post, meta7, extra = {}) {
   await auditLogRepository.record({
     organizationId: caller.organizationId,
     actorUserId: caller.id,
@@ -17268,8 +17566,8 @@ async function record(caller, action, post, meta6, extra = {}) {
     resourceType: "social_post",
     resourceId: post.id,
     metadata: auditMeta(post, extra),
-    ipAddress: meta6.ip,
-    userAgent: meta6.userAgent
+    ipAddress: meta7.ip,
+    userAgent: meta7.userAgent
   });
 }
 async function getApprovalMode(organizationId) {
@@ -17278,7 +17576,7 @@ async function getApprovalMode(organizationId) {
 var socialPostService = {
   evaluateGuardrails: evaluate,
   loadPost,
-  async create(caller, input, meta6 = {}, extra = {}) {
+  async create(caller, input, meta7 = {}, extra = {}) {
     const accounts = await accountsInOrg(caller.organizationId, input.accountIds);
     await assertMediaInOrg(caller.organizationId, input.mediaIds);
     if (input.sourceContent) await this.resolveSourceContent(caller.organizationId, input.sourceContent.type, input.sourceContent.id);
@@ -17305,7 +17603,7 @@ var socialPostService = {
       },
       include: POST_INCLUDE
     });
-    await record(caller, extra.aiGenerated ? "SOCIAL_POST_CREATED_BY_AI" : "SOCIAL_POST_CREATED", created, meta6, { accounts: accounts.length, aiExecutionId: extra.aiExecutionId });
+    await record(caller, extra.aiGenerated ? "SOCIAL_POST_CREATED_BY_AI" : "SOCIAL_POST_CREATED", created, meta7, { accounts: accounts.length, aiExecutionId: extra.aiExecutionId });
     return projectPost(created);
   },
   async get(organizationId, id2) {
@@ -17338,10 +17636,11 @@ var socialPostService = {
     for (const post of rows) (days[post.scheduledAt.toISOString().slice(0, 10)] ??= []).push(projectPost(post));
     return { days, total: rows.length };
   },
-  async update(caller, id2, input, meta6 = {}) {
+  async update(caller, id2, input, meta7 = {}) {
     const post = await loadPost(caller.organizationId, id2);
     const touchesContent = ["title", "body", "mediaIds", "linkUrl", "accountIds", "bodyOverrides", "sourceContent"].some((k) => k in input);
     const touchesSchedule = "scheduledAt" in input || "timezone" in input;
+    if (post.targets.some((t) => t.status === "PUBLISHING")) throw new ConflictError("This post is being published right now. Try again in a moment.");
     if (touchesContent && !CONTENT_EDITABLE.includes(post.status)) throw new ConflictError(`A post in status ${post.status} cannot be edited. Move it back to draft first.`);
     if (touchesSchedule && !SCHEDULE_EDITABLE.includes(post.status)) throw new ConflictError(`The schedule of a ${post.status} post cannot be changed.`);
     const body = input.body ?? post.body;
@@ -17386,19 +17685,22 @@ var socialPostService = {
         include: POST_INCLUDE
       });
     });
-    await record(caller, touchesContent ? "SOCIAL_POST_UPDATED" : "SOCIAL_POST_RESCHEDULED", updated, meta6);
+    await record(caller, touchesContent ? "SOCIAL_POST_UPDATED" : "SOCIAL_POST_RESCHEDULED", updated, meta7);
     return projectPost(updated);
   },
-  async remove(caller, id2, meta6 = {}) {
+  async remove(caller, id2, meta7 = {}) {
     const post = await loadPost(caller.organizationId, id2);
     if (!["DRAFT", "REJECTED", "CANCELLED"].includes(post.status)) throw new ConflictError(`A post in status ${post.status} cannot be deleted. Cancel it first.`);
     await prisma.socialPost.update({ where: { id: id2 }, data: { deletedAt: /* @__PURE__ */ new Date() } });
-    await record(caller, "SOCIAL_POST_DELETED", post, meta6);
+    await record(caller, "SOCIAL_POST_DELETED", post, meta7);
   },
   /** Moves a post to a new status after checking the transition table, guardrails and role rules. */
-  async transition(caller, id2, to, opts = {}, meta6 = {}) {
+  async transition(caller, id2, to, opts = {}, meta7 = {}) {
     const post = await loadPost(caller.organizationId, id2);
     if (!canTransition(post.status, to)) throw new ConflictError(`A ${post.status} post cannot move to ${to}.`);
+    if (post.targets.some((t) => t.status === "PUBLISHING")) throw new ConflictError("This post is being published right now. Try again in a moment.");
+    if (post.targets.some((t) => t.status === "UNCERTAIN")) throw new ConflictError("A publish for this post has an unknown outcome. Resolve it from the Failures page first.");
+    if (to === "DRAFT" && post.targets.some((t) => t.status === "PUBLISHED")) throw new ConflictError("This post was already published to an account. Create a new post instead.");
     let target = to;
     const data = {};
     let action = `SOCIAL_POST_${to}`;
@@ -17453,10 +17755,13 @@ var socialPostService = {
     }
     const targetStatus = target === "SCHEDULED" ? "SCHEDULED" : target === "CANCELLED" ? "CANCELLED" : "PENDING";
     const updated = await prisma.$transaction(async (tx) => {
-      await tx.socialPostTarget.updateMany({ where: { postId: id2 }, data: { status: targetStatus, ...data.scheduledAt ? { scheduledAt: data.scheduledAt } : {} } });
+      await tx.socialPostTarget.updateMany({
+        where: { postId: id2, status: { notIn: ["PUBLISHED", "PUBLISHING", "UNCERTAIN"] } },
+        data: { status: targetStatus, ...targetStatus === "SCHEDULED" ? { attempts: 0, nextAttemptAt: null, publishError: null } : {}, ...data.scheduledAt ? { scheduledAt: data.scheduledAt } : {} }
+      });
       return tx.socialPost.update({ where: { id: id2 }, data: { ...data, status: target }, include: POST_INCLUDE });
     });
-    await record(caller, action, updated, meta6, { from: post.status, to: updated.status, ...opts.comment ? { comment: opts.comment.slice(0, 500) } : {} });
+    await record(caller, action, updated, meta7, { from: post.status, to: updated.status, ...opts.comment ? { comment: opts.comment.slice(0, 500) } : {} });
     if (action === "SOCIAL_POST_SUBMITTED") {
       const approvers = (await userIdsWithPermission(caller.organizationId, "social.approve")).filter((u) => u !== caller.id);
       await Promise.all(approvers.map((userId) => notificationService.notify({ organizationId: caller.organizationId, userId, type: "approval_requested", title: "Social post awaiting approval", message: `"${post.title}" is waiting for your approval.`, entityType: "social_post", entityId: post.id })));
@@ -17474,10 +17779,10 @@ var socialPostService = {
     return projectPost(updated);
   },
   /** Approvals-center entry point: approve/reject a post that is PENDING_APPROVAL. */
-  async decide(caller, id2, approve2, comment, meta6 = {}) {
+  async decide(caller, id2, approve2, comment, meta7 = {}) {
     const post = await loadPost(caller.organizationId, id2);
     if (post.status !== "PENDING_APPROVAL") throw new ConflictError(`This post is ${post.status}, not awaiting approval.`);
-    return this.transition(caller, id2, approve2 ? "APPROVED" : "REJECTED", { comment }, meta6);
+    return this.transition(caller, id2, approve2 ? "APPROVED" : "REJECTED", { comment }, meta7);
   },
   // ---- source content ("share this blog post / case study") ----
   async resolveSourceContent(organizationId, type, id2) {
@@ -17504,7 +17809,7 @@ var socialPostService = {
     const { toneDescriptors, audience, dos, donts, bannedWords, requiredDisclaimers, defaultHashtags, ctaPhrases, languages } = row;
     return { toneDescriptors, audience, dos, donts, bannedWords, requiredDisclaimers, defaultHashtags, ctaPhrases, languages };
   },
-  async updateBrandVoice(caller, input, meta6 = {}) {
+  async updateBrandVoice(caller, input, meta7 = {}) {
     const data = { ...input, audience: input.audience ?? null, defaultHashtags: input.defaultHashtags.map((h) => h.startsWith("#") ? h : `#${h}`), updatedById: caller.id };
     await prisma.socialBrandVoice.upsert({ where: { organizationId: caller.organizationId }, create: { organizationId: caller.organizationId, ...data }, update: data });
     await auditLogRepository.record({
@@ -17514,15 +17819,15 @@ var socialPostService = {
       action: "SOCIAL_BRAND_VOICE_UPDATED",
       resourceType: "social_brand_voice",
       metadata: { bannedWords: data.bannedWords.length, disclaimers: data.requiredDisclaimers.length, languages: data.languages },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return this.getBrandVoice(caller.organizationId);
   },
   async getSettings(organizationId) {
     return { approvalMode: await getApprovalMode(organizationId) };
   },
-  async updateSettings(caller, approvalMode, meta6 = {}) {
+  async updateSettings(caller, approvalMode, meta7 = {}) {
     if (caller.role.key !== "ADMIN" && caller.role.key !== "SUPER_ADMIN") throw new AuthorizationError("Only administrators can change the approval mode.");
     const before = await getApprovalMode(caller.organizationId);
     await prisma.socialWorkspaceSetting.upsert({ where: { organizationId: caller.organizationId }, create: { organizationId: caller.organizationId, approvalMode, updatedById: caller.id }, update: { approvalMode, updatedById: caller.id } });
@@ -17534,8 +17839,8 @@ var socialPostService = {
       resourceType: "social_workspace_setting",
       beforeData: { approvalMode: before },
       afterData: { approvalMode },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return { approvalMode };
   }
@@ -17739,16 +18044,16 @@ var approvalCenterService = {
     ]);
     return { total: counts.ai + counts.automation + counts.content + counts.social, counts, sources: allowed };
   },
-  async decide(caller, source, id2, input, meta6 = {}) {
+  async decide(caller, source, id2, input, meta7 = {}) {
     const allowed = visibleSources(caller);
     if (!allowed.includes(source)) throw new AuthorizationError("You do not have access to this approval source.");
     if (!canDecideSource(caller, source)) throw new AuthorizationError(`Missing permission: ${SOURCE_DECIDE_PERMISSION[source]}`);
     const approve2 = input.decision === "approve";
     let result;
     if (source === "social") {
-      result = await socialPostService.decide(caller, id2, approve2, input.comment, meta6);
+      result = await socialPostService.decide(caller, id2, approve2, input.comment, meta7);
     } else if (source === "ai") {
-      result = await aiApprovalService.decide(caller, id2, { decision: approve2 ? "APPROVE" : "REJECT", rejectionReason: input.comment }, meta6);
+      result = await aiApprovalService.decide(caller, id2, { decision: approve2 ? "APPROVE" : "REJECT", rejectionReason: input.comment }, meta7);
     } else {
       const row = await prisma.automationApproval.findFirst({ where: { id: id2, organizationId: caller.organizationId }, select: { entityType: true } });
       if (!row) throw new NotFoundError("Approval request not found.");
@@ -17771,8 +18076,8 @@ var approvalCenterService = {
       resourceType: `${source}_approval`,
       resourceId: id2,
       metadata: { source, decision: input.decision, comment: input.comment ?? null },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return { source, id: id2, decision: input.decision, result };
   }
@@ -17801,6 +18106,809 @@ var approvalDecisionSchema = z21.object({
 });
 var approvalSourceParamSchema = z21.enum(APPROVAL_SOURCES);
 
+// server/services/social/publishing/publisher.ts
+import { randomUUID as randomUUID3 } from "node:crypto";
+init_errors();
+
+// server/services/social/socialAccountService.ts
+import { randomBytes as randomBytes6 } from "node:crypto";
+init_errors();
+var STATE_TTL_MS = 10 * 60 * 1e3;
+var EXPIRY_WARNING_MS = 7 * 24 * 60 * 60 * 1e3;
+var ACCOUNT_SELECT = {
+  id: true,
+  organizationId: true,
+  provider: true,
+  externalAccountId: true,
+  displayName: true,
+  handle: true,
+  avatarUrl: true,
+  accountType: true,
+  status: true,
+  scopes: true,
+  tokenExpiresAt: true,
+  lastSyncAt: true,
+  lastError: true,
+  connectedByUserId: true,
+  createdAt: true,
+  updatedAt: true
+};
+var safeError = (err, secrets = []) => redactSecrets(err, secrets).slice(0, 300);
+var redirectUri = () => `${config.controlCenterBaseUrl}/social/accounts`;
+function connectorOrThrow(provider) {
+  const known = connectorRegistry.get(provider);
+  if (!known) throw new ValidationError("Unknown social provider.");
+  const connector = connectorRegistry.getAvailable(provider);
+  if (!connector) throw new ValidationError(`${known.label} is not configured yet.`);
+  return connector;
+}
+async function loadInOrgOrThrow(organizationId, id2) {
+  const account = await prisma.socialAccount.findFirst({ where: { id: id2, organizationId }, select: ACCOUNT_SELECT });
+  if (!account) throw new NotFoundError("Social account not found.");
+  return account;
+}
+async function saveTokens(accountId, tokens2) {
+  const { ciphertext, keyVersion } = tokenVault.encrypt(tokens2, accountId);
+  await prisma.socialAccountCredential.upsert({
+    where: { socialAccountId: accountId },
+    create: { socialAccountId: accountId, ciphertext, keyVersion },
+    update: { ciphertext, keyVersion }
+  });
+}
+async function loadTokens(accountId) {
+  const row = await prisma.socialAccountCredential.findUnique({ where: { socialAccountId: accountId } });
+  return row ? tokenVault.decrypt(row.ciphertext, row.keyVersion, accountId) : null;
+}
+async function managersOf(organizationId) {
+  const rows = await prisma.organizationMembership.findMany({
+    where: {
+      organizationId,
+      status: "ACTIVE",
+      user: { status: "ACTIVE", deletedAt: null },
+      role: { rolePermissions: { some: { permission: { key: "social.accounts.manage" } } } }
+    },
+    select: { userId: true },
+    take: 50
+  });
+  return rows.map((r) => r.userId);
+}
+async function notifyManagers(account, title, message) {
+  const userIds = await managersOf(account.organizationId);
+  await Promise.all(
+    userIds.map(
+      (userId) => notificationService.notify({ organizationId: account.organizationId, userId, type: "social_account_attention", title, message, entityType: "social_account", entityId: account.id })
+    )
+  );
+}
+var socialAccountService = {
+  /** Server-internal only (publisher). Tokens must never be returned from an API or logged. */
+  loadTokens,
+  persistTokens: saveTokens,
+  async list(organizationId) {
+    const accounts = await prisma.socialAccount.findMany({ where: { organizationId }, orderBy: [{ status: "asc" }, { displayName: "asc" }], select: ACCOUNT_SELECT });
+    return { accounts, providers: connectorRegistry.list() };
+  },
+  get: (organizationId, id2) => loadInOrgOrThrow(organizationId, id2),
+  /** Begins OAuth: returns the provider URL. The single-use `state` is stored hashed and bound to this user + workspace + provider. */
+  async startConnect(user, provider, reconnectAccountId) {
+    const connector = connectorOrThrow(provider);
+    if (reconnectAccountId) {
+      const existing = await loadInOrgOrThrow(user.organizationId, reconnectAccountId);
+      if (existing.provider !== provider) throw new ValidationError("That account belongs to a different provider.");
+    }
+    const state = `art_oauth_${randomBytes6(32).toString("base64url")}`;
+    await prisma.socialOAuthState.create({
+      data: { stateHash: hashToken(state), organizationId: user.organizationId, userId: user.id, provider, reconnectAccountId: reconnectAccountId ?? null, expiresAt: new Date(Date.now() + STATE_TTL_MS) }
+    });
+    return { authUrl: connector.getAuthUrl({ state, redirectUri: redirectUri(), scopes: connector.defaultScopes }) };
+  },
+  async handleCallback(user, input, meta7 = {}) {
+    const invalid = () => new AuthenticationError("This connection request is invalid or has expired. Please start again.");
+    const stateHash = hashToken(input.state);
+    const row = await prisma.socialOAuthState.findUnique({ where: { stateHash } });
+    if (!row || row.usedAt || row.expiresAt.getTime() <= Date.now() || row.userId !== user.id || row.organizationId !== user.organizationId) throw invalid();
+    const claimed = await prisma.socialOAuthState.updateMany({ where: { stateHash, usedAt: null }, data: { usedAt: /* @__PURE__ */ new Date() } });
+    if (claimed.count !== 1) throw invalid();
+    const connector = connectorOrThrow(row.provider);
+    if (input.error || !input.code) throw new ValidationError("The provider did not grant access.");
+    let result;
+    try {
+      result = await connector.handleCallback({ code: input.code, redirectUri: redirectUri() });
+    } catch (err) {
+      await auditLogRepository.record({
+        organizationId: user.organizationId,
+        actorUserId: user.id,
+        actorType: "USER",
+        action: "SOCIAL_ACCOUNT_CONNECT_FAILED",
+        resourceType: "social_account",
+        result: "FAILURE",
+        metadata: { provider: row.provider, reason: safeError(err, [input.code]) },
+        ipAddress: meta7.ip,
+        userAgent: meta7.userAgent
+      });
+      throw new ValidationError("Could not connect the account. Please try again.");
+    }
+    const { profile, tokens: tokens2 } = result;
+    if (row.reconnectAccountId) {
+      const target = await loadInOrgOrThrow(user.organizationId, row.reconnectAccountId);
+      if (target.externalAccountId !== profile.externalAccountId) throw new ValidationError("You signed in with a different account than the one being reconnected.");
+    }
+    const previous = await prisma.socialAccount.findUnique({
+      where: { organizationId_provider_externalAccountId: { organizationId: user.organizationId, provider: row.provider, externalAccountId: profile.externalAccountId } },
+      select: { id: true, status: true }
+    });
+    const data = {
+      displayName: profile.displayName,
+      handle: profile.handle ?? null,
+      avatarUrl: profile.avatarUrl ?? null,
+      accountType: profile.accountType ?? "PROFILE",
+      status: "CONNECTED",
+      scopes: tokens2.scopes ?? connector.defaultScopes,
+      tokenExpiresAt: tokens2.expiresAt ? new Date(tokens2.expiresAt) : null,
+      lastSyncAt: /* @__PURE__ */ new Date(),
+      lastError: null,
+      connectedByUserId: user.id
+    };
+    const account = await prisma.socialAccount.upsert({
+      where: { organizationId_provider_externalAccountId: { organizationId: user.organizationId, provider: row.provider, externalAccountId: profile.externalAccountId } },
+      create: { organizationId: user.organizationId, provider: row.provider, externalAccountId: profile.externalAccountId, ...data },
+      update: data,
+      select: ACCOUNT_SELECT
+    });
+    await saveTokens(account.id, tokens2);
+    const reauth = !!previous && previous.status !== "CONNECTED";
+    await auditLogRepository.record({
+      organizationId: user.organizationId,
+      actorUserId: user.id,
+      actorType: "USER",
+      action: row.reconnectAccountId || reauth ? "SOCIAL_ACCOUNT_REAUTHENTICATED" : "SOCIAL_ACCOUNT_CONNECTED",
+      resourceType: "social_account",
+      resourceId: account.id,
+      metadata: { provider: account.provider, externalAccountId: account.externalAccountId, handle: account.handle },
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
+    });
+    return account;
+  },
+  async disconnect(user, id2, meta7 = {}) {
+    const account = await loadInOrgOrThrow(user.organizationId, id2);
+    await prisma.socialAccountCredential.deleteMany({ where: { socialAccountId: id2 } });
+    const updated = await prisma.socialAccount.update({ where: { id: id2 }, data: { status: "DISCONNECTED", tokenExpiresAt: null, lastError: null }, select: ACCOUNT_SELECT });
+    await auditLogRepository.record({
+      organizationId: user.organizationId,
+      actorUserId: user.id,
+      actorType: "USER",
+      action: "SOCIAL_ACCOUNT_DISCONNECTED",
+      resourceType: "social_account",
+      resourceId: id2,
+      metadata: { provider: account.provider, externalAccountId: account.externalAccountId, handle: account.handle },
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
+    });
+    return updated;
+  },
+  /**
+   * Verifies one account: refreshes a token that is expiring within 7 days (or already expired), then asks the provider.
+   * On failure the account moves to NEEDS_REAUTH (or ERROR for infrastructure failures) and managers are notified once.
+   */
+  async checkHealth(accountId, opts = {}) {
+    const account = await prisma.socialAccount.findUnique({ where: { id: accountId }, select: ACCOUNT_SELECT });
+    if (!account) throw new NotFoundError("Social account not found.");
+    if (account.status === "DISCONNECTED") return account;
+    const connector = connectorRegistry.getAvailable(account.provider);
+    if (!connector) return account;
+    const fail = async (status, reason) => {
+      const updated = await prisma.socialAccount.update({ where: { id: account.id }, data: { status, lastError: reason }, select: ACCOUNT_SELECT });
+      if (account.status === "CONNECTED") {
+        await auditLogRepository.record({
+          organizationId: account.organizationId,
+          actorUserId: opts.actor?.id,
+          actorType: opts.actor ? "USER" : "SYSTEM",
+          action: "SOCIAL_ACCOUNT_NEEDS_ATTENTION",
+          resourceType: "social_account",
+          resourceId: account.id,
+          result: "FAILURE",
+          metadata: { provider: account.provider, status, reason },
+          ipAddress: opts.meta?.ip,
+          userAgent: opts.meta?.userAgent
+        });
+        await notifyManagers(updated, `${account.displayName} needs attention`, status === "NEEDS_REAUTH" ? `Reconnect ${account.displayName} (${account.provider}) to keep it working. ${reason}` : `${account.displayName} (${account.provider}) failed a health check. ${reason}`);
+      }
+      return updated;
+    };
+    let tokens2;
+    try {
+      tokens2 = await loadTokens(account.id);
+    } catch (err) {
+      logger.error({ accountId: account.id, err: safeError(err) }, "[social] could not decrypt stored credentials");
+      return fail("ERROR", "Stored credentials could not be read.");
+    }
+    if (!tokens2) return fail("NEEDS_REAUTH", "No stored credentials; reconnect this account.");
+    try {
+      const expiresSoon = !!account.tokenExpiresAt && account.tokenExpiresAt.getTime() - Date.now() < EXPIRY_WARNING_MS;
+      let expiresAt = account.tokenExpiresAt;
+      if (expiresSoon) {
+        try {
+          tokens2 = await connector.refreshToken(tokens2);
+          await saveTokens(account.id, tokens2);
+          expiresAt = tokens2.expiresAt ? new Date(tokens2.expiresAt) : null;
+        } catch (err) {
+          return fail("NEEDS_REAUTH", `Token expires ${account.tokenExpiresAt.toISOString().slice(0, 10)} and could not be refreshed. ${safeError(err, [tokens2.accessToken, tokens2.refreshToken])}`.slice(0, 300));
+        }
+      }
+      const health = await connector.healthCheck(tokens2);
+      if (!health.ok) return fail("NEEDS_REAUTH", safeError(health.error ?? "The provider rejected the credentials.", [tokens2.accessToken, tokens2.refreshToken]));
+      return prisma.socialAccount.update({
+        where: { id: account.id },
+        data: { status: "CONNECTED", lastSyncAt: /* @__PURE__ */ new Date(), lastError: null, tokenExpiresAt: health.expiresAt ? new Date(health.expiresAt) : expiresAt },
+        select: ACCOUNT_SELECT
+      });
+    } catch (err) {
+      return fail("ERROR", safeError(err, [tokens2?.accessToken, tokens2?.refreshToken]));
+    }
+  },
+  /**
+   * Daily job: re-check connected/errored accounts (bounded per run). The cron tick fires every ~5 minutes, so accounts
+   * checked within `minAgeMs` (default 23h) are skipped — real providers must not be hit on every tick. Returns counts only.
+   */
+  async runTokenHealthJob(limit = 500, minAgeMs = 23 * 36e5) {
+    const cutoff = new Date(Date.now() - minAgeMs);
+    const accounts = await prisma.socialAccount.findMany({
+      where: { status: { in: ["CONNECTED", "ERROR"] }, OR: [{ lastSyncAt: null }, { lastSyncAt: { lt: cutoff } }] },
+      select: { id: true },
+      orderBy: { lastSyncAt: "asc" },
+      take: limit
+    });
+    let needsAttention = 0;
+    let errors = 0;
+    for (const { id: id2 } of accounts) {
+      try {
+        const result = await this.checkHealth(id2);
+        if (result.status === "NEEDS_REAUTH" || result.status === "ERROR") needsAttention += 1;
+      } catch (err) {
+        errors += 1;
+        logger.error({ accountId: id2, err: safeError(err) }, "[social] token health check crashed");
+      }
+    }
+    return { checked: accounts.length, needsAttention, errors };
+  }
+};
+
+// server/services/social/publishing/publishPolicy.ts
+var DEFAULT_GRACE_MINUTES = 60;
+var DEFAULT_MAX_ATTEMPTS = 5;
+var STALE_PUBLISHING_MS = 10 * 60 * 1e3;
+function computeBackoffMs(attempt2, retryAfterMs, opts = {}) {
+  const { baseMs = 2 * 6e4, capMs = 60 * 6e4, jitter = 0.2, random = Math.random } = opts;
+  const exp = Math.min(capMs, baseMs * 2 ** Math.max(0, attempt2 - 1));
+  const factor = 1 + (random() * 2 - 1) * jitter;
+  const delay = Math.min(capMs, Math.round(exp * factor));
+  return Math.max(delay, Math.min(retryAfterMs ?? 0, capMs));
+}
+function isMissed(scheduledAt, attempts, now, graceMinutes) {
+  return attempts === 0 && now.getTime() - scheduledAt.getTime() > graceMinutes * 6e4;
+}
+function decideFailure(kind, attempts, maxAttempts, retryAfterMs, opts) {
+  if (kind === "auth") return { action: "reauth" };
+  if (kind === "uncertain") return { action: "uncertain" };
+  if (kind === "permanent") return { action: "fail", reason: "permanent" };
+  if (attempts >= maxAttempts) return { action: "fail", reason: "max_attempts" };
+  return { action: "retry", delayMs: computeBackoffMs(attempts, retryAfterMs, opts) };
+}
+function derivePostStatus(current, targets) {
+  const active = targets.filter((t) => t.status !== "CANCELLED");
+  if (active.length === 0) return null;
+  const has3 = (s) => active.some((t) => t.status === s);
+  let next;
+  if (has3("PUBLISHING")) next = "PUBLISHING";
+  else if (has3("SCHEDULED") || has3("PENDING")) {
+    next = active.some((t) => t.status === "PUBLISHED") && current === "PUBLISHING" ? "PUBLISHING" : "SCHEDULED";
+  } else if (active.every((t) => t.status === "PUBLISHED")) next = "PUBLISHED";
+  else next = "FAILED";
+  return next === current ? null : next;
+}
+
+// server/services/social/publishing/publishingSettingsService.ts
+init_errors();
+function evaluateGate(envDisabled, global, ws) {
+  if (envDisabled) return { allowed: false, reason: "env_disabled" };
+  if (global.killSwitch) return { allowed: false, reason: "global_kill_switch" };
+  if (!global.enabled) return { allowed: false, reason: "global_off" };
+  if (ws.killSwitch) return { allowed: false, reason: "workspace_kill_switch" };
+  if (!ws.enabled) return { allowed: false, reason: "workspace_off" };
+  return { allowed: true, dryRun: global.dryRun || ws.dryRun };
+}
+var GLOBAL_DEFAULT = { enabled: false, dryRun: true, killSwitch: false };
+var WS_DEFAULT = { enabled: false, dryRun: true, killSwitch: false, graceMinutes: DEFAULT_GRACE_MINUTES, maxAttempts: DEFAULT_MAX_ATTEMPTS };
+var isAdmin = (u) => u.role.key === "ADMIN" || u.role.key === "SUPER_ADMIN";
+var publishingSettingsService = {
+  async getGlobal() {
+    const row = await prisma.socialPublishingGlobal.findUnique({ where: { id: "global" } });
+    return row ? { enabled: row.enabled, dryRun: row.dryRun, killSwitch: row.killSwitch } : GLOBAL_DEFAULT;
+  },
+  async getWorkspace(organizationId) {
+    const row = await prisma.socialPublishingSetting.findUnique({ where: { organizationId } });
+    return row ? { enabled: row.enabled, dryRun: row.dryRun, killSwitch: row.killSwitch, graceMinutes: row.graceMinutes, maxAttempts: row.maxAttempts } : WS_DEFAULT;
+  },
+  /** Read fresh on every call — never cached — so a kill switch takes effect before the very next attempt. */
+  async gate(organizationId) {
+    const [global, ws] = await Promise.all([this.getGlobal(), this.getWorkspace(organizationId)]);
+    return evaluateGate(config.socialPublishingDisabled, global, ws);
+  },
+  async view(organizationId) {
+    const [global, workspace] = await Promise.all([this.getGlobal(), this.getWorkspace(organizationId)]);
+    const gate = evaluateGate(config.socialPublishingDisabled, global, workspace);
+    return { global, workspace, envDisabled: config.socialPublishingDisabled, effective: gate.allowed ? { publishing: true, dryRun: gate.dryRun } : { publishing: false, reason: gate.reason } };
+  },
+  async updateWorkspace(caller, input, meta7 = {}) {
+    if (!isAdmin(caller)) throw new AuthorizationError("Only administrators can change publishing settings.");
+    const before = await this.getWorkspace(caller.organizationId);
+    const data = { ...input, updatedById: caller.id };
+    await prisma.socialPublishingSetting.upsert({ where: { organizationId: caller.organizationId }, create: { organizationId: caller.organizationId, ...data }, update: data });
+    const after = await this.getWorkspace(caller.organizationId);
+    await auditLogRepository.record({
+      organizationId: caller.organizationId,
+      actorUserId: caller.id,
+      actorType: "USER",
+      action: input.killSwitch === true && !before.killSwitch ? "SOCIAL_PUBLISHING_KILL_SWITCH_ENGAGED" : "SOCIAL_PUBLISHING_SETTINGS_CHANGED",
+      resourceType: "social_publishing_setting",
+      beforeData: before,
+      afterData: after,
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
+    });
+    return this.view(caller.organizationId);
+  },
+  async updateGlobal(caller, input, meta7 = {}) {
+    if (caller.role.key !== "SUPER_ADMIN") throw new AuthorizationError("Only a super administrator can change global publishing settings.");
+    const before = await this.getGlobal();
+    await prisma.socialPublishingGlobal.upsert({ where: { id: "global" }, create: { id: "global", ...GLOBAL_DEFAULT, ...input, updatedById: caller.id }, update: { ...input, updatedById: caller.id } });
+    const after = await this.getGlobal();
+    await auditLogRepository.record({
+      organizationId: caller.organizationId,
+      actorUserId: caller.id,
+      actorType: "USER",
+      action: input.killSwitch === true && !before.killSwitch ? "SOCIAL_PUBLISHING_GLOBAL_KILL_SWITCH_ENGAGED" : "SOCIAL_PUBLISHING_GLOBAL_CHANGED",
+      resourceType: "social_publishing_global",
+      resourceId: "global",
+      beforeData: before,
+      afterData: after,
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
+    });
+    return this.view(caller.organizationId);
+  }
+};
+
+// server/services/social/publishing/publisher.ts
+var PUBLISH_CALL_TIMEOUT_MS = 25e3;
+var safe = (err, secrets = []) => redactSecrets(err, secrets).slice(0, 300);
+var emptyOutcomes = () => ({ published: 0, dry_run: 0, retry_scheduled: 0, failed: 0, uncertain: 0, reauth: 0, skipped: 0, not_claimed: 0, blocked: 0 });
+async function publishers(organizationId) {
+  const rows = await prisma.organizationMembership.findMany({
+    where: { organizationId, status: "ACTIVE", user: { status: "ACTIVE", deletedAt: null }, role: { rolePermissions: { some: { permission: { key: "social.publish" } } } } },
+    select: { userId: true },
+    take: 50
+  });
+  return rows.map((r) => r.userId);
+}
+async function notifyPublishers(organizationId, postId, title, message) {
+  const userIds = await publishers(organizationId);
+  await Promise.all(userIds.map((userId) => notificationService.notify({ organizationId, userId, type: "social_publish_failed", title, message, entityType: "social_post", entityId: postId })));
+}
+async function syncPostStatus(postId) {
+  const post = await prisma.socialPost.findUnique({ where: { id: postId }, select: { status: true, targets: { select: { status: true } } } });
+  if (!post || !["SCHEDULED", "PUBLISHING", "FAILED", "APPROVED"].includes(post.status)) return;
+  const next = derivePostStatus(post.status, post.targets);
+  if (next) await prisma.socialPost.update({ where: { id: postId }, data: { status: next } });
+}
+async function audit(organizationId, action, targetId, result, metadata, actor, meta7) {
+  await auditLogRepository.record({
+    organizationId,
+    actorUserId: actor?.id,
+    actorType: actor ? "USER" : "SYSTEM",
+    action,
+    resourceType: "social_post_target",
+    resourceId: targetId,
+    result,
+    metadata,
+    ipAddress: meta7?.ip,
+    userAgent: meta7?.userAgent
+  }).catch((err) => logger.error({ targetId, err: safe(err) }, "[social-publish] audit write failed"));
+}
+async function withTimeout3(p, ms) {
+  let timer;
+  try {
+    return await Promise.race([p, new Promise((_, rej) => {
+      timer = setTimeout(() => rej(new SocialPublishError("uncertain", "The network did not answer in time; the post may or may not have been published.")), ms);
+    })]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+async function buildMedia(organizationId, mediaIds) {
+  if (mediaIds.length === 0) return [];
+  const assets = await prisma.mediaAsset.findMany({ where: { organizationId, id: { in: mediaIds }, status: "ACTIVE" } });
+  if (assets.length !== mediaIds.length) throw new SocialPublishError("permanent", "One or more attached media files are missing.");
+  const storage = getStorageProvider();
+  return mediaIds.map((id2) => {
+    const a = assets.find((x) => x.id === id2);
+    return {
+      mediaId: a.id,
+      mimeType: a.mimeType,
+      altText: a.altText,
+      load: async () => {
+        if (Number(a.sizeBytes) > 10 * 1024 * 1024) throw new SocialPublishError("permanent", "Media file is larger than the 10 MB publishing limit.");
+        const url = await storage.createSignedReadUrl({ key: a.storageKey, expiresInSeconds: 120 });
+        const res = await fetch(url);
+        if (!res.ok) throw new SocialPublishError("transient", `Could not read the media file (HTTP ${res.status}).`, { httpStatus: res.status });
+        return Buffer.from(await res.arrayBuffer());
+      }
+    };
+  });
+}
+var TARGET_INCLUDE = { post: true, account: { select: { id: true, organizationId: true, provider: true, externalAccountId: true, displayName: true, accountType: true, status: true, tokenExpiresAt: true } } };
+var publisher = {
+  /** Attempts one target. Safe to call concurrently from many workers: at most one wins the claim. */
+  async publishTarget(targetId, opts = {}) {
+    const now = opts.now ?? /* @__PURE__ */ new Date();
+    const workerId = opts.workerId ?? `w_${randomUUID3().slice(0, 8)}`;
+    const head = await prisma.socialPostTarget.findUnique({ where: { id: targetId }, include: { post: { select: { organizationId: true } } } });
+    if (!head) throw new NotFoundError("Publishing target not found.");
+    const organizationId = head.post.organizationId;
+    const gate = await publishingSettingsService.gate(organizationId);
+    if (!gate.allowed) return { outcome: "blocked", detail: gate.reason };
+    if (!head.idempotencyKey) await prisma.socialPostTarget.updateMany({ where: { id: targetId, idempotencyKey: null }, data: { idempotencyKey: `art_${randomUUID3()}` } });
+    const claim = await prisma.socialPostTarget.updateMany({
+      where: {
+        id: targetId,
+        status: "SCHEDULED",
+        ...opts.manual ? {} : { scheduledAt: { lte: now }, OR: [{ nextAttemptAt: null }, { nextAttemptAt: { lte: now } }] },
+        post: { status: { in: ["SCHEDULED", "PUBLISHING"] }, deletedAt: null, decidedAt: { not: null } }
+      },
+      data: { status: "PUBLISHING", lockedAt: now, lockedBy: workerId, attempts: { increment: 1 } }
+    });
+    if (claim.count !== 1) return { outcome: "not_claimed" };
+    await prisma.socialPost.updateMany({ where: { id: head.postId, status: "SCHEDULED" }, data: { status: "PUBLISHING" } });
+    const target = await prisma.socialPostTarget.findUniqueOrThrow({ where: { id: targetId }, include: TARGET_INCLUDE });
+    const { post, account } = target;
+    const attemptNumber = await prisma.socialPublishAttempt.count({ where: { targetId } }) + 1;
+    const attempt2 = await prisma.socialPublishAttempt.create({ data: { targetId, attemptNumber, startedAt: /* @__PURE__ */ new Date(), dryRun: gate.dryRun, actorUserId: opts.manual?.actor.id } });
+    const startedMs = Date.now();
+    const actor = opts.manual?.actor;
+    const settings = await publishingSettingsService.getWorkspace(organizationId);
+    const finish = async (data) => prisma.socialPublishAttempt.update({
+      where: { id: attempt2.id },
+      data: { finishedAt: /* @__PURE__ */ new Date(), outcome: data.outcome, errorCategory: data.category ?? null, errorMessage: data.message ?? null, externalPostId: data.externalPostId ?? null, externalUrl: data.externalUrl ?? null, httpStatus: data.httpStatus ?? null, durationMs: Date.now() - startedMs }
+    });
+    const settle = async (status, extra = {}) => {
+      await prisma.socialPostTarget.update({ where: { id: targetId }, data: { status, lockedAt: null, lockedBy: null, ...extra } });
+      await syncPostStatus(post.id);
+    };
+    const release = async (status, message, category, extra = {}) => {
+      await finish({ outcome: "SKIPPED", category, message });
+      await settle(status, { attempts: { decrement: 1 }, publishError: message, ...extra });
+    };
+    const failTerminal = async (outcome, category, message, httpStatus) => {
+      await finish({ outcome, category, message, httpStatus });
+      await settle("FAILED", { publishError: `${category}: ${message}` });
+      await audit(organizationId, "SOCIAL_PUBLISH_FAILED", targetId, "FAILURE", { provider: account.provider, accountId: account.id, postId: post.id, attempt: attemptNumber, category, message, httpStatus });
+      await notifyPublishers(organizationId, post.id, "Social post failed to publish", `"${post.title}" \u2192 ${account.displayName}: ${message}`);
+      logger.warn({ targetId, postId: post.id, attempt: attemptNumber, category, httpStatus }, "[social-publish] failed");
+      return { outcome: "failed", detail: category };
+    };
+    try {
+      const gate2 = await publishingSettingsService.gate(organizationId);
+      if (!gate2.allowed) {
+        await release("SCHEDULED", `Publishing paused (${gate2.reason}).`, "gate");
+        return { outcome: "blocked", detail: gate2.reason };
+      }
+      const dryRun = gate2.dryRun;
+      if (account.status !== "CONNECTED") {
+        return await failTerminal("AUTH_FAILURE", "account_unavailable", `${account.displayName} is ${account.status.toLowerCase().replace("_", " ")}. Reconnect it, then retry.`);
+      }
+      const guardrails = await socialPostService.evaluateGuardrails(organizationId, post, [{ socialAccountId: account.id, bodyOverride: target.bodyOverride }]);
+      if (!guardrails.passed) {
+        const first = guardrails.issues.find((i) => i.severity === "block");
+        return await failTerminal("PERMANENT_FAILURE", "guardrails", `Guardrails no longer pass: ${first?.message ?? "blocking issue"}`);
+      }
+      const connector = connectorRegistry.getAvailable(account.provider);
+      if (!connector?.publish) return await failTerminal("PERMANENT_FAILURE", "unsupported", `${account.provider} publishing is not available in this environment.`);
+      if (dryRun) {
+        const text = target.bodyOverride ?? post.body;
+        await finish({ outcome: "DRY_RUN", category: "dry_run", message: `Dry run: would publish ${text.length} characters${post.mediaIds.length ? ` and ${post.mediaIds.length} media` : ""} to ${account.displayName}. Nothing was sent.` });
+        await settle("FAILED", { publishError: "dry_run: Dry run \u2014 nothing was sent to the network. Switch off dry-run and use Retry now to publish." });
+        await audit(organizationId, "SOCIAL_PUBLISH_DRY_RUN", targetId, "SUCCESS", { provider: account.provider, accountId: account.id, postId: post.id, attempt: attemptNumber }, actor, opts.manual?.meta);
+        return { outcome: "dry_run" };
+      }
+      let tokens2 = null;
+      try {
+        tokens2 = await socialAccountService.loadTokens(account.id);
+      } catch {
+        return await failTerminal("PERMANENT_FAILURE", "credentials", "Stored credentials could not be read. Reconnect the account.");
+      }
+      if (!tokens2) return await failTerminal("AUTH_FAILURE", "credentials", "No stored credentials. Reconnect the account.");
+      if (account.tokenExpiresAt && account.tokenExpiresAt.getTime() <= now.getTime()) {
+        await prisma.socialAccount.update({ where: { id: account.id }, data: { status: "NEEDS_REAUTH", lastError: "Access token expired." } });
+        return await failTerminal("AUTH_FAILURE", "token_expired", "The access token expired. Reconnect the account, then retry.");
+      }
+      let result;
+      try {
+        const media = await buildMedia(organizationId, post.mediaIds);
+        result = await withTimeout3(connector.publish(tokens2, {
+          accountExternalId: account.externalAccountId,
+          accountType: account.accountType,
+          text: target.bodyOverride ?? post.body,
+          linkUrl: post.linkUrl,
+          media,
+          idempotencyKey: (await prisma.socialPostTarget.findUniqueOrThrow({ where: { id: targetId }, select: { idempotencyKey: true } })).idempotencyKey,
+          attempt: attemptNumber
+        }), PUBLISH_CALL_TIMEOUT_MS);
+      } catch (err) {
+        const kind = err instanceof SocialPublishError ? err.kind : "uncertain";
+        const message = safe(err instanceof SocialPublishError ? err.message : `Unexpected error: ${err?.message ?? err}`, [tokens2.accessToken, tokens2.refreshToken]);
+        const httpStatus = err instanceof SocialPublishError ? err.httpStatus : void 0;
+        const decision = decideFailure(kind, target.attempts, settings.maxAttempts, err instanceof SocialPublishError ? err.retryAfterMs : void 0, opts.backoff);
+        if (decision.action === "retry") {
+          await finish({ outcome: "TRANSIENT_FAILURE", category: "transient", message, httpStatus });
+          await settle("SCHEDULED", { nextAttemptAt: new Date(now.getTime() + decision.delayMs), publishError: `transient: ${message}` });
+          await audit(organizationId, "SOCIAL_PUBLISH_RETRY_SCHEDULED", targetId, "FAILURE", { provider: account.provider, postId: post.id, attempt: attemptNumber, message, httpStatus, retryInMs: decision.delayMs }, actor, opts.manual?.meta);
+          logger.info({ targetId, attempt: attemptNumber, retryInMs: decision.delayMs, httpStatus }, "[social-publish] transient failure, retry scheduled");
+          return { outcome: "retry_scheduled", detail: String(decision.delayMs) };
+        }
+        if (decision.action === "uncertain") {
+          await finish({ outcome: "UNCERTAIN", category: "uncertain", message });
+          await settle("UNCERTAIN", { publishError: `uncertain: ${message}` });
+          await audit(organizationId, "SOCIAL_PUBLISH_UNCERTAIN", targetId, "FAILURE", { provider: account.provider, postId: post.id, attempt: attemptNumber, message }, actor, opts.manual?.meta);
+          await notifyPublishers(organizationId, post.id, "Social post needs a manual check", `"${post.title}" \u2192 ${account.displayName}: the network did not confirm whether it was published. Check the account, then mark it published or retry.`);
+          logger.warn({ targetId, attempt: attemptNumber }, "[social-publish] outcome unknown \u2014 marked UNCERTAIN");
+          return { outcome: "uncertain" };
+        }
+        if (decision.action === "reauth") {
+          await prisma.socialAccount.update({ where: { id: account.id }, data: { status: "NEEDS_REAUTH", lastError: message } });
+          const r = await failTerminal("AUTH_FAILURE", "auth", message, httpStatus);
+          return { ...r, outcome: "reauth" };
+        }
+        return await failTerminal("PERMANENT_FAILURE", decision.reason === "max_attempts" ? "max_attempts" : "permanent", decision.reason === "max_attempts" ? `Gave up after ${target.attempts} attempts. Last error: ${message}` : message, httpStatus);
+      }
+      await finish({ outcome: "SUCCESS", externalPostId: result.externalPostId, externalUrl: result.externalUrl });
+      await settle("PUBLISHED", { publishedAt: /* @__PURE__ */ new Date(), externalPostId: result.externalPostId, externalUrl: result.externalUrl, publishError: null, nextAttemptAt: null });
+      await audit(organizationId, "SOCIAL_PUBLISHED", targetId, "SUCCESS", { provider: account.provider, accountId: account.id, postId: post.id, attempt: attemptNumber, externalPostId: result.externalPostId }, actor, opts.manual?.meta);
+      logger.info({ targetId, postId: post.id, provider: account.provider, attempt: attemptNumber, durationMs: Date.now() - startedMs }, "[social-publish] published");
+      return { outcome: "published" };
+    } catch (err) {
+      logger.error({ targetId, err: safe(err) }, "[social-publish] bookkeeping error; target left PUBLISHING for stale recovery");
+      return { outcome: "uncertain", detail: "bookkeeping_error" };
+    }
+  },
+  /** PUBLISHING targets whose worker vanished become UNCERTAIN. Never retried automatically. */
+  async recoverStale(now = /* @__PURE__ */ new Date()) {
+    const stale = await prisma.socialPostTarget.findMany({ where: { status: "PUBLISHING", lockedAt: { lt: new Date(now.getTime() - STALE_PUBLISHING_MS) } }, include: { post: { select: { id: true, title: true, organizationId: true } }, account: { select: { displayName: true } } }, take: 50 });
+    let n = 0;
+    for (const t of stale) {
+      const moved = await prisma.socialPostTarget.updateMany({ where: { id: t.id, status: "PUBLISHING", lockedAt: t.lockedAt }, data: { status: "UNCERTAIN", lockedAt: null, lockedBy: null, publishError: "uncertain: The worker stopped before recording the outcome. Check the account before retrying." } });
+      if (moved.count !== 1) continue;
+      n += 1;
+      await prisma.socialPublishAttempt.updateMany({ where: { targetId: t.id, finishedAt: null }, data: { finishedAt: now, outcome: "UNCERTAIN", errorCategory: "stale", errorMessage: "Worker stopped before the outcome was recorded." } });
+      await syncPostStatus(t.post.id);
+      await audit(t.post.organizationId, "SOCIAL_PUBLISH_UNCERTAIN", t.id, "FAILURE", { postId: t.post.id, reason: "stale_lock" });
+      await notifyPublishers(t.post.organizationId, t.post.id, "Social post needs a manual check", `"${t.post.title}" \u2192 ${t.account.displayName}: publishing was interrupted. Check the account, then mark it published or retry.`);
+    }
+    return n;
+  },
+  /** Marks never-attempted targets that are older than their workspace's grace window as MISSED. */
+  async markMissed(now = /* @__PURE__ */ new Date()) {
+    const overdue = await prisma.socialPostTarget.findMany({
+      where: { status: "SCHEDULED", attempts: 0, scheduledAt: { lt: new Date(now.getTime() - 6e4) } },
+      include: { post: { select: { id: true, title: true, organizationId: true } }, account: { select: { displayName: true } } },
+      orderBy: { scheduledAt: "asc" },
+      take: 200
+    });
+    if (overdue.length === 0) return 0;
+    const graceByOrg = /* @__PURE__ */ new Map();
+    let n = 0;
+    for (const t of overdue) {
+      const org = t.post.organizationId;
+      if (!graceByOrg.has(org)) graceByOrg.set(org, (await publishingSettingsService.getWorkspace(org)).graceMinutes ?? DEFAULT_GRACE_MINUTES);
+      if (!isMissed(t.scheduledAt, t.attempts, now, graceByOrg.get(org))) continue;
+      const moved = await prisma.socialPostTarget.updateMany({ where: { id: t.id, status: "SCHEDULED", attempts: 0 }, data: { status: "MISSED", publishError: `missed: Not published within ${graceByOrg.get(org)} minutes of its scheduled time.` } });
+      if (moved.count !== 1) continue;
+      n += 1;
+      await syncPostStatus(t.post.id);
+      await audit(org, "SOCIAL_PUBLISH_MISSED", t.id, "FAILURE", { postId: t.post.id, scheduledAt: t.scheduledAt });
+      await notifyPublishers(org, t.post.id, "Social post missed its slot", `"${t.post.title}" \u2192 ${t.account.displayName} was not published within the grace window. Reschedule or retry it from the Failures page.`);
+    }
+    return n;
+  },
+  /** One scheduler run: recover stale, mark missed, then publish due targets with bounded batch/concurrency/per-account fairness. */
+  async tick(opts = {}) {
+    const started = Date.now();
+    const now = opts.now ?? /* @__PURE__ */ new Date();
+    const batchSize = opts.batchSize ?? config.socialPublishBatchSize;
+    const concurrency = opts.concurrency ?? config.socialPublishConcurrency;
+    const perAccount = opts.perAccountLimit ?? config.socialPublishPerAccountLimit;
+    const budget = opts.timeBudgetMs ?? config.socialPublishTimeBudgetMs;
+    const workerId = `tick_${randomUUID3().slice(0, 8)}`;
+    const outcomes = emptyOutcomes();
+    const recoveredStale = await this.recoverStale(now);
+    const missed = await this.markMissed(now);
+    const candidates = await prisma.socialPostTarget.findMany({
+      where: { status: "SCHEDULED", scheduledAt: { lte: now }, OR: [{ nextAttemptAt: null }, { nextAttemptAt: { lte: now } }], post: { status: { in: ["SCHEDULED", "PUBLISHING"] }, deletedAt: null, decidedAt: { not: null } } },
+      select: { id: true, socialAccountId: true },
+      orderBy: { scheduledAt: "asc" },
+      take: batchSize * 3
+    });
+    const perCount = /* @__PURE__ */ new Map();
+    const queue = candidates.filter((c) => {
+      const n = perCount.get(c.socialAccountId) ?? 0;
+      if (n >= perAccount) return false;
+      perCount.set(c.socialAccountId, n + 1);
+      return true;
+    }).slice(0, batchSize);
+    let gateReason = "open";
+    const rateLimitedAccounts = /* @__PURE__ */ new Set();
+    let idx = 0;
+    const worker = async () => {
+      while (idx < queue.length && Date.now() - started < budget) {
+        const item = queue[idx++];
+        if (rateLimitedAccounts.has(item.socialAccountId)) {
+          outcomes.skipped += 1;
+          continue;
+        }
+        try {
+          const r = await this.publishTarget(item.id, { workerId, now, backoff: opts.backoff });
+          outcomes[r.outcome] += 1;
+          if (r.outcome === "blocked") gateReason = r.detail ?? "blocked";
+          if (r.outcome === "retry_scheduled") rateLimitedAccounts.add(item.socialAccountId);
+        } catch (err) {
+          outcomes.skipped += 1;
+          logger.error({ targetId: item.id, err: safe(err) }, "[social-publish] unexpected error while publishing");
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(concurrency, Math.max(queue.length, 1)) }, worker));
+    const result = { gate: gateReason, recoveredStale, missed, considered: queue.length, outcomes, durationMs: Date.now() - started };
+    logger.info({ ...result }, "[social-publish] tick");
+    return result;
+  }
+};
+var ACTIONABLE = ["FAILED", "UNCERTAIN", "MISSED"];
+async function loadActionable(caller, targetId, allowed = ACTIONABLE) {
+  const target = await prisma.socialPostTarget.findFirst({ where: { id: targetId, post: { organizationId: caller.organizationId, deletedAt: null } }, include: { post: true, account: { select: { displayName: true, provider: true } } } });
+  if (!target) throw new NotFoundError("Publishing target not found.");
+  if (!allowed.includes(target.status)) throw new ConflictError(`This target is ${target.status}; that action is not available.`);
+  return target;
+}
+var publishingActions = {
+  /** Retry now. UNCERTAIN targets require explicit confirmation that nothing was posted. Never bypasses the gate/dry-run. */
+  async retryNow(caller, targetId, input = {}, meta7 = {}) {
+    const t = await loadActionable(caller, targetId, ["FAILED", "MISSED", "UNCERTAIN"]);
+    if (t.status === "UNCERTAIN" && !input.confirmNotPosted) throw new ValidationError("Confirm that the post is NOT on the network before retrying an uncertain publish (otherwise it may be duplicated).");
+    const now = /* @__PURE__ */ new Date();
+    const moved = await prisma.socialPostTarget.updateMany({ where: { id: targetId, status: t.status }, data: { status: "SCHEDULED", scheduledAt: now, nextAttemptAt: null, attempts: 0, publishError: null } });
+    if (moved.count !== 1) throw new ConflictError("This target changed; refresh and try again.");
+    await prisma.socialPost.updateMany({ where: { id: t.postId, status: { in: ["FAILED", "SCHEDULED"] } }, data: { status: "SCHEDULED", scheduledAt: now } });
+    await audit(caller.organizationId, "SOCIAL_PUBLISH_RETRY_REQUESTED", targetId, "SUCCESS", { from: t.status, confirmNotPosted: !!input.confirmNotPosted, postId: t.postId }, caller, meta7);
+    const result = await publisher.publishTarget(targetId, { manual: { actor: caller, meta: meta7 } });
+    return { result, target: await publishingQueries.getTarget(caller.organizationId, targetId) };
+  },
+  async reschedule(caller, targetId, input, meta7 = {}) {
+    const t = await loadActionable(caller, targetId);
+    if (t.status === "UNCERTAIN" && !input.confirmNotPosted) throw new ValidationError("Confirm that the post is NOT on the network before rescheduling an uncertain publish.");
+    if (input.scheduledAt.getTime() <= Date.now()) throw new ValidationError("Choose a future date and time.");
+    const moved = await prisma.socialPostTarget.updateMany({ where: { id: targetId, status: t.status }, data: { status: "SCHEDULED", scheduledAt: input.scheduledAt, nextAttemptAt: null, attempts: 0, publishError: null } });
+    if (moved.count !== 1) throw new ConflictError("This target changed; refresh and try again.");
+    await prisma.socialPost.updateMany({ where: { id: t.postId, status: { in: ["FAILED", "SCHEDULED"] } }, data: { status: "SCHEDULED", scheduledAt: input.scheduledAt } });
+    await audit(caller.organizationId, "SOCIAL_PUBLISH_RESCHEDULED", targetId, "SUCCESS", { from: t.status, scheduledAt: input.scheduledAt, postId: t.postId }, caller, meta7);
+    return publishingQueries.getTarget(caller.organizationId, targetId);
+  },
+  async markPublished(caller, targetId, input, meta7 = {}) {
+    const t = await loadActionable(caller, targetId);
+    const url = input.url.trim();
+    try {
+      if (new URL(url).protocol !== "https:") throw new Error("protocol");
+    } catch {
+      throw new ValidationError("Enter the https:// link to the live post.");
+    }
+    const moved = await prisma.socialPostTarget.updateMany({ where: { id: targetId, status: t.status }, data: { status: "PUBLISHED", publishedAt: /* @__PURE__ */ new Date(), externalUrl: url, manualResolution: true, resolvedById: caller.id, publishError: null, nextAttemptAt: null } });
+    if (moved.count !== 1) throw new ConflictError("This target changed; refresh and try again.");
+    await prisma.socialPublishAttempt.create({ data: { targetId, attemptNumber: await prisma.socialPublishAttempt.count({ where: { targetId } }) + 1, finishedAt: /* @__PURE__ */ new Date(), outcome: "SUCCESS", errorCategory: "manual", errorMessage: "Marked as published manually.", externalUrl: url, actorUserId: caller.id } });
+    await syncPostStatus(t.postId);
+    await audit(caller.organizationId, "SOCIAL_PUBLISH_MARKED_MANUALLY", targetId, "SUCCESS", { from: t.status, url, postId: t.postId }, caller, meta7);
+    return publishingQueries.getTarget(caller.organizationId, targetId);
+  },
+  async cancel(caller, targetId, meta7 = {}) {
+    const t = await loadActionable(caller, targetId, ["FAILED", "UNCERTAIN", "MISSED", "SCHEDULED"]);
+    const moved = await prisma.socialPostTarget.updateMany({ where: { id: targetId, status: t.status }, data: { status: "CANCELLED", nextAttemptAt: null } });
+    if (moved.count !== 1) throw new ConflictError("This target changed (it may have started publishing); refresh and try again.");
+    await syncPostStatus(t.postId);
+    const remaining = await prisma.socialPostTarget.count({ where: { postId: t.postId, status: { not: "CANCELLED" } } });
+    if (remaining === 0) await prisma.socialPost.update({ where: { id: t.postId }, data: { status: "CANCELLED" } });
+    await audit(caller.organizationId, "SOCIAL_PUBLISH_CANCELLED", targetId, "SUCCESS", { from: t.status, postId: t.postId }, caller, meta7);
+    return publishingQueries.getTarget(caller.organizationId, targetId);
+  }
+};
+var ROW_INCLUDE = {
+  post: { select: { id: true, title: true, body: true, status: true, scheduledAt: true, timezone: true, linkUrl: true, mediaIds: true } },
+  account: { select: { id: true, provider: true, displayName: true, handle: true, avatarUrl: true, accountType: true, status: true } }
+};
+var project = (t) => ({
+  id: t.id,
+  status: t.status,
+  scheduledAt: t.scheduledAt,
+  nextAttemptAt: t.nextAttemptAt,
+  attempts: t.attempts,
+  publishedAt: t.publishedAt,
+  externalPostId: t.externalPostId,
+  externalUrl: t.externalUrl,
+  error: t.publishError ? redactSecrets(t.publishError).slice(0, 300) : null,
+  manualResolution: t.manualResolution,
+  post: t.post,
+  account: t.account
+});
+var publishingQueries = {
+  async queue(organizationId) {
+    const rows = await prisma.socialPostTarget.findMany({
+      where: { status: { in: ["SCHEDULED", "PUBLISHING"] }, post: { organizationId, deletedAt: null } },
+      include: ROW_INCLUDE,
+      orderBy: [{ status: "desc" }, { scheduledAt: "asc" }],
+      take: 200
+    });
+    return { items: rows.map(project), now: (/* @__PURE__ */ new Date()).toISOString() };
+  },
+  async failures(organizationId, q = {}) {
+    const rows = await prisma.socialPostTarget.findMany({
+      where: { status: q.status ? q.status : { in: ACTIONABLE }, post: { organizationId, deletedAt: null } },
+      include: ROW_INCLUDE,
+      orderBy: { updatedAt: "desc" },
+      take: 200
+    });
+    return { items: rows.map(project) };
+  },
+  async getTarget(organizationId, id2) {
+    const t = await prisma.socialPostTarget.findFirst({ where: { id: id2, post: { organizationId, deletedAt: null } }, include: { ...ROW_INCLUDE, publishAttempts: { orderBy: { startedAt: "asc" }, take: 100 } } });
+    if (!t) throw new NotFoundError("Publishing target not found.");
+    const { publishAttempts, ...rest } = t;
+    return {
+      ...project(rest),
+      attemptLog: publishAttempts.map((a) => ({
+        id: a.id,
+        attemptNumber: a.attemptNumber,
+        startedAt: a.startedAt,
+        finishedAt: a.finishedAt,
+        outcome: a.outcome,
+        errorCategory: a.errorCategory,
+        error: a.errorMessage ? redactSecrets(a.errorMessage).slice(0, 300) : null,
+        externalPostId: a.externalPostId,
+        externalUrl: a.externalUrl,
+        httpStatus: a.httpStatus,
+        durationMs: a.durationMs,
+        dryRun: a.dryRun
+      }))
+    };
+  },
+  /** Counters for the Social Overview + the headline "oldest due-but-unpublished" figure. */
+  async metrics(organizationId, now = /* @__PURE__ */ new Date()) {
+    const since = new Date(now.getTime() - 24 * 36e5);
+    const inOrg = { post: { organizationId, deletedAt: null } };
+    const [oldestDue, queued, failures, attempts] = await Promise.all([
+      prisma.socialPostTarget.findFirst({ where: { status: "SCHEDULED", scheduledAt: { lte: now }, ...inOrg }, orderBy: { scheduledAt: "asc" }, select: { scheduledAt: true } }),
+      prisma.socialPostTarget.count({ where: { status: { in: ["SCHEDULED", "PUBLISHING"] }, ...inOrg } }),
+      prisma.socialPostTarget.count({ where: { status: { in: ACTIONABLE }, ...inOrg } }),
+      prisma.socialPublishAttempt.groupBy({ by: ["outcome"], where: { startedAt: { gte: since }, target: inOrg }, _count: { _all: true } })
+    ]);
+    const count = (o) => attempts.find((a) => a.outcome === o)?._count._all ?? 0;
+    return {
+      queued,
+      needsAttention: failures,
+      oldestDueAt: oldestDue?.scheduledAt ?? null,
+      oldestDueSeconds: oldestDue?.scheduledAt ? Math.max(0, Math.round((now.getTime() - oldestDue.scheduledAt.getTime()) / 1e3)) : null,
+      last24h: { published: count("SUCCESS"), failed: count("PERMANENT_FAILURE") + count("AUTH_FAILURE"), retried: count("TRANSIENT_FAILURE"), uncertain: count("UNCERTAIN"), dryRun: count("DRY_RUN") }
+    };
+  },
+  failureCount: (organizationId) => prisma.socialPostTarget.count({ where: { status: { in: ACTIONABLE }, post: { organizationId, deletedAt: null } } })
+};
+
 // server/services/navBadgeService.ts
 var TTL_MS = 3e4;
 var cache = /* @__PURE__ */ new Map();
@@ -17814,7 +18922,7 @@ var navBadgeService = {
     if (hit && Date.now() - hit.at < TTL_MS) return hit.value;
     const perms = caller.role.permissions;
     const universal = caller.role.key === "ADMIN" || caller.role.key === "SUPER_ADMIN";
-    const [notifications, approvals, myWork, socialApprovals] = await Promise.all([
+    const [notifications, approvals, myWork, socialApprovals, socialFailures] = await Promise.all([
       notificationRepository.unreadCount(caller.id, caller.organizationId),
       perms.includes("approvals.read") ? approvalCenterService.summary(caller).then((s) => s.total) : Promise.resolve(void 0),
       perms.includes("automation.read") ? Promise.all([
@@ -17822,9 +18930,10 @@ var navBadgeService = {
         // Same eligibility rule as the My Work page (role-matched unless ADMIN/SUPER_ADMIN).
         prisma.automationApproval.count({ where: { organizationId: caller.organizationId, status: "PENDING", ...universal ? {} : { requiredRole: caller.role.key } } })
       ]).then(([tasks, pending]) => tasks + pending) : Promise.resolve(void 0),
-      perms.includes("social.approve") ? prisma.socialPost.count({ where: { organizationId: caller.organizationId, deletedAt: null, status: "PENDING_APPROVAL" } }) : Promise.resolve(void 0)
+      perms.includes("social.approve") ? prisma.socialPost.count({ where: { organizationId: caller.organizationId, deletedAt: null, status: "PENDING_APPROVAL" } }) : Promise.resolve(void 0),
+      perms.includes("social.publish") ? publishingQueries.failureCount(caller.organizationId) : Promise.resolve(void 0)
     ]);
-    const value = { notifications, ...approvals !== void 0 ? { approvals } : {}, ...myWork !== void 0 ? { myWork } : {}, ...socialApprovals !== void 0 ? { socialApprovals } : {} };
+    const value = { notifications, ...approvals !== void 0 ? { approvals } : {}, ...myWork !== void 0 ? { myWork } : {}, ...socialApprovals !== void 0 ? { socialApprovals } : {}, ...socialFailures !== void 0 ? { socialFailures } : {} };
     cache.set(key2, { at: Date.now(), value });
     return value;
   }
@@ -17928,333 +19037,6 @@ var navRoutes_default = router16;
 // server/routes/v1/socialRoutes.ts
 import { Router as Router17 } from "express";
 init_apiResponse();
-
-// server/services/social/socialAccountService.ts
-import { randomBytes as randomBytes6 } from "node:crypto";
-init_errors();
-
-// server/services/social/tokenVault.ts
-import { createCipheriv as createCipheriv2, createDecipheriv as createDecipheriv2, hkdfSync as hkdfSync2, randomBytes as randomBytes5 } from "node:crypto";
-var FORMAT = "sv1";
-function keyRing() {
-  const ring = /* @__PURE__ */ new Map();
-  for (const entry of config.socialVaultKeys.split(",").map((e) => e.trim()).filter(Boolean)) {
-    const sep = entry.indexOf(":");
-    const version = Number(entry.slice(0, sep));
-    const secret = entry.slice(sep + 1);
-    if (!Number.isInteger(version) || version < 1 || secret.length < 32) {
-      throw new Error("SOCIAL_VAULT_KEYS must look like '1:<secret>,2:<secret>' with secrets of at least 32 characters.");
-    }
-    ring.set(version, Buffer.from(hkdfSync2("sha256", secret, "artify-social-vault-salt", `artify/social/token-vault/v${version}`, 32)));
-  }
-  if (ring.size === 0) {
-    const ikm = config.integrationsEncryptionKey || config.sessionSecret;
-    ring.set(1, Buffer.from(hkdfSync2("sha256", ikm, "artify-social-vault-salt", "artify/social/token-vault/derived", 32)));
-  }
-  return ring;
-}
-function activeKeyVersion() {
-  const ring = keyRing();
-  const wanted = config.socialVaultActiveKeyVersion ?? Math.max(...ring.keys());
-  if (!ring.has(wanted)) throw new Error(`SOCIAL_VAULT_ACTIVE_KEY_VERSION ${wanted} is not in SOCIAL_VAULT_KEYS.`);
-  return wanted;
-}
-var tokenVault = {
-  encrypt(tokens2, accountId) {
-    const keyVersion = activeKeyVersion();
-    const key2 = keyRing().get(keyVersion);
-    const iv = randomBytes5(12);
-    const cipher = createCipheriv2("aes-256-gcm", key2, iv);
-    cipher.setAAD(Buffer.from(accountId));
-    const ct = Buffer.concat([cipher.update(JSON.stringify(tokens2), "utf8"), cipher.final()]);
-    const ciphertext = [FORMAT, iv.toString("base64url"), cipher.getAuthTag().toString("base64url"), ct.toString("base64url")].join(".");
-    return { ciphertext, keyVersion };
-  },
-  decrypt(ciphertext, keyVersion, accountId) {
-    const key2 = keyRing().get(keyVersion);
-    if (!key2) throw new Error(`Social vault key version ${keyVersion} is not available.`);
-    const [format, iv, tag, ct] = ciphertext.split(".");
-    if (format !== FORMAT || !iv || !tag || !ct) throw new Error("Unsupported credential format.");
-    const decipher = createDecipheriv2("aes-256-gcm", key2, Buffer.from(iv, "base64url"));
-    decipher.setAAD(Buffer.from(accountId));
-    decipher.setAuthTag(Buffer.from(tag, "base64url"));
-    try {
-      return JSON.parse(Buffer.concat([decipher.update(Buffer.from(ct, "base64url")), decipher.final()]).toString("utf8"));
-    } catch {
-      throw new Error("Stored credentials could not be decrypted.");
-    }
-  },
-  /** True when a record is encrypted with a key version other than the active one. */
-  needsRotation(keyVersion) {
-    return keyVersion !== activeKeyVersion();
-  },
-  /** Re-encrypts a record under the active key version. */
-  rotate(ciphertext, keyVersion, accountId) {
-    return this.encrypt(this.decrypt(ciphertext, keyVersion, accountId), accountId);
-  }
-};
-var PATTERNS = [
-  /(bearer\s+)[a-z0-9._~+/=-]{8,}/gi,
-  /((?:access|refresh|id)_?token["'\s:=]+)[a-z0-9._~+/=-]{8,}/gi,
-  /((?:client_)?secret["'\s:=]+)[a-z0-9._~+/=-]{8,}/gi,
-  /(code=)[a-z0-9._~+/=-]{8,}/gi
-];
-function redactSecrets(input, knownSecrets = []) {
-  let text = input instanceof Error ? input.message : typeof input === "string" ? input : JSON.stringify(input) ?? "";
-  for (const secret of knownSecrets) if (secret && secret.length >= 6) text = text.split(secret).join("[redacted]");
-  for (const pattern of PATTERNS) text = text.replace(pattern, "$1[redacted]");
-  return text;
-}
-
-// server/services/social/socialAccountService.ts
-var STATE_TTL_MS = 10 * 60 * 1e3;
-var EXPIRY_WARNING_MS = 7 * 24 * 60 * 60 * 1e3;
-var ACCOUNT_SELECT = {
-  id: true,
-  organizationId: true,
-  provider: true,
-  externalAccountId: true,
-  displayName: true,
-  handle: true,
-  avatarUrl: true,
-  accountType: true,
-  status: true,
-  scopes: true,
-  tokenExpiresAt: true,
-  lastSyncAt: true,
-  lastError: true,
-  connectedByUserId: true,
-  createdAt: true,
-  updatedAt: true
-};
-var safeError = (err, secrets = []) => redactSecrets(err, secrets).slice(0, 300);
-var redirectUri = () => `${config.controlCenterBaseUrl}/social/accounts`;
-function connectorOrThrow(provider) {
-  const known = connectorRegistry.get(provider);
-  if (!known) throw new ValidationError("Unknown social provider.");
-  const connector = connectorRegistry.getAvailable(provider);
-  if (!connector) throw new ValidationError(`${known.label} is not configured yet.`);
-  return connector;
-}
-async function loadInOrgOrThrow(organizationId, id2) {
-  const account = await prisma.socialAccount.findFirst({ where: { id: id2, organizationId }, select: ACCOUNT_SELECT });
-  if (!account) throw new NotFoundError("Social account not found.");
-  return account;
-}
-async function saveTokens(accountId, tokens2) {
-  const { ciphertext, keyVersion } = tokenVault.encrypt(tokens2, accountId);
-  await prisma.socialAccountCredential.upsert({
-    where: { socialAccountId: accountId },
-    create: { socialAccountId: accountId, ciphertext, keyVersion },
-    update: { ciphertext, keyVersion }
-  });
-}
-async function loadTokens(accountId) {
-  const row = await prisma.socialAccountCredential.findUnique({ where: { socialAccountId: accountId } });
-  return row ? tokenVault.decrypt(row.ciphertext, row.keyVersion, accountId) : null;
-}
-async function managersOf(organizationId) {
-  const rows = await prisma.organizationMembership.findMany({
-    where: {
-      organizationId,
-      status: "ACTIVE",
-      user: { status: "ACTIVE", deletedAt: null },
-      role: { rolePermissions: { some: { permission: { key: "social.accounts.manage" } } } }
-    },
-    select: { userId: true },
-    take: 50
-  });
-  return rows.map((r) => r.userId);
-}
-async function notifyManagers(account, title, message) {
-  const userIds = await managersOf(account.organizationId);
-  await Promise.all(
-    userIds.map(
-      (userId) => notificationService.notify({ organizationId: account.organizationId, userId, type: "social_account_attention", title, message, entityType: "social_account", entityId: account.id })
-    )
-  );
-}
-var socialAccountService = {
-  async list(organizationId) {
-    const accounts = await prisma.socialAccount.findMany({ where: { organizationId }, orderBy: [{ status: "asc" }, { displayName: "asc" }], select: ACCOUNT_SELECT });
-    return { accounts, providers: connectorRegistry.list() };
-  },
-  get: (organizationId, id2) => loadInOrgOrThrow(organizationId, id2),
-  /** Begins OAuth: returns the provider URL. The single-use `state` is stored hashed and bound to this user + workspace + provider. */
-  async startConnect(user, provider, reconnectAccountId) {
-    const connector = connectorOrThrow(provider);
-    if (reconnectAccountId) {
-      const existing = await loadInOrgOrThrow(user.organizationId, reconnectAccountId);
-      if (existing.provider !== provider) throw new ValidationError("That account belongs to a different provider.");
-    }
-    const state = `art_oauth_${randomBytes6(32).toString("base64url")}`;
-    await prisma.socialOAuthState.create({
-      data: { stateHash: hashToken(state), organizationId: user.organizationId, userId: user.id, provider, reconnectAccountId: reconnectAccountId ?? null, expiresAt: new Date(Date.now() + STATE_TTL_MS) }
-    });
-    return { authUrl: connector.getAuthUrl({ state, redirectUri: redirectUri(), scopes: connector.defaultScopes }) };
-  },
-  async handleCallback(user, input, meta6 = {}) {
-    const invalid = () => new AuthenticationError("This connection request is invalid or has expired. Please start again.");
-    const stateHash = hashToken(input.state);
-    const row = await prisma.socialOAuthState.findUnique({ where: { stateHash } });
-    if (!row || row.usedAt || row.expiresAt.getTime() <= Date.now() || row.userId !== user.id || row.organizationId !== user.organizationId) throw invalid();
-    const claimed = await prisma.socialOAuthState.updateMany({ where: { stateHash, usedAt: null }, data: { usedAt: /* @__PURE__ */ new Date() } });
-    if (claimed.count !== 1) throw invalid();
-    const connector = connectorOrThrow(row.provider);
-    if (input.error || !input.code) throw new ValidationError("The provider did not grant access.");
-    let result;
-    try {
-      result = await connector.handleCallback({ code: input.code, redirectUri: redirectUri() });
-    } catch (err) {
-      await auditLogRepository.record({
-        organizationId: user.organizationId,
-        actorUserId: user.id,
-        actorType: "USER",
-        action: "SOCIAL_ACCOUNT_CONNECT_FAILED",
-        resourceType: "social_account",
-        result: "FAILURE",
-        metadata: { provider: row.provider, reason: safeError(err, [input.code]) },
-        ipAddress: meta6.ip,
-        userAgent: meta6.userAgent
-      });
-      throw new ValidationError("Could not connect the account. Please try again.");
-    }
-    const { profile, tokens: tokens2 } = result;
-    if (row.reconnectAccountId) {
-      const target = await loadInOrgOrThrow(user.organizationId, row.reconnectAccountId);
-      if (target.externalAccountId !== profile.externalAccountId) throw new ValidationError("You signed in with a different account than the one being reconnected.");
-    }
-    const previous = await prisma.socialAccount.findUnique({
-      where: { organizationId_provider_externalAccountId: { organizationId: user.organizationId, provider: row.provider, externalAccountId: profile.externalAccountId } },
-      select: { id: true, status: true }
-    });
-    const data = {
-      displayName: profile.displayName,
-      handle: profile.handle ?? null,
-      avatarUrl: profile.avatarUrl ?? null,
-      accountType: profile.accountType ?? "PROFILE",
-      status: "CONNECTED",
-      scopes: tokens2.scopes ?? connector.defaultScopes,
-      tokenExpiresAt: tokens2.expiresAt ? new Date(tokens2.expiresAt) : null,
-      lastSyncAt: /* @__PURE__ */ new Date(),
-      lastError: null,
-      connectedByUserId: user.id
-    };
-    const account = await prisma.socialAccount.upsert({
-      where: { organizationId_provider_externalAccountId: { organizationId: user.organizationId, provider: row.provider, externalAccountId: profile.externalAccountId } },
-      create: { organizationId: user.organizationId, provider: row.provider, externalAccountId: profile.externalAccountId, ...data },
-      update: data,
-      select: ACCOUNT_SELECT
-    });
-    await saveTokens(account.id, tokens2);
-    const reauth = !!previous && previous.status !== "CONNECTED";
-    await auditLogRepository.record({
-      organizationId: user.organizationId,
-      actorUserId: user.id,
-      actorType: "USER",
-      action: row.reconnectAccountId || reauth ? "SOCIAL_ACCOUNT_REAUTHENTICATED" : "SOCIAL_ACCOUNT_CONNECTED",
-      resourceType: "social_account",
-      resourceId: account.id,
-      metadata: { provider: account.provider, externalAccountId: account.externalAccountId, handle: account.handle },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
-    });
-    return account;
-  },
-  async disconnect(user, id2, meta6 = {}) {
-    const account = await loadInOrgOrThrow(user.organizationId, id2);
-    await prisma.socialAccountCredential.deleteMany({ where: { socialAccountId: id2 } });
-    const updated = await prisma.socialAccount.update({ where: { id: id2 }, data: { status: "DISCONNECTED", tokenExpiresAt: null, lastError: null }, select: ACCOUNT_SELECT });
-    await auditLogRepository.record({
-      organizationId: user.organizationId,
-      actorUserId: user.id,
-      actorType: "USER",
-      action: "SOCIAL_ACCOUNT_DISCONNECTED",
-      resourceType: "social_account",
-      resourceId: id2,
-      metadata: { provider: account.provider, externalAccountId: account.externalAccountId, handle: account.handle },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
-    });
-    return updated;
-  },
-  /**
-   * Verifies one account: refreshes a token that is expiring within 7 days (or already expired), then asks the provider.
-   * On failure the account moves to NEEDS_REAUTH (or ERROR for infrastructure failures) and managers are notified once.
-   */
-  async checkHealth(accountId, opts = {}) {
-    const account = await prisma.socialAccount.findUnique({ where: { id: accountId }, select: ACCOUNT_SELECT });
-    if (!account) throw new NotFoundError("Social account not found.");
-    if (account.status === "DISCONNECTED") return account;
-    const connector = connectorRegistry.getAvailable(account.provider);
-    if (!connector) return account;
-    const fail = async (status, reason) => {
-      const updated = await prisma.socialAccount.update({ where: { id: account.id }, data: { status, lastError: reason }, select: ACCOUNT_SELECT });
-      if (account.status === "CONNECTED") {
-        await auditLogRepository.record({
-          organizationId: account.organizationId,
-          actorUserId: opts.actor?.id,
-          actorType: opts.actor ? "USER" : "SYSTEM",
-          action: "SOCIAL_ACCOUNT_NEEDS_ATTENTION",
-          resourceType: "social_account",
-          resourceId: account.id,
-          result: "FAILURE",
-          metadata: { provider: account.provider, status, reason },
-          ipAddress: opts.meta?.ip,
-          userAgent: opts.meta?.userAgent
-        });
-        await notifyManagers(updated, `${account.displayName} needs attention`, status === "NEEDS_REAUTH" ? `Reconnect ${account.displayName} (${account.provider}) to keep it working. ${reason}` : `${account.displayName} (${account.provider}) failed a health check. ${reason}`);
-      }
-      return updated;
-    };
-    let tokens2;
-    try {
-      tokens2 = await loadTokens(account.id);
-    } catch (err) {
-      logger.error({ accountId: account.id, err: safeError(err) }, "[social] could not decrypt stored credentials");
-      return fail("ERROR", "Stored credentials could not be read.");
-    }
-    if (!tokens2) return fail("NEEDS_REAUTH", "No stored credentials; reconnect this account.");
-    try {
-      const expiresSoon = !!account.tokenExpiresAt && account.tokenExpiresAt.getTime() - Date.now() < EXPIRY_WARNING_MS;
-      let expiresAt = account.tokenExpiresAt;
-      if (expiresSoon) {
-        try {
-          tokens2 = await connector.refreshToken(tokens2);
-          await saveTokens(account.id, tokens2);
-          expiresAt = tokens2.expiresAt ? new Date(tokens2.expiresAt) : null;
-        } catch (err) {
-          return fail("NEEDS_REAUTH", `Token expires ${account.tokenExpiresAt.toISOString().slice(0, 10)} and could not be refreshed. ${safeError(err, [tokens2.accessToken, tokens2.refreshToken])}`.slice(0, 300));
-        }
-      }
-      const health = await connector.healthCheck(tokens2);
-      if (!health.ok) return fail("NEEDS_REAUTH", safeError(health.error ?? "The provider rejected the credentials.", [tokens2.accessToken, tokens2.refreshToken]));
-      return prisma.socialAccount.update({
-        where: { id: account.id },
-        data: { status: "CONNECTED", lastSyncAt: /* @__PURE__ */ new Date(), lastError: null, tokenExpiresAt: health.expiresAt ? new Date(health.expiresAt) : expiresAt },
-        select: ACCOUNT_SELECT
-      });
-    } catch (err) {
-      return fail("ERROR", safeError(err, [tokens2?.accessToken, tokens2?.refreshToken]));
-    }
-  },
-  /** Daily job: re-check every connected/errored account (bounded per run). Returns counts only. */
-  async runTokenHealthJob(limit = 500) {
-    const accounts = await prisma.socialAccount.findMany({ where: { status: { in: ["CONNECTED", "ERROR"] } }, select: { id: true }, orderBy: { lastSyncAt: "asc" }, take: limit });
-    let needsAttention = 0;
-    let errors = 0;
-    for (const { id: id2 } of accounts) {
-      try {
-        const result = await this.checkHealth(id2);
-        if (result.status === "NEEDS_REAUTH" || result.status === "ERROR") needsAttention += 1;
-      } catch (err) {
-        errors += 1;
-        logger.error({ accountId: id2, err: safeError(err) }, "[social] token health check crashed");
-      }
-    }
-    return { checked: accounts.length, needsAttention, errors };
-  }
-};
 
 // server/schemas/socialSchemas.ts
 import { z as z23 } from "zod";
@@ -18695,7 +19477,7 @@ var socialAiService = {
     return plans.map((p) => ({ id: p.id, brief: p.brief, cadencePerWeek: p.cadencePerWeek, startDate: p.startDate, endDate: p.endDate, status: p.status, createdAt: p.createdAt, postCount: p._count.posts }));
   },
   /** (a) Draft from brief: one DRAFT post with a per-account text for every selected account. */
-  async draftFromBrief(caller, input, meta6 = {}) {
+  async draftFromBrief(caller, input, meta7 = {}) {
     const targets = await accountsFor(caller, input.accountIds);
     const voice = await socialPostService.getBrandVoice(caller.organizationId);
     const source = input.sourceContent ? await socialPostService.resolveSourceContent(caller.organizationId, input.sourceContent.type, input.sourceContent.id) : null;
@@ -18703,7 +19485,7 @@ var socialAiService = {
       caller,
       def: SOCIAL_PROMPTS.draft,
       toolCode: "social_draft_from_brief",
-      meta: meta6,
+      meta: meta7,
       schema: draftSchema,
       inputSummary: { instruction: input.instruction.slice(0, 500), accounts: input.accountIds.length, sourceContent: input.sourceContent ?? null },
       variables: {
@@ -18733,13 +19515,13 @@ Link: ${source.url}` : "(none)"
         bodyOverrides: Object.fromEntries(targets.map((t, i) => [t.account.id, bodies[i]]).filter(([, b]) => b !== bodies[0])),
         sourceContent: input.sourceContent
       },
-      meta6,
+      meta7,
       { aiGenerated: true, aiExecutionId: executionId }
     );
     return { post, executionId };
   },
   /** (b) Generate plan: a SocialContentPlan plus DRAFT posts at suggested slots, all linked to the plan. */
-  async generatePlan(caller, input, meta6 = {}) {
+  async generatePlan(caller, input, meta7 = {}) {
     const targets = await accountsFor(caller, input.accountIds);
     const slots = planSlots(input.startDate, input.endDate, input.cadencePerWeek);
     if (slots.length === 0) throw new ValidationError("There are no future posting slots in that date range.");
@@ -18748,7 +19530,7 @@ Link: ${source.url}` : "(none)"
       caller,
       def: SOCIAL_PROMPTS.plan,
       toolCode: "social_content_plan",
-      meta: meta6,
+      meta: meta7,
       schema: planSchema,
       inputSummary: { brief: input.brief.slice(0, 500), accounts: input.accountIds.length, cadencePerWeek: input.cadencePerWeek, slots: slots.length },
       variables: {
@@ -18769,7 +19551,7 @@ Link: ${source.url}` : "(none)"
         await socialPostService.create(
           caller,
           { title: item.title || `Planned post ${i + 1}`, body: item.body, mediaIds: [], linkUrl: null, scheduledAt: slots[i], timezone: "UTC", accountIds: input.accountIds, bodyOverrides: {} },
-          meta6,
+          meta7,
           { aiGenerated: true, aiExecutionId: executionId, planId: plan.id }
         )
       );
@@ -18782,13 +19564,13 @@ Link: ${source.url}` : "(none)"
       resourceType: "social_content_plan",
       resourceId: plan.id,
       metadata: { posts: posts.length, cadencePerWeek: input.cadencePerWeek, aiExecutionId: executionId },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return { plan: { id: plan.id, brief: plan.brief, cadencePerWeek: plan.cadencePerWeek, startDate: plan.startDate, endDate: plan.endDate, status: plan.status, createdAt: plan.createdAt }, posts, executionId };
   },
   /** (c) Rewrite / shorten / translate the text of an editable draft. The previous text is returned so the UI can undo. */
-  async rewrite(caller, postId, input, meta6 = {}) {
+  async rewrite(caller, postId, input, meta7 = {}) {
     const post = await socialPostService.loadPost(caller.organizationId, postId);
     if (!CONTENT_EDITABLE.includes(post.status)) throw new ConflictError(`A post in status ${post.status} cannot be edited. Move it back to draft first.`);
     const target = input.accountId ? post.targets.find((t) => t.socialAccountId === input.accountId) : void 0;
@@ -18802,12 +19584,12 @@ Link: ${source.url}` : "(none)"
       caller,
       def: SOCIAL_PROMPTS.rewrite,
       toolCode: `social_${input.action}`,
-      meta: meta6,
+      meta: meta7,
       schema: rewriteSchema,
       inputSummary: { postId, action: input.action, language: input.language ?? null },
       variables: { brandVoice: brandVoiceText(voice), task: `${task}${input.instruction ? ` Extra guidance: ${input.instruction}` : ""}`, maxChars: constraints.maxChars, text: current }
     });
-    const updated = await socialPostService.update(caller, postId, target ? { bodyOverrides: { ...Object.fromEntries(post.targets.filter((t) => t.bodyOverride).map((t) => [t.socialAccountId, t.bodyOverride])), [target.socialAccountId]: result.body } } : { body: result.body }, meta6);
+    const updated = await socialPostService.update(caller, postId, target ? { bodyOverrides: { ...Object.fromEntries(post.targets.filter((t) => t.bodyOverride).map((t) => [t.socialAccountId, t.bodyOverride])), [target.socialAccountId]: result.body } } : { body: result.body }, meta7);
     await prisma.socialPost.update({ where: { id: postId }, data: { aiGenerated: true, aiExecutionId: executionId } });
     await auditLogRepository.record({
       organizationId: caller.organizationId,
@@ -18817,8 +19599,8 @@ Link: ${source.url}` : "(none)"
       resourceType: "social_post",
       resourceId: postId,
       metadata: { action: input.action, aiExecutionId: executionId },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return { post: { ...updated, aiGenerated: true, aiExecutionId: executionId }, previousBody: current, executionId };
   }
@@ -18902,6 +19684,18 @@ var aiRewriteSchema = z25.object({
   accountId: id.optional()
 });
 var contentSourcesQuerySchema = z25.object({ type: z25.enum(["post", "case_study"]), search: z25.string().trim().max(200).optional() });
+var publishingSettingsSchema = z25.object({
+  enabled: z25.boolean(),
+  dryRun: z25.boolean(),
+  killSwitch: z25.boolean(),
+  graceMinutes: z25.number().int().min(5).max(1440),
+  maxAttempts: z25.number().int().min(1).max(10)
+}).partial().refine((v) => Object.keys(v).length > 0, { message: "Nothing to update." });
+var publishingGlobalSchema = z25.object({ enabled: z25.boolean(), dryRun: z25.boolean(), killSwitch: z25.boolean() }).partial().refine((v) => Object.keys(v).length > 0, { message: "Nothing to update." });
+var failuresQuerySchema = z25.object({ status: z25.enum(["FAILED", "UNCERTAIN", "MISSED"]).optional() });
+var retryTargetSchema = z25.object({ confirmNotPosted: z25.boolean().optional() });
+var rescheduleTargetSchema = z25.object({ scheduledAt: z25.coerce.date(), confirmNotPosted: z25.boolean().optional() });
+var markPublishedSchema = z25.object({ url: z25.string().trim().url().max(2e3) });
 
 // server/routes/v1/socialContentRoutes.ts
 var meta3 = (req) => ({ ip: req.ip, userAgent: req.headers["user-agent"], requestId: req.requestId });
@@ -18990,8 +19784,62 @@ socialContentRouter.post("/posts/:id/ai/rewrite", publish, aiExecutionLimiter, a
   sendSuccess(res, await socialAiService.rewrite(req.user, req.params.id, aiRewriteSchema.parse(req.body), meta3(req)));
 }));
 
-// server/routes/v1/formRoutes.ts
+// server/routes/v1/socialPublishingRoutes.ts
+import { timingSafeEqual as timingSafeEqual2 } from "node:crypto";
 import { Router as Router19 } from "express";
+init_apiResponse();
+init_errors();
+var meta4 = (req) => ({ ip: req.ip, userAgent: req.headers["user-agent"], requestId: req.requestId });
+var constantTimeEquals = (a, b) => {
+  const x = Buffer.from(a);
+  const y = Buffer.from(b);
+  return x.length === y.length && timingSafeEqual2(x, y);
+};
+var socialInternalRouter = Router19();
+socialInternalRouter.all(
+  "/publish-tick",
+  asyncHandler(async (req, res) => {
+    if (req.method !== "GET" && req.method !== "POST") throw new NotFoundError("Not found.");
+    if (!config.cronSecret) throw new NotFoundError("Not found.");
+    if (!constantTimeEquals(req.headers.authorization ?? "", `Bearer ${config.cronSecret}`)) throw new AuthenticationError("Invalid cron credentials.");
+    sendSuccess(res, { publish: await publisher.tick() });
+  })
+);
+var socialPublishingRouter = Router19();
+socialPublishingRouter.use(authenticateToken);
+var read2 = requirePermission("social.read");
+var publish2 = requirePermission("social.publish");
+var manage2 = requirePermission("social.accounts.manage");
+socialPublishingRouter.get("/queue", read2, asyncHandler(async (req, res) => sendSuccess(res, await publishingQueries.queue(req.user.organizationId))));
+socialPublishingRouter.get("/failures", read2, asyncHandler(async (req, res) => {
+  const q = failuresQuerySchema.parse(req.query);
+  sendSuccess(res, await publishingQueries.failures(req.user.organizationId, q));
+}));
+socialPublishingRouter.get("/metrics", read2, asyncHandler(async (req, res) => sendSuccess(res, { metrics: await publishingQueries.metrics(req.user.organizationId) })));
+socialPublishingRouter.get("/settings", read2, asyncHandler(async (req, res) => sendSuccess(res, await publishingSettingsService.view(req.user.organizationId))));
+socialPublishingRouter.put("/settings", manage2, sensitiveActionLimiter, asyncHandler(async (req, res) => {
+  sendSuccess(res, await publishingSettingsService.updateWorkspace(req.user, publishingSettingsSchema.parse(req.body), meta4(req)));
+}));
+socialPublishingRouter.put("/global", manage2, sensitiveActionLimiter, asyncHandler(async (req, res) => {
+  sendSuccess(res, await publishingSettingsService.updateGlobal(req.user, publishingGlobalSchema.parse(req.body), meta4(req)));
+}));
+socialPublishingRouter.get("/targets/:id", read2, asyncHandler(async (req, res) => sendSuccess(res, { target: await publishingQueries.getTarget(req.user.organizationId, String(req.params.id)) })));
+socialPublishingRouter.post("/targets/:id/retry", publish2, sensitiveActionLimiter, asyncHandler(async (req, res) => {
+  sendSuccess(res, await publishingActions.retryNow(req.user, String(req.params.id), retryTargetSchema.parse(req.body ?? {}), meta4(req)));
+}));
+socialPublishingRouter.post("/targets/:id/reschedule", publish2, sensitiveActionLimiter, asyncHandler(async (req, res) => {
+  const body = rescheduleTargetSchema.parse(req.body);
+  sendSuccess(res, { target: await publishingActions.reschedule(req.user, String(req.params.id), body, meta4(req)) });
+}));
+socialPublishingRouter.post("/targets/:id/mark-published", publish2, sensitiveActionLimiter, asyncHandler(async (req, res) => {
+  sendSuccess(res, { target: await publishingActions.markPublished(req.user, String(req.params.id), markPublishedSchema.parse(req.body), meta4(req)) });
+}));
+socialPublishingRouter.post("/targets/:id/cancel", publish2, sensitiveActionLimiter, asyncHandler(async (req, res) => {
+  sendSuccess(res, { target: await publishingActions.cancel(req.user, String(req.params.id), meta4(req)) });
+}));
+
+// server/routes/v1/formRoutes.ts
+import { Router as Router20 } from "express";
 
 // server/services/formService.ts
 init_errors();
@@ -19012,7 +19860,7 @@ var formService = {
   async getForm(organizationId, id2) {
     return loadFormOrThrow(id2, organizationId);
   },
-  async createForm(caller, input, meta6 = {}) {
+  async createForm(caller, input, meta7 = {}) {
     const organizationId = caller.organizationId;
     if (input.slug) {
       const dup = await formRepository.findBySlugInOrg(organizationId, input.slug);
@@ -19037,12 +19885,12 @@ var formService = {
       resourceType: "form",
       resourceId: form.id,
       afterData: { name: form.name, slug: form.slug },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return form;
   },
-  async updateForm(caller, id2, input, meta6 = {}) {
+  async updateForm(caller, id2, input, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadFormOrThrow(id2, organizationId);
     if (input.slug !== void 0 && input.slug !== existing.slug) {
@@ -19067,12 +19915,12 @@ var formService = {
       resourceId: id2,
       beforeData: { name: existing.name, slug: existing.slug, status: existing.status },
       afterData: { name: input.name, slug: input.slug, status: input.status },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return updated;
   },
-  async deleteForm(caller, id2, meta6 = {}) {
+  async deleteForm(caller, id2, meta7 = {}) {
     const organizationId = caller.organizationId;
     await loadFormOrThrow(id2, organizationId);
     const submissionCount = await formRepository.countSubmissions(id2);
@@ -19087,8 +19935,8 @@ var formService = {
       action: "FORM_DELETED",
       resourceType: "form",
       resourceId: id2,
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
   },
   async listSubmissions(organizationId, formId, page, limit) {
@@ -19191,7 +20039,7 @@ var publicFormSubmitSchema = z26.object({
 });
 
 // server/routes/v1/formRoutes.ts
-var router17 = Router19();
+var router17 = Router20();
 router17.use(authenticateToken);
 function requestMeta8(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
@@ -19294,9 +20142,9 @@ router17.get(
 var formRoutes_default = router17;
 
 // server/routes/v1/crmRoutes.ts
-import { Router as Router20 } from "express";
+import { Router as Router21 } from "express";
 init_apiResponse();
-var router18 = Router20();
+var router18 = Router21();
 router18.use(authenticateToken);
 router18.get(
   "/summary",
@@ -19356,7 +20204,7 @@ router18.get(
 var crmRoutes_default = router18;
 
 // server/routes/v1/campaignRoutes.ts
-import { Router as Router21 } from "express";
+import { Router as Router22 } from "express";
 
 // server/repositories/caseStudyRepository.ts
 function slugify13(input) {
@@ -19619,7 +20467,7 @@ var campaignService = {
   async getCampaign(organizationId, id2) {
     return loadCampaignOrThrow(id2, organizationId);
   },
-  async createCampaign(caller, input, meta6 = {}) {
+  async createCampaign(caller, input, meta7 = {}) {
     const organizationId = caller.organizationId;
     await assertRelationshipsUsable(input, organizationId);
     const campaign = await campaignRepository.create({
@@ -19653,13 +20501,13 @@ var campaignService = {
       resourceType: "campaign",
       resourceId: campaign.id,
       afterData: { name: campaign.name, status: campaign.status, channel: campaign.channel, utmCampaign: campaign.utmCampaign },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     await emitCampaignEvent("campaign.created", campaign, caller.id);
     return loadCampaignOrThrow(campaign.id, organizationId);
   },
-  async updateCampaign(caller, id2, input, meta6 = {}) {
+  async updateCampaign(caller, id2, input, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadCampaignOrThrow(id2, organizationId);
     if (TERMINAL_STATUSES4.has(existing.status)) {
@@ -19697,15 +20545,15 @@ var campaignService = {
       resourceId: id2,
       beforeData: { name: existing.name, channel: existing.channel },
       afterData: patch,
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     const updated = await loadCampaignOrThrow(id2, organizationId);
     await emitCampaignEvent("campaign.updated", updated, caller.id);
     return updated;
   },
   /** Creates a new DRAFT campaign copying this one's fields and relations (never its leads/opportunities/clients — those are this campaign's own attributed activity, not the new copy's). */
-  async duplicateCampaign(caller, id2, input, meta6 = {}) {
+  async duplicateCampaign(caller, id2, input, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadCampaignOrThrow(id2, organizationId);
     const copy = await campaignRepository.create({
@@ -19750,12 +20598,12 @@ var campaignService = {
       resourceId: copy.id,
       beforeData: { duplicatedFromCampaignId: id2 },
       afterData: { name: copy.name },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return loadCampaignOrThrow(copy.id, organizationId);
   },
-  async activateCampaign(caller, id2, meta6 = {}) {
+  async activateCampaign(caller, id2, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadCampaignOrThrow(id2, organizationId);
     assertValidTransition3(existing.status, "ACTIVE");
@@ -19770,14 +20618,14 @@ var campaignService = {
       resourceId: id2,
       beforeData: { status: existing.status },
       afterData: { status: "ACTIVE" },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     const updated = await loadCampaignOrThrow(id2, organizationId);
     await emitCampaignEvent("campaign.activated", updated, caller.id);
     return updated;
   },
-  async pauseCampaign(caller, id2, meta6 = {}) {
+  async pauseCampaign(caller, id2, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadCampaignOrThrow(id2, organizationId);
     if (existing.status !== "ACTIVE") throw new ConflictError("Only an ACTIVE campaign can be paused.");
@@ -19791,14 +20639,14 @@ var campaignService = {
       resourceId: id2,
       beforeData: { status: existing.status },
       afterData: { status: "PAUSED" },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     const updated = await loadCampaignOrThrow(id2, organizationId);
     await emitCampaignEvent("campaign.paused", updated, caller.id);
     return updated;
   },
-  async archiveCampaign(caller, id2, meta6 = {}) {
+  async archiveCampaign(caller, id2, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadCampaignOrThrow(id2, organizationId);
     if (existing.status === "ARCHIVED") throw new ConflictError("This campaign is already archived.");
@@ -19812,8 +20660,8 @@ var campaignService = {
       resourceId: id2,
       beforeData: { status: existing.status },
       afterData: { status: "ARCHIVED" },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     const updated = await loadCampaignOrThrow(id2, organizationId);
     await emitCampaignEvent("campaign.archived", updated, caller.id);
@@ -19828,7 +20676,7 @@ var campaignService = {
    * separately permissioned action), it only refuses to go live until
    * that's genuinely true.
    */
-  async publishCampaign(caller, id2, meta6 = {}) {
+  async publishCampaign(caller, id2, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadCampaignOrThrow(id2, organizationId);
     assertValidTransition3(existing.status, "ACTIVE");
@@ -19836,7 +20684,7 @@ var campaignService = {
     if (existing.landingPageId && existing.landingPage?.status !== "PUBLISHED") {
       throw new ValidationError("This campaign's landing page must be published before the campaign can go live.");
     }
-    return this.activateCampaign(caller, id2, meta6);
+    return this.activateCampaign(caller, id2, meta7);
   },
   /**
    * Composes the real, resolvable preview URL for this campaign's landing
@@ -19944,7 +20792,7 @@ var duplicateCampaignSchema = z27.object({
 });
 
 // server/routes/v1/campaignRoutes.ts
-var router19 = Router21();
+var router19 = Router22();
 router19.use(authenticateToken);
 function requestMeta9(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
@@ -20051,7 +20899,7 @@ router19.post(
 var campaignRoutes_default = router19;
 
 // server/routes/v1/marketingRoutes.ts
-import { Router as Router22 } from "express";
+import { Router as Router23 } from "express";
 
 // server/services/marketingService.ts
 var marketingService = {
@@ -20103,7 +20951,7 @@ var marketingService = {
 
 // server/routes/v1/marketingRoutes.ts
 init_apiResponse();
-var router20 = Router22();
+var router20 = Router23();
 router20.use(authenticateToken);
 router20.get(
   "/summary",
@@ -20115,9 +20963,9 @@ router20.get(
 var marketingRoutes_default = router20;
 
 // server/routes/v1/onboardingRoutes.ts
-import { Router as Router23 } from "express";
+import { Router as Router24 } from "express";
 init_apiResponse();
-var router21 = Router23();
+var router21 = Router24();
 router21.use(authenticateToken);
 function requestMeta10(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
@@ -20198,7 +21046,7 @@ router21.post(
 var onboardingRoutes_default = router21;
 
 // server/routes/v1/workspaceRoutes.ts
-import { Router as Router24 } from "express";
+import { Router as Router25 } from "express";
 
 // server/repositories/workspaceInvitationRepository.ts
 var workspaceInvitationRepository = {
@@ -20277,13 +21125,13 @@ var invitationService = {
     const { rows, total } = await workspaceInvitationRepository.list(workspaceId, page, limit);
     return {
       rows: rows.map((r) => {
-        const { tokenHash: _tokenHash, ...safe } = r;
-        return { ...safe, status: computeInvitationStatus(r) };
+        const { tokenHash: _tokenHash, ...safe2 } = r;
+        return { ...safe2, status: computeInvitationStatus(r) };
       }),
       total
     };
   },
-  async createInvitation(caller, workspaceId, input, meta6 = {}) {
+  async createInvitation(caller, workspaceId, input, meta7 = {}) {
     const workspace = await loadWorkspaceForOwnerOrThrow2(workspaceId, caller.organizationId);
     const adminRole = await roleRepository.findByKey(CLIENT_ADMIN_ROLE_KEY);
     if (!adminRole) throw new InternalError("Required role configuration is missing.");
@@ -20314,15 +21162,15 @@ var invitationService = {
       resourceType: "workspace_invitation",
       resourceId: invitation.id,
       afterData: { workspaceId: workspace.id, email, roleKey: CLIENT_ADMIN_ROLE_KEY },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     if (workspace.provisionedForClient) {
       await onboardingService.completeStepForClient(workspace.provisionedForClient.id, "ADMINISTRATOR_INVITED", caller.id);
     }
     return { invitation, devToken: config.isProduction ? void 0 : token };
   },
-  async revokeInvitation(caller, invitationId, meta6 = {}) {
+  async revokeInvitation(caller, invitationId, meta7 = {}) {
     const invitation = await workspaceInvitationRepository.findById(invitationId);
     const workspace = invitation ? await workspaceRepository.findByIdForOwner(invitation.organizationId, caller.organizationId) : null;
     if (!invitation || !workspace) throw new NotFoundError("Invitation not found.");
@@ -20338,8 +21186,8 @@ var invitationService = {
       action: "CLIENT_ADMIN_INVITATION_REVOKED",
       resourceType: "workspace_invitation",
       resourceId: invitationId,
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
   },
   /** Public, unauthenticated lookup for the acceptance page (§26) — returns only what's needed to render a safe form, never the token hash or workspace internals. */
@@ -20358,7 +21206,7 @@ var invitationService = {
     };
   },
   /** Transactional acceptance (§21) — race-safe against double-acceptance via a conditional updateMany, same TOCTOU-guard pattern as leadService.convertLead. */
-  async acceptInvitation(token, input, meta6 = {}) {
+  async acceptInvitation(token, input, meta7 = {}) {
     const invitation = await workspaceInvitationRepository.findByToken(token);
     if (!invitation || computeInvitationStatus(invitation) !== "PENDING") {
       throw new AuthenticationError("This invitation link is invalid or has expired.");
@@ -20423,8 +21271,8 @@ var invitationService = {
       userId: result.id,
       organizationId: invitation.organizationId,
       expiresAt,
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     const role = await roleRepository.resolveById(invitation.roleId);
     if (!role) throw new InternalError("Role could not be resolved.");
@@ -20436,8 +21284,8 @@ var invitationService = {
       action: "CLIENT_ADMIN_ACCEPTED",
       resourceType: "workspace_invitation",
       resourceId: invitation.id,
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     const client3 = await prisma.client.findUnique({ where: { workspaceOrganizationId: invitation.organizationId } });
     if (client3) {
@@ -20470,7 +21318,7 @@ var acceptInvitationSchema = z28.object({
 });
 
 // server/routes/v1/workspaceRoutes.ts
-var router22 = Router24();
+var router22 = Router25();
 router22.use(authenticateToken);
 function requestMeta11(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
@@ -20549,9 +21397,9 @@ router22.post(
 var workspaceRoutes_default = router22;
 
 // server/routes/v1/invitationRoutes.ts
-import { Router as Router25 } from "express";
+import { Router as Router26 } from "express";
 init_apiResponse();
-var router23 = Router25();
+var router23 = Router26();
 function requestMeta12(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
@@ -20582,7 +21430,7 @@ router23.post(
 var invitationRoutes_default = router23;
 
 // server/routes/v1/productRoutes.ts
-import { Router as Router26 } from "express";
+import { Router as Router27 } from "express";
 
 // server/services/productModuleService.ts
 init_errors();
@@ -20607,7 +21455,7 @@ var productModuleService = {
   async getModule(id2) {
     return loadModuleOrThrow(id2);
   },
-  async createModule(caller, productId, input, meta6 = {}) {
+  async createModule(caller, productId, input, meta7 = {}) {
     const product = await loadProductOrThrow2(productId);
     if (product.status === "ARCHIVED") {
       throw new ConflictError("Cannot add a module to an archived product.");
@@ -20645,12 +21493,12 @@ var productModuleService = {
       resourceType: "product_module",
       resourceId: module_.id,
       afterData: { productId, code: module_.code, name: module_.name, status: module_.status },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return module_;
   },
-  async updateModule(caller, id2, input, meta6 = {}) {
+  async updateModule(caller, id2, input, meta7 = {}) {
     const existing = await loadModuleOrThrow(id2);
     if (input.slug !== void 0 && input.slug !== existing.slug) {
       const dup = await productModuleRepository.findBySlugForProduct(existing.productId, input.slug);
@@ -20680,12 +21528,12 @@ var productModuleService = {
       resourceId: id2,
       beforeData: { status: existing.status, name: existing.name },
       afterData: patch,
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return updated;
   },
-  async archiveModule(caller, id2, meta6 = {}) {
+  async archiveModule(caller, id2, meta7 = {}) {
     const existing = await loadModuleOrThrow(id2);
     if (existing.status === "INACTIVE") {
       throw new ConflictError("This module is already inactive.");
@@ -20698,13 +21546,13 @@ var productModuleService = {
       resourceType: "product_module",
       resourceId: id2,
       beforeData: { status: existing.status },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return archived;
   },
   /** Transactional, all-or-nothing reorder — validates every id belongs to this exact product before applying anything (§36). */
-  async reorderModules(caller, productId, moduleIds, meta6 = {}) {
+  async reorderModules(caller, productId, moduleIds, meta7 = {}) {
     await loadProductOrThrow2(productId);
     const existingIds = await productModuleRepository.listAllIdsForProduct(productId);
     const existingSet = new Set(existingIds);
@@ -20720,8 +21568,8 @@ var productModuleService = {
       resourceType: "product",
       resourceId: productId,
       afterData: { order: moduleIds },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
   }
 };
@@ -20897,7 +21745,7 @@ var reorderProductModulesSchema = z31.object({
 });
 
 // server/routes/v1/productRoutes.ts
-var router24 = Router26();
+var router24 = Router27();
 router24.use(authenticateToken);
 function requestMeta13(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
@@ -21016,9 +21864,9 @@ router24.post(
 var productRoutes_default = router24;
 
 // server/routes/v1/productModuleRoutes.ts
-import { Router as Router27 } from "express";
+import { Router as Router28 } from "express";
 init_apiResponse();
-var router25 = Router27();
+var router25 = Router28();
 router25.use(authenticateToken);
 function requestMeta14(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
@@ -21051,7 +21899,7 @@ router25.post(
 var productModuleRoutes_default = router25;
 
 // server/routes/v1/productCategoryRoutes.ts
-import { Router as Router28 } from "express";
+import { Router as Router29 } from "express";
 
 // server/services/productCategoryService.ts
 init_errors();
@@ -21067,7 +21915,7 @@ var productCategoryService = {
   async list(search) {
     return productCategoryRepository.list(search);
   },
-  async create(caller, input, meta6 = {}) {
+  async create(caller, input, meta7 = {}) {
     let slug;
     if (input.slug) {
       const existing = await productCategoryRepository.findBySlug(input.slug);
@@ -21089,12 +21937,12 @@ var productCategoryService = {
       resourceType: "product_category",
       resourceId: category.id,
       afterData: { name: category.name, slug: category.slug },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return category;
   },
-  async update(caller, id2, input, meta6 = {}) {
+  async update(caller, id2, input, meta7 = {}) {
     const existing = await loadOrThrow(id2);
     if (input.slug !== void 0 && input.slug !== existing.slug) {
       const dup = await productCategoryRepository.findBySlug(input.slug);
@@ -21114,12 +21962,12 @@ var productCategoryService = {
       resourceId: id2,
       beforeData: { name: existing.name, slug: existing.slug },
       afterData: input,
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return updated;
   },
-  async delete(caller, id2, meta6 = {}) {
+  async delete(caller, id2, meta7 = {}) {
     const existing = await loadOrThrow(id2);
     const productCount = await productCategoryRepository.countProducts(id2);
     if (productCount > 0) {
@@ -21133,8 +21981,8 @@ var productCategoryService = {
       resourceType: "product_category",
       resourceId: id2,
       beforeData: { name: existing.name, slug: existing.slug },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
   }
 };
@@ -21161,7 +22009,7 @@ var updateProductCategorySchema = z32.object({
 }).refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
 
 // server/routes/v1/productCategoryRoutes.ts
-var router26 = Router28();
+var router26 = Router29();
 router26.use(authenticateToken);
 function requestMeta15(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
@@ -21204,7 +22052,7 @@ router26.delete(
 var productCategoryRoutes_default = router26;
 
 // server/routes/v1/industryRoutes.ts
-import { Router as Router29 } from "express";
+import { Router as Router30 } from "express";
 
 // server/services/industryService.ts
 init_errors();
@@ -21220,7 +22068,7 @@ var industryService = {
   async list(search) {
     return industryRepository.list(search);
   },
-  async create(caller, input, meta6 = {}) {
+  async create(caller, input, meta7 = {}) {
     let slug;
     if (input.slug) {
       const existing = await industryRepository.findBySlug(input.slug);
@@ -21242,12 +22090,12 @@ var industryService = {
       resourceType: "industry",
       resourceId: industry.id,
       afterData: { name: industry.name, slug: industry.slug },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return industry;
   },
-  async update(caller, id2, input, meta6 = {}) {
+  async update(caller, id2, input, meta7 = {}) {
     const existing = await loadOrThrow2(id2);
     if (input.slug !== void 0 && input.slug !== existing.slug) {
       const dup = await industryRepository.findBySlug(input.slug);
@@ -21267,12 +22115,12 @@ var industryService = {
       resourceId: id2,
       beforeData: { name: existing.name, slug: existing.slug },
       afterData: input,
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return updated;
   },
-  async delete(caller, id2, meta6 = {}) {
+  async delete(caller, id2, meta7 = {}) {
     const existing = await loadOrThrow2(id2);
     const productCount = await industryRepository.countProducts(id2);
     if (productCount > 0) {
@@ -21286,8 +22134,8 @@ var industryService = {
       resourceType: "industry",
       resourceId: id2,
       beforeData: { name: existing.name, slug: existing.slug },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
   }
 };
@@ -21314,7 +22162,7 @@ var updateIndustrySchema = z33.object({
 }).refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
 
 // server/routes/v1/industryRoutes.ts
-var router27 = Router29();
+var router27 = Router30();
 router27.use(authenticateToken);
 function requestMeta16(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
@@ -21357,7 +22205,7 @@ router27.delete(
 var industryRoutes_default = router27;
 
 // server/routes/v1/pageRoutes.ts
-import { Router as Router30 } from "express";
+import { Router as Router31 } from "express";
 init_apiResponse();
 
 // server/schemas/pageSchemas.ts
@@ -21411,7 +22259,7 @@ var trashQuerySchema = z35.object({
   page: z35.coerce.number().int().positive().default(1),
   limit: z35.coerce.number().int().positive().max(100).default(20)
 });
-var router28 = Router30();
+var router28 = Router31();
 router28.use(authenticateToken);
 function requestMeta17(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
@@ -21571,7 +22419,7 @@ router28.delete(
 var pageRoutes_default = router28;
 
 // server/routes/v1/templateRoutes.ts
-import { Router as Router31 } from "express";
+import { Router as Router32 } from "express";
 
 // server/utils/templateStructure.ts
 function normalizeRegions(structure) {
@@ -21757,7 +22605,7 @@ var templateService = {
     );
     return { template, regions };
   },
-  async createTemplate(caller, input, meta6 = {}) {
+  async createTemplate(caller, input, meta7 = {}) {
     const organizationId = caller.organizationId;
     if (input.slug) {
       const dup = await templateRepository.findBySlugInOrg(organizationId, input.slug);
@@ -21802,12 +22650,12 @@ var templateService = {
       resourceType: "template",
       resourceId: createdId,
       afterData: { name: input.name, slug, type: input.type },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return loadTemplateOrThrow(createdId, organizationId);
   },
-  async updateTemplate(caller, id2, input, meta6 = {}) {
+  async updateTemplate(caller, id2, input, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadTemplateOrThrow(id2, organizationId);
     assertNotSystem(existing, "edited");
@@ -21866,12 +22714,12 @@ var templateService = {
       resourceId: id2,
       beforeData: { name: existing.name, slug: existing.slug },
       afterData: { name: input.name, slug: input.slug },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return loadTemplateOrThrow(id2, organizationId);
   },
-  async publishTemplate(caller, id2, meta6 = {}) {
+  async publishTemplate(caller, id2, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadTemplateOrThrow(id2, organizationId);
     assertNotSystem(existing, "published");
@@ -21892,12 +22740,12 @@ var templateService = {
       resourceId: id2,
       beforeData: { status: existing.status },
       afterData: { status: "PUBLISHED" },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return loadTemplateOrThrow(id2, organizationId);
   },
-  async archiveTemplate(caller, id2, meta6 = {}) {
+  async archiveTemplate(caller, id2, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadTemplateOrThrow(id2, organizationId);
     assertNotSystem(existing, "archived");
@@ -21912,12 +22760,12 @@ var templateService = {
       resourceId: id2,
       beforeData: { status: existing.status },
       afterData: { status: "ARCHIVED" },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return loadTemplateOrThrow(id2, organizationId);
   },
-  async revertTemplate(caller, id2, input, meta6 = {}) {
+  async revertTemplate(caller, id2, input, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadTemplateOrThrow(id2, organizationId);
     assertNotSystem(existing, "rolled back");
@@ -21949,12 +22797,12 @@ var templateService = {
       resourceId: id2,
       beforeData: { fromVersion: current?.version, revertedToRevisionId: target.id, revertedToVersion: target.version },
       afterData: { newVersion: nextVersion },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return loadTemplateOrThrow(id2, organizationId);
   },
-  async duplicateTemplate(caller, id2, input, meta6 = {}) {
+  async duplicateTemplate(caller, id2, input, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadTemplateOrThrow(id2, organizationId);
     const baseName = input.name ?? `${existing.name} (Copy)`;
@@ -21994,12 +22842,12 @@ var templateService = {
       resourceType: "template",
       resourceId: createdId,
       afterData: { duplicatedFromId: id2, name: baseName },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return loadTemplateOrThrow(createdId, organizationId);
   },
-  async deleteTemplate(caller, id2, meta6 = {}) {
+  async deleteTemplate(caller, id2, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadTemplateOrThrow(id2, organizationId);
     assertNotSystem(existing, "deleted");
@@ -22015,8 +22863,8 @@ var templateService = {
       resourceType: "template",
       resourceId: id2,
       beforeData: { name: existing.name, status: existing.status },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
   }
 };
@@ -22117,7 +22965,7 @@ var revertTemplatePartSchema = z36.object({
 });
 
 // server/routes/v1/templateRoutes.ts
-var router29 = Router31();
+var router29 = Router32();
 router29.use(authenticateToken);
 function requestMeta18(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
@@ -22233,7 +23081,7 @@ router29.delete(
 var templateRoutes_default = router29;
 
 // server/routes/v1/templatePartRoutes.ts
-import { Router as Router32 } from "express";
+import { Router as Router33 } from "express";
 
 // server/services/templatePartService.ts
 init_errors();
@@ -22266,7 +23114,7 @@ var templatePartService = {
     await loadTemplatePartOrThrow(id2, organizationId);
     return templatePartRepository.findUsage(id2, organizationId);
   },
-  async createPart(caller, input, meta6 = {}) {
+  async createPart(caller, input, meta7 = {}) {
     const organizationId = caller.organizationId;
     if (input.slug) {
       const dup = await templatePartRepository.findBySlugInOrg(organizationId, input.slug);
@@ -22311,12 +23159,12 @@ var templatePartService = {
       resourceType: "template_part",
       resourceId: createdId,
       afterData: { name: input.name, slug, type: input.type },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return loadTemplatePartOrThrow(createdId, organizationId);
   },
-  async updatePart(caller, id2, input, meta6 = {}) {
+  async updatePart(caller, id2, input, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadTemplatePartOrThrow(id2, organizationId);
     assertNotSystem2(existing, "edited");
@@ -22375,12 +23223,12 @@ var templatePartService = {
       resourceId: id2,
       beforeData: { name: existing.name, slug: existing.slug },
       afterData: { name: input.name, slug: input.slug },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return loadTemplatePartOrThrow(id2, organizationId);
   },
-  async publishPart(caller, id2, meta6 = {}) {
+  async publishPart(caller, id2, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadTemplatePartOrThrow(id2, organizationId);
     assertNotSystem2(existing, "published");
@@ -22400,12 +23248,12 @@ var templatePartService = {
       resourceId: id2,
       beforeData: { status: existing.status },
       afterData: { status: "PUBLISHED" },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return loadTemplatePartOrThrow(id2, organizationId);
   },
-  async archivePart(caller, id2, meta6 = {}) {
+  async archivePart(caller, id2, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadTemplatePartOrThrow(id2, organizationId);
     assertNotSystem2(existing, "archived");
@@ -22420,12 +23268,12 @@ var templatePartService = {
       resourceId: id2,
       beforeData: { status: existing.status },
       afterData: { status: "ARCHIVED" },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return loadTemplatePartOrThrow(id2, organizationId);
   },
-  async revertPart(caller, id2, input, meta6 = {}) {
+  async revertPart(caller, id2, input, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadTemplatePartOrThrow(id2, organizationId);
     assertNotSystem2(existing, "rolled back");
@@ -22457,12 +23305,12 @@ var templatePartService = {
       resourceId: id2,
       beforeData: { fromVersion: current?.version, revertedToRevisionId: target.id, revertedToVersion: target.version },
       afterData: { newVersion: nextVersion },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return loadTemplatePartOrThrow(id2, organizationId);
   },
-  async duplicatePart(caller, id2, input, meta6 = {}) {
+  async duplicatePart(caller, id2, input, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadTemplatePartOrThrow(id2, organizationId);
     const baseName = input.name ?? `${existing.name} (Copy)`;
@@ -22501,12 +23349,12 @@ var templatePartService = {
       resourceType: "template_part",
       resourceId: createdId,
       afterData: { duplicatedFromId: id2, name: baseName },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return loadTemplatePartOrThrow(createdId, organizationId);
   },
-  async deletePart(caller, id2, meta6 = {}) {
+  async deletePart(caller, id2, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadTemplatePartOrThrow(id2, organizationId);
     assertNotSystem2(existing, "deleted");
@@ -22526,15 +23374,15 @@ var templatePartService = {
       resourceType: "template_part",
       resourceId: id2,
       beforeData: { name: existing.name, status: existing.status },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
   }
 };
 
 // server/routes/v1/templatePartRoutes.ts
 init_apiResponse();
-var router30 = Router32();
+var router30 = Router33();
 router30.use(authenticateToken);
 function requestMeta19(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
@@ -22642,7 +23490,7 @@ router30.delete(
 var templatePartRoutes_default = router30;
 
 // server/routes/v1/navigationMenuRoutes.ts
-import { Router as Router33 } from "express";
+import { Router as Router34 } from "express";
 
 // server/repositories/navigationMenuRepository.ts
 function slugify15(input) {
@@ -22797,7 +23645,7 @@ var navigationMenuService = {
     await loadMenuOrThrow(id2, organizationId);
     return navigationMenuRepository.findUsage(id2, organizationId);
   },
-  async createMenu(caller, input, meta6 = {}) {
+  async createMenu(caller, input, meta7 = {}) {
     const organizationId = caller.organizationId;
     if (input.slug) {
       const dup = await navigationMenuRepository.findBySlugInOrg(organizationId, input.slug);
@@ -22834,12 +23682,12 @@ var navigationMenuService = {
       resourceType: "navigation_menu",
       resourceId: createdId,
       afterData: { name: input.name, slug, type: input.type },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return loadMenuOrThrow(createdId, organizationId);
   },
-  async updateMenu(caller, id2, input, meta6 = {}) {
+  async updateMenu(caller, id2, input, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadMenuOrThrow(id2, organizationId);
     assertNotSystem3(existing, "edited");
@@ -22897,12 +23745,12 @@ var navigationMenuService = {
       resourceId: id2,
       beforeData: { name: existing.name, slug: existing.slug },
       afterData: { name: input.name, slug: input.slug },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return loadMenuOrThrow(id2, organizationId);
   },
-  async publishMenu(caller, id2, meta6 = {}) {
+  async publishMenu(caller, id2, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadMenuOrThrow(id2, organizationId);
     assertNotSystem3(existing, "published");
@@ -22923,12 +23771,12 @@ var navigationMenuService = {
       resourceId: id2,
       beforeData: { status: existing.status },
       afterData: { status: "PUBLISHED" },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return loadMenuOrThrow(id2, organizationId);
   },
-  async archiveMenu(caller, id2, meta6 = {}) {
+  async archiveMenu(caller, id2, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadMenuOrThrow(id2, organizationId);
     assertNotSystem3(existing, "archived");
@@ -22943,12 +23791,12 @@ var navigationMenuService = {
       resourceId: id2,
       beforeData: { status: existing.status },
       afterData: { status: "ARCHIVED" },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return loadMenuOrThrow(id2, organizationId);
   },
-  async revertMenu(caller, id2, input, meta6 = {}) {
+  async revertMenu(caller, id2, input, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadMenuOrThrow(id2, organizationId);
     assertNotSystem3(existing, "rolled back");
@@ -22980,12 +23828,12 @@ var navigationMenuService = {
       resourceId: id2,
       beforeData: { fromVersion: current?.version, revertedToRevisionId: target.id, revertedToVersion: target.version },
       afterData: { newVersion: nextVersion },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return loadMenuOrThrow(id2, organizationId);
   },
-  async duplicateMenu(caller, id2, input, meta6 = {}) {
+  async duplicateMenu(caller, id2, input, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadMenuOrThrow(id2, organizationId);
     const baseName = input.name ?? `${existing.name} (Copy)`;
@@ -23009,12 +23857,12 @@ var navigationMenuService = {
       resourceType: "navigation_menu",
       resourceId: createdId,
       afterData: { duplicatedFromId: id2, name: baseName },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return loadMenuOrThrow(createdId, organizationId);
   },
-  async deleteMenu(caller, id2, meta6 = {}) {
+  async deleteMenu(caller, id2, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadMenuOrThrow(id2, organizationId);
     assertNotSystem3(existing, "deleted");
@@ -23034,8 +23882,8 @@ var navigationMenuService = {
       resourceType: "navigation_menu",
       resourceId: id2,
       beforeData: { name: existing.name, status: existing.status },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
   }
 };
@@ -23095,7 +23943,7 @@ var revertNavigationMenuSchema = z37.object({
 });
 
 // server/routes/v1/navigationMenuRoutes.ts
-var router31 = Router33();
+var router31 = Router34();
 router31.use(authenticateToken);
 function requestMeta20(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
@@ -23203,7 +24051,7 @@ router31.delete(
 var navigationMenuRoutes_default = router31;
 
 // server/routes/v1/postRoutes.ts
-import { Router as Router34 } from "express";
+import { Router as Router35 } from "express";
 init_apiResponse();
 
 // server/schemas/postSchemas.ts
@@ -23254,7 +24102,7 @@ var trashQuerySchema2 = z39.object({
   page: z39.coerce.number().int().positive().default(1),
   limit: z39.coerce.number().int().positive().max(100).default(20)
 });
-var router32 = Router34();
+var router32 = Router35();
 router32.use(authenticateToken);
 function requestMeta21(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
@@ -23406,7 +24254,7 @@ router32.delete(
 var postRoutes_default = router32;
 
 // server/routes/v1/caseStudyRoutes.ts
-import { Router as Router35 } from "express";
+import { Router as Router36 } from "express";
 
 // server/services/caseStudyService.ts
 init_errors();
@@ -23486,7 +24334,7 @@ var caseStudyService = {
     await loadCaseStudyOrThrow(id2, organizationId);
     return caseStudyRepository.listRevisions(id2);
   },
-  async createCaseStudy(caller, input, meta6 = {}) {
+  async createCaseStudy(caller, input, meta7 = {}) {
     const organizationId = caller.organizationId;
     const body = sanitizeContentHtml(input.body);
     const editorBlocks = input.editorBlocks ? sanitizeEditorDocument(input.editorBlocks) : void 0;
@@ -23548,12 +24396,12 @@ var caseStudyService = {
       resourceType: "case_study",
       resourceId: createdId,
       afterData: { title: input.title, slug },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return loadCaseStudyOrThrow(createdId, organizationId);
   },
-  async updateCaseStudy(caller, id2, input, meta6 = {}) {
+  async updateCaseStudy(caller, id2, input, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadCaseStudyOrThrow(id2, organizationId);
     const sanitizedBody = input.body !== void 0 ? sanitizeContentHtml(input.body) : void 0;
@@ -23657,8 +24505,8 @@ var caseStudyService = {
       resourceId: id2,
       beforeData: { status: existing.status, title: existing.title },
       afterData: { status: input.status, title: input.title, slug: input.slug },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     if (hasFeaturedMediaEdit && input.featuredMediaId !== existing.featuredMediaId) {
       await auditLogRepository.record({
@@ -23670,8 +24518,8 @@ var caseStudyService = {
         resourceId: id2,
         beforeData: { featuredMediaId: existing.featuredMediaId },
         afterData: { featuredMediaId: input.featuredMediaId ?? null },
-        ipAddress: meta6.ip,
-        userAgent: meta6.userAgent
+        ipAddress: meta7.ip,
+        userAgent: meta7.userAgent
       });
     }
     if (input.slug !== void 0 && input.slug !== existing.slug) {
@@ -23688,7 +24536,7 @@ var caseStudyService = {
     }
     return loadCaseStudyOrThrow(id2, organizationId);
   },
-  async submitForReview(caller, id2, meta6 = {}) {
+  async submitForReview(caller, id2, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadCaseStudyOrThrow(id2, organizationId);
     if (existing.status !== "DRAFT") throw new ConflictError(`Only a DRAFT case study can be submitted for review (current status: ${existing.status}).`);
@@ -23705,12 +24553,12 @@ var caseStudyService = {
       resourceId: id2,
       beforeData: { status: existing.status },
       afterData: { status: "IN_REVIEW" },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return loadCaseStudyOrThrow(id2, organizationId);
   },
-  async publishCaseStudy(caller, id2, meta6 = {}) {
+  async publishCaseStudy(caller, id2, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadCaseStudyOrThrow(id2, organizationId);
     if (existing.status === "ARCHIVED") throw new ConflictError("An archived case study must be restored before it can be published.");
@@ -23731,8 +24579,8 @@ var caseStudyService = {
       resourceId: id2,
       beforeData: { status: existing.status },
       afterData: { status: "PUBLISHED" },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     if (existing.createdById && existing.createdById !== caller.id) {
       await notificationService.notify({
@@ -23745,7 +24593,7 @@ var caseStudyService = {
     }
     return loadCaseStudyOrThrow(id2, organizationId);
   },
-  async scheduleCaseStudy(caller, id2, input, meta6 = {}) {
+  async scheduleCaseStudy(caller, id2, input, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadCaseStudyOrThrow(id2, organizationId);
     if (existing.status === "ARCHIVED") throw new ConflictError("An archived case study must be restored before it can be scheduled.");
@@ -23761,12 +24609,12 @@ var caseStudyService = {
       resourceId: id2,
       beforeData: { status: existing.status },
       afterData: { status: "SCHEDULED", scheduledAt: input.scheduledAt },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return loadCaseStudyOrThrow(id2, organizationId);
   },
-  async archiveCaseStudy(caller, id2, meta6 = {}) {
+  async archiveCaseStudy(caller, id2, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadCaseStudyOrThrow(id2, organizationId);
     if (existing.status === "ARCHIVED") throw new ConflictError("This case study is already archived.");
@@ -23780,12 +24628,12 @@ var caseStudyService = {
       resourceId: id2,
       beforeData: { status: existing.status },
       afterData: { status: "ARCHIVED" },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return loadCaseStudyOrThrow(id2, organizationId);
   },
-  async revertCaseStudy(caller, id2, input, meta6 = {}) {
+  async revertCaseStudy(caller, id2, input, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadCaseStudyOrThrow(id2, organizationId);
     if (existing.status === "ARCHIVED") throw new ConflictError("An archived case study must be restored before its content can be reverted.");
@@ -23820,12 +24668,12 @@ var caseStudyService = {
       resourceId: id2,
       beforeData: { fromVersion: current?.version, revertedToRevisionId: target.id, revertedToVersion: target.version },
       afterData: { newVersion: nextVersion },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return loadCaseStudyOrThrow(id2, organizationId);
   },
-  async deleteCaseStudy(caller, id2, meta6 = {}) {
+  async deleteCaseStudy(caller, id2, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadCaseStudyOrThrow(id2, organizationId);
     await caseStudyRepository.softDelete(id2);
@@ -23837,14 +24685,14 @@ var caseStudyService = {
       resourceType: "case_study",
       resourceId: id2,
       beforeData: { status: existing.status, title: existing.title },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
   },
   async listTrash(organizationId, page, limit) {
     return caseStudyRepository.listTrash(organizationId, page, limit);
   },
-  async restoreCaseStudy(caller, id2, meta6 = {}) {
+  async restoreCaseStudy(caller, id2, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await caseStudyRepository.findTrashedByIdInOrg(id2, organizationId);
     if (!existing) throw new NotFoundError("Case study not found in trash.");
@@ -23857,19 +24705,19 @@ var caseStudyService = {
       resourceType: "case_study",
       resourceId: id2,
       beforeData: { status: existing.status, title: existing.title },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
   },
   /** Bulk workflow actions for the list view — same per-item isolation as postService.bulkAction/pageService.bulkAction. */
-  async bulkAction(caller, action, ids, meta6 = {}) {
+  async bulkAction(caller, action, ids, meta7 = {}) {
     const succeeded = [];
     const failed = [];
     for (const id2 of ids) {
       try {
-        if (action === "archive") await this.archiveCaseStudy(caller, id2, meta6);
-        else if (action === "trash") await this.deleteCaseStudy(caller, id2, meta6);
-        else await this.restoreCaseStudy(caller, id2, meta6);
+        if (action === "archive") await this.archiveCaseStudy(caller, id2, meta7);
+        else if (action === "trash") await this.deleteCaseStudy(caller, id2, meta7);
+        else await this.restoreCaseStudy(caller, id2, meta7);
         succeeded.push(id2);
       } catch (err) {
         failed.push({ id: id2, error: err instanceof Error ? err.message : "Action failed." });
@@ -23947,7 +24795,7 @@ var trashQuerySchema3 = z41.object({
   page: z41.coerce.number().int().positive().default(1),
   limit: z41.coerce.number().int().positive().max(100).default(20)
 });
-var router33 = Router35();
+var router33 = Router36();
 router33.use(authenticateToken);
 function requestMeta22(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
@@ -24099,7 +24947,7 @@ router33.delete(
 var caseStudyRoutes_default = router33;
 
 // server/routes/v1/categoryRoutes.ts
-import { Router as Router36 } from "express";
+import { Router as Router37 } from "express";
 
 // server/services/categoryService.ts
 init_errors();
@@ -24133,7 +24981,7 @@ var categoryService = {
   async getCategory(organizationId, id2) {
     return loadCategoryOrThrow(id2, organizationId);
   },
-  async createCategory(caller, input, meta6 = {}) {
+  async createCategory(caller, input, meta7 = {}) {
     const organizationId = caller.organizationId;
     if (input.slug) {
       const dup = await categoryRepository.findBySlugInOrg(organizationId, input.slug);
@@ -24155,12 +25003,12 @@ var categoryService = {
       resourceType: "category",
       resourceId: category.id,
       afterData: { name: category.name, slug: category.slug },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return category;
   },
-  async updateCategory(caller, id2, input, meta6 = {}) {
+  async updateCategory(caller, id2, input, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadCategoryOrThrow(id2, organizationId);
     if (input.slug !== void 0 && input.slug !== existing.slug) {
@@ -24188,12 +25036,12 @@ var categoryService = {
       resourceId: id2,
       beforeData: { name: existing.name, slug: existing.slug },
       afterData: patch,
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return updated;
   },
-  async deleteCategory(caller, id2, meta6 = {}) {
+  async deleteCategory(caller, id2, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadCategoryOrThrow(id2, organizationId);
     const postCount = await categoryRepository.countPostsUsing(id2);
@@ -24209,15 +25057,15 @@ var categoryService = {
       resourceType: "category",
       resourceId: id2,
       beforeData: { name: existing.name, slug: existing.slug },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
   }
 };
 
 // server/routes/v1/categoryRoutes.ts
 init_apiResponse();
-var router34 = Router36();
+var router34 = Router37();
 router34.use(authenticateToken);
 function requestMeta23(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
@@ -24267,7 +25115,7 @@ router34.delete(
 var categoryRoutes_default = router34;
 
 // server/routes/v1/redirectRoutes.ts
-import { Router as Router37 } from "express";
+import { Router as Router38 } from "express";
 init_apiResponse();
 
 // server/schemas/redirectSchemas.ts
@@ -24296,7 +25144,7 @@ var updateRedirectSchema = z42.object({
 }).strict().refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
 
 // server/routes/v1/redirectRoutes.ts
-var router35 = Router37();
+var router35 = Router38();
 router35.use(authenticateToken);
 function requestMeta24(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
@@ -24354,7 +25202,7 @@ router35.delete(
 var redirectRoutes_default = router35;
 
 // server/routes/v1/seoRoutes.ts
-import { Router as Router38 } from "express";
+import { Router as Router39 } from "express";
 
 // server/services/seoAuditService.ts
 var LIVE_STATUSES = /* @__PURE__ */ new Set(["PUBLISHED", "SCHEDULED"]);
@@ -24365,27 +25213,27 @@ var VALID_SLUG_PATTERN = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 function checkRecord(resourceType, record2) {
   const issues = [];
   const isLive = LIVE_STATUSES.has(record2.status);
-  const meta6 = record2.currentRevision?.metadata ?? {};
+  const meta7 = record2.currentRevision?.metadata ?? {};
   const displayTitle = record2.currentRevision?.title || record2.title;
   function push(severity, code, message) {
     issues.push({ resourceType, resourceId: record2.id, resourceTitle: displayTitle, slug: record2.slug, status: record2.status, severity, code, message });
   }
-  if (!meta6.metaTitle) {
+  if (!meta7.metaTitle) {
     push(isLive ? "critical" : "warning", "missing_meta_title", "No SEO title set \u2014 search engines will fall back to the content title, which may not be optimized.");
-  } else if (meta6.metaTitle.length > META_TITLE_IDEAL_MAX) {
-    push("warning", "meta_title_too_long", `SEO title is ${meta6.metaTitle.length} characters \u2014 search engines typically truncate titles beyond ~${META_TITLE_IDEAL_MAX}.`);
+  } else if (meta7.metaTitle.length > META_TITLE_IDEAL_MAX) {
+    push("warning", "meta_title_too_long", `SEO title is ${meta7.metaTitle.length} characters \u2014 search engines typically truncate titles beyond ~${META_TITLE_IDEAL_MAX}.`);
   }
-  if (!meta6.metaDescription) {
+  if (!meta7.metaDescription) {
     push(isLive ? "critical" : "warning", "missing_meta_description", "No meta description set \u2014 search engines will auto-generate a snippet from the page content instead.");
-  } else if (meta6.metaDescription.length > META_DESCRIPTION_IDEAL_MAX) {
-    push("warning", "meta_description_too_long", `Meta description is ${meta6.metaDescription.length} characters \u2014 likely to be truncated beyond ~${META_DESCRIPTION_IDEAL_MAX}.`);
-  } else if (meta6.metaDescription.length < META_DESCRIPTION_IDEAL_MIN) {
-    push("warning", "meta_description_too_short", `Meta description is only ${meta6.metaDescription.length} characters \u2014 likely too short to be a useful search-result snippet.`);
+  } else if (meta7.metaDescription.length > META_DESCRIPTION_IDEAL_MAX) {
+    push("warning", "meta_description_too_long", `Meta description is ${meta7.metaDescription.length} characters \u2014 likely to be truncated beyond ~${META_DESCRIPTION_IDEAL_MAX}.`);
+  } else if (meta7.metaDescription.length < META_DESCRIPTION_IDEAL_MIN) {
+    push("warning", "meta_description_too_short", `Meta description is only ${meta7.metaDescription.length} characters \u2014 likely too short to be a useful search-result snippet.`);
   }
   if (record2.featuredMedia && !record2.featuredMedia.altText) {
     push("warning", "missing_featured_image_alt_text", "Featured image has no alt text \u2014 hurts accessibility and image search visibility.");
   }
-  if (isLive && !meta6.ogImage && !record2.featuredMedia) {
+  if (isLive && !meta7.ogImage && !record2.featuredMedia) {
     push("warning", "missing_social_image", "No social share image (Open Graph image or featured image) set \u2014 links shared on social platforms will show no preview image.");
   }
   if (!VALID_SLUG_PATTERN.test(record2.slug)) {
@@ -24430,11 +25278,11 @@ var seoAuditService = {
     const titleIndex = [];
     const descriptionIndex = [];
     function indexRecord(resourceType, record2) {
-      const meta6 = record2.currentRevision?.metadata ?? {};
+      const meta7 = record2.currentRevision?.metadata ?? {};
       const title = record2.currentRevision?.title || record2.title;
       const base = { resourceType, id: record2.id, slug: record2.slug, title, status: record2.status };
-      if (meta6.metaTitle) titleIndex.push({ ...base, value: meta6.metaTitle });
-      if (meta6.metaDescription) descriptionIndex.push({ ...base, value: meta6.metaDescription });
+      if (meta7.metaTitle) titleIndex.push({ ...base, value: meta7.metaTitle });
+      if (meta7.metaDescription) descriptionIndex.push({ ...base, value: meta7.metaDescription });
     }
     for (const post of posts) {
       issues.push(...checkRecord("post", post));
@@ -24456,7 +25304,7 @@ var seoAuditService = {
 
 // server/routes/v1/seoRoutes.ts
 init_apiResponse();
-var router36 = Router38();
+var router36 = Router39();
 router36.use(authenticateToken);
 router36.get(
   "/issues",
@@ -24469,7 +25317,7 @@ router36.get(
 var seoRoutes_default = router36;
 
 // server/routes/v1/tagRoutes.ts
-import { Router as Router39 } from "express";
+import { Router as Router40 } from "express";
 
 // server/services/tagService.ts
 init_errors();
@@ -24488,7 +25336,7 @@ var tagService = {
   async getTag(organizationId, id2) {
     return loadTagOrThrow(id2, organizationId);
   },
-  async createTag(caller, input, meta6 = {}) {
+  async createTag(caller, input, meta7 = {}) {
     const organizationId = caller.organizationId;
     if (input.slug) {
       const dup = await tagRepository.findBySlugInOrg(organizationId, input.slug);
@@ -24509,12 +25357,12 @@ var tagService = {
       resourceType: "tag",
       resourceId: tag.id,
       afterData: { name: tag.name, slug: tag.slug },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return tag;
   },
-  async updateTag(caller, id2, input, meta6 = {}) {
+  async updateTag(caller, id2, input, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadTagOrThrow(id2, organizationId);
     if (input.slug !== void 0 && input.slug !== existing.slug) {
@@ -24540,12 +25388,12 @@ var tagService = {
       resourceId: id2,
       beforeData: { name: existing.name, slug: existing.slug },
       afterData: patch,
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return updated;
   },
-  async deleteTag(caller, id2, meta6 = {}) {
+  async deleteTag(caller, id2, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadTagOrThrow(id2, organizationId);
     const postCount = await tagRepository.countPostsUsing(id2);
@@ -24561,15 +25409,15 @@ var tagService = {
       resourceType: "tag",
       resourceId: id2,
       beforeData: { name: existing.name, slug: existing.slug },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
   }
 };
 
 // server/routes/v1/tagRoutes.ts
 init_apiResponse();
-var router37 = Router39();
+var router37 = Router40();
 router37.use(authenticateToken);
 function requestMeta25(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
@@ -24619,7 +25467,7 @@ router37.delete(
 var tagRoutes_default = router37;
 
 // server/routes/v1/authorRoutes.ts
-import { Router as Router40 } from "express";
+import { Router as Router41 } from "express";
 
 // server/repositories/authorRepository.ts
 var withUser = { include: { user: { select: { id: true, email: true, firstName: true, lastName: true, displayName: true, status: true } } } };
@@ -24660,7 +25508,7 @@ var authorService = {
   async getAuthor(id2) {
     return loadAuthorOrThrow(id2);
   },
-  async createAuthor(caller, input, meta6 = {}) {
+  async createAuthor(caller, input, meta7 = {}) {
     const user = await userRepository.findById(input.userId);
     if (!user) throw new ValidationError("userId does not refer to an existing user.");
     const existing = await authorRepository.findByUserId(input.userId);
@@ -24673,12 +25521,12 @@ var authorService = {
       resourceType: "author",
       resourceId: author.id,
       afterData: { userId: input.userId },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return author;
   },
-  async updateAuthor(caller, id2, input, meta6 = {}) {
+  async updateAuthor(caller, id2, input, meta7 = {}) {
     const existing = await loadAuthorOrThrow(id2);
     const patch = {};
     if (input.bio !== void 0) patch.bio = input.bio;
@@ -24692,8 +25540,8 @@ var authorService = {
       resourceId: id2,
       beforeData: { bio: existing.bio, avatarUrl: existing.avatarUrl },
       afterData: patch,
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return updated;
   }
@@ -24715,7 +25563,7 @@ var updateAuthorSchema = z43.object({
 }).refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
 
 // server/routes/v1/authorRoutes.ts
-var router38 = Router40();
+var router38 = Router41();
 router38.use(authenticateToken);
 function requestMeta26(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
@@ -24757,7 +25605,7 @@ router38.patch(
 var authorRoutes_default = router38;
 
 // server/routes/v1/mediaRoutes.ts
-import { Router as Router41 } from "express";
+import { Router as Router42 } from "express";
 import express2 from "express";
 init_apiResponse();
 init_errors();
@@ -24808,7 +25656,7 @@ var updateMediaSchema = z44.object({
 }).refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
 
 // server/routes/v1/mediaRoutes.ts
-var router39 = Router41();
+var router39 = Router42();
 function requestMeta27(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
@@ -24951,7 +25799,7 @@ router39.delete(
 var mediaRoutes_default = router39;
 
 // server/routes/v1/contractRoutes.ts
-import { Router as Router42 } from "express";
+import { Router as Router43 } from "express";
 init_apiResponse();
 
 // server/schemas/contractSchemas.ts
@@ -25009,7 +25857,7 @@ var createContractVariationSchema = z46.object({
 });
 
 // server/routes/v1/contractRoutes.ts
-var router40 = Router42();
+var router40 = Router43();
 router40.use(authenticateToken);
 function requestMeta28(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
@@ -25093,7 +25941,7 @@ router40.post(
 var contractRoutes_default = router40;
 
 // server/routes/v1/subscriptionRoutes.ts
-import { Router as Router43 } from "express";
+import { Router as Router44 } from "express";
 
 // server/services/subscriptionService.ts
 init_errors();
@@ -25112,7 +25960,7 @@ var subscriptionService = {
   async getSubscription(organizationId, id2) {
     return loadSubscriptionOrThrow(id2, organizationId);
   },
-  async createSubscription(caller, input, meta6 = {}) {
+  async createSubscription(caller, input, meta7 = {}) {
     const organizationId = caller.organizationId;
     const client3 = await clientRepository.findByIdInOrg(input.clientId, organizationId);
     if (!client3) throw new ValidationError("The specified client does not exist in this organization.");
@@ -25155,12 +26003,12 @@ var subscriptionService = {
       resourceType: "subscription",
       resourceId: subscription.id,
       afterData: { subscriptionNumber, clientId: input.clientId, productId: input.productId, price: subscription.price.toString(), currency },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return subscription;
   },
-  async updateSubscription(caller, id2, input, meta6 = {}) {
+  async updateSubscription(caller, id2, input, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadSubscriptionOrThrow(id2, organizationId);
     if (existing.status === "CANCELLED" || existing.status === "EXPIRED") {
@@ -25185,12 +26033,12 @@ var subscriptionService = {
       resourceId: id2,
       beforeData: { quantity: existing.quantity, price: existing.price.toString() },
       afterData: patch,
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return loadSubscriptionOrThrow(id2, organizationId);
   },
-  async activateSubscription(caller, id2, meta6 = {}) {
+  async activateSubscription(caller, id2, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadSubscriptionOrThrow(id2, organizationId);
     const count = await subscriptionRepository.transitionStatus(id2, ACTIVATABLE_FROM2, { status: "ACTIVE" });
@@ -25204,12 +26052,12 @@ var subscriptionService = {
       resourceId: id2,
       beforeData: { status: existing.status },
       afterData: { status: "ACTIVE" },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return loadSubscriptionOrThrow(id2, organizationId);
   },
-  async pauseSubscription(caller, id2, meta6 = {}) {
+  async pauseSubscription(caller, id2, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadSubscriptionOrThrow(id2, organizationId);
     const count = await subscriptionRepository.transitionStatus(id2, PAUSABLE_FROM, { status: "PAUSED" });
@@ -25223,12 +26071,12 @@ var subscriptionService = {
       resourceId: id2,
       beforeData: { status: existing.status },
       afterData: { status: "PAUSED" },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return loadSubscriptionOrThrow(id2, organizationId);
   },
-  async cancelSubscription(caller, id2, input, meta6 = {}) {
+  async cancelSubscription(caller, id2, input, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadSubscriptionOrThrow(id2, organizationId);
     const now = /* @__PURE__ */ new Date();
@@ -25248,8 +26096,8 @@ var subscriptionService = {
       resourceId: id2,
       beforeData: { status: existing.status },
       afterData: { status: "CANCELLED", reason: input.reason },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return loadSubscriptionOrThrow(id2, organizationId);
   }
@@ -25297,7 +26145,7 @@ var cancelSubscriptionSchema = z47.object({
 });
 
 // server/routes/v1/subscriptionRoutes.ts
-var router41 = Router43();
+var router41 = Router44();
 router41.use(authenticateToken);
 function requestMeta29(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
@@ -25372,7 +26220,7 @@ router41.post(
 var subscriptionRoutes_default = router41;
 
 // server/routes/v1/invoiceRoutes.ts
-import { Router as Router44 } from "express";
+import { Router as Router45 } from "express";
 
 // server/services/paymentService.ts
 init_errors();
@@ -25393,7 +26241,7 @@ var paymentService = {
   async getPayment(organizationId, id2) {
     return loadPaymentOrThrow(id2, organizationId);
   },
-  async reversePayment(caller, id2, input, meta6 = {}) {
+  async reversePayment(caller, id2, input, meta7 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadPaymentOrThrow(id2, organizationId);
     if (existing.status !== "COMPLETED") {
@@ -25424,8 +26272,8 @@ var paymentService = {
       resourceId: id2,
       beforeData: { status: "COMPLETED", amount: existing.amount.toString() },
       afterData: { status: "REVERSED", reason: input.reason },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return loadPaymentOrThrow(id2, organizationId);
   }
@@ -25491,7 +26339,7 @@ var recordPaymentSchema = z48.object({
 });
 
 // server/routes/v1/invoiceRoutes.ts
-var router42 = Router44();
+var router42 = Router45();
 router42.use(authenticateToken);
 function requestMeta30(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
@@ -25584,7 +26432,7 @@ router42.post(
 var invoiceRoutes_default = router42;
 
 // server/routes/v1/paymentRoutes.ts
-import { Router as Router45 } from "express";
+import { Router as Router46 } from "express";
 init_apiResponse();
 
 // server/schemas/paymentSchemas.ts
@@ -25604,7 +26452,7 @@ var reversePaymentSchema = z49.object({
 });
 
 // server/routes/v1/paymentRoutes.ts
-var router43 = Router45();
+var router43 = Router46();
 router43.use(authenticateToken);
 function requestMeta31(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
@@ -25645,7 +26493,7 @@ router43.post(
 var paymentRoutes_default = router43;
 
 // server/routes/v1/portalRoutes.ts
-import { Router as Router46 } from "express";
+import { Router as Router47 } from "express";
 import { z as z50 } from "zod";
 
 // server/services/clientPortalService.ts
@@ -25757,7 +26605,7 @@ var clientPortalService = {
 
 // server/routes/v1/portalRoutes.ts
 init_apiResponse();
-var router44 = Router46();
+var router44 = Router47();
 router44.use(authenticateToken);
 var pageQuerySchema2 = z50.object({
   page: z50.coerce.number().int().positive().default(1),
@@ -25851,7 +26699,7 @@ router44.get(
 var portalRoutes_default = router44;
 
 // server/routes/v1/publicRoutes.ts
-import { Router as Router47 } from "express";
+import { Router as Router48 } from "express";
 
 // server/services/publicFormService.ts
 init_errors();
@@ -25909,7 +26757,7 @@ var publicFormService = {
    * successMessage (§8's "accepted-but-discarded" contract from
    * publicLeadService), but writes nothing.
    */
-  async submit(slug, input, meta6 = {}) {
+  async submit(slug, input, meta7 = {}) {
     const organizationId = config.publicWebsiteOrganizationId;
     if (!organizationId) {
       throw new InfrastructureError("Public form intake is not configured.");
@@ -25968,7 +26816,7 @@ var publicFormService = {
       utmTerm: input.utmTerm,
       utmContent: input.utmContent,
       landingPagePath: input.landingPagePath,
-      referrer: meta6.referrer,
+      referrer: meta7.referrer,
       consentGiven: consentGiven ?? void 0,
       formId: form.id,
       campaignId
@@ -26025,11 +26873,11 @@ ${notes}` : notes,
       utmTerm: input.utmTerm,
       utmContent: input.utmContent,
       leadId,
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent,
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent,
       consentGiven: consentGiven ?? void 0,
       landingPagePath: input.landingPagePath,
-      referrer: meta6.referrer,
+      referrer: meta7.referrer,
       campaignId
     });
     await auditLogRepository.record({
@@ -26040,8 +26888,8 @@ ${notes}` : notes,
       resourceType: "form_submission",
       resourceId: submission.id,
       afterData: { formId: form.id, formSlug: form.slug, leadId },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     try {
       await eventEngine.emit({
@@ -26067,7 +26915,7 @@ ${notes}` : notes,
       utmContent: input.utmContent,
       campaignId,
       path: input.landingPagePath,
-      referrer: meta6.referrer
+      referrer: meta7.referrer
     });
     const notifyUserIds = form.notifyUserIds ?? [];
     for (const userId of notifyUserIds) {
@@ -26572,7 +27420,7 @@ var publicLeadService = {
    * like a real submission from the caller's point of view, so a bot
    * learns nothing about which field gave it away.
    */
-  async createLead(input, meta6 = {}) {
+  async createLead(input, meta7 = {}) {
     if (input.website) {
       return null;
     }
@@ -26595,7 +27443,7 @@ var publicLeadService = {
       utmTerm: input.utmTerm,
       utmContent: input.utmContent,
       landingPagePath: input.landingPagePath,
-      referrer: meta6.referrer,
+      referrer: meta7.referrer,
       consentGiven: true,
       campaignId
     });
@@ -26607,8 +27455,8 @@ var publicLeadService = {
       resourceType: "lead",
       resourceId: lead.id,
       afterData: { companyName: lead.companyName, source: lead.source },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     try {
       await eventEngine.emit({
@@ -26634,7 +27482,7 @@ var publicLeadService = {
       utmContent: input.utmContent,
       campaignId,
       path: input.landingPagePath,
-      referrer: meta6.referrer
+      referrer: meta7.referrer
     });
     return lead;
   }
@@ -26742,7 +27590,7 @@ var reportQuerySchema = z52.object({
 });
 
 // server/routes/v1/publicRoutes.ts
-var router45 = Router47();
+var router45 = Router48();
 router45.use((req, res, next) => {
   if (req.method === "GET" || req.method === "HEAD") {
     res.setHeader("Cache-Control", "public, s-maxage=60, stale-while-revalidate=300");
@@ -26940,7 +27788,7 @@ router45.post(
 var publicRoutes_default = router45;
 
 // server/routes/v1/aiProviderRoutes.ts
-import { Router as Router48 } from "express";
+import { Router as Router49 } from "express";
 
 // server/repositories/aiProviderRepository.ts
 var aiProviderRepository = {
@@ -27005,7 +27853,7 @@ var aiProviderService = {
     if (!provider) throw new NotFoundError("AI provider not found.");
     return provider;
   },
-  async createProvider(caller, input, meta6 = {}) {
+  async createProvider(caller, input, meta7 = {}) {
     const existing = await aiProviderRepository.findProviderByCode(input.code);
     if (existing) throw new ConflictError(`An AI provider with code "${input.code}" already exists.`);
     if (input.isDefault) await aiProviderRepository.clearDefaultProviders();
@@ -27018,12 +27866,12 @@ var aiProviderService = {
       resourceType: "ai_provider",
       resourceId: provider.id,
       afterData: { code: provider.code, status: provider.status },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return provider;
   },
-  async updateProvider(caller, id2, input, meta6 = {}) {
+  async updateProvider(caller, id2, input, meta7 = {}) {
     await this.getProvider(id2);
     if (input.isDefault) await aiProviderRepository.clearDefaultProviders();
     const provider = await aiProviderRepository.updateProvider(id2, input);
@@ -27035,15 +27883,15 @@ var aiProviderService = {
       resourceType: "ai_provider",
       resourceId: id2,
       afterData: input,
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return provider;
   },
   async listModels(providerId) {
     return aiProviderRepository.listModels(providerId);
   },
-  async createModel(caller, input, meta6 = {}) {
+  async createModel(caller, input, meta7 = {}) {
     await this.getProvider(input.providerId);
     if (input.isDefault) await aiProviderRepository.clearDefaultModels(input.providerId);
     const model = await aiProviderRepository.createModel(input);
@@ -27055,12 +27903,12 @@ var aiProviderService = {
       resourceType: "ai_model",
       resourceId: model.id,
       afterData: { providerId: model.providerId, modelId: model.modelId },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return model;
   },
-  async updateModel(caller, id2, input, meta6 = {}) {
+  async updateModel(caller, id2, input, meta7 = {}) {
     const existing = await aiProviderRepository.getModel(id2);
     if (!existing) throw new NotFoundError("AI model not found.");
     if (input.isDefault) await aiProviderRepository.clearDefaultModels(existing.providerId);
@@ -27073,8 +27921,8 @@ var aiProviderService = {
       resourceType: "ai_model",
       resourceId: id2,
       afterData: input,
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return model;
   }
@@ -27188,7 +28036,7 @@ var decideAiApprovalSchema = z53.object({
 });
 
 // server/routes/v1/aiProviderRoutes.ts
-var router46 = Router48();
+var router46 = Router49();
 router46.use(authenticateToken);
 function requestMeta33(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"], requestId: req.requestId };
@@ -27249,7 +28097,7 @@ router46.patch(
 var aiProviderRoutes_default = router46;
 
 // server/routes/v1/aiToolRoutes.ts
-import { Router as Router49 } from "express";
+import { Router as Router50 } from "express";
 
 // server/repositories/aiToolRepository.ts
 var aiToolRepository = {
@@ -27291,7 +28139,7 @@ var aiToolService = {
       requireApprovalOverride: settingByCode.get(tool2.code)?.requireApprovalOverride ?? null
     }));
   },
-  async updateOrgSetting(caller, toolCode, input, meta6 = {}) {
+  async updateOrgSetting(caller, toolCode, input, meta7 = {}) {
     const tool2 = await aiToolRepository.getToolByCode(toolCode);
     if (!tool2) throw new NotFoundError(`AI tool "${toolCode}" not found.`);
     const setting = await aiToolRepository.upsertOrgSetting(caller.organizationId, toolCode, input);
@@ -27303,8 +28151,8 @@ var aiToolService = {
       resourceType: "ai_tool",
       resourceId: toolCode,
       afterData: { enabled: setting.enabled, requireApprovalOverride: setting.requireApprovalOverride },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return setting;
   }
@@ -27312,7 +28160,7 @@ var aiToolService = {
 
 // server/routes/v1/aiToolRoutes.ts
 init_apiResponse();
-var router47 = Router49();
+var router47 = Router50();
 router47.use(authenticateToken);
 function requestMeta34(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"], requestId: req.requestId };
@@ -27337,7 +28185,7 @@ router47.patch(
 var aiToolRoutes_default = router47;
 
 // server/routes/v1/aiPromptRoutes.ts
-import { Router as Router50 } from "express";
+import { Router as Router51 } from "express";
 
 // server/services/aiPromptService.ts
 init_errors();
@@ -27353,7 +28201,7 @@ var aiPromptService = {
   async getTemplate(organizationId, id2) {
     return loadTemplateOrThrow2(id2, organizationId);
   },
-  async createTemplate(caller, input, meta6 = {}) {
+  async createTemplate(caller, input, meta7 = {}) {
     const existing = await aiPromptRepository.findByKeyInOrg(input.key, caller.organizationId);
     if (existing) throw new ConflictError(`A prompt template with key "${input.key}" already exists in this organization.`);
     const template = await aiPromptRepository.create(caller.organizationId, caller.id, input);
@@ -27365,12 +28213,12 @@ var aiPromptService = {
       resourceType: "ai_prompt_template",
       resourceId: template.id,
       afterData: { key: template.key, name: template.name },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return template;
   },
-  async createVersion(caller, templateId, input, meta6 = {}) {
+  async createVersion(caller, templateId, input, meta7 = {}) {
     await loadTemplateOrThrow2(templateId, caller.organizationId);
     const version = await aiPromptRepository.createVersion(templateId, caller.id, input);
     await auditLogRepository.record({
@@ -27381,12 +28229,12 @@ var aiPromptService = {
       resourceType: "ai_prompt_version",
       resourceId: version.id,
       afterData: { templateId, version: version.version },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return version;
   },
-  async updateTemplate(caller, id2, input, meta6 = {}) {
+  async updateTemplate(caller, id2, input, meta7 = {}) {
     await loadTemplateOrThrow2(id2, caller.organizationId);
     const template = await aiPromptRepository.update(id2, caller.id, input);
     await auditLogRepository.record({
@@ -27397,12 +28245,12 @@ var aiPromptService = {
       resourceType: "ai_prompt_template",
       resourceId: id2,
       afterData: input,
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return template;
   },
-  async publishVersion(caller, templateId, versionId, meta6 = {}) {
+  async publishVersion(caller, templateId, versionId, meta7 = {}) {
     await loadTemplateOrThrow2(templateId, caller.organizationId);
     const version = await aiPromptRepository.findVersionInTemplate(templateId, versionId);
     if (!version) throw new ValidationError("versionId does not refer to a version of this prompt template.");
@@ -27418,12 +28266,12 @@ var aiPromptService = {
       resourceType: "ai_prompt_template",
       resourceId: templateId,
       afterData: { versionId },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return aiPromptRepository.findByIdInOrg(templateId, caller.organizationId);
   },
-  async deleteTemplate(caller, id2, meta6 = {}) {
+  async deleteTemplate(caller, id2, meta7 = {}) {
     await loadTemplateOrThrow2(id2, caller.organizationId);
     await aiPromptRepository.update(id2, caller.id, { status: "ARCHIVED" });
     await auditLogRepository.record({
@@ -27433,15 +28281,15 @@ var aiPromptService = {
       action: "AI_PROMPT_TEMPLATE_ARCHIVED",
       resourceType: "ai_prompt_template",
       resourceId: id2,
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
   }
 };
 
 // server/routes/v1/aiPromptRoutes.ts
 init_apiResponse();
-var router48 = Router50();
+var router48 = Router51();
 router48.use(authenticateToken);
 function requestMeta35(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"], requestId: req.requestId };
@@ -27517,7 +28365,7 @@ router48.delete(
 var aiPromptRoutes_default = router48;
 
 // server/routes/v1/aiWorkflowRoutes.ts
-import { Router as Router51 } from "express";
+import { Router as Router52 } from "express";
 
 // server/repositories/aiWorkflowRepository.ts
 var aiWorkflowRepository = {
@@ -27591,7 +28439,7 @@ var aiWorkflowService = {
   async getWorkflow(organizationId, id2) {
     return loadWorkflowOrThrow(id2, organizationId);
   },
-  async createWorkflow(caller, input, meta6 = {}) {
+  async createWorkflow(caller, input, meta7 = {}) {
     const existing = await aiWorkflowRepository.findByKeyInOrg(input.key, caller.organizationId);
     if (existing) throw new ConflictError(`A workflow with key "${input.key}" already exists in this organization.`);
     assertStepsValid(input.steps, input.maxSteps ?? 10);
@@ -27604,12 +28452,12 @@ var aiWorkflowService = {
       resourceType: "ai_workflow",
       resourceId: workflow.id,
       afterData: { key: workflow.key, name: workflow.name },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return workflow;
   },
-  async updateWorkflow(caller, id2, input, meta6 = {}) {
+  async updateWorkflow(caller, id2, input, meta7 = {}) {
     const existing = await loadWorkflowOrThrow(id2, caller.organizationId);
     if (input.expectedUpdatedAt && existing.updatedAt.getTime() !== input.expectedUpdatedAt.getTime()) {
       throw new ConflictError("This workflow was modified by someone else since you loaded it.");
@@ -27627,12 +28475,12 @@ var aiWorkflowService = {
       resourceType: "ai_workflow",
       resourceId: id2,
       afterData: patch,
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return workflow;
   },
-  async publishWorkflow(caller, id2, meta6 = {}) {
+  async publishWorkflow(caller, id2, meta7 = {}) {
     await loadWorkflowOrThrow(id2, caller.organizationId);
     const workflow = await aiWorkflowRepository.setStatus(id2, "ACTIVE", caller.id);
     await auditLogRepository.record({
@@ -27642,12 +28490,12 @@ var aiWorkflowService = {
       action: "AI_WORKFLOW_PUBLISHED",
       resourceType: "ai_workflow",
       resourceId: id2,
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return workflow;
   },
-  async archiveWorkflow(caller, id2, meta6 = {}) {
+  async archiveWorkflow(caller, id2, meta7 = {}) {
     await loadWorkflowOrThrow(id2, caller.organizationId);
     const workflow = await aiWorkflowRepository.setStatus(id2, "ARCHIVED", caller.id);
     await auditLogRepository.record({
@@ -27657,8 +28505,8 @@ var aiWorkflowService = {
       action: "AI_WORKFLOW_ARCHIVED",
       resourceType: "ai_workflow",
       resourceId: id2,
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return workflow;
   },
@@ -27669,7 +28517,7 @@ var aiWorkflowService = {
    * territory); a workflow left AWAITING_APPROVAL is a terminal state here,
    * re-run from scratch once the approval is resolved.
    */
-  async executeWorkflow(caller, id2, input, meta6 = {}) {
+  async executeWorkflow(caller, id2, input, meta7 = {}) {
     const workflow = await loadWorkflowOrThrow(id2, caller.organizationId);
     if (workflow.status !== "ACTIVE") {
       throw new ValidationError("Only an ACTIVE workflow can be executed.");
@@ -27681,7 +28529,7 @@ var aiWorkflowService = {
       userId: caller.id,
       kind: "WORKFLOW",
       workflowId: workflow.id,
-      requestId: meta6.requestId,
+      requestId: meta7.requestId,
       input: input.stepInputs
     });
     await auditLogRepository.record({
@@ -27692,8 +28540,8 @@ var aiWorkflowService = {
       resourceType: "ai_execution",
       resourceId: execution.id,
       afterData: { workflowId: workflow.id, workflowKey: workflow.key },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     const stepResults = [];
     const deadline = Date.now() + workflow.timeoutMs;
@@ -27709,7 +28557,7 @@ var aiWorkflowService = {
         input: stepInput,
         executionId: execution.id,
         stepOrder: step.order,
-        meta: meta6
+        meta: meta7
       });
       stepResults.push({ order: step.order, toolCode: step.toolCode, ...result });
       if (result.status === "AWAITING_APPROVAL") {
@@ -27725,7 +28573,7 @@ var aiWorkflowService = {
 
 // server/routes/v1/aiWorkflowRoutes.ts
 init_apiResponse();
-var router49 = Router51();
+var router49 = Router52();
 router49.use(authenticateToken);
 function requestMeta36(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"], requestId: req.requestId };
@@ -27801,7 +28649,7 @@ router49.post(
 var aiWorkflowRoutes_default = router49;
 
 // server/routes/v1/aiExecutionRoutes.ts
-import { Router as Router52 } from "express";
+import { Router as Router53 } from "express";
 
 // server/services/aiExecutionService.ts
 init_errors();
@@ -27815,13 +28663,13 @@ var aiExecutionService = {
     return execution;
   },
   /** A single governed tool call, outside of any workflow — e.g. a human coworker's assistant panel invoking one action directly. */
-  async executeTool(caller, input, meta6 = {}) {
+  async executeTool(caller, input, meta7 = {}) {
     const execution = await aiExecutionRepository.create({
       organizationId: caller.organizationId,
       userId: caller.id,
       kind: "TOOL_CALL",
       toolCode: input.toolCode,
-      requestId: meta6.requestId,
+      requestId: meta7.requestId,
       input: input.input
     });
     const result = await executeGovernedTool({
@@ -27829,7 +28677,7 @@ var aiExecutionService = {
       toolCode: input.toolCode,
       input: input.input,
       executionId: execution.id,
-      meta: meta6
+      meta: meta7
     });
     if (result.status === "AWAITING_APPROVAL") {
       return aiExecutionRepository.complete(execution.id, "AWAITING_APPROVAL", result);
@@ -27843,7 +28691,7 @@ var aiExecutionService = {
 
 // server/routes/v1/aiExecutionRoutes.ts
 init_apiResponse();
-var router50 = Router52();
+var router50 = Router53();
 router50.use(authenticateToken);
 function requestMeta37(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"], requestId: req.requestId };
@@ -27889,7 +28737,7 @@ router50.post(
 var aiExecutionRoutes_default = router50;
 
 // server/routes/v1/aiUsageRoutes.ts
-import { Router as Router53 } from "express";
+import { Router as Router54 } from "express";
 
 // server/services/aiUsageService.ts
 var aiUsageService = {
@@ -27903,7 +28751,7 @@ var aiUsageService = {
 
 // server/routes/v1/aiUsageRoutes.ts
 init_apiResponse();
-var router51 = Router53();
+var router51 = Router54();
 router51.use(authenticateToken);
 router51.use(requirePermission("ai.usage.read"));
 router51.get(
@@ -27925,7 +28773,7 @@ router51.get(
 var aiUsageRoutes_default = router51;
 
 // server/routes/v1/aiHealthRoutes.ts
-import { Router as Router54 } from "express";
+import { Router as Router55 } from "express";
 init_apiResponse();
 
 // server/services/aiHealthService.ts
@@ -28051,7 +28899,7 @@ var aiHealthService = {
 };
 
 // server/routes/v1/aiHealthRoutes.ts
-var router52 = Router54();
+var router52 = Router55();
 router52.use(authenticateToken);
 router52.get(
   "/health",
@@ -28075,7 +28923,7 @@ router52.put(
 var aiHealthRoutes_default = router52;
 
 // server/routes/v1/portalRegistrationRoutes.ts
-import { Router as Router55 } from "express";
+import { Router as Router56 } from "express";
 import { z as z54 } from "zod";
 init_apiResponse();
 
@@ -28120,7 +28968,7 @@ var portalRegistrationService = {
       };
     });
   },
-  async link(caller, organizationId, clientId, meta6 = {}) {
+  async link(caller, organizationId, clientId, meta7 = {}) {
     assertOperator(caller);
     const org = await prisma.organization.findFirst({ where: { id: organizationId, ...pendingWhere }, select: { id: true } });
     if (!org) throw new NotFoundError("Pending registration not found.");
@@ -28140,11 +28988,11 @@ var portalRegistrationService = {
       resourceType: "organization",
       resourceId: organizationId,
       afterData: { clientId },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
   },
-  async reject(caller, organizationId, meta6 = {}) {
+  async reject(caller, organizationId, meta7 = {}) {
     assertOperator(caller);
     const org = await prisma.organization.findFirst({ where: { id: organizationId, ...pendingWhere }, select: { id: true } });
     if (!org) throw new NotFoundError("Pending registration not found.");
@@ -28158,16 +29006,16 @@ var portalRegistrationService = {
       action: "PORTAL_REGISTRATION_REJECTED",
       resourceType: "organization",
       resourceId: organizationId,
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
   }
 };
 
 // server/routes/v1/portalRegistrationRoutes.ts
-var router53 = Router55();
+var router53 = Router56();
 router53.use(authenticateToken);
-var meta4 = (req) => ({ ip: req.ip, userAgent: req.headers["user-agent"] });
+var meta5 = (req) => ({ ip: req.ip, userAgent: req.headers["user-agent"] });
 router53.get(
   "/",
   requirePermission("workspaces.read"),
@@ -28179,7 +29027,7 @@ router53.post(
   sensitiveActionLimiter,
   asyncHandler(async (req, res) => {
     const { clientId } = z54.object({ clientId: z54.string().uuid() }).parse(req.body);
-    await portalRegistrationService.link(req.user, req.params.organizationId, clientId, meta4(req));
+    await portalRegistrationService.link(req.user, req.params.organizationId, clientId, meta5(req));
     sendSuccess(res, { linked: true });
   })
 );
@@ -28188,16 +29036,16 @@ router53.post(
   requirePermission("workspaces.suspend"),
   sensitiveActionLimiter,
   asyncHandler(async (req, res) => {
-    await portalRegistrationService.reject(req.user, req.params.organizationId, meta4(req));
+    await portalRegistrationService.reject(req.user, req.params.organizationId, meta5(req));
     sendSuccess(res, { rejected: true });
   })
 );
 var portalRegistrationRoutes_default = router53;
 
 // server/routes/v1/aiApprovalRoutes.ts
-import { Router as Router56 } from "express";
+import { Router as Router57 } from "express";
 init_apiResponse();
-var router54 = Router56();
+var router54 = Router57();
 router54.use(authenticateToken);
 function requestMeta38(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"], requestId: req.requestId };
@@ -28238,8 +29086,8 @@ router54.post(
 var aiApprovalRoutes_default = router54;
 
 // server/routes/v1/automationRoutes.ts
-import { timingSafeEqual as timingSafeEqual2 } from "node:crypto";
-import { Router as Router57 } from "express";
+import { timingSafeEqual as timingSafeEqual3 } from "node:crypto";
+import { Router as Router58 } from "express";
 import { z as z55 } from "zod";
 init_apiResponse();
 
@@ -28343,29 +29191,31 @@ var contentSchedulingService = {
 
 // server/routes/v1/automationRoutes.ts
 init_errors();
-function constantTimeEquals(a, b) {
+function constantTimeEquals2(a, b) {
   const ab = Buffer.from(a);
   const bb = Buffer.from(b);
-  return ab.length === bb.length && timingSafeEqual2(ab, bb);
+  return ab.length === bb.length && timingSafeEqual3(ab, bb);
 }
-var router55 = Router57();
+var router55 = Router58();
 router55.get(
   "/internal/tick",
   asyncHandler(async (req, res) => {
     if (!config.cronSecret) {
       throw new NotFoundError("Not found.");
     }
-    if (!constantTimeEquals(req.headers.authorization ?? "", `Bearer ${config.cronSecret}`)) {
+    if (!constantTimeEquals2(req.headers.authorization ?? "", `Bearer ${config.cronSecret}`)) {
       throw new AuthenticationError("Invalid cron credentials.");
     }
-    const [automation, content, webhookRetries, socialTokenHealth] = await Promise.all([
+    const [automation, content, webhookRetries, socialTokenHealth, socialPublish] = await Promise.all([
       automationService.runCronTick(),
       contentSchedulingService.publishDueScheduled(),
       webhookEndpointService.processDueRetries(),
       // Daily social token check; a failure here must never break the other jobs sharing this cron entry.
-      socialAccountService.runTokenHealthJob().catch(() => ({ checked: 0, needsAttention: 0, errors: 1 }))
+      socialAccountService.runTokenHealthJob().catch(() => ({ checked: 0, needsAttention: 0, errors: 1 })),
+      // Catch-up pass for social publishing (the minute-level scheduler hits /social/internal/publish-tick); gated, default OFF.
+      publisher.tick().then((r) => ({ considered: r.considered, outcomes: r.outcomes, missed: r.missed })).catch(() => ({ error: true }))
     ]);
-    sendSuccess(res, { automation, content, webhookRetries, socialTokenHealth });
+    sendSuccess(res, { automation, content, webhookRetries, socialTokenHealth, socialPublish });
   })
 );
 router55.use(authenticateToken);
@@ -28800,7 +29650,7 @@ router55.post(
 var automationRoutes_default = router55;
 
 // server/routes/v1/knowledgeRoutes.ts
-import { Router as Router58 } from "express";
+import { Router as Router59 } from "express";
 import express3 from "express";
 init_apiResponse();
 init_errors();
@@ -28864,7 +29714,7 @@ var searchKnowledgeSchema = z56.object({
 });
 
 // server/routes/v1/knowledgeRoutes.ts
-var router56 = Router58();
+var router56 = Router59();
 router56.use(authenticateToken);
 router56.get(
   "/collections",
@@ -29028,7 +29878,7 @@ router56.post(
 var knowledgeRoutes_default = router56;
 
 // server/routes/v1/copilotRoutes.ts
-import { Router as Router59 } from "express";
+import { Router as Router60 } from "express";
 
 // server/services/copilot/CopilotService.ts
 init_errors();
@@ -29890,7 +30740,7 @@ var sendMessageSchema = z57.object({
 });
 
 // server/routes/v1/copilotRoutes.ts
-var router57 = Router59();
+var router57 = Router60();
 router57.use(authenticateToken);
 router57.get(
   "/workspaces",
@@ -30073,7 +30923,7 @@ router57.get(
 var copilotRoutes_default = router57;
 
 // server/routes/v1/adminRoutes.ts
-import { Router as Router60 } from "express";
+import { Router as Router61 } from "express";
 import { z as z58 } from "zod";
 init_apiResponse();
 
@@ -30207,7 +31057,7 @@ var adminOverviewService = {
 };
 
 // server/routes/v1/adminRoutes.ts
-var router58 = Router60();
+var router58 = Router61();
 router58.use(authenticateToken);
 router58.get("/overview", requirePermission("security.read"), asyncHandler(async (req, res) => sendSuccess(res, { overview: await adminOverviewService.overview(req.user) })));
 router58.get("/security/policy", requirePermission("security.read"), (_req, res) => sendSuccess(res, { policy: adminOverviewService.policy() }));
@@ -30242,7 +31092,7 @@ router58.post(
 var adminRoutes_default = router58;
 
 // server/routes/v1/integrationRoutes.ts
-import { Router as Router61 } from "express";
+import { Router as Router62 } from "express";
 init_apiResponse();
 
 // server/services/admin/integrationService.ts
@@ -30426,7 +31276,7 @@ var integrationService = {
       encryption: { source: encryptionKeySource() }
     };
   },
-  async upsert(caller, provider, input, meta6 = {}) {
+  async upsert(caller, provider, input, meta7 = {}) {
     const entry = catalogEntry(provider);
     const existing = await prisma.integration.findUnique({ where: { organizationId_provider: { organizationId: caller.organizationId, provider } } });
     let cfg = existing?.config ?? {};
@@ -30460,12 +31310,12 @@ var integrationService = {
       resourceId: row.id,
       afterData: { provider, enabled: row.enabled, configKeys: Object.keys(cfg), credentialRotated: input.secret !== void 0 },
       // never the secret
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return projectIntegration(row);
   },
-  async test(caller, provider, meta6 = {}) {
+  async test(caller, provider, meta7 = {}) {
     catalogEntry(provider);
     const row = await prisma.integration.findUnique({ where: { organizationId_provider: { organizationId: caller.organizationId, provider } } });
     if (!row || deriveStatus(row) === "NOT_CONFIGURED") throw new ValidationError("Configure this integration before testing it.");
@@ -30484,12 +31334,12 @@ var integrationService = {
       resourceId: row.id,
       result: result.ok ? "SUCCESS" : "FAILURE",
       afterData: { provider, ok: result.ok },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return projectIntegration(updated);
   },
-  async clearSecret(caller, provider, meta6 = {}) {
+  async clearSecret(caller, provider, meta7 = {}) {
     catalogEntry(provider);
     const row = await prisma.integration.findUnique({ where: { organizationId_provider: { organizationId: caller.organizationId, provider } } });
     if (!row) throw new NotFoundError("Integration not configured.");
@@ -30505,8 +31355,8 @@ var integrationService = {
       resourceType: "integration",
       resourceId: row.id,
       afterData: { provider },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return projectIntegration(updated);
   }
@@ -30554,7 +31404,7 @@ var apiKeyService = {
     const keys = await prisma.apiKey.findMany({ where: { organizationId }, orderBy: { createdAt: "desc" } });
     return keys.map(projectApiKey);
   },
-  async create(caller, input, meta6 = {}) {
+  async create(caller, input, meta7 = {}) {
     const active = await prisma.apiKey.count({ where: { organizationId: caller.organizationId, revokedAt: null } });
     if (active >= MAX_ACTIVE_KEYS) throw new ConflictError(`An organization can have at most ${MAX_ACTIVE_KEYS} active API keys.`);
     const scopes = validateScopes(caller, input.scopes);
@@ -30581,12 +31431,12 @@ var apiKeyService = {
       resourceType: "api_key",
       resourceId: record2.id,
       afterData: { name: record2.name, scopes, expiresAt: record2.expiresAt?.toISOString() ?? null },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return { apiKey: projectApiKey(record2), key: key2 };
   },
-  async revoke(caller, id2, meta6 = {}) {
+  async revoke(caller, id2, meta7 = {}) {
     const existing = await prisma.apiKey.findFirst({ where: { id: id2, organizationId: caller.organizationId } });
     if (!existing) throw new NotFoundError("API key not found.");
     if (existing.revokedAt) return projectApiKey(existing);
@@ -30599,8 +31449,8 @@ var apiKeyService = {
       resourceType: "api_key",
       resourceId: id2,
       beforeData: { name: existing.name },
-      ipAddress: meta6.ip,
-      userAgent: meta6.userAgent
+      ipAddress: meta7.ip,
+      userAgent: meta7.userAgent
     });
     return projectApiKey(updated);
   },
@@ -30618,9 +31468,9 @@ var apiKeyService = {
 };
 
 // server/routes/v1/integrationRoutes.ts
-var meta5 = (req) => ({ ip: req.ip, userAgent: req.headers["user-agent"] });
+var meta6 = (req) => ({ ip: req.ip, userAgent: req.headers["user-agent"] });
 var noStore2 = (res) => res.setHeader("Cache-Control", "no-store");
-var integrationsRouter = Router61();
+var integrationsRouter = Router62();
 integrationsRouter.use(authenticateToken);
 integrationsRouter.get("/", requirePermission("integrations.read"), asyncHandler(async (req, res) => sendSuccess(res, await integrationService.overview(req.user.organizationId))));
 integrationsRouter.put(
@@ -30629,22 +31479,22 @@ integrationsRouter.put(
   sensitiveActionLimiter,
   asyncHandler(async (req, res) => {
     const input = upsertIntegrationSchema.parse(req.body);
-    sendSuccess(res, { integration: await integrationService.upsert(req.user, req.params.provider, input, meta5(req)) });
+    sendSuccess(res, { integration: await integrationService.upsert(req.user, req.params.provider, input, meta6(req)) });
   })
 );
 integrationsRouter.post(
   "/:provider/test",
   requirePermission("integrations.manage"),
   sensitiveActionLimiter,
-  asyncHandler(async (req, res) => sendSuccess(res, { integration: await integrationService.test(req.user, req.params.provider, meta5(req)) }))
+  asyncHandler(async (req, res) => sendSuccess(res, { integration: await integrationService.test(req.user, req.params.provider, meta6(req)) }))
 );
 integrationsRouter.delete(
   "/:provider/secret",
   requirePermission("integrations.manage"),
   sensitiveActionLimiter,
-  asyncHandler(async (req, res) => sendSuccess(res, { integration: await integrationService.clearSecret(req.user, req.params.provider, meta5(req)) }))
+  asyncHandler(async (req, res) => sendSuccess(res, { integration: await integrationService.clearSecret(req.user, req.params.provider, meta6(req)) }))
 );
-var webhookEndpointsRouter = Router61();
+var webhookEndpointsRouter = Router62();
 webhookEndpointsRouter.use(authenticateToken);
 webhookEndpointsRouter.get("/events", requirePermission("webhooks.read"), (_req, res) => sendSuccess(res, { events: supportedEvents() }));
 webhookEndpointsRouter.get("/", requirePermission("webhooks.read"), asyncHandler(async (req, res) => sendSuccess(res, { endpoints: await webhookEndpointService.list(req.user.organizationId) })));
@@ -30655,13 +31505,13 @@ webhookEndpointsRouter.post(
   asyncHandler(async (req, res) => {
     const input = createWebhookEndpointSchema.parse(req.body);
     noStore2(res);
-    sendSuccess(res, await webhookEndpointService.create(req.user, input, meta5(req)), 201);
+    sendSuccess(res, await webhookEndpointService.create(req.user, input, meta6(req)), 201);
   })
 );
 webhookEndpointsRouter.patch(
   "/:id",
   requirePermission("webhooks.manage"),
-  asyncHandler(async (req, res) => sendSuccess(res, { endpoint: await webhookEndpointService.update(req.user, req.params.id, updateWebhookEndpointSchema.parse(req.body), meta5(req)) }))
+  asyncHandler(async (req, res) => sendSuccess(res, { endpoint: await webhookEndpointService.update(req.user, req.params.id, updateWebhookEndpointSchema.parse(req.body), meta6(req)) }))
 );
 webhookEndpointsRouter.post(
   "/:id/rotate-secret",
@@ -30669,7 +31519,7 @@ webhookEndpointsRouter.post(
   sensitiveActionLimiter,
   asyncHandler(async (req, res) => {
     noStore2(res);
-    sendSuccess(res, await webhookEndpointService.rotateSecret(req.user, req.params.id, meta5(req)));
+    sendSuccess(res, await webhookEndpointService.rotateSecret(req.user, req.params.id, meta6(req)));
   })
 );
 webhookEndpointsRouter.post(
@@ -30682,7 +31532,7 @@ webhookEndpointsRouter.delete(
   "/:id",
   requirePermission("webhooks.manage"),
   asyncHandler(async (req, res) => {
-    await webhookEndpointService.remove(req.user, req.params.id, meta5(req));
+    await webhookEndpointService.remove(req.user, req.params.id, meta6(req));
     sendSuccess(res, { message: "Webhook endpoint deleted." });
   })
 );
@@ -30701,7 +31551,7 @@ webhookEndpointsRouter.post(
   sensitiveActionLimiter,
   asyncHandler(async (req, res) => sendSuccess(res, { delivery: await webhookEndpointService.retryDelivery(req.user, req.params.deliveryId) }))
 );
-var apiKeysRouter = Router61();
+var apiKeysRouter = Router62();
 apiKeysRouter.use(authenticateToken);
 apiKeysRouter.get("/", requirePermission("api_keys.read"), asyncHandler(async (req, res) => sendSuccess(res, { apiKeys: await apiKeyService.list(req.user.organizationId) })));
 apiKeysRouter.post(
@@ -30711,18 +31561,18 @@ apiKeysRouter.post(
   asyncHandler(async (req, res) => {
     const input = createApiKeySchema.parse(req.body);
     noStore2(res);
-    sendSuccess(res, await apiKeyService.create(req.user, input, meta5(req)), 201);
+    sendSuccess(res, await apiKeyService.create(req.user, input, meta6(req)), 201);
   })
 );
 apiKeysRouter.post(
   "/:id/revoke",
   requirePermission("api_keys.manage"),
   sensitiveActionLimiter,
-  asyncHandler(async (req, res) => sendSuccess(res, { apiKey: await apiKeyService.revoke(req.user, req.params.id, meta5(req)) }))
+  asyncHandler(async (req, res) => sendSuccess(res, { apiKey: await apiKeyService.revoke(req.user, req.params.id, meta6(req)) }))
 );
 
 // server/routes/v1/externalRoutes.ts
-import { Router as Router62 } from "express";
+import { Router as Router63 } from "express";
 
 // server/middleware/apiKeyAuth.ts
 init_errors();
@@ -30737,7 +31587,7 @@ var authenticateApiKey = asyncHandler(async (req, _res, next) => {
 
 // server/routes/v1/externalRoutes.ts
 init_apiResponse();
-var router59 = Router62();
+var router59 = Router63();
 router59.use(generalApiLimiter, authenticateApiKey);
 router59.get(
   "/whoami",
@@ -30749,7 +31599,7 @@ router59.get(
 var externalRoutes_default = router59;
 
 // server/routes/v1/analyticsRoutes.ts
-import { Router as Router63 } from "express";
+import { Router as Router64 } from "express";
 
 // server/services/analyticsReportingService.ts
 init_errors();
@@ -30936,7 +31786,7 @@ var analyticsReportingService = {
 
 // server/routes/v1/analyticsRoutes.ts
 init_apiResponse();
-var router60 = Router63();
+var router60 = Router64();
 router60.use(authenticateToken);
 router60.get(
   "/overview",
@@ -30959,7 +31809,7 @@ router60.get(
 var analyticsRoutes_default = router60;
 
 // server/routes/v1/reportsRoutes.ts
-import { Router as Router64 } from "express";
+import { Router as Router65 } from "express";
 init_apiResponse();
 
 // server/utils/csv.ts
@@ -30981,7 +31831,7 @@ function sendCsv(res, filename, csv) {
 
 // server/routes/v1/reportsRoutes.ts
 init_errors();
-var router61 = Router64();
+var router61 = Router65();
 router61.use(authenticateToken);
 function assertReportType(value) {
   if (REPORT_TYPES.includes(value)) return value;
@@ -31027,10 +31877,10 @@ router61.get(
 var reportsRoutes_default = router61;
 
 // server/routes/v1/contentApprovalRoutes.ts
-import { Router as Router65 } from "express";
+import { Router as Router66 } from "express";
 import { z as z59 } from "zod";
 init_apiResponse();
-var router62 = Router65();
+var router62 = Router66();
 router62.use(authenticateToken);
 var SubmitSchema = z59.object({
   contentType: z59.enum(["page", "post"]),
@@ -31074,7 +31924,7 @@ router62.post(
 var contentApprovalRoutes_default = router62;
 
 // server/routes/v1/index.ts
-var v1Router = Router66();
+var v1Router = Router67();
 v1Router.use("/auth", authRoutes_default);
 v1Router.use("/webhooks", webhookRoutes_default);
 v1Router.use("/system", systemRoutes_default);
@@ -31092,6 +31942,8 @@ v1Router.use("/opportunities", opportunityRoutes_default);
 v1Router.use("/notifications", notificationRoutes_default);
 v1Router.use("/approvals", approvalCenterRoutes_default);
 v1Router.use("/nav", navRoutes_default);
+v1Router.use("/social/internal", socialInternalRouter);
+v1Router.use("/social/publishing", socialPublishingRouter);
 v1Router.use("/social/accounts", socialAccountsRouter);
 v1Router.use("/social", socialContentRouter);
 v1Router.use("/forms", formRoutes_default);

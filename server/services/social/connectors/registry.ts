@@ -1,5 +1,6 @@
 import { mockProvider } from "./mockProvider";
-import { linkedinProvider, metaProvider } from "./stubProviders";
+import { linkedinProvider } from "./linkedinProvider";
+import { metaProvider } from "./stubProviders";
 import { DEFAULT_CONSTRAINTS, type SocialConnector, type SocialConstraints } from "./types";
 
 const CONNECTORS: SocialConnector[] = [metaProvider, linkedinProvider, mockProvider];

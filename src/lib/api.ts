@@ -2892,6 +2892,8 @@ export interface NavBadges {
   notifications: number;
   myWork?: number;
   socialApprovals?: number;
+  /** Failed / uncertain / missed publishes (social.publish holders only). */
+  socialFailures?: number;
 }
 
 export const approvalsApi = {
@@ -2989,6 +2991,9 @@ export interface SocialPostTarget {
   bodyOverride: string | null;
   status: string;
   scheduledAt: string | null;
+  publishedAt?: string | null;
+  /** Live link to the published post (set once published). */
+  externalUrl?: string | null;
   account: { id: string; provider: string; displayName: string; handle: string | null; accountType: string; status: string; avatarUrl: string | null };
 }
 export interface SocialPostView {
@@ -3085,4 +3090,70 @@ export const socialContentApi = {
   aiRewrite: (id: string, input: { action: "rewrite" | "shorten" | "translate"; instruction?: string; language?: string; accountId?: string }) =>
     apiClient.post<{ post: SocialPostView; previousBody: string; executionId: string }>(`/social/posts/${id}/ai/rewrite`, input),
   plans: () => apiClient.get<{ plans: SocialPlanSummary[] }>("/social/plans").then((r) => r.plans),
+};
+
+// ---- Social publishing (Step 6): queue, failures, controls ----
+export type PublishTargetStatus = "PENDING" | "SCHEDULED" | "PUBLISHING" | "PUBLISHED" | "FAILED" | "UNCERTAIN" | "MISSED" | "CANCELLED";
+export interface PublishingTarget {
+  id: string;
+  status: PublishTargetStatus;
+  scheduledAt: string | null;
+  nextAttemptAt: string | null;
+  attempts: number;
+  publishedAt: string | null;
+  externalPostId: string | null;
+  externalUrl: string | null;
+  error: string | null;
+  manualResolution: boolean;
+  post: { id: string; title: string; body: string; status: SocialPostStatus; scheduledAt: string | null; timezone: string; linkUrl: string | null; mediaIds: string[] };
+  account: { id: string; provider: string; displayName: string; handle: string | null; avatarUrl: string | null; accountType: string; status: SocialAccountStatus };
+}
+export interface PublishAttemptView {
+  id: string;
+  attemptNumber: number;
+  startedAt: string;
+  finishedAt: string | null;
+  outcome: "SUCCESS" | "TRANSIENT_FAILURE" | "PERMANENT_FAILURE" | "AUTH_FAILURE" | "UNCERTAIN" | "DRY_RUN" | "SKIPPED" | null;
+  errorCategory: string | null;
+  error: string | null;
+  externalPostId: string | null;
+  externalUrl: string | null;
+  httpStatus: number | null;
+  durationMs: number | null;
+  dryRun: boolean;
+}
+export interface PublishingTargetDetail extends PublishingTarget {
+  attemptLog: PublishAttemptView[];
+}
+export interface PublishingControls {
+  enabled: boolean;
+  dryRun: boolean;
+  killSwitch: boolean;
+}
+export interface PublishingSettingsView {
+  global: PublishingControls;
+  workspace: PublishingControls & { graceMinutes: number; maxAttempts: number };
+  envDisabled: boolean;
+  effective: { publishing: true; dryRun: boolean } | { publishing: false; reason: string };
+}
+export interface PublishingMetrics {
+  queued: number;
+  needsAttention: number;
+  oldestDueAt: string | null;
+  oldestDueSeconds: number | null;
+  last24h: { published: number; failed: number; retried: number; uncertain: number; dryRun: number };
+}
+
+export const socialPublishingApi = {
+  queue: () => apiClient.get<{ items: PublishingTarget[]; now: string }>("/social/publishing/queue"),
+  failures: (status?: "FAILED" | "UNCERTAIN" | "MISSED") => apiClient.get<{ items: PublishingTarget[] }>(`/social/publishing/failures${toQuery({ status })}`).then((r) => r.items),
+  target: (id: string) => apiClient.get<{ target: PublishingTargetDetail }>(`/social/publishing/targets/${id}`).then((r) => r.target),
+  metrics: () => apiClient.get<{ metrics: PublishingMetrics }>("/social/publishing/metrics").then((r) => r.metrics),
+  settings: () => apiClient.get<PublishingSettingsView>("/social/publishing/settings"),
+  saveSettings: (input: Partial<PublishingControls & { graceMinutes: number; maxAttempts: number }>) => apiClient.put<PublishingSettingsView>("/social/publishing/settings", input),
+  saveGlobal: (input: Partial<PublishingControls>) => apiClient.put<PublishingSettingsView>("/social/publishing/global", input),
+  retry: (id: string, confirmNotPosted?: boolean) => apiClient.post<{ result: { outcome: string; detail?: string }; target: PublishingTargetDetail }>(`/social/publishing/targets/${id}/retry`, { confirmNotPosted }),
+  reschedule: (id: string, scheduledAt: string, confirmNotPosted?: boolean) => apiClient.post<{ target: PublishingTargetDetail }>(`/social/publishing/targets/${id}/reschedule`, { scheduledAt, confirmNotPosted }),
+  markPublished: (id: string, url: string) => apiClient.post<{ target: PublishingTargetDetail }>(`/social/publishing/targets/${id}/mark-published`, { url }),
+  cancel: (id: string) => apiClient.post<{ target: PublishingTargetDetail }>(`/social/publishing/targets/${id}/cancel`),
 };

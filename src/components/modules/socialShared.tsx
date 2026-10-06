@@ -41,3 +41,16 @@ export const ProviderAvatar: React.FC<{ account: Pick<SocialAccountSummary, "dis
       {account.displayName.charAt(0).toUpperCase()}
     </span>
   );
+
+/** "in 4m 05s" / "due 2m ago" style label for the publishing queue. */
+export function formatCountdown(targetIso: string | null, now: number): string {
+  if (!targetIso) return "not scheduled";
+  const diff = new Date(targetIso).getTime() - now;
+  const abs = Math.abs(diff);
+  const d = Math.floor(abs / 86400_000);
+  const h = Math.floor((abs % 86400_000) / 3600_000);
+  const m = Math.floor((abs % 3600_000) / 60_000);
+  const s = Math.floor((abs % 60_000) / 1000);
+  const text = d > 0 ? `${d}d ${h}h` : h > 0 ? `${h}h ${String(m).padStart(2, "0")}m` : m > 0 ? `${m}m ${String(s).padStart(2, "0")}s` : `${s}s`;
+  return diff >= 0 ? `in ${text}` : `due ${text} ago`;
+}

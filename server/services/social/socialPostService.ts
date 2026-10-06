@@ -1,7 +1,7 @@
 /**
  * Social posts: CRUD, status transitions, calendar, guardrail evaluation, approval decisions, brand voice and
  * workspace settings. Everything is scoped to the caller's ACTIVE workspace. NO publishing happens here — SCHEDULED
- * posts wait for Step 6's workers. AI-created posts always start as DRAFT and use exactly the same rules.
+ * posts are picked up by the publishing workers (services/social/publishing). AI-created posts always start as DRAFT and use exactly the same rules.
  */
 import type { Prisma, SocialPostStatus } from "@prisma/client";
 import { prisma } from "../../db/prisma";
@@ -48,7 +48,7 @@ export function projectPost(post: PostWithRelations) {
     createdAt: post.createdAt,
     updatedAt: post.updatedAt,
     createdBy: post.createdBy ? { id: post.createdBy.id, name: `${post.createdBy.firstName} ${post.createdBy.lastName}`.trim() } : null,
-    targets: post.targets.map((t) => ({ id: t.id, accountId: t.socialAccountId, bodyOverride: t.bodyOverride, status: t.status, scheduledAt: t.scheduledAt, account: t.account })),
+    targets: post.targets.map((t) => ({ id: t.id, accountId: t.socialAccountId, bodyOverride: t.bodyOverride, status: t.status, scheduledAt: t.scheduledAt, publishedAt: t.publishedAt, externalUrl: t.externalUrl, account: t.account })),
   };
 }
 
@@ -189,6 +189,7 @@ export const socialPostService = {
     const post = await loadPost(caller.organizationId, id);
     const touchesContent = ["title", "body", "mediaIds", "linkUrl", "accountIds", "bodyOverrides", "sourceContent"].some((k) => k in input);
     const touchesSchedule = "scheduledAt" in input || "timezone" in input;
+    if (post.targets.some((t) => t.status === "PUBLISHING")) throw new ConflictError("This post is being published right now. Try again in a moment.");
     if (touchesContent && !CONTENT_EDITABLE.includes(post.status)) throw new ConflictError(`A post in status ${post.status} cannot be edited. Move it back to draft first.`);
     if (touchesSchedule && !SCHEDULE_EDITABLE.includes(post.status)) throw new ConflictError(`The schedule of a ${post.status} post cannot be changed.`);
 
@@ -248,6 +249,10 @@ export const socialPostService = {
   async transition(caller: SanitizedUser, id: string, to: SocialPostStatus, opts: { comment?: string; scheduledAt?: Date; timezone?: string } = {}, meta: RequestMeta = {}) {
     const post = await loadPost(caller.organizationId, id);
     if (!canTransition(post.status, to)) throw new ConflictError(`A ${post.status} post cannot move to ${to}.`);
+    // Publishing safety: never change a post while a publish is in flight, and never lose track of an unknown outcome.
+    if (post.targets.some((t) => t.status === "PUBLISHING")) throw new ConflictError("This post is being published right now. Try again in a moment.");
+    if (post.targets.some((t) => t.status === "UNCERTAIN")) throw new ConflictError("A publish for this post has an unknown outcome. Resolve it from the Failures page first.");
+    if (to === "DRAFT" && post.targets.some((t) => t.status === "PUBLISHED")) throw new ConflictError("This post was already published to an account. Create a new post instead.");
 
     let target: SocialPostStatus = to;
     const data: Prisma.SocialPostUpdateInput = {};
@@ -307,7 +312,11 @@ export const socialPostService = {
 
     const targetStatus = target === "SCHEDULED" ? ("SCHEDULED" as const) : target === "CANCELLED" ? ("CANCELLED" as const) : ("PENDING" as const);
     const updated = await prisma.$transaction(async (tx) => {
-      await tx.socialPostTarget.updateMany({ where: { postId: id }, data: { status: targetStatus, ...(data.scheduledAt ? { scheduledAt: data.scheduledAt as Date } : {}) } });
+      // Targets that already published (or are unresolved) are never touched, so a post can never be re-sent.
+      await tx.socialPostTarget.updateMany({
+        where: { postId: id, status: { notIn: ["PUBLISHED", "PUBLISHING", "UNCERTAIN"] } },
+        data: { status: targetStatus, ...(targetStatus === "SCHEDULED" ? { attempts: 0, nextAttemptAt: null, publishError: null } : {}), ...(data.scheduledAt ? { scheduledAt: data.scheduledAt as Date } : {}) },
+      });
       return tx.socialPost.update({ where: { id }, data: { ...data, status: target }, include: POST_INCLUDE });
     });
     await record(caller, action, updated, meta, { from: post.status, to: updated.status, ...(opts.comment ? { comment: opts.comment.slice(0, 500) } : {}) });

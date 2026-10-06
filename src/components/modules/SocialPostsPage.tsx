@@ -8,6 +8,7 @@ import { useActiveWorkspace } from "../../context/ActiveWorkspaceContext";
 import { hasPermission } from "../../lib/permissions";
 import { Card, Button, Input, Select, Badge, LoadingState, ErrorState, EmptyState, Pagination } from "../ui/ui";
 import { POST_STATUS_LABEL, PostStatusBadge } from "./socialPostShared";
+import { LiveLink } from "./SocialFailuresPage";
 
 export const SocialPostsPage: React.FC = () => {
   const { user } = useAuth();
@@ -114,6 +115,15 @@ export const SocialPostsPage: React.FC = () => {
                   </span>
                   <PostStatusBadge status={p.status} />
                 </button>
+                {p.targets.some((t) => t.externalUrl) && (
+                  <div className="px-4 pb-3 flex gap-3 flex-wrap">
+                    {p.targets.filter((t) => t.externalUrl).map((t) => (
+                      <span key={t.id} className="inline-flex items-center gap-1.5 text-[11px]" style={{ color: "var(--text-muted)" }}>
+                        {t.account.displayName}: <LiveLink url={t.externalUrl!} />
+                      </span>
+                    ))}
+                  </div>
+                )}
               </li>
             ))}
           </ul>

@@ -9,7 +9,8 @@ import { config } from "../../server/config/env";
 import { connectorRegistry } from "../../server/services/social/connectors/registry";
 import { mockProvider } from "../../server/services/social/connectors/mockProvider";
 import { ConnectorNotImplementedError } from "../../server/services/social/connectors/types";
-import { linkedinProvider, metaProvider } from "../../server/services/social/connectors/stubProviders";
+import { metaProvider } from "../../server/services/social/connectors/stubProviders";
+import { linkedinProvider } from "../../server/services/social/connectors/linkedinProvider";
 
 const mutable = config as unknown as Record<string, unknown>;
 afterEach(() => {
@@ -39,7 +40,9 @@ describe("connector registry", () => {
     mutable.metaAppSecret = "secret";
     expect(connectorRegistry.list().find((p) => p.key === "meta")).toMatchObject({ configured: true, available: false });
     expect(() => metaProvider.getAuthUrl({ state: "s", redirectUri: "r" })).toThrow(ConnectorNotImplementedError);
-    expect(linkedinProvider.implemented).toBe(false);
+    // LinkedIn has real connector code now, but stays unavailable until app credentials are configured.
+    expect(linkedinProvider.implemented).toBe(true);
+    expect(connectorRegistry.getAvailable("linkedin")).toBeUndefined();
   });
 });
 

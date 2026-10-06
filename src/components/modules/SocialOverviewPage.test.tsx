@@ -1,9 +1,10 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 
 const listMock = vi.fn();
 const navigateMock = vi.fn();
-vi.mock("../../lib/api", () => ({ socialApi: { list: () => listMock() } }));
+const metricsMock = vi.fn();
+vi.mock("../../lib/api", () => ({ socialApi: { list: () => listMock() }, socialPublishingApi: { metrics: () => metricsMock() } }));
 vi.mock("../../lib/router", () => ({ useRouter: () => ({ path: "/social", navigate: navigateMock }) }));
 const user = { role: { permissions: ["social.read"] } };
 vi.mock("../../context/AuthContext", () => ({ useAuth: () => ({ user }) }));
@@ -16,13 +17,30 @@ const account = (over: Record<string, unknown> = {}) => ({
   scopes: [], tokenExpiresAt: new Date(Date.now() + 40 * 86400_000).toISOString(), lastSyncAt: new Date().toISOString(), lastError: null, createdAt: "", updatedAt: "", ...over,
 });
 
+beforeEach(() => metricsMock.mockRejectedValue(new Error("metrics unavailable")));
 afterEach(() => {
   cleanup();
   listMock.mockReset();
   navigateMock.mockReset();
+  metricsMock.mockReset();
 });
 
 describe("SocialOverviewPage", () => {
+  it("shows publishing health with the oldest due-but-unpublished figure, and survives a metrics failure", async () => {
+    listMock.mockResolvedValue({ accounts: [account()], providers: [] });
+    metricsMock.mockResolvedValue({ queued: 3, needsAttention: 2, oldestDueAt: "x", oldestDueSeconds: 1500, last24h: { published: 7, failed: 1, retried: 2, uncertain: 0, dryRun: 0 } });
+    const first = render(<SocialOverviewPage />);
+    expect(await screen.findByText("25 min overdue")).toBeInTheDocument();
+    expect(screen.getByText("Published", { selector: "p" }).nextElementSibling).toHaveTextContent("7");
+    fireEvent.click(screen.getByRole("button", { name: /2 publishes need attention/ }));
+    expect(navigateMock).toHaveBeenCalledWith("/social/failures");
+    first.unmount();
+    metricsMock.mockRejectedValue(new Error("nope"));
+    render(<SocialOverviewPage />);
+    expect(await screen.findByText("All connections look healthy")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Publishing health")).toBeNull();
+  });
+
   it("shows an empty state when nothing is connected", async () => {
     listMock.mockResolvedValue({ accounts: [], providers: [] });
     render(<SocialOverviewPage />);

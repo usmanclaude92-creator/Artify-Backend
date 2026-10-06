@@ -1,4 +1,4 @@
-/** Social Composer: write once, tune per account, check guardrails, get approval. Nothing here publishes — scheduled posts wait for the publishing workers. */
+/** Social Composer: write once, tune per account, check guardrails, get approval. Nothing here sends directly — scheduled posts are published by the scheduler. */
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { PenSquare, Sparkles, Image as ImageIcon, X, AlertTriangle, CheckCircle2, Link2, Undo2, Save, Send, CalendarClock } from "lucide-react";
 import {
@@ -11,6 +11,7 @@ import { useToast } from "../../context/ToastContext";
 import { useRouter } from "../../lib/router";
 import { hasPermission } from "../../lib/permissions";
 import { Card, Button, Input, Select, Badge, LoadingState, ErrorState, Modal, ReasonConfirmDialog } from "../ui/ui";
+import { LiveLink } from "./SocialFailuresPage";
 import { CONTENT_EDITABLE, PostStatusBadge, SCHEDULE_EDITABLE, countHashtags, timezoneOptions, utcToZonedLocal, zonedLocalToUtc } from "./socialPostShared";
 
 const SHARED = "__shared__";
@@ -189,7 +190,7 @@ export const SocialComposerPage: React.FC = () => {
       }
       applyPost(await socialContentApi.action(id!, action, extra));
       notify(
-        { submit: "Submitted for approval.", withdraw: "Moved back to draft.", reopen: "Reopened as a draft.", cancel: "Post cancelled.", unschedule: "Unscheduled.", approve: "Approved.", reject: "Rejected.", schedule: "Scheduled. It will publish when the publishing workers are enabled." }[action],
+        { submit: "Submitted for approval.", withdraw: "Moved back to draft.", reopen: "Reopened as a draft.", cancel: "Post cancelled.", unschedule: "Unscheduled.", approve: "Approved.", reject: "Rejected.", schedule: "Scheduled. It will be published automatically at that time if publishing is enabled." }[action],
         "success"
       );
     } catch (err) {
@@ -289,10 +290,18 @@ export const SocialComposerPage: React.FC = () => {
             {post?.aiGenerated && <Badge tone="info">AI draft</Badge>}
           </h1>
           <p className="text-xs" style={{ color: "var(--text-muted)" }}>
-            Posts are never sent from here. Approved posts can be scheduled and will publish once the publishing workers are enabled.
+            Posts are never sent from here. Scheduled posts are published by the scheduler when publishing is enabled for this workspace.
           </p>
         </div>
       </div>
+
+      {post && post.targets.some((t) => t.externalUrl) && (
+        <Card className="p-3 text-xs space-y-1" aria-label="Published links">
+          {post.targets.filter((t) => t.externalUrl).map((t) => (
+            <p key={t.id}>{t.account.displayName}: <LiveLink url={t.externalUrl!} /></p>
+          ))}
+        </Card>
+      )}
 
       {post?.status === "REJECTED" && post.rejectionReason && (
         <Card className="p-3 text-xs" role="alert" style={{ borderColor: "#e11d48" }}>

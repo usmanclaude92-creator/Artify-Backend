@@ -1,4 +1,4 @@
-/** Meta and LinkedIn are registered so the UI can list them, but they stay "not configured" until app credentials exist AND real connector code is written. */
+/** Meta is registered so the UI can list them, but they stay "not configured" until app credentials exist AND real connector code is written. */
 import { config } from "../../../config/env";
 import { ConnectorNotImplementedError, DEFAULT_CONSTRAINTS, type SocialConnector, type SocialConstraints } from "./types";
 
@@ -27,9 +27,3 @@ export const metaProvider = stub("meta", "Facebook & Instagram (Meta)", () => !!
     ? { ...DEFAULT_CONSTRAINTS, maxChars: 2200, maxHashtags: 30, maxMedia: 10, requiresMedia: true, supportsLink: false }
     : { ...DEFAULT_CONSTRAINTS, maxChars: 63206, maxHashtags: 30, maxMedia: 10 }
 );
-export const linkedinProvider = stub("linkedin", "LinkedIn", () => !!config.linkedinClientId && !!config.linkedinClientSecret, ["r_liteprofile", "w_member_social"], () => ({
-  ...DEFAULT_CONSTRAINTS,
-  maxChars: 3000,
-  maxHashtags: 5,
-  maxMedia: 9,
-}));

@@ -45,6 +45,31 @@ export const DEFAULT_CONSTRAINTS: SocialConstraints = {
   mentionPrefix: "@",
 };
 
+export interface PublishMedia {
+  mediaId: string;
+  mimeType: string;
+  altText?: string | null;
+  /** Loads the bytes lazily (storage read); only the connector that needs an upload calls it. */
+  load: () => Promise<Buffer>;
+}
+
+export interface PublishInput {
+  /** Provider-side author/account id (e.g. LinkedIn person id). */
+  accountExternalId: string;
+  accountType?: string | null;
+  text: string;
+  linkUrl?: string | null;
+  media: PublishMedia[];
+  /** Stable per target; sent to networks that support idempotent creates. */
+  idempotencyKey: string;
+  attempt: number;
+}
+
+export interface PublishResult {
+  externalPostId: string;
+  externalUrl: string | null;
+}
+
 export class ConnectorNotImplementedError extends Error {
   constructor(provider: string, capability: string) {
     super(`${provider} does not support "${capability}" yet.`);
@@ -69,8 +94,13 @@ export interface SocialConnector {
   getProfile(tokens: SocialTokenSet): Promise<SocialProfile>;
   healthCheck(tokens: SocialTokenSet): Promise<HealthResult>;
 
-  // Reserved for later phases (publishing, inbox, analytics) — signatures only.
-  publish?(tokens: SocialTokenSet, post: unknown): Promise<unknown>;
+  /**
+   * Sends one post to the network. MUST throw `SocialPublishError` with the right `kind` (see publishErrors.ts) and MUST
+   * NOT retry internally: the publisher owns retries. A timeout/abort after the request was sent is `uncertain`.
+   */
+  publish?(tokens: SocialTokenSet, input: PublishInput): Promise<PublishResult>;
+
+  // Reserved for later phases (inbox, analytics) — signatures only.
   fetchInbox?(tokens: SocialTokenSet, cursor?: string): Promise<unknown>;
   fetchMetrics?(tokens: SocialTokenSet, range: { from: Date; to: Date }): Promise<unknown>;
 }

@@ -1,0 +1,33 @@
+{
+  "textPost": {
+    "input": { "authorUrn": "urn:li:person:abc123", "text": "Hello (world) #launch" },
+    "body": {
+      "author": "urn:li:person:abc123",
+      "commentary": "Hello \\(world\\) #launch",
+      "visibility": "PUBLIC",
+      "distribution": { "feedDistribution": "MAIN_FEED", "targetEntities": [], "thirdPartyDistributionChannels": [] },
+      "lifecycleState": "PUBLISHED",
+      "isReshareDisabledByAuthor": false
+    }
+  },
+  "linkPost": {
+    "input": { "authorUrn": "urn:li:person:abc123", "text": "Read this", "linkUrl": "https://artifysols.com/blog/hello" },
+    "content": { "article": { "source": "https://artifysols.com/blog/hello", "title": "artifysols.com" } }
+  },
+  "imagePost": {
+    "input": { "authorUrn": "urn:li:person:abc123", "text": "Look", "imageUrn": "urn:li:image:C4E10AQ", "altText": "A chart" },
+    "content": { "media": { "id": "urn:li:image:C4E10AQ", "altText": "A chart" } }
+  },
+  "imageInit": { "initializeUploadRequest": { "owner": "urn:li:person:abc123" } },
+  "headers": {
+    "Authorization": "Bearer TOKEN",
+    "Linkedin-Version": "202504",
+    "X-Restli-Protocol-Version": "2.0.0",
+    "Content-Type": "application/json"
+  },
+  "authUrl": {
+    "base": "https://www.linkedin.com/oauth/v2/authorization",
+    "params": { "response_type": "code", "client_id": "cid", "redirect_uri": "https://cc.example/social/accounts", "state": "st", "scope": "openid profile w_member_social" }
+  },
+  "tokenExchange": "grant_type=authorization_code&code=thecode&redirect_uri=https%3A%2F%2Fcc.example%2Fsocial%2Faccounts&client_id=cid&client_secret=csecret"
+}

@@ -97,3 +97,20 @@ export const aiRewriteSchema = z.object({
 });
 
 export const contentSourcesQuerySchema = z.object({ type: z.enum(["post", "case_study"]), search: z.string().trim().max(200).optional() });
+
+// ---- Publishing (Step 6) ----
+export const publishingSettingsSchema = z
+  .object({
+    enabled: z.boolean(),
+    dryRun: z.boolean(),
+    killSwitch: z.boolean(),
+    graceMinutes: z.number().int().min(5).max(1440),
+    maxAttempts: z.number().int().min(1).max(10),
+  })
+  .partial()
+  .refine((v) => Object.keys(v).length > 0, { message: "Nothing to update." });
+export const publishingGlobalSchema = z.object({ enabled: z.boolean(), dryRun: z.boolean(), killSwitch: z.boolean() }).partial().refine((v) => Object.keys(v).length > 0, { message: "Nothing to update." });
+export const failuresQuerySchema = z.object({ status: z.enum(["FAILED", "UNCERTAIN", "MISSED"]).optional() });
+export const retryTargetSchema = z.object({ confirmNotPosted: z.boolean().optional() });
+export const rescheduleTargetSchema = z.object({ scheduledAt: z.coerce.date(), confirmNotPosted: z.boolean().optional() });
+export const markPublishedSchema = z.object({ url: z.string().trim().url().max(2000) });

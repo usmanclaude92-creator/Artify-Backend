@@ -85,6 +85,10 @@ async function notifyManagers(account: SocialAccountView, title: string, message
 }
 
 export const socialAccountService = {
+  /** Server-internal only (publisher). Tokens must never be returned from an API or logged. */
+  loadTokens,
+  persistTokens: saveTokens,
+
   async list(organizationId: string) {
     const accounts = await prisma.socialAccount.findMany({ where: { organizationId }, orderBy: [{ status: "asc" }, { displayName: "asc" }], select: ACCOUNT_SELECT });
     return { accounts, providers: connectorRegistry.list() };
@@ -229,9 +233,16 @@ export const socialAccountService = {
     }
   },
 
-  /** Daily job: re-check every connected/errored account (bounded per run). Returns counts only. */
-  async runTokenHealthJob(limit = 500): Promise<{ checked: number; needsAttention: number; errors: number }> {
-    const accounts = await prisma.socialAccount.findMany({ where: { status: { in: ["CONNECTED", "ERROR"] } }, select: { id: true }, orderBy: { lastSyncAt: "asc" }, take: limit });
+  /**
+   * Daily job: re-check connected/errored accounts (bounded per run). The cron tick fires every ~5 minutes, so accounts
+   * checked within `minAgeMs` (default 23h) are skipped — real providers must not be hit on every tick. Returns counts only.
+   */
+  async runTokenHealthJob(limit = 500, minAgeMs = 23 * 3600_000): Promise<{ checked: number; needsAttention: number; errors: number }> {
+    const cutoff = new Date(Date.now() - minAgeMs);
+    const accounts = await prisma.socialAccount.findMany({
+      where: { status: { in: ["CONNECTED", "ERROR"] }, OR: [{ lastSyncAt: null }, { lastSyncAt: { lt: cutoff } }] },
+      select: { id: true }, orderBy: { lastSyncAt: "asc" }, take: limit,
+    });
     let needsAttention = 0;
     let errors = 0;
     for (const { id } of accounts) {

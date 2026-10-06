@@ -56,6 +56,7 @@ model Organization {
   socialBrandVoice       SocialBrandVoice?
   socialWorkspaceSetting SocialWorkspaceSetting?
   socialPosts            SocialPost[]
+  socialPublishingSetting SocialPublishingSetting?
   socialContentPlans     SocialContentPlan[]
   navPins                UserNavPin[]
   id                     String                  @id @default(uuid())
@@ -498,6 +499,20 @@ enum SocialPostTargetStatus {
   PUBLISHED
   FAILED
   CANCELLED
+  // Step 6: outcome unknown after a send (timeout / crashed worker) — never retried automatically.
+  UNCERTAIN
+  // Step 6: the scheduled time passed by more than the grace window without a publish attempt.
+  MISSED
+}
+
+enum SocialPublishOutcome {
+  SUCCESS
+  TRANSIENT_FAILURE
+  PERMANENT_FAILURE
+  AUTH_FAILURE
+  UNCERTAIN
+  DRY_RUN
+  SKIPPED
 }
 
 enum SocialPlanStatus {
@@ -611,15 +626,77 @@ model SocialPostTarget {
   externalPostId  String?                @map("external_post_id")
   publishError    String?                @map("publish_error")
   attempts        Int                    @default(0)
+  // Step 6 publishing state. idempotencyKey is generated once per target and is sent to the network when supported.
+  idempotencyKey   String?               @unique @map("idempotency_key")
+  lockedAt         DateTime?             @map("locked_at")
+  lockedBy         String?               @map("locked_by")
+  nextAttemptAt    DateTime?             @map("next_attempt_at")
+  externalUrl      String?               @map("external_url")
+  manualResolution Boolean               @default(false) @map("manual_resolution")
+  resolvedById     String?               @map("resolved_by")
   createdAt       DateTime               @default(now()) @map("created_at")
   updatedAt       DateTime               @updatedAt @map("updated_at")
 
   post    SocialPost    @relation(fields: [postId], references: [id], onDelete: Cascade)
   account SocialAccount @relation(fields: [socialAccountId], references: [id], onDelete: Cascade)
+  publishAttempts SocialPublishAttempt[]
 
   @@unique([postId, socialAccountId])
   @@index([socialAccountId])
+  @@index([status, scheduledAt])
   @@map("social_post_targets")
+}
+
+// One row per publish attempt (including dry runs). Errors are stored redacted; never any token material.
+model SocialPublishAttempt {
+  id             String                @id @default(uuid())
+  targetId       String                @map("target_id")
+  attemptNumber  Int                   @map("attempt_number")
+  startedAt      DateTime              @default(now()) @map("started_at")
+  finishedAt     DateTime?             @map("finished_at")
+  outcome        SocialPublishOutcome?
+  errorCategory  String?               @map("error_category")
+  errorMessage   String?               @map("error_message")
+  externalPostId String?               @map("external_post_id")
+  externalUrl    String?               @map("external_url")
+  httpStatus     Int?                  @map("http_status")
+  durationMs     Int?                  @map("duration_ms")
+  dryRun         Boolean               @default(false) @map("dry_run")
+  actorUserId    String?               @map("actor_user_id")
+
+  target SocialPostTarget @relation(fields: [targetId], references: [id], onDelete: Cascade)
+
+  @@index([targetId, startedAt])
+  @@map("social_publish_attempts")
+}
+
+// Per-workspace publishing controls. Defaults are the safe ones: OFF, dry-run, kill switch not engaged.
+model SocialPublishingSetting {
+  id             String   @id @default(uuid())
+  organizationId String   @unique @map("organization_id")
+  enabled        Boolean  @default(false)
+  dryRun         Boolean  @default(true) @map("dry_run")
+  killSwitch     Boolean  @default(false) @map("kill_switch")
+  graceMinutes   Int      @default(60) @map("grace_minutes")
+  maxAttempts    Int      @default(5) @map("max_attempts")
+  updatedById    String?  @map("updated_by")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@map("social_publishing_settings")
+}
+
+// Global (platform-wide) controls: a single row, id = 'global'. Default OFF + dry-run.
+model SocialPublishingGlobal {
+  id          String   @id
+  enabled     Boolean  @default(false)
+  dryRun      Boolean  @default(true) @map("dry_run")
+  killSwitch  Boolean  @default(false) @map("kill_switch")
+  updatedById String?  @map("updated_by")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@map("social_publishing_global")
 }
 
 model SocialOAuthState {

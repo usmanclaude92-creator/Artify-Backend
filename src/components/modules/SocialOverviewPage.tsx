@@ -1,7 +1,7 @@
 /** Social Media → Overview: connected accounts, status counts and warnings for the active workspace. */
 import React, { useEffect, useState } from "react";
 import { Share2, AlertTriangle, CheckCircle2, ArrowRight } from "lucide-react";
-import { socialApi, type SocialAccountSummary } from "../../lib/api";
+import { socialApi, socialPublishingApi, type PublishingMetrics, type SocialAccountSummary } from "../../lib/api";
 import { useRouter } from "../../lib/router";
 import { useAuth } from "../../context/AuthContext";
 import { useActiveWorkspace } from "../../context/ActiveWorkspaceContext";
@@ -27,6 +27,12 @@ export const SocialOverviewPage: React.FC = () => {
   const canSeeAccounts = hasPermission(user?.role.permissions, "social.read");
   const [accounts, setAccounts] = useState<SocialAccountSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [metrics, setMetrics] = useState<PublishingMetrics | null>(null);
+
+  useEffect(() => {
+    // Publishing health is optional context: a failure here must never break the page.
+    socialPublishingApi.metrics().then(setMetrics).catch(() => setMetrics(null));
+  }, [current?.organizationId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -78,6 +84,29 @@ export const SocialOverviewPage: React.FC = () => {
             <Stat label="Needs reconnect" value={count("NEEDS_REAUTH")} tone={count("NEEDS_REAUTH") ? "warning" : undefined} />
             <Stat label="Errors" value={count("ERROR")} tone={count("ERROR") ? "danger" : undefined} />
           </Card>
+
+          {metrics && (
+            <Card className="p-4" aria-label="Publishing health">
+              <h2 className="text-sm font-bold mb-3" style={{ color: "var(--text-primary)" }}>Publishing (last 24h)</h2>
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-4">
+                <Stat label="Published" value={metrics.last24h.published} tone={metrics.last24h.published ? "success" : undefined} />
+                <Stat label="Failed" value={metrics.last24h.failed} tone={metrics.last24h.failed ? "danger" : undefined} />
+                <Stat label="Retried" value={metrics.last24h.retried} tone={metrics.last24h.retried ? "warning" : undefined} />
+                <Stat label="Queued" value={metrics.queued} />
+                <div>
+                  <p className="text-[10px] uppercase font-bold" style={{ color: "var(--text-muted)" }}>Oldest due, unpublished</p>
+                  <p className="text-sm font-bold pt-1.5" style={{ color: metrics.oldestDueSeconds && metrics.oldestDueSeconds > 600 ? "#f59e0b" : "var(--text-primary)" }}>
+                    {metrics.oldestDueSeconds === null ? "none" : `${Math.max(1, Math.round(metrics.oldestDueSeconds / 60))} min overdue`}
+                  </p>
+                </div>
+              </div>
+              {metrics.needsAttention > 0 && (
+                <Button variant="secondary" className="mt-3" onClick={() => navigate("/social/failures")}>
+                  {metrics.needsAttention} publish{metrics.needsAttention === 1 ? "" : "es"} need attention <ArrowRight className="w-3.5 h-3.5" />
+                </Button>
+              )}
+            </Card>
+          )}
 
           <Card className="p-4 space-y-2" aria-label="Warnings">
             <h2 className="text-sm font-bold flex items-center gap-2" style={{ color: "var(--text-primary)" }}>

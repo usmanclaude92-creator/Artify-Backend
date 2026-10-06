@@ -171,6 +171,13 @@ const envSchema = z
     META_APP_SECRET: z.string().optional().default(""),
     LINKEDIN_CLIENT_ID: z.string().optional().default(""),
     LINKEDIN_CLIENT_SECRET: z.string().optional().default(""),
+    LINKEDIN_API_VERSION: z.string().regex(/^\d{6}$/, "LINKEDIN_API_VERSION must look like YYYYMM").optional().default("202504"),
+    // Hard environment kill switch: "true" stops ALL social publishing regardless of database settings.
+    SOCIAL_PUBLISHING_DISABLED: z.enum(["true", "false"]).optional().default("false"),
+    SOCIAL_PUBLISH_BATCH_SIZE: z.coerce.number().int().min(1).max(100).optional().default(20),
+    SOCIAL_PUBLISH_CONCURRENCY: z.coerce.number().int().min(1).max(10).optional().default(3),
+    SOCIAL_PUBLISH_PER_ACCOUNT_LIMIT: z.coerce.number().int().min(1).max(10).optional().default(2),
+    SOCIAL_PUBLISH_TIME_BUDGET_MS: z.coerce.number().int().min(1000).max(50000).optional().default(8000),
   })
   .superRefine((val, ctx) => {
     const isProdLike = val.NODE_ENV === "production" || val.NODE_ENV === "staging";
@@ -341,6 +348,12 @@ export type AppConfig = Readonly<{
   metaAppSecret: string;
   linkedinClientId: string;
   linkedinClientSecret: string;
+  linkedinApiVersion: string;
+  socialPublishingDisabled: boolean;
+  socialPublishBatchSize: number;
+  socialPublishConcurrency: number;
+  socialPublishPerAccountLimit: number;
+  socialPublishTimeBudgetMs: number;
 }>;
 
 export type EnvValidationResult =
@@ -420,6 +433,12 @@ export function validateEnv(raw: NodeJS.ProcessEnv | Record<string, string | und
       metaAppSecret: env.META_APP_SECRET,
       linkedinClientId: env.LINKEDIN_CLIENT_ID,
       linkedinClientSecret: env.LINKEDIN_CLIENT_SECRET,
+      linkedinApiVersion: env.LINKEDIN_API_VERSION,
+      socialPublishingDisabled: env.SOCIAL_PUBLISHING_DISABLED === "true",
+      socialPublishBatchSize: env.SOCIAL_PUBLISH_BATCH_SIZE,
+      socialPublishConcurrency: env.SOCIAL_PUBLISH_CONCURRENCY,
+      socialPublishPerAccountLimit: env.SOCIAL_PUBLISH_PER_ACCOUNT_LIMIT,
+      socialPublishTimeBudgetMs: env.SOCIAL_PUBLISH_TIME_BUDGET_MS,
     }),
   };
 }
