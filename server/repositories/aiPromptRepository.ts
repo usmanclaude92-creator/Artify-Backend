@@ -39,7 +39,7 @@ export const aiPromptRepository = {
     return prisma.aIPromptTemplate.findUnique({ where: { organizationId_key: { organizationId, key } } });
   },
 
-  async create(organizationId: string, createdById: string, input: CreateAiPromptTemplateInput) {
+  async create(organizationId: string, createdById: string | null, input: CreateAiPromptTemplateInput) {
     return prisma.$transaction(async (tx) => {
       const template = await tx.aIPromptTemplate.create({
         data: {

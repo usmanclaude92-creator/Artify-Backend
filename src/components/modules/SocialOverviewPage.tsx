@@ -1,13 +1,14 @@
 /** Social Media → Overview: connected accounts, status counts and warnings for the active workspace. */
 import React, { useEffect, useState } from "react";
 import { Share2, AlertTriangle, CheckCircle2, ArrowRight } from "lucide-react";
-import { socialApi, socialPublishingApi, type PublishingMetrics, type SocialAccountSummary } from "../../lib/api";
+import { socialApi, socialInboxApi, socialPublishingApi, type InboxMetrics, type PublishingMetrics, type SocialAccountSummary } from "../../lib/api";
 import { useRouter } from "../../lib/router";
 import { useAuth } from "../../context/AuthContext";
 import { useActiveWorkspace } from "../../context/ActiveWorkspaceContext";
 import { hasPermission } from "../../lib/permissions";
 import { Card, Button, LoadingState, ErrorState, EmptyState } from "./../ui/ui";
 import { ProviderAvatar, StatusBadge, expiresSoon, timeAgo } from "./socialShared";
+import { formatDuration } from "./socialInboxShared";
 
 const Stat: React.FC<{ label: string; value: number; tone?: "danger" | "warning" | "success" }> = ({ label, value, tone }) => (
   <div>
@@ -28,10 +29,12 @@ export const SocialOverviewPage: React.FC = () => {
   const [accounts, setAccounts] = useState<SocialAccountSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [metrics, setMetrics] = useState<PublishingMetrics | null>(null);
+  const [inbox, setInbox] = useState<InboxMetrics | null>(null);
 
   useEffect(() => {
     // Publishing health is optional context: a failure here must never break the page.
     socialPublishingApi.metrics().then(setMetrics).catch(() => setMetrics(null));
+    socialInboxApi.metrics().then(setInbox).catch(() => setInbox(null));
   }, [current?.organizationId]);
 
   useEffect(() => {
@@ -84,6 +87,22 @@ export const SocialOverviewPage: React.FC = () => {
             <Stat label="Needs reconnect" value={count("NEEDS_REAUTH")} tone={count("NEEDS_REAUTH") ? "warning" : undefined} />
             <Stat label="Errors" value={count("ERROR")} tone={count("ERROR") ? "danger" : undefined} />
           </Card>
+
+          {inbox && (
+            <Card className="p-4" aria-label="Inbox health">
+              <h2 className="text-sm font-bold mb-3" style={{ color: "var(--text-primary)" }}>Inbox</h2>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                <Stat label="Open" value={inbox.open} />
+                <Stat label="Overdue" value={inbox.overdue} tone={inbox.overdue ? "danger" : undefined} />
+                <Stat label="Unassigned" value={inbox.unassigned} tone={inbox.unassigned ? "warning" : undefined} />
+                <div>
+                  <p className="text-[10px] uppercase font-bold" style={{ color: "var(--text-muted)" }}>Median first reply</p>
+                  <p className="text-sm font-bold pt-1.5" style={{ color: "var(--text-primary)" }}>{formatDuration(inbox.medianFirstResponseMs)}</p>
+                </div>
+              </div>
+              <Button variant="secondary" className="mt-3" onClick={() => navigate("/social/inbox")}>Open inbox <ArrowRight className="w-3.5 h-3.5" /></Button>
+            </Card>
+          )}
 
           {metrics && (
             <Card className="p-4" aria-label="Publishing health">

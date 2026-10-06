@@ -27,13 +27,16 @@ import type { RequestMeta } from "../authService";
 const FALLBACK_MODEL = "gemini-3.7-flash";
 const MAX_PLAN_POSTS = 30;
 
-async function ensureTemplate(caller: SanitizedUser, def: SocialPromptDef) {
+/** Who an AI call is attributed to: a user, or `id: null` for system work (inbox triage from a webhook/cron). */
+export type AiActor = { id: string | null; organizationId: string };
+
+export async function ensureTemplate(caller: AiActor, def: SocialPromptDef) {
   let template = await aiPromptRepository.findByKeyInOrg(def.key, caller.organizationId);
   if (!template) {
     await aiPromptRepository.create(caller.organizationId, caller.id, { key: def.key, name: def.name, purpose: def.purpose, systemInstructions: def.systemInstructions, userTemplate: def.userTemplate });
     template = await aiPromptRepository.findByKeyInOrg(def.key, caller.organizationId);
     await prisma.aIPromptTemplate.update({ where: { id: template!.id }, data: { status: "ACTIVE" } });
-    await auditLogRepository.record({ organizationId: caller.organizationId, actorUserId: caller.id, actorType: "SYSTEM", action: "AI_PROMPT_TEMPLATE_REGISTERED", resourceType: "ai_prompt_template", resourceId: template!.id, metadata: { key: def.key, source: "social" } });
+    await auditLogRepository.record({ organizationId: caller.organizationId, actorUserId: caller.id ?? undefined, actorType: "SYSTEM", action: "AI_PROMPT_TEMPLATE_REGISTERED", resourceType: "ai_prompt_template", resourceId: template!.id, metadata: { key: def.key, source: "social" } });
   }
   const full = await prisma.aIPromptTemplate.findUnique({ where: { id: template!.id }, include: { currentVersion: true } });
   if (!full?.currentVersion) throw new InfrastructureError("The social prompt template has no current version.");
@@ -41,7 +44,7 @@ async function ensureTemplate(caller: SanitizedUser, def: SocialPromptDef) {
 }
 
 /** Daily AI limits (org-wide) also count social usage; copilot usage is read by the existing quota service. */
-async function assertQuota(organizationId: string): Promise<void> {
+export async function assertQuota(organizationId: string): Promise<void> {
   await aiQuotaService.assertWithinLimits(organizationId);
   const limits = await aiQuotaService.getLimits(organizationId);
   if (!limits.dailyRequests && !limits.dailyTokens) return;
@@ -59,13 +62,13 @@ async function assertQuota(organizationId: string): Promise<void> {
   }
 }
 
-async function resolveModel() {
+export async function resolveModel() {
   const row = await prisma.aIModel.findFirst({ where: { isActive: true, isDefault: true, provider: { status: "ACTIVE" } }, include: { provider: true } });
   const providerType = row && ["GEMINI", "MOCK"].includes(row.provider.code.toUpperCase()) ? row.provider.code.toUpperCase() : "GEMINI";
   return { row, providerType, modelName: row?.modelId ?? FALLBACK_MODEL };
 }
 
-function brandVoiceText(v: Awaited<ReturnType<typeof socialPostService.getBrandVoice>>): string {
+export function brandVoiceText(v: Awaited<ReturnType<typeof socialPostService.getBrandVoice>>): string {
   const parts = [
     v.toneDescriptors.length ? `Tone: ${v.toneDescriptors.join(", ")}` : "",
     v.audience ? `Audience: ${v.audience}` : "",
@@ -79,7 +82,7 @@ function brandVoiceText(v: Awaited<ReturnType<typeof socialPostService.getBrandV
   return parts.length ? parts.join("\n") : "No brand voice has been configured: write clearly, professionally and without hype.";
 }
 
-function parseJson<T>(text: string, schema: z.ZodType<T>): T {
+export function parseJson<T>(text: string, schema: z.ZodType<T>): T {
   const cleaned = text.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
   const start = cleaned.search(/[[{]/);
   const end = Math.max(cleaned.lastIndexOf("}"), cleaned.lastIndexOf("]"));
@@ -90,18 +93,20 @@ function parseJson<T>(text: string, schema: z.ZodType<T>): T {
   }
 }
 
-interface RunParams<T> {
-  caller: SanitizedUser;
+export interface RunParams<T> {
+  caller: AiActor;
   def: SocialPromptDef;
   toolCode: string;
   variables: Record<string, string | number>;
   schema: z.ZodType<T>;
   meta: RequestMeta;
   inputSummary: Record<string, unknown>;
+  /** What to keep in AIExecution.output (default: the whole result). Inbox passes a label-only view so message text is never stored there. */
+  outputSummary?: (result: T) => unknown;
 }
 
 /** One governed model call: prompt from the catalog → execution row → adapter → usage record. */
-async function run<T>(p: RunParams<T>): Promise<{ result: T; executionId: string }> {
+export async function run<T>(p: RunParams<T>): Promise<{ result: T; executionId: string }> {
   const { caller, def } = p;
   await assertQuota(caller.organizationId);
   const { version } = await ensureTemplate(caller, def);
@@ -121,7 +126,7 @@ async function run<T>(p: RunParams<T>): Promise<{ result: T; executionId: string
       ? (response.inputTokens * Number(price.inputPricePerMillionTokens) + response.outputTokens * Number(price.outputPricePerMillionTokens)) / 1_000_000
       : undefined;
     await aiUsageRepository.record({ organizationId: caller.organizationId, executionId: execution.id, providerId: model.row?.providerId, modelId: model.row?.id, inputTokens: response.inputTokens, outputTokens: response.outputTokens, totalTokens: response.totalTokens, estimatedCost: cost });
-    await aiExecutionRepository.complete(execution.id, "COMPLETED", { model: model.modelName, tokens: response.totalTokens, result });
+    await aiExecutionRepository.complete(execution.id, "COMPLETED", { model: model.modelName, tokens: response.totalTokens, result: p.outputSummary ? p.outputSummary(result) : result });
     return { result, executionId: execution.id };
   } catch (err) {
     const message = redactSecrets(err).slice(0, 300);

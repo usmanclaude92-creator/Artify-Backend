@@ -39,6 +39,7 @@ import navRoutes from "./navRoutes";
 import { socialAccountsRouter } from "./socialRoutes";
 import { socialContentRouter } from "./socialContentRoutes";
 import { socialInternalRouter, socialPublishingRouter } from "./socialPublishingRoutes";
+import { socialInboxRouter, socialWebhookRouter } from "./socialInboxRoutes";
 import formRoutes from "./formRoutes";
 import crmRoutes from "./crmRoutes";
 import campaignRoutes from "./campaignRoutes";
@@ -107,7 +108,9 @@ v1Router.use("/notifications", notificationRoutes);
 v1Router.use("/approvals", approvalCenterRoutes);
 v1Router.use("/nav", navRoutes);
 v1Router.use("/social/internal", socialInternalRouter); // CRON_SECRET-protected, must precede the authenticated social routers
+v1Router.use("/social/webhooks", socialWebhookRouter); // provider-signed, no session
 v1Router.use("/social/publishing", socialPublishingRouter);
+v1Router.use("/social/inbox", socialInboxRouter);
 v1Router.use("/social/accounts", socialAccountsRouter);
 v1Router.use("/social", socialContentRouter);
 v1Router.use("/forms", formRoutes);

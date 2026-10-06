@@ -2894,6 +2894,8 @@ export interface NavBadges {
   socialApprovals?: number;
   /** Failed / uncertain / missed publishes (social.publish holders only). */
   socialFailures?: number;
+  /** Unassigned + overdue inbox conversations (social.reply holders only). */
+  socialInbox?: number;
 }
 
 export const approvalsApi = {
@@ -3156,4 +3158,133 @@ export const socialPublishingApi = {
   reschedule: (id: string, scheduledAt: string, confirmNotPosted?: boolean) => apiClient.post<{ target: PublishingTargetDetail }>(`/social/publishing/targets/${id}/reschedule`, { scheduledAt, confirmNotPosted }),
   markPublished: (id: string, url: string) => apiClient.post<{ target: PublishingTargetDetail }>(`/social/publishing/targets/${id}/mark-published`, { url }),
   cancel: (id: string) => apiClient.post<{ target: PublishingTargetDetail }>(`/social/publishing/targets/${id}/cancel`),
+};
+
+// ---- Social inbox (Step 7) ----
+export type InboxStatus = "OPEN" | "PENDING" | "RESOLVED" | "SPAM";
+export type InboxType = "COMMENT" | "DM" | "MENTION" | "REVIEW";
+export type InboxPriority = "LOW" | "NORMAL" | "HIGH" | "URGENT";
+export interface InboxConversation {
+  id: string;
+  type: InboxType;
+  status: InboxStatus;
+  priority: InboxPriority;
+  intent: string | null;
+  sentiment: string | null;
+  needsHuman: boolean;
+  tags: string[];
+  isRead: boolean;
+  participant: { externalId: string | null; handle: string | null; name: string | null };
+  subjectRef: string | null;
+  assigneeId: string | null;
+  lastMessageAt: string;
+  firstResponseAt: string | null;
+  slaDueAt: string | null;
+  overdue: boolean;
+  leadId: string | null;
+  contactId: string | null;
+  account: { id: string; provider: string; displayName: string; handle: string | null; accountType: string; status: string; avatarUrl: string | null };
+  preview: string | null;
+  failedSend: boolean;
+}
+export interface InboxMessage {
+  id: string;
+  direction: "INBOUND" | "OUTBOUND";
+  authorKind: "CUSTOMER" | "PAGE" | "AI_DRAFT" | "NOTE";
+  body: string;
+  sendStatus: "RECEIVED" | "DRAFT" | "SENDING" | "SENT" | "FAILED" | "UNCERTAIN";
+  sendError: string | null;
+  sentById: string | null;
+  sentAt: string | null;
+  hidden: boolean;
+  aiConfidence: number | null;
+  guardrailResult: GuardrailResult | null;
+  autoSent: boolean;
+  createdAt: string;
+}
+export interface InboxTriage {
+  intent: string;
+  sentiment: string;
+  priority: string;
+  language: string | null;
+  spamScore: number;
+  category: string | null;
+  confidence: number | null;
+  source: string;
+  flaggedForHuman: boolean;
+}
+export interface InboxSettingsView {
+  autoTriage: boolean;
+  autoDraft: boolean;
+  autoReply: boolean;
+  autoLead: boolean;
+  firstResponseMinutes: number;
+  retentionDays: number;
+}
+export interface InboxRuleView {
+  id: string;
+  name: string;
+  enabled: boolean;
+  position: number;
+  matchKeywords: string[];
+  matchIntents: string[];
+  matchSentiments: string[];
+  assigneeId: string | null;
+  setPriority: InboxPriority | null;
+  addTags: string[];
+}
+export interface InboxCannedReply {
+  id: string;
+  title: string;
+  body: string;
+  category: string | null;
+  approvedForAuto: boolean;
+  matchKeywords: string[];
+}
+export interface InboxMetrics {
+  open: number;
+  overdue: number;
+  unassigned: number;
+  medianFirstResponseMs: number | null;
+  answeredLast30d: number;
+}
+export interface InboxListParams {
+  status?: InboxStatus;
+  accountId?: string;
+  type?: InboxType;
+  assignee?: string;
+  priority?: InboxPriority;
+  sentiment?: string;
+  overdue?: boolean;
+  unread?: boolean;
+  search?: string;
+  page?: number;
+  limit?: number;
+}
+
+export const socialInboxApi = {
+  list: (params: InboxListParams) => apiClient.get<{ conversations: InboxConversation[]; total: number; page: number; limit: number }>(`/social/inbox/conversations${toQuery(params as Record<string, string | number | boolean | undefined>)}`),
+  get: (id: string) => apiClient.get<{ conversation: InboxConversation; messages: InboxMessage[]; triage: InboxTriage | null }>(`/social/inbox/conversations/${id}`),
+  metrics: () => apiClient.get<{ metrics: InboxMetrics }>("/social/inbox/metrics").then((r) => r.metrics),
+  assignees: () => apiClient.get<{ assignees: Array<{ id: string; name: string }> }>("/social/inbox/assignees").then((r) => r.assignees),
+  draft: (id: string) => apiClient.post<{ draft: { messageId: string; body: string; confidence: number | null; guardrail: GuardrailResult } }>(`/social/inbox/conversations/${id}/draft`).then((r) => r.draft),
+  editDraft: (messageId: string, body: string) => apiClient.patch<{ draft: { id: string; body: string; guardrailResult: GuardrailResult } }>(`/social/inbox/messages/${messageId}`, { body }).then((r) => r.draft),
+  reply: (id: string, input: { messageId?: string; body?: string; resolve?: boolean; confirmNotSent?: boolean }) => apiClient.post<{ message: { id: string; sendStatus: string; sendError: string | null } }>(`/social/inbox/conversations/${id}/reply`, input).then((r) => r.message),
+  note: (id: string, body: string) => apiClient.post<{ id: string }>(`/social/inbox/conversations/${id}/notes`, { body }),
+  setStatus: (id: string, status: InboxStatus) => apiClient.post<{ conversation: InboxConversation }>(`/social/inbox/conversations/${id}/status`, { status }),
+  setPriority: (id: string, priority: InboxPriority) => apiClient.post<{ conversation: InboxConversation }>(`/social/inbox/conversations/${id}/priority`, { priority }),
+  assign: (id: string, assigneeId: string | null) => apiClient.post<{ conversation: InboxConversation }>(`/social/inbox/conversations/${id}/assign`, { assigneeId }),
+  markRead: (id: string, read: boolean) => apiClient.post<{ id: string; isRead: boolean }>(`/social/inbox/conversations/${id}/read`, { read }),
+  hide: (messageId: string, hidden: boolean) => apiClient.post<{ id: string; hidden: boolean }>(`/social/inbox/messages/${messageId}/hide`, { hidden }),
+  createLead: (id: string, input: { email?: string; name?: string; note?: string } = {}) => apiClient.post<{ handoff: { outcome: "created" | "linked_lead" | "linked_contact"; leadId: string | null; contactId: string | null } }>(`/social/inbox/conversations/${id}/lead`, input).then((r) => r.handoff),
+  bulk: (ids: string[], patch: { status?: InboxStatus; assigneeId?: string | null; priority?: InboxPriority; markRead?: boolean }) => apiClient.post<{ updated: number }>("/social/inbox/bulk", { ids, patch }),
+  settings: () => apiClient.get<{ settings: InboxSettingsView }>("/social/inbox/settings").then((r) => r.settings),
+  saveSettings: (input: Partial<InboxSettingsView>) => apiClient.put<{ settings: InboxSettingsView }>("/social/inbox/settings", input).then((r) => r.settings),
+  rules: () => apiClient.get<{ rules: InboxRuleView[] }>("/social/inbox/rules").then((r) => r.rules),
+  saveRule: (id: string | null, input: Partial<Omit<InboxRuleView, "id">> & { name: string }) => (id ? apiClient.put<{ rule: InboxRuleView }>(`/social/inbox/rules/${id}`, input) : apiClient.post<{ rule: InboxRuleView }>("/social/inbox/rules", input)).then((r) => r.rule),
+  deleteRule: (id: string) => apiClient.delete<{ deleted: boolean }>(`/social/inbox/rules/${id}`),
+  canned: () => apiClient.get<{ replies: InboxCannedReply[] }>("/social/inbox/canned").then((r) => r.replies),
+  saveCanned: (id: string | null, input: { title: string; body: string; category?: string | null; approvedForAuto?: boolean; matchKeywords?: string[] }) =>
+    (id ? apiClient.put<{ reply: InboxCannedReply }>(`/social/inbox/canned/${id}`, input) : apiClient.post<{ reply: InboxCannedReply }>("/social/inbox/canned", input)).then((r) => r.reply),
+  deleteCanned: (id: string) => apiClient.delete<{ deleted: boolean }>(`/social/inbox/canned/${id}`),
 };

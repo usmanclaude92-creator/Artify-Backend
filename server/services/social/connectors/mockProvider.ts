@@ -3,15 +3,24 @@
  * No network. The "authorization code" is `mock_<name>`: the account becomes `mock-<name>`. Special names let tests
  * exercise failure paths: `mock_fail` fails the callback; an access token containing `expired` fails health checks.
  */
-import { randomBytes } from "node:crypto";
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { config } from "../../../config/env";
 import type { SocialTokenSet } from "../tokenVault";
 import { SocialPublishError } from "../publishing/publishErrors";
-import { DEFAULT_CONSTRAINTS, type ConnectResult, type HealthResult, type PublishInput, type PublishResult, type SocialConnector, type SocialProfile } from "./types";
+import { DEFAULT_CONSTRAINTS, type InboundEvent, type SendReplyInput, type SendReplyResult, type ConnectResult, type HealthResult, type PublishInput, type PublishResult, type SocialConnector, type SocialProfile } from "./types";
 
 /** Calls recorded by the mock (id -> count) so tests can prove "never published twice". Test/dev only. */
 export const mockPublishLog: Array<{ idempotencyKey: string; attempt: number; text: string }> = [];
 const onceSeen = new Set<string>();
+
+/** Inbox activity recorded by the mock so tests can assert exactly what was (not) sent. Test/dev only. */
+export const mockInboxLog: { replies: SendReplyInput[]; hidden: Array<{ providerMessageId: string; hidden: boolean }>; read: Array<{ providerThreadId: string }> } = { replies: [], hidden: [], read: [] };
+/** Events the mock "polling" endpoint will return once (per account external id). */
+export const mockPollQueue = new Map<string, InboundEvent[]>();
+
+export const MOCK_SIGNATURE_HEADER = "x-mock-signature";
+/** Signature the mock provider expects: hex HMAC-SHA256 of the raw body with WEBHOOK_SECRET. */
+export const signMockWebhook = (rawBody: Buffer | string, secret: string): string => createHmac("sha256", secret).update(rawBody).digest("hex");
 
 const tokenFor = (name: string, kind: "at" | "rt") => `mock_${kind}_${name}_${randomBytes(8).toString("hex")}`;
 
@@ -19,6 +28,7 @@ export const mockProvider: SocialConnector = {
   key: "mock",
   label: "Mock Network (dev/test)",
   implemented: true,
+  pollsInbox: true,
   defaultScopes: ["profile.read", "posts.write"],
   isConfigured: () => config.socialMockProviderEnabled,
   getConstraints: () => ({ ...DEFAULT_CONSTRAINTS, maxChars: 500, maxHashtags: 5, maxMedia: 4 }),
@@ -71,5 +81,50 @@ export const mockProvider: SocialConnector = {
     if (t.includes("[[timeout]]")) throw new SocialPublishError("uncertain", "Mock: request timed out after being sent.");
     const id = `mockpost_${input.idempotencyKey.slice(0, 12)}`;
     return { externalPostId: id, externalUrl: `https://mock.example/posts/${id}` };
+  },
+
+  // ---- Inbox ----
+  verifyWebhook({ rawBody, headers }) {
+    const given = headers[MOCK_SIGNATURE_HEADER];
+    const sig = Array.isArray(given) ? given[0] : given;
+    if (!sig || !config.webhookSecret) return false;
+    const expected = Buffer.from(signMockWebhook(rawBody, config.webhookSecret));
+    const provided = Buffer.from(sig);
+    return expected.length === provided.length && timingSafeEqual(expected, provided);
+  },
+
+  parseWebhook({ rawBody }): InboundEvent[] {
+    let json: { events?: Array<Partial<InboundEvent> & { type?: string; participant?: InboundEvent["participant"] }> };
+    try { json = JSON.parse(rawBody.toString("utf8")); } catch { return []; }
+    const types = ["COMMENT", "DM", "MENTION", "REVIEW"];
+    return (json.events ?? []).flatMap((e) => {
+      const type = String(e.type ?? "").toUpperCase();
+      if (!types.includes(type) || !e.accountExternalId || !e.providerThreadId || !e.providerMessageId || typeof e.text !== "string") return [];
+      return [{ type: type as InboundEvent["type"], accountExternalId: e.accountExternalId, providerThreadId: e.providerThreadId, providerMessageId: e.providerMessageId, participant: e.participant ?? {}, text: e.text, subjectRef: e.subjectRef, createdAt: e.createdAt }];
+    });
+  },
+
+  async fetchInbox(_tokens, { accountExternalId }) {
+    const events = mockPollQueue.get(accountExternalId) ?? [];
+    mockPollQueue.delete(accountExternalId);
+    return { events, nextCursor: undefined };
+  },
+
+  async sendReply(_tokens: SocialTokenSet, input: SendReplyInput): Promise<SendReplyResult> {
+    mockInboxLog.replies.push(input);
+    const t = input.text;
+    if (t.includes("[[fail-transient]]")) throw new SocialPublishError("transient", "Mock: service unavailable.", { httpStatus: 503 });
+    if (t.includes("[[fail-permanent]]")) throw new SocialPublishError("permanent", "Mock: reply rejected by the network.", { httpStatus: 422 });
+    if (t.includes("[[fail-auth]]")) throw new SocialPublishError("auth", "Mock: access token revoked.", { httpStatus: 401 });
+    if (t.includes("[[timeout]]")) throw new SocialPublishError("uncertain", "Mock: request timed out after being sent.");
+    return { providerMessageId: `mockreply_${input.idempotencyKey.slice(0, 12)}` };
+  },
+
+  async hideComment(_tokens, input) {
+    mockInboxLog.hidden.push(input);
+  },
+
+  async markRead(_tokens, input) {
+    mockInboxLog.read.push({ providerThreadId: input.providerThreadId });
   },
 };

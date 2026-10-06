@@ -57,6 +57,10 @@ model Organization {
   socialWorkspaceSetting SocialWorkspaceSetting?
   socialPosts            SocialPost[]
   socialPublishingSetting SocialPublishingSetting?
+  socialConversations     SocialConversation[]
+  socialInboxRules        SocialInboxRule[]
+  socialCannedReplies     SocialCannedReply[]
+  socialInboxSetting      SocialInboxSetting?
   socialContentPlans     SocialContentPlan[]
   navPins                UserNavPin[]
   id                     String                  @id @default(uuid())
@@ -459,6 +463,7 @@ model SocialAccount {
   connectedBy  User?                    @relation("SocialAccountConnectedBy", fields: [connectedByUserId], references: [id], onDelete: SetNull)
   credentials  SocialAccountCredential?
   postTargets  SocialPostTarget[]
+  conversations SocialConversation[]
 
   @@unique([organizationId, provider, externalAccountId])
   @@index([organizationId, status])
@@ -4075,4 +4080,225 @@ model ApiKey {
 
   @@index([organizationId])
   @@map("api_keys")
+}
+
+// =============================================================================
+// Social inbox (Step 7). Holds personal data: always scoped by organization, purged by retention, never logged.
+// assigneeId / leadId / contactId are plain ids (no FK) so CRM and user lifecycle are untouched.
+// =============================================================================
+enum SocialConversationType {
+  COMMENT
+  DM
+  MENTION
+  REVIEW
+}
+
+enum SocialConversationStatus {
+  OPEN
+  PENDING
+  RESOLVED
+  SPAM
+}
+
+enum SocialConversationPriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+enum SocialMessageDirection {
+  INBOUND
+  OUTBOUND
+}
+
+enum SocialMessageAuthorKind {
+  CUSTOMER
+  PAGE
+  AI_DRAFT
+  NOTE
+}
+
+enum SocialMessageSendStatus {
+  RECEIVED
+  DRAFT
+  SENDING
+  SENT
+  FAILED
+  UNCERTAIN
+}
+
+enum SocialTriageStatus {
+  PENDING
+  DONE
+  FAILED
+  SKIPPED
+}
+
+model SocialConversation {
+  id                    String                     @id @default(uuid())
+  organizationId        String                     @map("organization_id")
+  socialAccountId       String                     @map("social_account_id")
+  providerThreadId      String                     @map("provider_thread_id")
+  type                  SocialConversationType
+  participantExternalId String?                    @map("participant_external_id")
+  participantHandle     String?                    @map("participant_handle")
+  participantName       String?                    @map("participant_name")
+  subjectRef            String?                    @map("subject_ref")
+  status                SocialConversationStatus   @default(OPEN)
+  assigneeId            String?                    @map("assignee_id")
+  priority              SocialConversationPriority @default(NORMAL)
+  intent                String?
+  sentiment             String?
+  needsHuman            Boolean                    @default(false) @map("needs_human")
+  tags                  String[]                   @default([])
+  isRead                Boolean                    @default(false) @map("is_read")
+  lastMessageAt         DateTime                   @default(now()) @map("last_message_at")
+  lastInboundAt         DateTime?                  @map("last_inbound_at")
+  // When the customer started waiting for a first reply (reset when a resolved thread is reopened). First-response time = firstResponseAt - awaitingSince.
+  awaitingSince         DateTime?                  @map("awaiting_since")
+  firstResponseAt       DateTime?                  @map("first_response_at")
+  slaDueAt              DateTime?                  @map("sla_due_at")
+  slaNotifiedAt         DateTime?                  @map("sla_notified_at")
+  leadId                String?                    @map("lead_id")
+  contactId             String?                    @map("contact_id")
+  createdAt             DateTime                   @default(now()) @map("created_at")
+  updatedAt             DateTime                   @updatedAt @map("updated_at")
+
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  account      SocialAccount   @relation(fields: [socialAccountId], references: [id], onDelete: Cascade)
+  messages     SocialMessage[]
+  triages      SocialTriage[]
+
+  @@unique([socialAccountId, providerThreadId])
+  @@index([organizationId, status, lastMessageAt])
+  @@index([organizationId, assigneeId])
+  @@index([organizationId, slaDueAt])
+  @@map("social_conversations")
+}
+
+model SocialMessage {
+  id                String                  @id @default(uuid())
+  conversationId    String                  @map("conversation_id")
+  organizationId    String                  @map("organization_id")
+  socialAccountId   String                  @map("social_account_id")
+  direction         SocialMessageDirection
+  authorKind        SocialMessageAuthorKind
+  providerMessageId String?                 @map("provider_message_id")
+  body              String
+  mediaRefs         Json?                   @map("media_refs")
+  sendStatus        SocialMessageSendStatus @default(RECEIVED) @map("send_status")
+  sendError         String?                 @map("send_error")
+  sendIdempotencyKey String?                @unique @map("send_idempotency_key")
+  sentById          String?                 @map("sent_by")
+  sentAt            DateTime?               @map("sent_at")
+  hidden            Boolean                 @default(false)
+  aiExecutionId     String?                 @map("ai_execution_id")
+  aiConfidence      Float?                  @map("ai_confidence")
+  guardrailResult   Json?                   @map("guardrail_result")
+  autoSent          Boolean                 @default(false) @map("auto_sent")
+  triageStatus      SocialTriageStatus      @default(SKIPPED) @map("triage_status")
+  triageAttempts    Int                     @default(0) @map("triage_attempts")
+  createdAt         DateTime                @default(now()) @map("created_at")
+
+  conversation SocialConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  triage       SocialTriage?
+
+  @@unique([socialAccountId, providerMessageId])
+  @@index([conversationId, createdAt])
+  @@index([organizationId, createdAt])
+  @@index([triageStatus, createdAt])
+  @@map("social_messages")
+}
+
+model SocialTriage {
+  id                String   @id @default(uuid())
+  conversationId    String   @map("conversation_id")
+  messageId         String   @unique @map("message_id")
+  organizationId    String   @map("organization_id")
+  intent            String
+  sentiment         String
+  priority          String
+  language          String?
+  spamScore         Float    @default(0) @map("spam_score")
+  suggestedCategory String?  @map("suggested_category")
+  confidence        Float?
+  source            String
+  flaggedForHuman   Boolean  @default(false) @map("flagged_for_human")
+  aiExecutionId     String?  @map("ai_execution_id")
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  conversation SocialConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  message      SocialMessage      @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId])
+  @@index([organizationId, createdAt])
+  @@map("social_triage")
+}
+
+model SocialInboxRule {
+  id             String   @id @default(uuid())
+  organizationId String   @map("organization_id")
+  name           String
+  enabled        Boolean  @default(true)
+  position       Int      @default(0)
+  matchKeywords  String[] @default([]) @map("match_keywords")
+  matchIntents   String[] @default([]) @map("match_intents")
+  matchSentiments String[] @default([]) @map("match_sentiments")
+  assigneeId     String?  @map("assignee_id")
+  setPriority    SocialConversationPriority? @map("set_priority")
+  addTags        String[] @default([]) @map("add_tags")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, position])
+  @@map("social_inbox_rules")
+}
+
+model SocialCannedReply {
+  id              String   @id @default(uuid())
+  organizationId  String   @map("organization_id")
+  title           String
+  body            String
+  category        String?
+  // Approved answers are the ONLY text auto-reply may send (simple FAQ), after guardrails.
+  approvedForAuto Boolean  @default(false) @map("approved_for_auto")
+  matchKeywords   String[] @default([]) @map("match_keywords")
+  createdById     String?  @map("created_by")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@map("social_canned_replies")
+}
+
+model SocialInboxSetting {
+  id                   String   @id @default(uuid())
+  organizationId       String   @unique @map("organization_id")
+  autoTriage           Boolean  @default(true) @map("auto_triage")
+  autoDraft            Boolean  @default(false) @map("auto_draft")
+  autoReply            Boolean  @default(false) @map("auto_reply")
+  autoLead             Boolean  @default(false) @map("auto_lead")
+  firstResponseMinutes Int      @default(60) @map("first_response_minutes")
+  retentionDays        Int      @default(180) @map("retention_days")
+  updatedById          String?  @map("updated_by")
+  updatedAt            DateTime @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@map("social_inbox_settings")
+}
+
+// Polling fallback bookkeeping for providers without webhooks.
+model SocialInboxCursor {
+  id              String   @id @default(uuid())
+  socialAccountId String   @unique @map("social_account_id")
+  cursor          String?
+  polledAt        DateTime @default(now()) @map("polled_at")
+
+  @@map("social_inbox_cursors")
 }

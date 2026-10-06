@@ -10,7 +10,7 @@ import { SocialPublishError } from "../publishing/publishErrors";
 import {
   LINKEDIN, buildAuthUrl, buildImageInitBody, buildPostBody, errorFromNetwork, errorFromResponse, personUrn, postUrnFromResponse, restHeaders, tokenRequestBody, validatePublishInput,
 } from "./linkedinApi";
-import { DEFAULT_CONSTRAINTS, type ConnectResult, type HealthResult, type PublishInput, type PublishResult, type SocialConnector, type SocialProfile } from "./types";
+import { ConnectorNotImplementedError, DEFAULT_CONSTRAINTS, type ConnectResult, type HealthResult, type PublishInput, type PublishResult, type SocialConnector, type SocialProfile } from "./types";
 
 const TIMEOUT_MS = 20_000;
 
@@ -111,6 +111,14 @@ export const linkedinProvider: SocialConnector = {
       return { ok: false, error: redactSecrets(err, [tokens.accessToken]).slice(0, 200) };
     }
   },
+
+  // The LinkedIn inbox APIs are restricted to approved partners: not supported by this connector.
+  verifyWebhook: () => { throw new ConnectorNotImplementedError("LinkedIn", "webhook verification"); },
+  parseWebhook: () => { throw new ConnectorNotImplementedError("LinkedIn", "webhook parsing"); },
+  fetchInbox: async () => { throw new ConnectorNotImplementedError("LinkedIn", "inbox polling"); },
+  sendReply: async () => { throw new ConnectorNotImplementedError("LinkedIn", "sending replies"); },
+  hideComment: async () => { throw new ConnectorNotImplementedError("LinkedIn", "hiding comments"); },
+  markRead: async () => { throw new ConnectorNotImplementedError("LinkedIn", "marking messages read"); },
 
   async publish(tokens: SocialTokenSet, input: PublishInput): Promise<PublishResult> {
     validatePublishInput(input);

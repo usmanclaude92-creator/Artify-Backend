@@ -4,7 +4,8 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 const listMock = vi.fn();
 const navigateMock = vi.fn();
 const metricsMock = vi.fn();
-vi.mock("../../lib/api", () => ({ socialApi: { list: () => listMock() }, socialPublishingApi: { metrics: () => metricsMock() } }));
+const inboxMock = vi.fn();
+vi.mock("../../lib/api", () => ({ socialApi: { list: () => listMock() }, socialPublishingApi: { metrics: () => metricsMock() }, socialInboxApi: { metrics: () => inboxMock() } }));
 vi.mock("../../lib/router", () => ({ useRouter: () => ({ path: "/social", navigate: navigateMock }) }));
 const user = { role: { permissions: ["social.read"] } };
 vi.mock("../../context/AuthContext", () => ({ useAuth: () => ({ user }) }));
@@ -17,15 +18,26 @@ const account = (over: Record<string, unknown> = {}) => ({
   scopes: [], tokenExpiresAt: new Date(Date.now() + 40 * 86400_000).toISOString(), lastSyncAt: new Date().toISOString(), lastError: null, createdAt: "", updatedAt: "", ...over,
 });
 
-beforeEach(() => metricsMock.mockRejectedValue(new Error("metrics unavailable")));
+beforeEach(() => { metricsMock.mockRejectedValue(new Error("metrics unavailable")); inboxMock.mockRejectedValue(new Error("inbox unavailable")); });
 afterEach(() => {
   cleanup();
   listMock.mockReset();
   navigateMock.mockReset();
   metricsMock.mockReset();
+  inboxMock.mockReset();
 });
 
 describe("SocialOverviewPage", () => {
+  it("shows inbox open/overdue counts and the median first-response time", async () => {
+    listMock.mockResolvedValue({ accounts: [account()], providers: [] });
+    inboxMock.mockResolvedValue({ open: 12, overdue: 3, unassigned: 5, medianFirstResponseMs: 25 * 60_000, answeredLast30d: 40 });
+    render(<SocialOverviewPage />);
+    expect(await screen.findByText("25m")).toBeInTheDocument();
+    expect(screen.getByText("Overdue", { selector: "p" }).nextElementSibling).toHaveTextContent("3");
+    fireEvent.click(screen.getByRole("button", { name: /Open inbox/ }));
+    expect(navigateMock).toHaveBeenCalledWith("/social/inbox");
+  });
+
   it("shows publishing health with the oldest due-but-unpublished figure, and survives a metrics failure", async () => {
     listMock.mockResolvedValue({ accounts: [account()], providers: [] });
     metricsMock.mockResolvedValue({ queued: 3, needsAttention: 2, oldestDueAt: "x", oldestDueSeconds: 1500, last24h: { published: 7, failed: 1, retried: 2, uncertain: 0, dryRun: 0 } });

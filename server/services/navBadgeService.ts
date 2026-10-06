@@ -3,6 +3,7 @@ import { prisma } from "../db/prisma";
 import { notificationRepository } from "../repositories/notificationRepository";
 import { approvalCenterService } from "./approvalCenterService";
 import { publishingQueries } from "./social/publishing/publisher";
+import { inboxService } from "./social/inbox/inboxService";
 import type { SanitizedUser } from "../types/domain";
 
 export interface NavBadges {
@@ -13,6 +14,8 @@ export interface NavBadges {
   socialApprovals?: number;
   /** Failed / uncertain / missed publishes — only for users who can publish. */
   socialFailures?: number;
+  /** Unassigned + overdue inbox conversations — only for users who can reply. */
+  socialInbox?: number;
 }
 
 const TTL_MS = 30_000;
@@ -30,7 +33,7 @@ export const navBadgeService = {
 
     const perms = caller.role.permissions;
     const universal = caller.role.key === "ADMIN" || caller.role.key === "SUPER_ADMIN";
-    const [notifications, approvals, myWork, socialApprovals, socialFailures] = await Promise.all([
+    const [notifications, approvals, myWork, socialApprovals, socialFailures, socialInbox] = await Promise.all([
       notificationRepository.unreadCount(caller.id, caller.organizationId),
       perms.includes("approvals.read") ? approvalCenterService.summary(caller).then((s) => s.total) : Promise.resolve(undefined),
       perms.includes("automation.read")
@@ -42,9 +45,10 @@ export const navBadgeService = {
         : Promise.resolve(undefined),
       perms.includes("social.approve") ? prisma.socialPost.count({ where: { organizationId: caller.organizationId, deletedAt: null, status: "PENDING_APPROVAL" } }) : Promise.resolve(undefined),
       perms.includes("social.publish") ? publishingQueries.failureCount(caller.organizationId) : Promise.resolve(undefined),
+      perms.includes("social.reply") ? inboxService.badgeCount(caller.organizationId) : Promise.resolve(undefined),
     ]);
 
-    const value: NavBadges = { notifications, ...(approvals !== undefined ? { approvals } : {}), ...(myWork !== undefined ? { myWork } : {}), ...(socialApprovals !== undefined ? { socialApprovals } : {}), ...(socialFailures !== undefined ? { socialFailures } : {}) };
+    const value: NavBadges = { notifications, ...(approvals !== undefined ? { approvals } : {}), ...(myWork !== undefined ? { myWork } : {}), ...(socialApprovals !== undefined ? { socialApprovals } : {}), ...(socialFailures !== undefined ? { socialFailures } : {}), ...(socialInbox !== undefined ? { socialInbox } : {}) };
     cache.set(key, { at: Date.now(), value });
     return value;
   },

@@ -177,6 +177,7 @@ const envSchema = z
     SOCIAL_PUBLISH_BATCH_SIZE: z.coerce.number().int().min(1).max(100).optional().default(20),
     SOCIAL_PUBLISH_CONCURRENCY: z.coerce.number().int().min(1).max(10).optional().default(3),
     SOCIAL_PUBLISH_PER_ACCOUNT_LIMIT: z.coerce.number().int().min(1).max(10).optional().default(2),
+    SOCIAL_REPLY_RATE_PER_MINUTE: z.coerce.number().int().min(1).max(200).optional().default(20),
     SOCIAL_PUBLISH_TIME_BUDGET_MS: z.coerce.number().int().min(1000).max(50000).optional().default(8000),
   })
   .superRefine((val, ctx) => {
@@ -354,6 +355,7 @@ export type AppConfig = Readonly<{
   socialPublishConcurrency: number;
   socialPublishPerAccountLimit: number;
   socialPublishTimeBudgetMs: number;
+  socialReplyRatePerMinute: number;
 }>;
 
 export type EnvValidationResult =
@@ -439,6 +441,7 @@ export function validateEnv(raw: NodeJS.ProcessEnv | Record<string, string | und
       socialPublishConcurrency: env.SOCIAL_PUBLISH_CONCURRENCY,
       socialPublishPerAccountLimit: env.SOCIAL_PUBLISH_PER_ACCOUNT_LIMIT,
       socialPublishTimeBudgetMs: env.SOCIAL_PUBLISH_TIME_BUDGET_MS,
+      socialReplyRatePerMinute: env.SOCIAL_REPLY_RATE_PER_MINUTE,
     }),
   };
 }

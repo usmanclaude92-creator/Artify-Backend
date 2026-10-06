@@ -31,7 +31,7 @@ export const aiExecutionRepository = {
 
   async create(data: {
     organizationId: string;
-    userId: string;
+    userId: string | null;
     kind: "TOOL_CALL" | "WORKFLOW";
     workflowId?: string;
     toolCode?: string;

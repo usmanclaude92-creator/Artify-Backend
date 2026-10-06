@@ -48,6 +48,15 @@ export const publishingSettingsService = {
     return evaluateGate(config.socialPublishingDisabled, global, ws);
   },
 
+  /** Kill-switch-only check used by inbox replies: true (with reason) when the env flag or a global/workspace kill switch is engaged. */
+  async killed(organizationId: string): Promise<{ killed: false } | { killed: true; reason: "env_disabled" | "global_kill_switch" | "workspace_kill_switch" }> {
+    if (config.socialPublishingDisabled) return { killed: true, reason: "env_disabled" };
+    const [global, ws] = await Promise.all([this.getGlobal(), this.getWorkspace(organizationId)]);
+    if (global.killSwitch) return { killed: true, reason: "global_kill_switch" };
+    if (ws.killSwitch) return { killed: true, reason: "workspace_kill_switch" };
+    return { killed: false };
+  },
+
   async view(organizationId: string) {
     const [global, workspace] = await Promise.all([this.getGlobal(), this.getWorkspace(organizationId)]);
     const gate = evaluateGate(config.socialPublishingDisabled, global, workspace);

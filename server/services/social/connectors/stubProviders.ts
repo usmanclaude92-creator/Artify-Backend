@@ -18,6 +18,13 @@ function stub(key: string, label: string, configured: () => boolean, scopes: str
     refreshToken: async () => unavailable("token refresh"),
     getProfile: async () => unavailable("profile"),
     healthCheck: async () => unavailable("health check"),
+    // Inbox capabilities: "not supported" until the real connector implements them.
+    verifyWebhook: () => unavailable("webhook verification"),
+    parseWebhook: () => unavailable("webhook parsing"),
+    fetchInbox: async () => unavailable("inbox polling"),
+    sendReply: async () => unavailable("sending replies"),
+    hideComment: async () => unavailable("hiding comments"),
+    markRead: async () => unavailable("marking messages read"),
   };
 }
 
