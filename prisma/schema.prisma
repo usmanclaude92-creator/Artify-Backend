@@ -4302,3 +4302,21 @@ model SocialInboxCursor {
 
   @@map("social_inbox_cursors")
 }
+
+// Short-lived, ENCRYPTED hand-off between OAuth and the "which Pages to connect?" step (Step 8). Holds per-Page tokens until the user picks.
+// AES-256-GCM via the token vault, bound to this row's id; deleted/expired quickly; never returned by any API.
+model SocialConnectSession {
+  id             String    @id @default(uuid())
+  organizationId String    @map("organization_id")
+  userId         String    @map("user_id")
+  provider       String
+  ciphertext     String
+  keyVersion     Int       @map("key_version")
+  expiresAt      DateTime  @map("expires_at")
+  usedAt         DateTime? @map("used_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  @@index([expiresAt])
+  @@index([organizationId, userId])
+  @@map("social_connect_sessions")
+}

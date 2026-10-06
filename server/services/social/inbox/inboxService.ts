@@ -58,7 +58,9 @@ export const inboxService = {
       prisma.socialMessage.findMany({ where: { conversationId: id }, orderBy: { createdAt: "asc" }, take: 300 }),
       prisma.socialTriage.findFirst({ where: { conversationId: id }, orderBy: { createdAt: "desc" } }),
     ]);
+    const win = connectorRegistry.get(conv.account.provider)?.replyWindow?.({ type: conv.type, lastInboundAt: conv.lastInboundAt, now: new Date() }) ?? { open: true, closesAt: null };
     return {
+      replyWindow: { open: win.open, closesAt: win.closesAt, reason: win.reason ?? null },
       conversation: project(conv, new Date(), { failedSend: messages.some((m) => (m.sendStatus === "FAILED" || m.sendStatus === "UNCERTAIN") && m.authorKind !== "NOTE") }),
       messages: messages.map((m) => ({
         id: m.id, direction: m.direction, authorKind: m.authorKind, body: m.body, sendStatus: m.sendStatus, sendError: m.sendError, sentById: m.sentById, sentAt: m.sentAt, hidden: m.hidden,

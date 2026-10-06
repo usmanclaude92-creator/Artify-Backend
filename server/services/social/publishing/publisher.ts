@@ -93,6 +93,7 @@ async function buildMedia(organizationId: string, mediaIds: string[]): Promise<P
     const a = assets.find((x) => x.id === id)!;
     return {
       mediaId: a.id, mimeType: a.mimeType, altText: a.altText,
+      signedUrl: () => storage.createSignedReadUrl({ key: a.storageKey, expiresInSeconds: 600 }),
       load: async () => {
         if (Number(a.sizeBytes) > 10 * 1024 * 1024) throw new SocialPublishError("permanent", "Media file is larger than the 10 MB publishing limit.");
         const url = await storage.createSignedReadUrl({ key: a.storageKey, expiresInSeconds: 120 });

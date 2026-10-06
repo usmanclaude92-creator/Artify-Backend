@@ -9,9 +9,21 @@ export interface SocialProfile {
   accountType?: string;
 }
 
+/** One connectable asset (e.g. a Facebook Page) discovered during OAuth. Its tokens are encrypted server-side and never sent to the browser. */
+export interface SelectableAccount {
+  profile: SocialProfile;
+  tokens: SocialTokenSet;
+  /** Roles/tasks the connecting user has on it (informational). */
+  tasks?: string[];
+  /** Human-readable reasons this asset may not work fully (e.g. missing tasks). */
+  warnings?: string[];
+}
+
 export interface ConnectResult {
   profile: SocialProfile;
   tokens: SocialTokenSet;
+  /** Providers where one login yields several assets: the user picks which to connect. `profile`/`tokens` are then not persisted. */
+  selectable?: SelectableAccount[];
 }
 
 export interface HealthResult {
@@ -51,6 +63,8 @@ export interface PublishMedia {
   altText?: string | null;
   /** Loads the bytes lazily (storage read); only the connector that needs an upload calls it. */
   load: () => Promise<Buffer>;
+  /** Short-lived signed URL for networks that fetch the image themselves (e.g. Facebook `url=`). */
+  signedUrl?: () => Promise<string>;
 }
 
 export interface PublishInput {
@@ -68,6 +82,14 @@ export interface PublishInput {
 export interface PublishResult {
   externalPostId: string;
   externalUrl: string | null;
+}
+
+export interface ReplyWindow {
+  open: boolean;
+  /** When the window closes (null = no window). */
+  closesAt: Date | null;
+  /** Shown to the user when `open` is false. */
+  reason?: string;
 }
 
 export type InboundEventType = "COMMENT" | "DM" | "MENTION" | "REVIEW";
@@ -139,6 +161,14 @@ export interface SocialConnector {
   parseWebhook?(input: { rawBody: Buffer }): InboundEvent[];
   /** Polling fallback for providers without webhooks (cursor-based). */
   fetchInbox?(tokens: SocialTokenSet, input: { accountExternalId: string; cursor?: string }): Promise<{ events: InboundEvent[]; nextCursor?: string }>;
+  /** GET verification handshake (e.g. Meta's hub.challenge). Returns the body to echo, or null to refuse (fail closed). */
+  handleWebhookChallenge?(input: { query: Record<string, string | undefined> }): string | null;
+  /** Is a reply still allowed by the network's messaging policy (e.g. Messenger's 24-hour window)? Checked before every send. */
+  replyWindow?(input: { type: InboundEventType; lastInboundAt: Date | null; now: Date }): ReplyWindow;
+  /** Runs once after an account is created (e.g. subscribe the app to the Page's webhooks). Failures become warnings, never block connecting. */
+  onConnected?(tokens: SocialTokenSet, profile: SocialProfile): Promise<{ warnings?: string[] }>;
+  /** Best-effort cleanup when an account is disconnected (e.g. remove the webhook subscription). */
+  onDisconnect?(tokens: SocialTokenSet, profile: { externalAccountId: string }): Promise<void>;
   sendReply?(tokens: SocialTokenSet, input: SendReplyInput): Promise<SendReplyResult>;
   hideComment?(tokens: SocialTokenSet, input: { providerMessageId: string; hidden: boolean }): Promise<void>;
   markRead?(tokens: SocialTokenSet, input: { providerThreadId: string; providerMessageId?: string }): Promise<void>;

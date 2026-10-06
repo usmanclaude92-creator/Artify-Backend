@@ -171,6 +171,12 @@ const envSchema = z
     META_APP_SECRET: z.string().optional().default(""),
     LINKEDIN_CLIENT_ID: z.string().optional().default(""),
     LINKEDIN_CLIENT_SECRET: z.string().optional().default(""),
+    // Meta (Facebook Pages). The webhook verify token is a shared secret between us and the Meta app dashboard.
+    META_WEBHOOK_VERIFY_TOKEN: z.string().optional().default(""),
+    META_API_VERSION: z.string().regex(/^v\d{1,2}\.\d$/, "META_API_VERSION must look like v25.0").optional().default("v25.0"),
+    // Informational only (shown on the setup panel): the Graph API does not tell us whether the app is in Development or Live mode.
+    META_APP_MODE: z.enum(["development", "live", "unknown"]).optional().default("unknown"),
+    META_INBOX_POLLING: z.enum(["true", "false"]).optional().default("false"),
     LINKEDIN_API_VERSION: z.string().regex(/^\d{6}$/, "LINKEDIN_API_VERSION must look like YYYYMM").optional().default("202504"),
     // Hard environment kill switch: "true" stops ALL social publishing regardless of database settings.
     SOCIAL_PUBLISHING_DISABLED: z.enum(["true", "false"]).optional().default("false"),
@@ -347,6 +353,10 @@ export type AppConfig = Readonly<{
   controlCenterBaseUrl: string;
   metaAppId: string;
   metaAppSecret: string;
+  metaWebhookVerifyToken: string;
+  metaApiVersion: string;
+  metaAppMode: "development" | "live" | "unknown";
+  metaInboxPolling: boolean;
   linkedinClientId: string;
   linkedinClientSecret: string;
   linkedinApiVersion: string;
@@ -433,6 +443,10 @@ export function validateEnv(raw: NodeJS.ProcessEnv | Record<string, string | und
       controlCenterBaseUrl: (env.CONTROL_CENTER_BASE_URL || (env.NODE_ENV === "production" ? "https://cc.artifysols.com" : "http://localhost:3000")).replace(/\/+$/, ""),
       metaAppId: env.META_APP_ID,
       metaAppSecret: env.META_APP_SECRET,
+      metaWebhookVerifyToken: env.META_WEBHOOK_VERIFY_TOKEN,
+      metaApiVersion: env.META_API_VERSION,
+      metaAppMode: env.META_APP_MODE,
+      metaInboxPolling: env.META_INBOX_POLLING === "true",
       linkedinClientId: env.LINKEDIN_CLIENT_ID,
       linkedinClientSecret: env.LINKEDIN_CLIENT_SECRET,
       linkedinApiVersion: env.LINKEDIN_API_VERSION,

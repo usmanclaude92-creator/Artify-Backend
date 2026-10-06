@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { runGuardrails, countHashtags, type GuardrailInput } from "../../server/services/social/guardrails";
 import { DEFAULT_CONSTRAINTS } from "../../server/services/social/connectors/types";
+import { instagramProvider } from "../../server/services/social/connectors/stubProviders";
 import { connectorRegistry } from "../../server/services/social/connectors/registry";
 import { POST_TRANSITIONS, canTransition, CONTENT_EDITABLE } from "../../server/services/social/postTransitions";
 
@@ -106,8 +107,9 @@ describe("post transitions", () => {
 describe("network constraints", () => {
   it("are defined for every registered connector, specialised by account type", () => {
     expect(connectorRegistry.constraintsFor("linkedin").maxChars).toBe(3000);
-    expect(connectorRegistry.constraintsFor("meta", "INSTAGRAM")).toMatchObject({ maxChars: 2200, requiresMedia: true, supportsLink: false });
-    expect(connectorRegistry.constraintsFor("meta", "PAGE")).toMatchObject({ maxChars: 63206, requiresMedia: false });
+    expect(connectorRegistry.constraintsFor("meta_facebook", "PAGE")).toMatchObject({ maxChars: 63206, maxMedia: 1, requiresMedia: false, supportsLink: true });
+    // Instagram is a later step: its constraints live on the (unregistered) placeholder so the connector can be added without refactoring.
+    expect(instagramProvider.getConstraints()).toMatchObject({ maxChars: 2200, requiresMedia: true, supportsLink: false });
     expect(connectorRegistry.constraintsFor("mock").maxChars).toBe(500);
     expect(connectorRegistry.constraintsFor("unknown-network")).toEqual(DEFAULT_CONSTRAINTS);
   });

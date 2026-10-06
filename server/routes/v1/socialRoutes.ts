@@ -5,7 +5,9 @@ import { sensitiveActionLimiter } from "../../middleware/rateLimiter";
 import { asyncHandler } from "../../utils/asyncHandler";
 import { sendSuccess } from "../../core/apiResponse";
 import { socialAccountService } from "../../services/social/socialAccountService";
-import { connectCallbackSchema, connectStartSchema } from "../../schemas/socialSchemas";
+import { connectCallbackSchema, connectSelectSchema, connectStartSchema } from "../../schemas/socialSchemas";
+import { providerSetup } from "../../services/social/connectors/setupInfo";
+import { NotFoundError } from "../../core/errors";
 
 const meta = (req: Request) => ({ ip: req.ip, userAgent: req.headers["user-agent"] });
 const noStore = (res: import("express").Response) => res.setHeader("Cache-Control", "no-store");
@@ -33,7 +35,28 @@ socialAccountsRouter.post(
   asyncHandler(async (req, res) => {
     const input = connectCallbackSchema.parse(req.body);
     noStore(res);
-    sendSuccess(res, { account: await socialAccountService.handleCallback(req.user!, input, meta(req)) });
+    // Either { account, warnings? } (single asset) or { selection } (the user must pick which assets to connect).
+    sendSuccess(res, await socialAccountService.handleCallback(req.user!, input, meta(req)));
+  })
+);
+
+socialAccountsRouter.post(
+  "/connect/select",
+  requirePermission("social.accounts.manage"),
+  sensitiveActionLimiter,
+  asyncHandler(async (req, res) => {
+    noStore(res);
+    sendSuccess(res, await socialAccountService.completeSelection(req.user!, connectSelectSchema.parse(req.body), meta(req)));
+  })
+);
+
+socialAccountsRouter.get(
+  "/providers/:provider/setup",
+  requirePermission("social.accounts.manage"),
+  asyncHandler(async (req, res) => {
+    const setup = providerSetup(String(req.params.provider));
+    if (!setup) throw new NotFoundError("No setup guide for this provider.");
+    sendSuccess(res, { setup });
   })
 );
 

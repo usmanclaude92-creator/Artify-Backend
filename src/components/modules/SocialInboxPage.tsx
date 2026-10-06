@@ -99,6 +99,8 @@ const ConversationView: React.FC<DetailProps> = ({ id, canReply, people, canned,
   if (!data) return <LoadingState />;
   const c = data.conversation;
   const uncertain = data.messages.find((m) => m.sendStatus === "UNCERTAIN");
+  const windowClosed = data.replyWindow ? !data.replyWindow.open : false;
+  const closesSoon = data.replyWindow?.open && data.replyWindow.closesAt && new Date(data.replyWindow.closesAt).getTime() - Date.now() < 6 * 3600_000 ? data.replyWindow.closesAt : null;
 
   const generate = () => act(async () => {
     const d = await socialInboxApi.draft(id);
@@ -150,6 +152,12 @@ const ConversationView: React.FC<DetailProps> = ({ id, canReply, people, canned,
 
       {canReply && c.status !== "SPAM" && (
         <Card className="p-3 space-y-2" aria-label="Reply">
+          {windowClosed && (
+            <p className="text-[11px] rounded-lg p-2" role="alert" style={{ background: "rgba(225,29,72,0.1)", color: "#e11d48" }}>
+              {data.replyWindow?.reason ?? "The network's messaging window for this conversation has closed."} You can still add an internal note{c.leadId || c.contactId ? "" : " or create a lead"}.
+            </p>
+          )}
+          {closesSoon && <p className="text-[11px]" style={{ color: "#b45309" }}>The messaging window closes at {new Date(closesSoon).toLocaleString()}.</p>}
           {draftInfo && !noteMode && (
             <div className="text-[11px] space-y-1" style={{ color: "var(--text-secondary)" }}>
               <p className="flex items-center gap-2 flex-wrap"><Sparkles className="w-3.5 h-3.5" style={{ color: "var(--accent)" }} aria-hidden="true" /> AI draft — a person must send it.
@@ -169,8 +177,8 @@ const ConversationView: React.FC<DetailProps> = ({ id, canReply, people, canned,
             <span className="flex-1" />
             {noteMode ? <Button variant="primary" disabled={busy || !text.trim()} onClick={() => send(false)}>Add note</Button> : (
               <>
-                <Button disabled={busy || !text.trim()} onClick={() => send(true)}>Send &amp; resolve</Button>
-                <Button variant="primary" disabled={busy || !text.trim()} onClick={() => send(false)}><Send className="w-3.5 h-3.5" aria-hidden="true" /> Send</Button>
+                <Button disabled={busy || windowClosed || !text.trim()} onClick={() => send(true)}>Send &amp; resolve</Button>
+                <Button variant="primary" disabled={busy || windowClosed || !text.trim()} onClick={() => send(false)}><Send className="w-3.5 h-3.5" aria-hidden="true" /> Send</Button>
               </>
             )}
           </div>

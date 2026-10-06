@@ -291,6 +291,12 @@ var envSchema = z.object({
   META_APP_SECRET: z.string().optional().default(""),
   LINKEDIN_CLIENT_ID: z.string().optional().default(""),
   LINKEDIN_CLIENT_SECRET: z.string().optional().default(""),
+  // Meta (Facebook Pages). The webhook verify token is a shared secret between us and the Meta app dashboard.
+  META_WEBHOOK_VERIFY_TOKEN: z.string().optional().default(""),
+  META_API_VERSION: z.string().regex(/^v\d{1,2}\.\d$/, "META_API_VERSION must look like v25.0").optional().default("v25.0"),
+  // Informational only (shown on the setup panel): the Graph API does not tell us whether the app is in Development or Live mode.
+  META_APP_MODE: z.enum(["development", "live", "unknown"]).optional().default("unknown"),
+  META_INBOX_POLLING: z.enum(["true", "false"]).optional().default("false"),
   LINKEDIN_API_VERSION: z.string().regex(/^\d{6}$/, "LINKEDIN_API_VERSION must look like YYYYMM").optional().default("202504"),
   // Hard environment kill switch: "true" stops ALL social publishing regardless of database settings.
   SOCIAL_PUBLISHING_DISABLED: z.enum(["true", "false"]).optional().default("false"),
@@ -448,6 +454,10 @@ function validateEnv(raw) {
       controlCenterBaseUrl: (env.CONTROL_CENTER_BASE_URL || (env.NODE_ENV === "production" ? "https://cc.artifysols.com" : "http://localhost:3000")).replace(/\/+$/, ""),
       metaAppId: env.META_APP_ID,
       metaAppSecret: env.META_APP_SECRET,
+      metaWebhookVerifyToken: env.META_WEBHOOK_VERIFY_TOKEN,
+      metaApiVersion: env.META_API_VERSION,
+      metaAppMode: env.META_APP_MODE,
+      metaInboxPolling: env.META_INBOX_POLLING === "true",
       linkedinClientId: env.LINKEDIN_CLIENT_ID,
       linkedinClientSecret: env.LINKEDIN_CLIENT_SECRET,
       linkedinApiVersion: env.LINKEDIN_API_VERSION,
@@ -17080,6 +17090,13 @@ var mockProvider = {
     return { externalPostId: id3, externalUrl: `https://mock.example/posts/${id3}` };
   },
   // ---- Inbox ----
+  /** Mirrors Messenger's rule so the core enforcement is testable without a network: DMs can be answered for 24 hours after the last inbound message. */
+  replyWindow({ type, lastInboundAt, now }) {
+    if (type !== "DM") return { open: true, closesAt: null };
+    if (!lastInboundAt) return { open: false, closesAt: null, reason: "There is no message from this person to reply to." };
+    const closesAt = new Date(lastInboundAt.getTime() + 24 * 36e5);
+    return now <= closesAt ? { open: true, closesAt } : { open: false, closesAt, reason: "The 24-hour messaging window for this conversation has closed." };
+  },
   verifyWebhook({ rawBody, headers }) {
     const given = headers[MOCK_SIGNATURE_HEADER];
     const sig = Array.isArray(given) ? given[0] : given;
@@ -17396,42 +17413,324 @@ var linkedinProvider = {
   }
 };
 
-// server/services/social/connectors/stubProviders.ts
-function stub(key2, label, configured, scopes, constraints) {
-  const unavailable = (capability) => {
-    throw new ConnectorNotImplementedError(label, capability);
-  };
-  return {
-    key: key2,
-    label,
-    implemented: false,
-    defaultScopes: scopes,
-    isConfigured: configured,
-    getConstraints: (account) => constraints(account?.accountType),
-    getAuthUrl: () => unavailable("connect"),
-    handleCallback: async () => unavailable("connect"),
-    refreshToken: async () => unavailable("token refresh"),
-    getProfile: async () => unavailable("profile"),
-    healthCheck: async () => unavailable("health check"),
-    // Inbox capabilities: "not supported" until the real connector implements them.
-    verifyWebhook: () => unavailable("webhook verification"),
-    parseWebhook: () => unavailable("webhook parsing"),
-    fetchInbox: async () => unavailable("inbox polling"),
-    sendReply: async () => unavailable("sending replies"),
-    hideComment: async () => unavailable("hiding comments"),
-    markRead: async () => unavailable("marking messages read")
-  };
+// server/services/social/connectors/metaGraph.ts
+import { createHmac as createHmac3, timingSafeEqual as timingSafeEqual3 } from "node:crypto";
+var MESSAGING_WINDOW_MS = 24 * 60 * 60 * 1e3;
+var graphBase = () => `https://graph.facebook.com/${config.metaApiVersion}`;
+var dialogUrl = () => `https://www.facebook.com/${config.metaApiVersion}/dialog/oauth`;
+var metaHttp = { fetch: (...args) => fetch(...args) };
+var appSecretProof = (accessToken, appSecret) => createHmac3("sha256", appSecret).update(accessToken).digest("hex");
+function verifySignature(rawBody, header, appSecret) {
+  const value = Array.isArray(header) ? header[0] : header;
+  if (!appSecret || !value || !value.startsWith("sha256=")) return false;
+  const given = value.slice("sha256=".length);
+  if (!/^[0-9a-f]{64}$/i.test(given)) return false;
+  const expected = createHmac3("sha256", appSecret).update(rawBody).digest();
+  const provided = Buffer.from(given, "hex");
+  return provided.length === expected.length && timingSafeEqual3(provided, expected);
 }
-var metaProvider = stub(
-  "meta",
-  "Facebook & Instagram (Meta)",
-  () => !!config.metaAppId && !!config.metaAppSecret,
-  ["pages_show_list", "instagram_basic"],
-  (accountType) => accountType === "INSTAGRAM" ? { ...DEFAULT_CONSTRAINTS, maxChars: 2200, maxHashtags: 30, maxMedia: 10, requiresMedia: true, supportsLink: false } : { ...DEFAULT_CONSTRAINTS, maxChars: 63206, maxHashtags: 30, maxMedia: 10 }
-);
+function webhookChallenge(query, verifyToken) {
+  const given = query["hub.verify_token"];
+  if (!verifyToken || query["hub.mode"] !== "subscribe" || !given || !query["hub.challenge"]) return null;
+  const a = Buffer.from(given);
+  const b = Buffer.from(verifyToken);
+  return a.length === b.length && timingSafeEqual3(a, b) ? query["hub.challenge"] : null;
+}
+function classifyGraphError(status, body) {
+  const e = body?.error;
+  const code = e?.code;
+  const sub = e?.error_subcode;
+  if (sub === 2018278 || code === 2018278) return { kind: "permanent", code, window: true };
+  if (code === 190 || code === 102 || status === 401) return { kind: "auth", code };
+  if (code === 10 || code !== void 0 && code >= 200 && code <= 299) return { kind: "auth", code };
+  if (code === 4 || code === 17 || code === 32 || code === 613 || code !== void 0 && code >= 8e4 && code <= 80014) return { kind: "transient", code };
+  if (e?.is_transient === true || code === 1 || code === 2 || status === 429 || status >= 500) return { kind: "transient", code };
+  return { kind: "permanent", code };
+}
+function errorFromGraph(status, body, secrets = []) {
+  const { kind, code, window } = classifyGraphError(status, body);
+  const raw = body?.error?.message ?? "";
+  const trace = body?.error?.fbtrace_id ? ` [trace ${body.error.fbtrace_id}]` : "";
+  const msg = window ? "Meta only allows replying within 24 hours of the person's last message (messaging window closed)." : kind === "auth" ? "Meta rejected the Page credentials or permissions. Reconnect the Page and grant the requested permissions." : kind === "transient" ? "Meta is temporarily unavailable or rate limiting this Page." : `Meta rejected the request${code !== void 0 ? ` (code ${code})` : ""}.`;
+  const detail = kind === "permanent" || window ? ` ${redactSecrets(raw, secrets).replace(/\s+/g, " ").slice(0, 160)}` : "";
+  return new SocialPublishError(kind, `${msg}${detail}${trace}`.trim(), { httpStatus: status, retryAfterMs: kind === "transient" && code !== void 0 && [4, 17, 32, 613].includes(code) ? 15 * 6e4 : void 0 });
+}
+function errorFromNetwork2(err, phase) {
+  const code = err?.cause?.code ?? err?.code;
+  const name = err?.name;
+  if (phase === "read") return new SocialPublishError("transient", `Network error talking to Meta (${code ?? name ?? "unknown"}).`);
+  if (code === "ECONNREFUSED" || code === "ENOTFOUND" || code === "EAI_AGAIN") return new SocialPublishError("transient", `Could not reach Meta (${code}).`);
+  return new SocialPublishError("uncertain", `No response from Meta after sending (${code ?? name ?? "timeout"}); the action may have been completed.`);
+}
+function buildUrl(req) {
+  const q = new URLSearchParams();
+  for (const [k, v] of Object.entries(req.query ?? {})) if (v !== void 0) q.set(k, v);
+  if (req.method !== "POST" && req.token) {
+    q.set("access_token", req.token);
+    if (config.metaAppSecret) q.set("appsecret_proof", appSecretProof(req.token, config.metaAppSecret));
+  }
+  const qs = q.toString();
+  return `${graphBase()}${req.path}${qs ? `?${qs}` : ""}`;
+}
+async function graph(req) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 2e4);
+  let res;
+  try {
+    const withToken = req.method === "POST" && req.token ? { ...req.body, access_token: req.token, ...config.metaAppSecret ? { appsecret_proof: appSecretProof(req.token, config.metaAppSecret) } : {} } : req.body;
+    res = await metaHttp.fetch(buildUrl(req), {
+      method: req.method,
+      signal: ctrl.signal,
+      ...req.method === "POST" ? { headers: { "Content-Type": "application/json" }, body: JSON.stringify(withToken ?? {}) } : {}
+    });
+  } catch (err) {
+    throw errorFromNetwork2(err, req.phase);
+  } finally {
+    clearTimeout(timer);
+  }
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok || json.error) throw errorFromGraph(res.status, json, [req.token, config.metaAppSecret]);
+  return { status: res.status, json, headers: res.headers };
+}
+
+// server/services/social/connectors/facebookPageProvider.ts
+var FACEBOOK_SCOPES = ["pages_show_list", "pages_manage_metadata", "pages_manage_posts", "pages_manage_engagement", "pages_read_engagement", "pages_read_user_engagement", "pages_messaging"];
+var REQUIRED_SCOPES = ["pages_manage_posts", "pages_manage_engagement", "pages_read_engagement"];
+var SUBSCRIBED_FIELDS_FULL = "feed,messages,mention,ratings";
+var SUBSCRIBED_FIELDS_CORE = "feed,messages";
+var MESSENGER_TEXT_LIMIT = 2e3;
+var appToken = () => `${config.metaAppId}|${config.metaAppSecret}`;
+var pageIdOf = (tokens2, fallback) => String(tokens2.pageId ?? fallback ?? "");
+var epochToIso = (seconds) => typeof seconds === "number" ? new Date(seconds * 1e3).toISOString() : void 0;
+var postUrl = (id3) => {
+  const cut = id3.lastIndexOf("_");
+  return cut > 0 ? `https://www.facebook.com/${id3.slice(0, cut)}/posts/${id3.slice(cut + 1)}` : `https://www.facebook.com/${id3}`;
+};
+var messengerReplyWindow = (lastInboundAt, now) => {
+  if (!lastInboundAt) return { open: false, closesAt: null, reason: "There is no message from this person to reply to." };
+  const closesAt = new Date(lastInboundAt.getTime() + MESSAGING_WINDOW_MS);
+  return now.getTime() <= closesAt.getTime() ? { open: true, closesAt } : { open: false, closesAt, reason: "Facebook only allows replying to a Messenger message within 24 hours of the person's last message. The window closed, so this reply can't be sent from here." };
+};
+function parseWebhookPayload(payload) {
+  if (payload.object !== "page") return [];
+  const out = [];
+  for (const entry of payload.entry ?? []) {
+    const pageId = entry.id;
+    if (!pageId) continue;
+    for (const change of entry.changes ?? []) {
+      const v = change.value ?? {};
+      if (change.field === "feed" && v.item === "comment" && v.verb === "add") {
+        const commentId = v.comment_id;
+        const postId = v.post_id;
+        const from = v.from;
+        const text = typeof v.message === "string" ? v.message : "";
+        if (!commentId || !from?.id || from.id === pageId) continue;
+        const parent = v.parent_id;
+        const root = parent && parent !== postId ? parent : commentId;
+        out.push({ type: "COMMENT", accountExternalId: pageId, providerThreadId: `c:${root}`, providerMessageId: commentId, participant: { externalId: from.id, name: from.name }, text: text || "[comment without text]", subjectRef: postId, createdAt: epochToIso(v.created_time) });
+      } else if (change.field === "ratings" && (v.review_text || v.rating_text || v.recommendation_type)) {
+        const reviewer = v.reviewer_id;
+        const id3 = v.open_graph_story_id ?? (reviewer ? `${reviewer}:${v.created_time ?? ""}` : void 0);
+        if (!id3 || reviewer === pageId) continue;
+        out.push({ type: "REVIEW", accountExternalId: pageId, providerThreadId: `r:${id3}`, providerMessageId: id3, participant: { externalId: reviewer, name: v.reviewer_name }, text: String(v.review_text ?? v.rating_text ?? v.recommendation_type), createdAt: epochToIso(v.created_time) });
+      }
+    }
+    for (const m of entry.messaging ?? []) {
+      const psid = m.sender?.id;
+      if (!m.message?.mid || !psid || psid === pageId || m.message.is_echo) continue;
+      const text = m.message.text ?? (m.message.attachments?.length ? "[attachment]" : "");
+      if (!text) continue;
+      out.push({ type: "DM", accountExternalId: pageId, providerThreadId: `dm:${psid}`, providerMessageId: m.message.mid, participant: { externalId: psid }, text, createdAt: m.timestamp ? new Date(m.timestamp).toISOString() : void 0 });
+    }
+  }
+  return out;
+}
+async function listPages(userToken) {
+  const pages = [];
+  let after;
+  for (let i = 0; i < 5; i++) {
+    const r = await graph({ method: "GET", path: "/me/accounts", token: userToken, phase: "read", query: { fields: "id,name,category,access_token,tasks,picture{url}", limit: "100", after } });
+    pages.push(...r.json.data ?? []);
+    after = r.json.paging?.next ? r.json.paging.cursors?.after : void 0;
+    if (!after) break;
+  }
+  return pages;
+}
+var toSelectable = (p, scopes) => {
+  if (!p.access_token) return null;
+  const tasks = p.tasks ?? [];
+  const warnings = [];
+  if (tasks.length) {
+    if (!tasks.includes("CREATE_CONTENT")) warnings.push("You can't publish posts to this Page (needs the Create content task).");
+    if (!tasks.includes("MODERATE")) warnings.push("You can't moderate comments on this Page (needs the Moderate task).");
+    if (!tasks.includes("MESSAGING")) warnings.push("You can't read or send Messenger messages for this Page (needs the Messages task).");
+  }
+  return { profile: { externalAccountId: p.id, displayName: p.name ?? p.id, handle: null, avatarUrl: p.picture?.data?.url ?? null, accountType: "PAGE" }, tokens: { accessToken: p.access_token, pageId: p.id, scopes }, tasks, warnings };
+};
+var facebookPageProvider = {
+  key: "meta_facebook",
+  label: "Facebook Pages",
+  implemented: true,
+  defaultScopes: [...FACEBOOK_SCOPES],
+  isConfigured: () => !!config.metaAppId && !!config.metaAppSecret,
+  get pollsInbox() {
+    return config.metaInboxPolling;
+  },
+  getConstraints: () => ({ ...DEFAULT_CONSTRAINTS, maxChars: 63206, maxHashtags: 30, maxMedia: 1, allowedMediaTypes: ["image/jpeg", "image/png", "image/gif"], supportsLink: true }),
+  getAuthUrl({ state, redirectUri: redirectUri2, scopes }) {
+    const q = new URLSearchParams({ client_id: config.metaAppId, redirect_uri: redirectUri2, state, response_type: "code", scope: (scopes?.length ? scopes : [...FACEBOOK_SCOPES]).join(",") });
+    return `${dialogUrl()}?${q.toString()}`;
+  },
+  async handleCallback({ code, redirectUri: redirectUri2 }) {
+    const short = await graph({ method: "GET", path: "/oauth/access_token", phase: "read", query: { client_id: config.metaAppId, redirect_uri: redirectUri2, client_secret: config.metaAppSecret, code } });
+    if (!short.json.access_token) throw new Error("Meta did not return an access token.");
+    const long = await graph({ method: "GET", path: "/oauth/access_token", phase: "read", query: { grant_type: "fb_exchange_token", client_id: config.metaAppId, client_secret: config.metaAppSecret, fb_exchange_token: short.json.access_token } });
+    const userToken = long.json.access_token;
+    if (!userToken) throw new Error("Meta did not return a long-lived token.");
+    const [me, perms, pages] = await Promise.all([
+      graph({ method: "GET", path: "/me", token: userToken, phase: "read", query: { fields: "id,name" } }),
+      graph({ method: "GET", path: "/me/permissions", token: userToken, phase: "read" }),
+      listPages(userToken)
+    ]);
+    const scopes = (perms.json.data ?? []).filter((p) => p.status === "granted").map((p) => p.permission);
+    const selectable = pages.map((p) => toSelectable(p, scopes)).filter((x) => !!x);
+    if (selectable.length === 0) throw new Error("This Facebook account does not manage any Pages (or no Page access was granted).");
+    return { profile: { externalAccountId: me.json.id ?? "user", displayName: me.json.name ?? "Facebook user", accountType: "USER" }, tokens: { accessToken: "" }, selectable };
+  },
+  async refreshToken() {
+    throw new Error("Facebook Page access tokens cannot be refreshed automatically; reconnect the Page to renew access.");
+  },
+  async getProfile(tokens2) {
+    const id3 = pageIdOf(tokens2);
+    const r = await graph({ method: "GET", path: `/${id3}`, token: tokens2.accessToken, phase: "read", query: { fields: "id,name,username,category,picture{url}" } });
+    return { externalAccountId: r.json.id, displayName: r.json.name ?? r.json.id, handle: r.json.username ?? null, avatarUrl: r.json.picture?.data?.url ?? null, accountType: "PAGE" };
+  },
+  async healthCheck(tokens2) {
+    const r = await graph({
+      method: "GET",
+      path: "/debug_token",
+      token: appToken(),
+      phase: "read",
+      query: { input_token: tokens2.accessToken }
+    });
+    const d = r.json.data;
+    if (!d?.is_valid) return { ok: false, error: redactSecrets(d?.error?.message ?? "The Page access token is no longer valid; reconnect the Page.", [tokens2.accessToken]).slice(0, 200) };
+    const granted = new Set(d.scopes ?? []);
+    const missing = REQUIRED_SCOPES.filter((s) => d.scopes && !granted.has(s));
+    if (missing.length) return { ok: false, error: `Missing permissions: ${missing.join(", ")}. Reconnect the Page and approve them.` };
+    const times = [d.expires_at, d.data_access_expires_at].filter((t) => typeof t === "number" && t > 0);
+    return { ok: true, expiresAt: times.length ? new Date(Math.min(...times) * 1e3).toISOString() : null };
+  },
+  async publish(tokens2, input) {
+    const page = pageIdOf(tokens2, input.accountExternalId);
+    if (!input.text.trim() && !input.linkUrl) throw new SocialPublishError("permanent", "The post has no text or link.");
+    if (input.media.length > 1) throw new SocialPublishError("permanent", "Facebook publishing currently supports one photo per post.");
+    const photo = input.media[0];
+    if (photo && !["image/jpeg", "image/png", "image/gif"].includes(photo.mimeType)) throw new SocialPublishError("permanent", "Facebook photos must be JPEG, PNG or GIF.");
+    let res;
+    if (photo) {
+      if (!photo.signedUrl) throw new SocialPublishError("permanent", "This media file cannot be shared by URL.");
+      const url = await photo.signedUrl().catch(() => {
+        throw new SocialPublishError("transient", "Could not prepare the photo for upload.");
+      });
+      const caption = input.linkUrl && !input.text.includes(input.linkUrl) ? `${input.text}
+
+${input.linkUrl}`.trim() : input.text;
+      res = await graph({ method: "POST", path: `/${page}/photos`, token: tokens2.accessToken, phase: "write", body: { url, caption, published: true } });
+      const id3 = res.json.post_id ?? res.json.id;
+      if (!id3) throw new SocialPublishError("uncertain", "Meta answered without a post id; the photo may have been published.");
+      return { externalPostId: id3, externalUrl: postUrl(id3) };
+    }
+    res = await graph({ method: "POST", path: `/${page}/feed`, token: tokens2.accessToken, phase: "write", body: { message: input.text, ...input.linkUrl ? { link: input.linkUrl } : {}, published: true } });
+    if (!res.json.id) throw new SocialPublishError("uncertain", "Meta answered without a post id; the post may have been published.");
+    return { externalPostId: res.json.id, externalUrl: postUrl(res.json.id) };
+  },
+  // ---------------- inbox ----------------
+  verifyWebhook: ({ rawBody, headers }) => verifySignature(rawBody, headers["x-hub-signature-256"], config.metaAppSecret),
+  handleWebhookChallenge: ({ query }) => webhookChallenge(query, config.metaWebhookVerifyToken),
+  parseWebhook({ rawBody }) {
+    try {
+      return parseWebhookPayload(JSON.parse(rawBody.toString("utf8")));
+    } catch {
+      return [];
+    }
+  },
+  replyWindow: ({ type, lastInboundAt, now }) => type === "DM" ? messengerReplyWindow(lastInboundAt, now) : { open: true, closesAt: null },
+  async onConnected(tokens2, profile) {
+    const page = profile.externalAccountId;
+    for (const fields of [SUBSCRIBED_FIELDS_FULL, SUBSCRIBED_FIELDS_CORE]) {
+      try {
+        await graph({ method: "POST", path: `/${page}/subscribed_apps`, token: tokens2.accessToken, phase: "write", body: { subscribed_fields: fields } });
+        return {};
+      } catch {
+      }
+    }
+    return { warnings: ["Could not subscribe this Page to webhooks, so new comments and messages will not arrive in real time. Check the Meta app's Webhooks settings, then reconnect."] };
+  },
+  async onDisconnect(tokens2, profile) {
+    await graph({ method: "DELETE", path: `/${profile.externalAccountId}/subscribed_apps`, token: tokens2.accessToken, phase: "write" }).catch(() => void 0);
+  },
+  async fetchInbox(tokens2, { accountExternalId, cursor }) {
+    const page = pageIdOf(tokens2, accountExternalId);
+    const now = Date.now();
+    const since = cursor ? Number(cursor) : now - 6 * 36e5;
+    const events = [];
+    const convs = await graph({
+      method: "GET",
+      path: `/${page}/conversations`,
+      token: tokens2.accessToken,
+      phase: "read",
+      query: { platform: "messenger", fields: "updated_time,messages.limit(10){id,message,from,created_time}", limit: "25" }
+    });
+    for (const c of convs.json.data ?? []) {
+      if (c.updated_time && Date.parse(c.updated_time) <= since) continue;
+      for (const m of c.messages?.data ?? []) {
+        if (!m.from?.id || m.from.id === page || !m.message || !m.created_time || Date.parse(m.created_time) <= since) continue;
+        events.push({ type: "DM", accountExternalId: page, providerThreadId: `dm:${m.from.id}`, providerMessageId: m.id, participant: { externalId: m.from.id, name: m.from.name }, text: m.message, createdAt: m.created_time });
+      }
+    }
+    const feed = await graph({
+      method: "GET",
+      path: `/${page}/feed`,
+      token: tokens2.accessToken,
+      phase: "read",
+      query: { fields: "id,comments.filter(stream).limit(25){id,message,from,created_time,parent{id}}", limit: "10" }
+    });
+    for (const post of feed.json.data ?? []) {
+      for (const c of post.comments?.data ?? []) {
+        if (!c.from?.id || c.from.id === page || !c.created_time || Date.parse(c.created_time) <= since) continue;
+        events.push({ type: "COMMENT", accountExternalId: page, providerThreadId: `c:${c.parent?.id ?? c.id}`, providerMessageId: c.id, participant: { externalId: c.from.id, name: c.from.name }, text: c.message ?? "[comment without text]", subjectRef: post.id, createdAt: c.created_time });
+      }
+    }
+    return { events, nextCursor: String(now - 6e4) };
+  },
+  async sendReply(tokens2, input) {
+    if (input.conversationType === "COMMENT") {
+      if (!input.inReplyToProviderMessageId) throw new SocialPublishError("permanent", "There is no comment to reply to.");
+      const r = await graph({ method: "POST", path: `/${input.inReplyToProviderMessageId}/comments`, token: tokens2.accessToken, phase: "write", body: { message: input.text } });
+      if (!r.json.id) throw new SocialPublishError("uncertain", "Meta answered without a comment id; the reply may have been posted.");
+      return { providerMessageId: r.json.id };
+    }
+    if (input.conversationType === "DM") {
+      if (!input.participantExternalId) throw new SocialPublishError("permanent", "The recipient is unknown.");
+      if (input.text.length > MESSENGER_TEXT_LIMIT) throw new SocialPublishError("permanent", `Messenger messages are limited to ${MESSENGER_TEXT_LIMIT} characters.`);
+      const r = await graph({ method: "POST", path: "/me/messages", token: tokens2.accessToken, phase: "write", body: { recipient: { id: input.participantExternalId }, messaging_type: "RESPONSE", message: { text: input.text } } });
+      if (!r.json.message_id) throw new SocialPublishError("uncertain", "Meta answered without a message id; the message may have been sent.");
+      return { providerMessageId: r.json.message_id };
+    }
+    throw new SocialPublishError("permanent", "Replying to this kind of item is not supported yet.");
+  },
+  async hideComment(tokens2, { providerMessageId, hidden }) {
+    await graph({ method: "POST", path: `/${providerMessageId}`, token: tokens2.accessToken, phase: "write", body: { is_hidden: hidden } });
+  },
+  async markRead(tokens2, { providerThreadId }) {
+    if (!providerThreadId.startsWith("dm:")) return;
+    await graph({ method: "POST", path: "/me/messages", token: tokens2.accessToken, phase: "write", body: { recipient: { id: providerThreadId.slice(3) }, sender_action: "mark_seen" } });
+  }
+};
 
 // server/services/social/connectors/registry.ts
-var CONNECTORS = [metaProvider, linkedinProvider, mockProvider];
+var CONNECTORS = [facebookPageProvider, linkedinProvider, mockProvider];
 var connectorRegistry = {
   get(key2) {
     return CONNECTORS.find((c) => c.key === key2);
@@ -18183,11 +18482,11 @@ var approvalDecisionSchema = z21.object({
 var approvalSourceParamSchema = z21.enum(APPROVAL_SOURCES);
 
 // server/services/social/publishing/publisher.ts
-import { randomUUID as randomUUID3 } from "node:crypto";
+import { randomUUID as randomUUID4 } from "node:crypto";
 init_errors();
 
 // server/services/social/socialAccountService.ts
-import { randomBytes as randomBytes6 } from "node:crypto";
+import { randomBytes as randomBytes6, randomUUID as randomUUID3 } from "node:crypto";
 init_errors();
 var STATE_TTL_MS = 10 * 60 * 1e3;
 var EXPIRY_WARNING_MS = 7 * 24 * 60 * 60 * 1e3;
@@ -18256,6 +18555,67 @@ async function notifyManagers(account, title, message) {
     )
   );
 }
+var SELECTION_TTL_MS = 15 * 60 * 1e3;
+async function startSelection(user, provider, selectable, meta8) {
+  await prisma.socialConnectSession.deleteMany({ where: { OR: [{ expiresAt: { lt: /* @__PURE__ */ new Date() } }, { organizationId: user.organizationId, userId: user.id, provider }] } });
+  const id3 = randomUUID3();
+  const { ciphertext, keyVersion } = tokenVault.encrypt({ accessToken: "", pages: selectable.map((p) => ({ profile: p.profile, tokens: p.tokens })) }, id3);
+  await prisma.socialConnectSession.create({ data: { id: id3, organizationId: user.organizationId, userId: user.id, provider, ciphertext, keyVersion, expiresAt: new Date(Date.now() + SELECTION_TTL_MS) } });
+  const existing = new Set((await prisma.socialAccount.findMany({ where: { organizationId: user.organizationId, provider, status: { not: "DISCONNECTED" } }, select: { externalAccountId: true } })).map((a) => a.externalAccountId));
+  await auditLogRepository.record({ organizationId: user.organizationId, actorUserId: user.id, actorType: "USER", action: "SOCIAL_ACCOUNT_SELECTION_STARTED", resourceType: "social_account", metadata: { provider, candidates: selectable.length }, ipAddress: meta8.ip, userAgent: meta8.userAgent });
+  return { selection: { id: id3, provider, pages: selectable.map((p) => ({ externalId: p.profile.externalAccountId, name: p.profile.displayName, category: p.profile.accountType ?? null, avatarUrl: p.profile.avatarUrl ?? null, tasks: p.tasks ?? [], warnings: p.warnings ?? [], alreadyConnected: existing.has(p.profile.externalAccountId) })) } };
+}
+async function persistAccount(user, provider, connector, profile, tokens2, reconnectAccountId, meta8) {
+  if (reconnectAccountId) {
+    const target = await loadInOrgOrThrow(user.organizationId, reconnectAccountId);
+    if (target.externalAccountId !== profile.externalAccountId) throw new ValidationError("You signed in with a different account than the one being reconnected.");
+  }
+  const previous = await prisma.socialAccount.findUnique({
+    where: { organizationId_provider_externalAccountId: { organizationId: user.organizationId, provider, externalAccountId: profile.externalAccountId } },
+    select: { id: true, status: true }
+  });
+  const data = {
+    displayName: profile.displayName,
+    handle: profile.handle ?? null,
+    avatarUrl: profile.avatarUrl ?? null,
+    accountType: profile.accountType ?? "PROFILE",
+    status: "CONNECTED",
+    scopes: tokens2.scopes ?? connector.defaultScopes,
+    tokenExpiresAt: tokens2.expiresAt ? new Date(tokens2.expiresAt) : null,
+    lastSyncAt: /* @__PURE__ */ new Date(),
+    lastError: null,
+    connectedByUserId: user.id
+  };
+  let account = await prisma.socialAccount.upsert({
+    where: { organizationId_provider_externalAccountId: { organizationId: user.organizationId, provider, externalAccountId: profile.externalAccountId } },
+    create: { organizationId: user.organizationId, provider, externalAccountId: profile.externalAccountId, ...data },
+    update: data,
+    select: ACCOUNT_SELECT
+  });
+  await saveTokens(account.id, tokens2);
+  let warnings;
+  if (connector.onConnected) {
+    try {
+      warnings = (await connector.onConnected(tokens2, profile)).warnings;
+    } catch (err) {
+      warnings = [`Post-connect setup failed: ${safeError(err, [tokens2.accessToken, tokens2.refreshToken])}`];
+    }
+    if (warnings?.length) account = await prisma.socialAccount.update({ where: { id: account.id }, data: { lastError: warnings[0].slice(0, 300) }, select: ACCOUNT_SELECT });
+  }
+  const reauth = !!previous && previous.status !== "CONNECTED";
+  await auditLogRepository.record({
+    organizationId: user.organizationId,
+    actorUserId: user.id,
+    actorType: "USER",
+    action: reconnectAccountId || reauth ? "SOCIAL_ACCOUNT_REAUTHENTICATED" : "SOCIAL_ACCOUNT_CONNECTED",
+    resourceType: "social_account",
+    resourceId: account.id,
+    metadata: { provider: account.provider, externalAccountId: account.externalAccountId, handle: account.handle, ...warnings?.length ? { warnings: warnings.length } : {} },
+    ipAddress: meta8.ip,
+    userAgent: meta8.userAgent
+  });
+  return { account, ...warnings?.length ? { warnings } : {} };
+}
 var socialAccountService = {
   /** Server-internal only (publisher). Tokens must never be returned from an API or logged. */
   loadTokens,
@@ -18305,49 +18665,54 @@ var socialAccountService = {
       throw new ValidationError("Could not connect the account. Please try again.");
     }
     const { profile, tokens: tokens2 } = result;
-    if (row.reconnectAccountId) {
-      const target = await loadInOrgOrThrow(user.organizationId, row.reconnectAccountId);
-      if (target.externalAccountId !== profile.externalAccountId) throw new ValidationError("You signed in with a different account than the one being reconnected.");
+    if (result.selectable?.length) {
+      if (row.reconnectAccountId) {
+        const target = await loadInOrgOrThrow(user.organizationId, row.reconnectAccountId);
+        const match = result.selectable.find((p) => p.profile.externalAccountId === target.externalAccountId);
+        if (!match) throw new ValidationError("You signed in with a different account than the one being reconnected.");
+        return persistAccount(user, row.provider, connector, match.profile, match.tokens, row.reconnectAccountId, meta8);
+      }
+      return startSelection(user, row.provider, result.selectable, meta8);
     }
-    const previous = await prisma.socialAccount.findUnique({
-      where: { organizationId_provider_externalAccountId: { organizationId: user.organizationId, provider: row.provider, externalAccountId: profile.externalAccountId } },
-      select: { id: true, status: true }
-    });
-    const data = {
-      displayName: profile.displayName,
-      handle: profile.handle ?? null,
-      avatarUrl: profile.avatarUrl ?? null,
-      accountType: profile.accountType ?? "PROFILE",
-      status: "CONNECTED",
-      scopes: tokens2.scopes ?? connector.defaultScopes,
-      tokenExpiresAt: tokens2.expiresAt ? new Date(tokens2.expiresAt) : null,
-      lastSyncAt: /* @__PURE__ */ new Date(),
-      lastError: null,
-      connectedByUserId: user.id
-    };
-    const account = await prisma.socialAccount.upsert({
-      where: { organizationId_provider_externalAccountId: { organizationId: user.organizationId, provider: row.provider, externalAccountId: profile.externalAccountId } },
-      create: { organizationId: user.organizationId, provider: row.provider, externalAccountId: profile.externalAccountId, ...data },
-      update: data,
-      select: ACCOUNT_SELECT
-    });
-    await saveTokens(account.id, tokens2);
-    const reauth = !!previous && previous.status !== "CONNECTED";
-    await auditLogRepository.record({
-      organizationId: user.organizationId,
-      actorUserId: user.id,
-      actorType: "USER",
-      action: row.reconnectAccountId || reauth ? "SOCIAL_ACCOUNT_REAUTHENTICATED" : "SOCIAL_ACCOUNT_CONNECTED",
-      resourceType: "social_account",
-      resourceId: account.id,
-      metadata: { provider: account.provider, externalAccountId: account.externalAccountId, handle: account.handle },
-      ipAddress: meta8.ip,
-      userAgent: meta8.userAgent
-    });
-    return account;
+    return persistAccount(user, row.provider, connector, profile, tokens2, row.reconnectAccountId ?? void 0, meta8);
+  },
+  /** Step 2 of a multi-asset connect: create accounts for the chosen assets from the encrypted session. */
+  async completeSelection(user, input, meta8 = {}) {
+    const invalid = () => new AuthenticationError("This selection has expired. Please start the connection again.");
+    const row = await prisma.socialConnectSession.findUnique({ where: { id: input.selectionId } });
+    if (!row || row.usedAt || row.expiresAt.getTime() <= Date.now() || row.userId !== user.id || row.organizationId !== user.organizationId) throw invalid();
+    const claimed = await prisma.socialConnectSession.updateMany({ where: { id: row.id, usedAt: null }, data: { usedAt: /* @__PURE__ */ new Date() } });
+    if (claimed.count !== 1) throw invalid();
+    const connector = connectorOrThrow(row.provider);
+    let pages;
+    try {
+      pages = tokenVault.decrypt(row.ciphertext, row.keyVersion, row.id).pages;
+    } catch {
+      throw invalid();
+    } finally {
+      await prisma.socialConnectSession.delete({ where: { id: row.id } }).catch(() => void 0);
+    }
+    const wanted = new Set(input.externalIds);
+    const chosen = pages.filter((p) => wanted.has(p.profile.externalAccountId));
+    if (chosen.length === 0 || chosen.length !== wanted.size) throw new ValidationError("Choose at least one of the listed accounts.");
+    const accounts = [];
+    const warnings = [];
+    for (const p of chosen) {
+      const out = await persistAccount(user, row.provider, connector, p.profile, p.tokens, void 0, meta8);
+      accounts.push(out.account);
+      warnings.push(...(out.warnings ?? []).map((w) => `${out.account.displayName}: ${w}`));
+    }
+    return { accounts, warnings };
   },
   async disconnect(user, id3, meta8 = {}) {
     const account = await loadInOrgOrThrow(user.organizationId, id3);
+    try {
+      const connector = connectorRegistry.getAvailable(account.provider);
+      const tokens2 = connector?.onDisconnect ? await loadTokens(id3) : null;
+      if (connector?.onDisconnect && tokens2) await connector.onDisconnect(tokens2, { externalAccountId: account.externalAccountId });
+    } catch (err) {
+      logger.warn({ accountId: id3, err: safeError(err) }, "[social] provider cleanup on disconnect failed");
+    }
     await prisma.socialAccountCredential.deleteMany({ where: { socialAccountId: id3 } });
     const updated = await prisma.socialAccount.update({ where: { id: id3 }, data: { status: "DISCONNECTED", tokenExpiresAt: null, lastError: null }, select: ACCOUNT_SELECT });
     await auditLogRepository.record({
@@ -18621,6 +18986,7 @@ async function buildMedia(organizationId, mediaIds) {
       mediaId: a.id,
       mimeType: a.mimeType,
       altText: a.altText,
+      signedUrl: () => storage.createSignedReadUrl({ key: a.storageKey, expiresInSeconds: 600 }),
       load: async () => {
         if (Number(a.sizeBytes) > 10 * 1024 * 1024) throw new SocialPublishError("permanent", "Media file is larger than the 10 MB publishing limit.");
         const url = await storage.createSignedReadUrl({ key: a.storageKey, expiresInSeconds: 120 });
@@ -18636,13 +19002,13 @@ var publisher = {
   /** Attempts one target. Safe to call concurrently from many workers: at most one wins the claim. */
   async publishTarget(targetId, opts = {}) {
     const now = opts.now ?? /* @__PURE__ */ new Date();
-    const workerId = opts.workerId ?? `w_${randomUUID3().slice(0, 8)}`;
+    const workerId = opts.workerId ?? `w_${randomUUID4().slice(0, 8)}`;
     const head = await prisma.socialPostTarget.findUnique({ where: { id: targetId }, include: { post: { select: { organizationId: true } } } });
     if (!head) throw new NotFoundError("Publishing target not found.");
     const organizationId = head.post.organizationId;
     const gate = await publishingSettingsService.gate(organizationId);
     if (!gate.allowed) return { outcome: "blocked", detail: gate.reason };
-    if (!head.idempotencyKey) await prisma.socialPostTarget.updateMany({ where: { id: targetId, idempotencyKey: null }, data: { idempotencyKey: `art_${randomUUID3()}` } });
+    if (!head.idempotencyKey) await prisma.socialPostTarget.updateMany({ where: { id: targetId, idempotencyKey: null }, data: { idempotencyKey: `art_${randomUUID4()}` } });
     const claim = await prisma.socialPostTarget.updateMany({
       where: {
         id: targetId,
@@ -18812,7 +19178,7 @@ var publisher = {
     const concurrency = opts.concurrency ?? config.socialPublishConcurrency;
     const perAccount = opts.perAccountLimit ?? config.socialPublishPerAccountLimit;
     const budget = opts.timeBudgetMs ?? config.socialPublishTimeBudgetMs;
-    const workerId = `tick_${randomUUID3().slice(0, 8)}`;
+    const workerId = `tick_${randomUUID4().slice(0, 8)}`;
     const outcomes = emptyOutcomes();
     const recoveredStale = await this.recoverStale(now);
     const missed = await this.markMissed(now);
@@ -19699,7 +20065,7 @@ var inboxAi = {
 
 // server/services/social/inbox/inboxCore.ts
 init_errors();
-import { randomUUID as randomUUID4 } from "node:crypto";
+import { randomUUID as randomUUID5 } from "node:crypto";
 var DEFAULT_INBOX_SETTINGS = { autoTriage: true, autoDraft: false, autoReply: false, autoLead: false, firstResponseMinutes: 60, retentionDays: 180 };
 async function getInboxSettings(organizationId) {
   const row = await prisma.socialInboxSetting.findUnique({ where: { organizationId } });
@@ -19816,6 +20182,8 @@ async function sendReply(organizationId, conversationId, o) {
   if (conv.account.status !== "CONNECTED") throw new ConflictError(`${conv.account.displayName} is ${conv.account.status.toLowerCase().replace("_", " ")}. Reconnect it first.`);
   const connector = connectorRegistry.getAvailable(conv.account.provider);
   if (!connector?.sendReply) throw new ConflictError(`Replies are not supported for ${conv.account.provider} yet.`);
+  const win = connector.replyWindow?.({ type: conv.type, lastInboundAt: conv.lastInboundAt, now: /* @__PURE__ */ new Date() });
+  if (win && !win.open) throw new ConflictError(win.reason ?? "This reply is outside the network's messaging window.");
   let msg;
   if (o.messageId) {
     const found = await prisma.socialMessage.findFirst({ where: { id: o.messageId, conversationId, organizationId, direction: "OUTBOUND" } });
@@ -19835,7 +20203,7 @@ async function sendReply(organizationId, conversationId, o) {
   const sinceMinute = new Date(Date.now() - 6e4);
   const recent = await prisma.socialMessage.count({ where: { socialAccountId: conv.socialAccountId, direction: "OUTBOUND", sendStatus: { in: ["SENDING", "SENT"] }, authorKind: { not: "NOTE" }, sentAt: { gte: sinceMinute } } });
   if (recent >= config.socialReplyRatePerMinute) throw new RateLimitError("This account is sending replies too quickly. Try again in a minute.");
-  const key2 = msg.sendIdempotencyKey ?? `rep_${randomUUID4()}`;
+  const key2 = msg.sendIdempotencyKey ?? `rep_${randomUUID5()}`;
   const claim = await prisma.socialMessage.updateMany({
     where: { id: msg.id, sendStatus: msg.sendStatus },
     data: { sendStatus: "SENDING", body: text, sendIdempotencyKey: key2, sentById: o.actor?.id ?? msg.sentById, sentAt: /* @__PURE__ */ new Date(), sendError: null, autoSent: !!o.autoSent, guardrailResult: guard }
@@ -20225,7 +20593,9 @@ var inboxService = {
       prisma.socialMessage.findMany({ where: { conversationId: id3 }, orderBy: { createdAt: "asc" }, take: 300 }),
       prisma.socialTriage.findFirst({ where: { conversationId: id3 }, orderBy: { createdAt: "desc" } })
     ]);
+    const win = connectorRegistry.get(conv.account.provider)?.replyWindow?.({ type: conv.type, lastInboundAt: conv.lastInboundAt, now: /* @__PURE__ */ new Date() }) ?? { open: true, closesAt: null };
     return {
+      replyWindow: { open: win.open, closesAt: win.closesAt, reason: win.reason ?? null },
       conversation: project2(conv, /* @__PURE__ */ new Date(), { failedSend: messages.some((m) => (m.sendStatus === "FAILED" || m.sendStatus === "UNCERTAIN") && m.authorKind !== "NOTE") }),
       messages: messages.map((m) => ({
         id: m.id,
@@ -20582,8 +20952,41 @@ var connectCallbackSchema = z26.object({
   code: z26.string().max(2e3).optional(),
   error: z26.string().max(500).optional()
 });
+var connectSelectSchema = z26.object({ selectionId: z26.string().uuid(), externalIds: z26.array(z26.string().min(1).max(100)).min(1).max(20) });
+
+// server/services/social/connectors/setupInfo.ts
+function providerSetup(provider) {
+  if (provider !== "meta_facebook") return null;
+  const base = config.controlCenterBaseUrl.replace(/\/+$/, "");
+  return {
+    provider,
+    label: "Facebook Pages",
+    configured: !!config.metaAppId && !!config.metaAppSecret,
+    appMode: config.metaAppMode,
+    apiVersion: config.metaApiVersion,
+    redirectUri: `${base}/social/accounts`,
+    webhookCallbackUrl: `${base}/api/v1/social/webhooks/meta_facebook`,
+    verifyTokenConfigured: !!config.metaWebhookVerifyToken,
+    verifyTokenEnvVar: "META_WEBHOOK_VERIFY_TOKEN",
+    permissions: FACEBOOK_SCOPES.map((name) => ({ name, required: REQUIRED_SCOPES.includes(name) })),
+    webhookFields: SUBSCRIBED_FIELDS_FULL.split(","),
+    envVars: [
+      { name: "META_APP_ID", set: !!config.metaAppId },
+      { name: "META_APP_SECRET", set: !!config.metaAppSecret },
+      { name: "META_WEBHOOK_VERIFY_TOKEN", set: !!config.metaWebhookVerifyToken },
+      { name: "META_API_VERSION", set: true }
+    ],
+    notes: [
+      "In the Meta app dashboard add the Facebook Login product and put the redirect URI above under Valid OAuth Redirect URIs.",
+      "Add the Webhooks product, choose the Page object, set the callback URL above and the verify token (the value of META_WEBHOOK_VERIFY_TOKEN), then subscribe to the listed fields.",
+      "While the app is in Development mode only people with a role on the app (administrator, developer, tester) can connect Pages and receive events.",
+      "Going Live for other people requires App Review for the permissions above. This panel cannot detect the app mode; set META_APP_MODE to show it here."
+    ]
+  };
+}
 
 // server/routes/v1/socialRoutes.ts
+init_errors();
 var meta2 = (req) => ({ ip: req.ip, userAgent: req.headers["user-agent"] });
 var noStore = (res) => res.setHeader("Cache-Control", "no-store");
 var socialAccountsRouter = Router17();
@@ -20606,7 +21009,25 @@ socialAccountsRouter.post(
   asyncHandler(async (req, res) => {
     const input = connectCallbackSchema.parse(req.body);
     noStore(res);
-    sendSuccess(res, { account: await socialAccountService.handleCallback(req.user, input, meta2(req)) });
+    sendSuccess(res, await socialAccountService.handleCallback(req.user, input, meta2(req)));
+  })
+);
+socialAccountsRouter.post(
+  "/connect/select",
+  requirePermission("social.accounts.manage"),
+  sensitiveActionLimiter,
+  asyncHandler(async (req, res) => {
+    noStore(res);
+    sendSuccess(res, await socialAccountService.completeSelection(req.user, connectSelectSchema.parse(req.body), meta2(req)));
+  })
+);
+socialAccountsRouter.get(
+  "/providers/:provider/setup",
+  requirePermission("social.accounts.manage"),
+  asyncHandler(async (req, res) => {
+    const setup = providerSetup(String(req.params.provider));
+    if (!setup) throw new NotFoundError("No setup guide for this provider.");
+    sendSuccess(res, { setup });
   })
 );
 socialAccountsRouter.get("/:id", requirePermission("social.read"), asyncHandler(async (req, res) => sendSuccess(res, { account: await socialAccountService.get(req.user.organizationId, req.params.id) })));
@@ -20819,7 +21240,7 @@ socialContentRouter.post("/posts/:id/ai/rewrite", publish, aiExecutionLimiter, a
 }));
 
 // server/routes/v1/socialPublishingRoutes.ts
-import { timingSafeEqual as timingSafeEqual3 } from "node:crypto";
+import { timingSafeEqual as timingSafeEqual4 } from "node:crypto";
 import { Router as Router19 } from "express";
 init_apiResponse();
 init_errors();
@@ -20827,7 +21248,7 @@ var meta4 = (req) => ({ ip: req.ip, userAgent: req.headers["user-agent"], reques
 var constantTimeEquals = (a, b) => {
   const x = Buffer.from(a);
   const y = Buffer.from(b);
-  return x.length === y.length && timingSafeEqual3(x, y);
+  return x.length === y.length && timingSafeEqual4(x, y);
 };
 var socialInternalRouter = Router19();
 socialInternalRouter.all(
@@ -20942,6 +21363,22 @@ socialWebhookRouter.post(
   asyncHandler(async (req, res) => {
     const result = await ingestWebhook(String(req.params.provider), req.rawBody, req.headers);
     sendSuccess(res, { ...result });
+  })
+);
+socialWebhookRouter.get(
+  "/:provider",
+  webhookLimiter,
+  asyncHandler(async (req, res) => {
+    const connector = connectorRegistry.get(String(req.params.provider));
+    if (!connector || !connector.isConfigured() || !connector.handleWebhookChallenge) throw new NotFoundError("Not found.");
+    const query = {};
+    for (const [k, v] of Object.entries(req.query)) query[k] = typeof v === "string" ? v : void 0;
+    const challenge = connector.handleWebhookChallenge({ query });
+    if (challenge === null) {
+      res.status(403).type("text/plain").send("Forbidden");
+      return;
+    }
+    res.status(200).type("text/plain").send(challenge);
   })
 );
 var socialInboxRouter = Router20();
@@ -30236,7 +30673,7 @@ router54.post(
 var aiApprovalRoutes_default = router54;
 
 // server/routes/v1/automationRoutes.ts
-import { timingSafeEqual as timingSafeEqual4 } from "node:crypto";
+import { timingSafeEqual as timingSafeEqual5 } from "node:crypto";
 import { Router as Router59 } from "express";
 import { z as z58 } from "zod";
 init_apiResponse();
@@ -30344,7 +30781,7 @@ init_errors();
 function constantTimeEquals2(a, b) {
   const ab = Buffer.from(a);
   const bb = Buffer.from(b);
-  return ab.length === bb.length && timingSafeEqual4(ab, bb);
+  return ab.length === bb.length && timingSafeEqual5(ab, bb);
 }
 var router55 = Router59();
 router55.get(

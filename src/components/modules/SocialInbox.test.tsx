@@ -146,6 +146,27 @@ describe("conversation view", () => {
     await waitFor(() => expect(notify).toHaveBeenCalledWith("Mock: service unavailable.", "error"));
   });
 
+  it("explains a closed messaging window, blocks sending, and still allows internal notes", async () => {
+    api.get.mockResolvedValue({ ...detail(conv({ type: "DM" })), replyWindow: { open: false, closesAt: new Date(Date.now() - 3600_000).toISOString(), reason: "Facebook only allows replying to a Messenger message within 24 hours of the person's last message." } });
+    api.note.mockResolvedValue({ id: "n" });
+    await openFirst();
+    expect(screen.getByRole("alert")).toHaveTextContent("within 24 hours");
+    fireEvent.change(screen.getByLabelText("Reply text"), { target: { value: "Too late" } });
+    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Send & resolve" })).toBeDisabled();
+    fireEvent.click(screen.getByLabelText("Internal note", { selector: "input" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add note" }));
+    await waitFor(() => expect(api.note).toHaveBeenCalled());
+  });
+
+  it("warns when the messaging window is about to close", async () => {
+    api.get.mockResolvedValue({ ...detail(conv({ type: "DM" })), replyWindow: { open: true, closesAt: new Date(Date.now() + 2 * 3600_000).toISOString(), reason: null } });
+    await openFirst();
+    expect(screen.getByText(/messaging window closes at/)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Reply text"), { target: { value: "ok" } });
+    expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
+  });
+
   it("internal notes are added without sending anything", async () => {
     api.note.mockResolvedValue({ id: "n" });
     await openFirst();

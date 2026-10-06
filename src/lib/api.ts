@@ -2953,11 +2953,45 @@ export interface SocialProviderInfo {
   available: boolean;
 }
 
+export interface ConnectSelectionPage {
+  externalId: string;
+  name: string;
+  category?: string | null;
+  avatarUrl: string | null;
+  tasks: string[];
+  warnings: string[];
+  alreadyConnected: boolean;
+}
+export interface ConnectSelection {
+  id: string;
+  provider: string;
+  pages: ConnectSelectionPage[];
+}
+export interface ProviderSetupView {
+  provider: string;
+  label: string;
+  configured: boolean;
+  appMode: "development" | "live" | "unknown";
+  apiVersion: string;
+  redirectUri: string;
+  webhookCallbackUrl: string;
+  verifyTokenConfigured: boolean;
+  verifyTokenEnvVar: string;
+  permissions: Array<{ name: string; required: boolean }>;
+  webhookFields: string[];
+  envVars: Array<{ name: string; set: boolean }>;
+  notes: string[];
+}
+
 export const socialApi = {
   list: () => apiClient.get<{ accounts: SocialAccountSummary[]; providers: SocialProviderInfo[] }>("/social/accounts"),
   startConnect: (provider: string) => apiClient.post<{ authUrl: string }>("/social/accounts/connect/start", { provider }),
+  /** Either the connected account, or (providers where one login yields several Pages) a selection the person must confirm. */
   completeConnect: (payload: { state: string; code?: string; error?: string }) =>
-    apiClient.post<{ account: SocialAccountSummary }>("/social/accounts/callback", payload),
+    apiClient.post<{ account?: SocialAccountSummary; warnings?: string[]; selection?: ConnectSelection }>("/social/accounts/callback", payload),
+  selectPages: (selectionId: string, externalIds: string[]) =>
+    apiClient.post<{ accounts: SocialAccountSummary[]; warnings: string[] }>("/social/accounts/connect/select", { selectionId, externalIds }),
+  providerSetup: (provider: string) => apiClient.get<{ setup: ProviderSetupView }>(`/social/accounts/providers/${provider}/setup`).then((r) => r.setup),
   reconnect: (id: string) => apiClient.post<{ authUrl: string }>(`/social/accounts/${id}/reconnect`),
   disconnect: (id: string) => apiClient.post<{ account: SocialAccountSummary }>(`/social/accounts/${id}/disconnect`),
   checkHealth: (id: string) => apiClient.post<{ account: SocialAccountSummary }>(`/social/accounts/${id}/health`),
@@ -3262,9 +3296,15 @@ export interface InboxListParams {
   limit?: number;
 }
 
+export interface InboxReplyWindow {
+  open: boolean;
+  closesAt: string | null;
+  reason: string | null;
+}
+
 export const socialInboxApi = {
   list: (params: InboxListParams) => apiClient.get<{ conversations: InboxConversation[]; total: number; page: number; limit: number }>(`/social/inbox/conversations${toQuery(params as Record<string, string | number | boolean | undefined>)}`),
-  get: (id: string) => apiClient.get<{ conversation: InboxConversation; messages: InboxMessage[]; triage: InboxTriage | null }>(`/social/inbox/conversations/${id}`),
+  get: (id: string) => apiClient.get<{ conversation: InboxConversation; messages: InboxMessage[]; triage: InboxTriage | null; replyWindow?: InboxReplyWindow }>(`/social/inbox/conversations/${id}`),
   metrics: () => apiClient.get<{ metrics: InboxMetrics }>("/social/inbox/metrics").then((r) => r.metrics),
   assignees: () => apiClient.get<{ assignees: Array<{ id: string; name: string }> }>("/social/inbox/assignees").then((r) => r.assignees),
   draft: (id: string) => apiClient.post<{ draft: { messageId: string; body: string; confidence: number | null; guardrail: GuardrailResult } }>(`/social/inbox/conversations/${id}/draft`).then((r) => r.draft),

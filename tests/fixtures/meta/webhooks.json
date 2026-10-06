@@ -1,0 +1,39 @@
+{
+  "commentAdd": {
+    "object": "page",
+    "entry": [{ "id": "PAGE1", "time": 1760000000, "changes": [{ "field": "feed", "value": { "from": { "id": "U100", "name": "Ada Lovelace" }, "item": "comment", "comment_id": "POST1_C1", "post_id": "PAGE1_POST1", "verb": "add", "created_time": 1760000000, "message": "What are your opening hours?", "parent_id": "PAGE1_POST1" } }] }]
+  },
+  "commentReply": {
+    "object": "page",
+    "entry": [{ "id": "PAGE1", "time": 1760000100, "changes": [{ "field": "feed", "value": { "from": { "id": "U101", "name": "Grace Hopper" }, "item": "comment", "comment_id": "POST1_C2", "post_id": "PAGE1_POST1", "verb": "add", "created_time": 1760000100, "message": "Same question!", "parent_id": "POST1_C1" } }] }]
+  },
+  "commentEditAndRemove": {
+    "object": "page",
+    "entry": [{ "id": "PAGE1", "time": 1760000200, "changes": [
+      { "field": "feed", "value": { "from": { "id": "U100" }, "item": "comment", "comment_id": "POST1_C1", "post_id": "PAGE1_POST1", "verb": "edited", "message": "edited" } },
+      { "field": "feed", "value": { "from": { "id": "U100" }, "item": "comment", "comment_id": "POST1_C1", "post_id": "PAGE1_POST1", "verb": "remove" } },
+      { "field": "feed", "value": { "from": { "id": "U100" }, "item": "status", "post_id": "PAGE1_POST9", "verb": "add", "message": "a post" } }
+    ] }]
+  },
+  "pageOwnComment": {
+    "object": "page",
+    "entry": [{ "id": "PAGE1", "time": 1760000300, "changes": [{ "field": "feed", "value": { "from": { "id": "PAGE1", "name": "Artify" }, "item": "comment", "comment_id": "POST1_C3", "post_id": "PAGE1_POST1", "verb": "add", "message": "Thanks!", "parent_id": "POST1_C1" } }] }]
+  },
+  "messengerText": {
+    "object": "page",
+    "entry": [{ "id": "PAGE1", "time": 1760000400000, "messaging": [{ "sender": { "id": "PSID1" }, "recipient": { "id": "PAGE1" }, "timestamp": 1760000400000, "message": { "mid": "m_abc123", "text": "hello, world!" } }] }]
+  },
+  "messengerEchoDeliveryAttachment": {
+    "object": "page",
+    "entry": [{ "id": "PAGE1", "messaging": [
+      { "sender": { "id": "PAGE1" }, "recipient": { "id": "PSID1" }, "timestamp": 1760000500000, "message": { "mid": "m_echo", "text": "our reply", "is_echo": true } },
+      { "sender": { "id": "PSID1" }, "recipient": { "id": "PAGE1" }, "timestamp": 1760000500001, "delivery": { "mids": ["m_echo"], "watermark": 1760000500000 } },
+      { "sender": { "id": "PSID2" }, "recipient": { "id": "PAGE1" }, "timestamp": 1760000500002, "message": { "mid": "m_att", "attachments": [{ "type": "image", "payload": { "url": "https://cdn.example/x.png" } }] } }
+    ] }]
+  },
+  "rating": {
+    "object": "page",
+    "entry": [{ "id": "PAGE1", "time": 1760000600, "changes": [{ "field": "ratings", "value": { "open_graph_story_id": "OGS1", "reviewer_id": "U200", "reviewer_name": "Alan Turing", "recommendation_type": "positive", "review_text": "Great service", "created_time": 1760000600, "item": "rating", "verb": "add" } }] }]
+  },
+  "notAPage": { "object": "instagram", "entry": [{ "id": "IG1", "changes": [{ "field": "comments", "value": { "id": "x", "text": "y" } }] }] }
+}

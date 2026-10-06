@@ -145,7 +145,7 @@ describe("social inbox", () => {
     expect((await deliver([ev()], { sign: false })).status).toBe(401);
     expect((await deliver([ev()], { secret: "wrong-secret-0000000000000000" })).status).toBe(401);
     expect((await deliver([ev()], { provider: "nope" })).status).toBe(404);
-    expect((await deliver([ev()], { provider: "meta" })).status).toBe(404); // registered, not configured / not supported yet
+    expect((await deliver([ev()], { provider: "meta_facebook" })).status).toBe(404); // registered, but not configured here
     expect((await deliver([ev()], { provider: "linkedin" })).status).toBe(404);
     expect(await prisma.socialMessage.count()).toBe(before);
   });

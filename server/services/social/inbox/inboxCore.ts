@@ -151,6 +151,9 @@ export async function sendReply(organizationId: string, conversationId: string, 
   if (conv.account.status !== "CONNECTED") throw new ConflictError(`${conv.account.displayName} is ${conv.account.status.toLowerCase().replace("_", " ")}. Reconnect it first.`);
   const connector = connectorRegistry.getAvailable(conv.account.provider);
   if (!connector?.sendReply) throw new ConflictError(`Replies are not supported for ${conv.account.provider} yet.`);
+  // Network messaging policy (e.g. Messenger's 24-hour window): checked BEFORE anything is created or claimed.
+  const win = connector.replyWindow?.({ type: conv.type, lastInboundAt: conv.lastInboundAt, now: new Date() });
+  if (win && !win.open) throw new ConflictError(win.reason ?? "This reply is outside the network's messaging window.");
 
   // Resolve the message to send.
   let msg: SocialMessage;

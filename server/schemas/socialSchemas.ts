@@ -6,3 +6,4 @@ export const connectCallbackSchema = z.object({
   code: z.string().max(2000).optional(),
   error: z.string().max(500).optional(),
 });
+export const connectSelectSchema = z.object({ selectionId: z.string().uuid(), externalIds: z.array(z.string().min(1).max(100)).min(1).max(20) });

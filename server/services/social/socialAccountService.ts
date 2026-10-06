@@ -3,7 +3,7 @@
  * Tokens only ever exist in memory here and in the encrypted credentials table — they are never returned, logged,
  * or placed in audit metadata. Everything is scoped to the caller's ACTIVE workspace (organizationId).
  */
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import type { SocialAccount } from "@prisma/client";
 import { prisma } from "../../db/prisma";
 import { config } from "../../config/env";
@@ -13,7 +13,7 @@ import { auditLogRepository } from "../../repositories/auditLogRepository";
 import { notificationService } from "../notificationService";
 import { hashToken } from "../../utils/crypto";
 import { connectorRegistry } from "./connectors/registry";
-import type { SocialConnector } from "./connectors/types";
+import type { SelectableAccount, SocialConnector, SocialProfile } from "./connectors/types";
 import { redactSecrets, tokenVault, type SocialTokenSet } from "./tokenVault";
 import type { SanitizedUser } from "../../types/domain";
 import type { RequestMeta } from "../authService";
@@ -84,6 +84,64 @@ async function notifyManagers(account: SocialAccountView, title: string, message
   );
 }
 
+export type SelectionPage = { externalId: string; name: string; category?: string | null; avatarUrl: string | null; tasks: string[]; warnings: string[]; alreadyConnected: boolean };
+export type ConnectOutcome = { account: SocialAccountView; warnings?: string[] } | { selection: { id: string; provider: string; pages: SelectionPage[] } };
+const SELECTION_TTL_MS = 15 * 60 * 1000;
+
+/** Encrypts the discoverable assets (with their tokens) into a short-lived session; only non-secret fields go back to the browser. */
+async function startSelection(user: SanitizedUser, provider: string, selectable: SelectableAccount[], meta: RequestMeta): Promise<ConnectOutcome> {
+  await prisma.socialConnectSession.deleteMany({ where: { OR: [{ expiresAt: { lt: new Date() } }, { organizationId: user.organizationId, userId: user.id, provider }] } });
+  const id = randomUUID();
+  const { ciphertext, keyVersion } = tokenVault.encrypt({ accessToken: "", pages: selectable.map((p) => ({ profile: p.profile, tokens: p.tokens })) } as unknown as SocialTokenSet, id);
+  await prisma.socialConnectSession.create({ data: { id, organizationId: user.organizationId, userId: user.id, provider, ciphertext, keyVersion, expiresAt: new Date(Date.now() + SELECTION_TTL_MS) } });
+  const existing = new Set((await prisma.socialAccount.findMany({ where: { organizationId: user.organizationId, provider, status: { not: "DISCONNECTED" } }, select: { externalAccountId: true } })).map((a) => a.externalAccountId));
+  await auditLogRepository.record({ organizationId: user.organizationId, actorUserId: user.id, actorType: "USER", action: "SOCIAL_ACCOUNT_SELECTION_STARTED", resourceType: "social_account", metadata: { provider, candidates: selectable.length }, ipAddress: meta.ip, userAgent: meta.userAgent });
+  return { selection: { id, provider, pages: selectable.map((p) => ({ externalId: p.profile.externalAccountId, name: p.profile.displayName, category: p.profile.accountType ?? null, avatarUrl: p.profile.avatarUrl ?? null, tasks: p.tasks ?? [], warnings: p.warnings ?? [], alreadyConnected: existing.has(p.profile.externalAccountId) })) } };
+}
+
+/** Creates or updates the SocialAccount for one connected asset, stores its tokens encrypted, runs the provider's post-connect hook. */
+async function persistAccount(user: SanitizedUser, provider: string, connector: SocialConnector, profile: SocialProfile, tokens: SocialTokenSet, reconnectAccountId: string | undefined, meta: RequestMeta): Promise<{ account: SocialAccountView; warnings?: string[] }> {
+  if (reconnectAccountId) {
+    const target = await loadInOrgOrThrow(user.organizationId, reconnectAccountId);
+    if (target.externalAccountId !== profile.externalAccountId) throw new ValidationError("You signed in with a different account than the one being reconnected.");
+  }
+  const previous = await prisma.socialAccount.findUnique({
+    where: { organizationId_provider_externalAccountId: { organizationId: user.organizationId, provider, externalAccountId: profile.externalAccountId } },
+    select: { id: true, status: true },
+  });
+  const data = {
+    displayName: profile.displayName, handle: profile.handle ?? null, avatarUrl: profile.avatarUrl ?? null, accountType: profile.accountType ?? "PROFILE",
+    status: "CONNECTED" as const, scopes: tokens.scopes ?? connector.defaultScopes, tokenExpiresAt: tokens.expiresAt ? new Date(tokens.expiresAt) : null,
+    lastSyncAt: new Date(), lastError: null, connectedByUserId: user.id,
+  };
+  let account = await prisma.socialAccount.upsert({
+    where: { organizationId_provider_externalAccountId: { organizationId: user.organizationId, provider, externalAccountId: profile.externalAccountId } },
+    create: { organizationId: user.organizationId, provider, externalAccountId: profile.externalAccountId, ...data },
+    update: data,
+    select: ACCOUNT_SELECT,
+  });
+  await saveTokens(account.id, tokens);
+
+  let warnings: string[] | undefined;
+  if (connector.onConnected) {
+    try {
+      warnings = (await connector.onConnected(tokens, profile)).warnings;
+    } catch (err) {
+      warnings = [`Post-connect setup failed: ${safeError(err, [tokens.accessToken, tokens.refreshToken])}`];
+    }
+    if (warnings?.length) account = await prisma.socialAccount.update({ where: { id: account.id }, data: { lastError: warnings[0]!.slice(0, 300) }, select: ACCOUNT_SELECT });
+  }
+
+  const reauth = !!previous && previous.status !== "CONNECTED";
+  await auditLogRepository.record({
+    organizationId: user.organizationId, actorUserId: user.id, actorType: "USER",
+    action: reconnectAccountId || reauth ? "SOCIAL_ACCOUNT_REAUTHENTICATED" : "SOCIAL_ACCOUNT_CONNECTED",
+    resourceType: "social_account", resourceId: account.id,
+    metadata: { provider: account.provider, externalAccountId: account.externalAccountId, handle: account.handle, ...(warnings?.length ? { warnings: warnings.length } : {}) }, ipAddress: meta.ip, userAgent: meta.userAgent,
+  });
+  return { account, ...(warnings?.length ? { warnings } : {}) };
+}
+
 export const socialAccountService = {
   /** Server-internal only (publisher). Tokens must never be returned from an API or logged. */
   loadTokens,
@@ -110,7 +168,7 @@ export const socialAccountService = {
     return { authUrl: connector.getAuthUrl({ state, redirectUri: redirectUri(), scopes: connector.defaultScopes }) };
   },
 
-  async handleCallback(user: SanitizedUser, input: { state: string; code?: string; error?: string }, meta: RequestMeta = {}): Promise<SocialAccountView> {
+  async handleCallback(user: SanitizedUser, input: { state: string; code?: string; error?: string }, meta: RequestMeta = {}): Promise<ConnectOutcome> {
     const invalid = () => new AuthenticationError("This connection request is invalid or has expired. Please start again.");
     const stateHash = hashToken(input.state);
     const row = await prisma.socialOAuthState.findUnique({ where: { stateHash } });
@@ -134,40 +192,58 @@ export const socialAccountService = {
     }
 
     const { profile, tokens } = result;
-    if (row.reconnectAccountId) {
-      const target = await loadInOrgOrThrow(user.organizationId, row.reconnectAccountId);
-      if (target.externalAccountId !== profile.externalAccountId) throw new ValidationError("You signed in with a different account than the one being reconnected.");
+    if (result.selectable?.length) {
+      // One login, several assets (e.g. Facebook Pages). Reconnecting a known one completes straight away; otherwise the user picks.
+      if (row.reconnectAccountId) {
+        const target = await loadInOrgOrThrow(user.organizationId, row.reconnectAccountId);
+        const match = result.selectable.find((p) => p.profile.externalAccountId === target.externalAccountId);
+        if (!match) throw new ValidationError("You signed in with a different account than the one being reconnected.");
+        return persistAccount(user, row.provider, connector, match.profile, match.tokens, row.reconnectAccountId, meta);
+      }
+      return startSelection(user, row.provider, result.selectable, meta);
     }
+    return persistAccount(user, row.provider, connector, profile, tokens, row.reconnectAccountId ?? undefined, meta);
+  },
 
-    const previous = await prisma.socialAccount.findUnique({
-      where: { organizationId_provider_externalAccountId: { organizationId: user.organizationId, provider: row.provider, externalAccountId: profile.externalAccountId } },
-      select: { id: true, status: true },
-    });
-    const data = {
-      displayName: profile.displayName, handle: profile.handle ?? null, avatarUrl: profile.avatarUrl ?? null, accountType: profile.accountType ?? "PROFILE",
-      status: "CONNECTED" as const, scopes: tokens.scopes ?? connector.defaultScopes, tokenExpiresAt: tokens.expiresAt ? new Date(tokens.expiresAt) : null,
-      lastSyncAt: new Date(), lastError: null, connectedByUserId: user.id,
-    };
-    const account = await prisma.socialAccount.upsert({
-      where: { organizationId_provider_externalAccountId: { organizationId: user.organizationId, provider: row.provider, externalAccountId: profile.externalAccountId } },
-      create: { organizationId: user.organizationId, provider: row.provider, externalAccountId: profile.externalAccountId, ...data },
-      update: data,
-      select: ACCOUNT_SELECT,
-    });
-    await saveTokens(account.id, tokens);
-
-    const reauth = !!previous && previous.status !== "CONNECTED";
-    await auditLogRepository.record({
-      organizationId: user.organizationId, actorUserId: user.id, actorType: "USER",
-      action: row.reconnectAccountId || reauth ? "SOCIAL_ACCOUNT_REAUTHENTICATED" : "SOCIAL_ACCOUNT_CONNECTED",
-      resourceType: "social_account", resourceId: account.id,
-      metadata: { provider: account.provider, externalAccountId: account.externalAccountId, handle: account.handle }, ipAddress: meta.ip, userAgent: meta.userAgent,
-    });
-    return account;
+  /** Step 2 of a multi-asset connect: create accounts for the chosen assets from the encrypted session. */
+  async completeSelection(user: SanitizedUser, input: { selectionId: string; externalIds: string[] }, meta: RequestMeta = {}): Promise<{ accounts: SocialAccountView[]; warnings: string[] }> {
+    const invalid = () => new AuthenticationError("This selection has expired. Please start the connection again.");
+    const row = await prisma.socialConnectSession.findUnique({ where: { id: input.selectionId } });
+    if (!row || row.usedAt || row.expiresAt.getTime() <= Date.now() || row.userId !== user.id || row.organizationId !== user.organizationId) throw invalid();
+    const claimed = await prisma.socialConnectSession.updateMany({ where: { id: row.id, usedAt: null }, data: { usedAt: new Date() } });
+    if (claimed.count !== 1) throw invalid();
+    const connector = connectorOrThrow(row.provider);
+    let pages: Array<{ profile: SocialProfile; tokens: SocialTokenSet }>;
+    try {
+      pages = (tokenVault.decrypt(row.ciphertext, row.keyVersion, row.id) as unknown as { pages: typeof pages }).pages;
+    } catch {
+      throw invalid();
+    } finally {
+      await prisma.socialConnectSession.delete({ where: { id: row.id } }).catch(() => undefined); // single use either way
+    }
+    const wanted = new Set(input.externalIds);
+    const chosen = pages.filter((p) => wanted.has(p.profile.externalAccountId));
+    if (chosen.length === 0 || chosen.length !== wanted.size) throw new ValidationError("Choose at least one of the listed accounts.");
+    const accounts: SocialAccountView[] = [];
+    const warnings: string[] = [];
+    for (const p of chosen) {
+      const out = await persistAccount(user, row.provider, connector, p.profile, p.tokens, undefined, meta);
+      accounts.push(out.account);
+      warnings.push(...(out.warnings ?? []).map((w) => `${out.account.displayName}: ${w}`));
+    }
+    return { accounts, warnings };
   },
 
   async disconnect(user: SanitizedUser, id: string, meta: RequestMeta = {}): Promise<SocialAccountView> {
     const account = await loadInOrgOrThrow(user.organizationId, id);
+    // Best-effort provider cleanup (e.g. remove the Page webhook subscription) while we still hold the credentials.
+    try {
+      const connector = connectorRegistry.getAvailable(account.provider);
+      const tokens = connector?.onDisconnect ? await loadTokens(id) : null;
+      if (connector?.onDisconnect && tokens) await connector.onDisconnect(tokens, { externalAccountId: account.externalAccountId });
+    } catch (err) {
+      logger.warn({ accountId: id, err: safeError(err) }, "[social] provider cleanup on disconnect failed");
+    }
     await prisma.socialAccountCredential.deleteMany({ where: { socialAccountId: id } });
     const updated = await prisma.socialAccount.update({ where: { id }, data: { status: "DISCONNECTED", tokenExpiresAt: null, lastError: null }, select: ACCOUNT_SELECT });
     await auditLogRepository.record({

@@ -1,7 +1,7 @@
 /** Social Media → Connected Accounts. Tokens are never shown or fetched; the API returns profile + status only. */
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Link2, RefreshCw, Unplug, Activity, AlertTriangle } from "lucide-react";
-import { socialApi, type SocialAccountSummary, type SocialProviderInfo } from "../../lib/api";
+import { socialApi, type ConnectSelection, type SocialAccountSummary, type SocialProviderInfo } from "../../lib/api";
 import { ApiClientError } from "../../lib/apiClient";
 import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
@@ -9,6 +9,8 @@ import { useActiveWorkspace } from "../../context/ActiveWorkspaceContext";
 import { hasPermission } from "../../lib/permissions";
 import { Card, Button, Badge, LoadingState, ErrorState, EmptyState, ConfirmDialog } from "../ui/ui";
 import { ProviderAvatar, StatusBadge, expiresSoon, timeAgo } from "./socialShared";
+import { ConnectPagePicker } from "./ConnectPagePicker";
+import { FacebookSetupPanel } from "./FacebookSetupPanel";
 
 const SOCIAL_ACCOUNTS_PATH = "/social/accounts";
 
@@ -24,6 +26,7 @@ export const SocialAccountsPage: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [confirmDisconnect, setConfirmDisconnect] = useState<SocialAccountSummary | null>(null);
+  const [selection, setSelection] = useState<ConnectSelection | null>(null);
   const handledCallback = useRef(false);
 
   const load = useCallback(async () => {
@@ -58,7 +61,12 @@ export const SocialAccountsPage: React.FC = () => {
     socialApi
       .completeConnect({ state, code, error: providerError })
       .then((res) => {
-        notify(`${res.account.displayName} connected.`, "success");
+        if (res.selection) {
+          setSelection(res.selection); // several Pages: let the person choose which to connect
+          return undefined;
+        }
+        notify(`${res.account!.displayName} connected.`, "success");
+        res.warnings?.forEach((w) => notify(w, "error"));
         return load();
       })
       .catch((err) => notify(err instanceof ApiClientError ? err.message : "Could not complete the connection.", "error"));
@@ -166,6 +174,8 @@ export const SocialAccountsPage: React.FC = () => {
             )}
           </Card>
 
+          {canManage && providers.some((p) => p.key === "meta_facebook") && <FacebookSetupPanel provider="meta_facebook" />}
+
           {accounts.length === 0 ? (
             <Card>
               <EmptyState
@@ -233,6 +243,8 @@ export const SocialAccountsPage: React.FC = () => {
           )}
         </>
       )}
+
+      <ConnectPagePicker selection={selection} onClose={() => setSelection(null)} onConnected={() => void load()} />
 
       <ConfirmDialog
         open={!!confirmDisconnect}

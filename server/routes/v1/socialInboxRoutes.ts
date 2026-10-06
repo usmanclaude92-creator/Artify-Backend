@@ -8,6 +8,7 @@ import { aiExecutionLimiter, sensitiveActionLimiter, webhookLimiter } from "../.
 import { asyncHandler } from "../../utils/asyncHandler";
 import { sendSuccess } from "../../core/apiResponse";
 import { NotFoundError } from "../../core/errors";
+import { connectorRegistry } from "../../services/social/connectors/registry";
 import { config } from "../../config/env";
 import { inboxService } from "../../services/social/inbox/inboxService";
 import { ingestWebhook } from "../../services/social/inbox/inboxPipeline";
@@ -27,6 +28,24 @@ socialWebhookRouter.post(
   asyncHandler(async (req, res) => {
     const result = await ingestWebhook(String(req.params.provider), req.rawBody, req.headers);
     sendSuccess(res, { ...result });
+  })
+);
+
+/** GET verification handshake (e.g. Meta hub.challenge). Echoes the challenge only when the connector accepts the verify token; fails closed with 403. */
+socialWebhookRouter.get(
+  "/:provider",
+  webhookLimiter,
+  asyncHandler(async (req, res) => {
+    const connector = connectorRegistry.get(String(req.params.provider));
+    if (!connector || !connector.isConfigured() || !connector.handleWebhookChallenge) throw new NotFoundError("Not found.");
+    const query: Record<string, string | undefined> = {};
+    for (const [k, v] of Object.entries(req.query)) query[k] = typeof v === "string" ? v : undefined;
+    const challenge = connector.handleWebhookChallenge({ query });
+    if (challenge === null) {
+      res.status(403).type("text/plain").send("Forbidden");
+      return;
+    }
+    res.status(200).type("text/plain").send(challenge);
   })
 );
 

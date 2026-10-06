@@ -65,12 +65,12 @@ describe("social accounts", () => {
     expect(perms).toHaveLength(0);
   });
 
-  it("lists providers: mock available; meta/linkedin registered but not configured", async () => {
+  it("lists providers: mock available; Facebook Pages/linkedin registered but not configured", async () => {
     const list = (await call("get", "", adminToken)).body.data;
     expect(list.accounts).toEqual([]);
     expect(list.providers.find((p: { key: string }) => p.key === "mock")).toMatchObject({ available: true });
-    expect(list.providers.find((p: { key: string }) => p.key === "meta")).toMatchObject({ configured: false, available: false });
-    const start = await call("post", "/connect/start", adminToken, { provider: "meta" });
+    expect(list.providers.find((p: { key: string }) => p.key === "meta_facebook")).toMatchObject({ configured: false, available: false });
+    const start = await call("post", "/connect/start", adminToken, { provider: "meta_facebook" });
     expect(start.status).toBe(400);
     expect((await call("post", "/connect/start", adminToken, { provider: "nope" })).status).toBe(400);
   });

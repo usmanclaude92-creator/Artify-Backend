@@ -84,6 +84,14 @@ export const mockProvider: SocialConnector = {
   },
 
   // ---- Inbox ----
+  /** Mirrors Messenger's rule so the core enforcement is testable without a network: DMs can be answered for 24 hours after the last inbound message. */
+  replyWindow({ type, lastInboundAt, now }) {
+    if (type !== "DM") return { open: true, closesAt: null };
+    if (!lastInboundAt) return { open: false, closesAt: null, reason: "There is no message from this person to reply to." };
+    const closesAt = new Date(lastInboundAt.getTime() + 24 * 3600_000);
+    return now <= closesAt ? { open: true, closesAt } : { open: false, closesAt, reason: "The 24-hour messaging window for this conversation has closed." };
+  },
+
   verifyWebhook({ rawBody, headers }) {
     const given = headers[MOCK_SIGNATURE_HEADER];
     const sig = Array.isArray(given) ? given[0] : given;
