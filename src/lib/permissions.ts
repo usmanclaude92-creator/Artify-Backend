@@ -10,6 +10,7 @@
 import { lazy, type ComponentType, type LazyExoticComponent } from "react";
 import {
   LayoutDashboard,
+  BadgeCheck,
   Share2,
   Users,
   ShieldCheck,
@@ -79,6 +80,7 @@ function lazyPage<T extends ComponentType>(loader: () => Promise<Record<string, 
 }
 
 const AdministrationPage = lazyPage(() => import("../components/modules/AdministrationPage"), "AdministrationPage");
+const ApprovalsPage = lazyPage(() => import("../components/modules/ApprovalsPage"), "ApprovalsPage");
 const SocialOverviewPage = lazyPage(() => import("../components/modules/SocialOverviewPage"), "SocialOverviewPage");
 const SecurityCenterPage = lazyPage(() => import("../components/modules/SecurityCenterPage"), "SecurityCenterPage");
 const IntegrationsPage = lazyPage(() => import("../components/modules/IntegrationsPage"), "IntegrationsPage");
@@ -146,7 +148,7 @@ export type NavSection = "Dashboard" | "Website Management" | "CRM" | "Social Me
 export const NAV_SECTIONS: NavSection[] = ["Dashboard", "Website Management", "CRM", "Social Media", "Marketing", "Catalog", "Commercial", "Automation & AI", "Administration", "Client Portal"];
 
 /** Display order of items inside the sidebar (section + group are on each item; this only orders them). */
-export const NAV_ORDER: string[] = ["dashboard", "my-work", "notification-center", "analytics-dashboard", "analytics-reports", "website-templates", "website-template-parts", "website-navigation-menus", "website-homepage", "website-site-identity", "website-global-styles", "website-site-editor", "cms-pages", "cms-posts", "cms-case-studies", "cms-taxonomy", "cms-authors", "cms-media", "seo-issues", "seo-redirects", "crm-dashboard", "crm-leads", "crm-clients", "crm-contacts", "crm-opportunities", "onboarding-overview", "onboarding-pending", "marketing-forms", "social-overview", "marketing-dashboard", "marketing-campaigns", "products-all", "products-modules", "services-all", "solutions-all", "products-taxonomy", "commercial-contracts", "commercial-subscriptions", "commercial-invoices", "commercial-payments", "automation", "ai-overview", "ai-providers", "ai-tools", "ai-prompts", "ai-workflows", "ai-executions", "ai-usage", "ai-approvals", "ai-copilot", "users", "roles", "permissions", "organizations", "workspaces-all", "workspaces-members", "security-center", "audit-log", "security", "administration", "integrations", "settings", "client-portal"];
+export const NAV_ORDER: string[] = ["dashboard", "my-work", "notification-center", "approvals", "analytics-dashboard", "analytics-reports", "website-templates", "website-template-parts", "website-navigation-menus", "website-homepage", "website-site-identity", "website-global-styles", "website-site-editor", "cms-pages", "cms-posts", "cms-case-studies", "cms-taxonomy", "cms-authors", "cms-media", "seo-issues", "seo-redirects", "crm-dashboard", "crm-leads", "crm-clients", "crm-contacts", "crm-opportunities", "onboarding-overview", "onboarding-pending", "marketing-forms", "social-overview", "marketing-dashboard", "marketing-campaigns", "products-all", "products-modules", "services-all", "solutions-all", "products-taxonomy", "commercial-contracts", "commercial-subscriptions", "commercial-invoices", "commercial-payments", "automation", "ai-overview", "ai-providers", "ai-tools", "ai-prompts", "ai-workflows", "ai-executions", "ai-usage", "ai-approvals", "ai-copilot", "users", "roles", "permissions", "organizations", "workspaces-all", "workspaces-members", "security-center", "audit-log", "security", "administration", "integrations", "settings", "client-portal"];
 
 export interface NavItem {
   id: string;
@@ -186,6 +188,15 @@ export const NAV_ITEMS: NavItem[] = [
     path: "/notifications",
     icon: Bell,
     component: NotificationCenterPage,
+    section: "Dashboard",
+  },
+  {
+    id: "approvals",
+    label: "Approvals",
+    path: "/approvals",
+    icon: BadgeCheck,
+    requiresAnyPermission: ["approvals.read"],
+    component: ApprovalsPage,
     section: "Dashboard",
   },
   {

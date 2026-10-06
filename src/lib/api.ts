@@ -2865,3 +2865,48 @@ export const reportsApi = {
     URL.revokeObjectURL(url);
   },
 };
+
+// ---- Global Approvals center + sidebar badges (Step 2 redesign) ----
+
+export type ApprovalSourceKey = "ai" | "automation" | "content" | "social";
+export type ApprovalStatusFilter = "pending" | "approved" | "rejected";
+
+export interface CenterApproval {
+  id: string;
+  source: ApprovalSourceKey;
+  title: string;
+  summary: string;
+  requestedBy: { id: string; name: string } | null;
+  requestedAt: string;
+  status: "pending" | "approved" | "rejected" | "expired";
+  dueAt: string | null;
+  link: string;
+  decidedBy: { id: string; name: string } | null;
+  decidedAt: string | null;
+  decisionComment: string | null;
+  canDecide: boolean;
+}
+
+export interface NavBadges {
+  approvals?: number;
+  notifications: number;
+  myWork?: number;
+}
+
+export const approvalsApi = {
+  list: async (params: { source?: ApprovalSourceKey; status?: ApprovalStatusFilter; assignee?: "me" | "all"; search?: string; from?: string; to?: string; page?: number; limit?: number }) => {
+    const raw = await apiClient.getRaw<{ approvals: CenterApproval[]; sources: string[] }>(`/approvals${toQuery(params)}`);
+    const meta = raw.meta as EnvelopeMeta;
+    const data = raw.data as unknown as { approvals: CenterApproval[]; sources: string[] };
+    const total = meta.pagination?.total ?? data.approvals.length;
+    const limit = meta.pagination?.limit ?? params.limit ?? 20;
+    return { items: data.approvals, sources: data.sources, total, page: meta.pagination?.page ?? 1, totalPages: Math.max(1, Math.ceil(total / limit)) };
+  },
+  summary: () => apiClient.get<{ total: number; counts: Record<ApprovalSourceKey, number>; sources: string[] }>("/approvals/summary"),
+  decide: (source: ApprovalSourceKey, id: string, decision: "approve" | "reject", comment?: string) =>
+    apiClient.post<{ source: string; id: string; decision: string }>(`/approvals/${source}/${id}/decision`, { decision, comment }),
+};
+
+export const navApi = {
+  badges: () => apiClient.get<{ badges: NavBadges }>("/nav/badges").then((r) => r.badges),
+};

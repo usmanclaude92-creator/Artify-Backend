@@ -2,13 +2,16 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 
 let mockPath = "/dashboard";
-vi.mock("../../context/AuthContext", () => ({ useAuth: () => ({ user: { role: { permissions: ["users.read", "roles.read", "audit.read", "cms.pages.read", "content.read", "social.read"] } } }) }));
+let mockBadges: Record<string, number> | null = null;
+vi.mock("../../lib/useNavBadges", () => ({ useNavBadges: () => mockBadges }));
+vi.mock("../../context/AuthContext", () => ({ useAuth: () => ({ user: { role: { permissions: ["users.read", "roles.read", "audit.read", "cms.pages.read", "content.read", "social.read", "approvals.read", "automation.read"] } } }) }));
 vi.mock("../../lib/router", () => ({ useRouter: () => ({ path: mockPath, navigate: vi.fn() }) }));
 
 afterEach(() => {
   cleanup();
   localStorage.clear();
   mockPath = "/dashboard";
+  mockBadges = null;
 });
 
 describe("Sidebar", () => {
@@ -55,5 +58,38 @@ describe("Sidebar accordion", () => {
     fireEvent.click(screen.getByRole("button", { name: /Social Media/ }));
     expect(screen.getAllByRole("button", { expanded: true })).toHaveLength(1);
     expect(admin.getAttribute("aria-expanded")).toBe("false");
+  });
+});
+
+describe("Sidebar live badges", () => {
+  it("shows count pills with screen-reader labels next to Approvals, Notifications and My Work", async () => {
+    mockBadges = { approvals: 3, notifications: 120, myWork: 2 };
+    mockPath = "/dashboard";
+    const { Sidebar } = await import("./Sidebar");
+    render(<Sidebar mobileOpen={false} onCloseMobile={() => {}} />);
+    expect(screen.getByRole("button", { name: "Approvals, 3 pending" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Notifications, 120 unread" })).toHaveTextContent("99+");
+    expect(screen.getByRole("button", { name: "My Work, 2 open" })).toBeInTheDocument();
+  });
+
+  it("shows no pill for a zero or missing count", async () => {
+    mockBadges = { approvals: 0, notifications: 0 };
+    const { Sidebar } = await import("./Sidebar");
+    render(<Sidebar mobileOpen={false} onCloseMobile={() => {}} />);
+    expect(screen.getByRole("button", { name: "Approvals" })).toBeInTheDocument();
+    expect(document.querySelector(".cc-badge")).toBeNull();
+  });
+
+  it("marks a collapsed section header with a dot (and sr text) when a child has a count", async () => {
+    mockBadges = { approvals: 1, notifications: 0 };
+    mockPath = "/users"; // Administration open, so Dashboard is collapsed
+    const { Sidebar } = await import("./Sidebar");
+    render(<Sidebar mobileOpen={false} onCloseMobile={() => {}} />);
+    const dashboard = screen.getByRole("button", { name: /^Dashboard/ });
+    expect(dashboard.getAttribute("aria-expanded")).toBe("false");
+    expect(dashboard.querySelector(".cc-dot")).not.toBeNull();
+    expect(dashboard).toHaveTextContent(/needing attention/i);
+    const admin = screen.getByRole("button", { name: /^Administration$/ });
+    expect(admin.querySelector(".cc-dot")).toBeNull();
   });
 });

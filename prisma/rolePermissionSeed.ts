@@ -212,6 +212,7 @@ const ROLE_PERMISSION_SETS: Record<RoleKey, readonly string[] | "*"> = {
     "campaigns.update",
     "campaigns.publish",
     "campaigns.archive",
+    "approvals.read",
   ],
   MANAGER: [
     "users.read",
@@ -345,6 +346,7 @@ const ROLE_PERMISSION_SETS: Record<RoleKey, readonly string[] | "*"> = {
     "campaigns.create",
     "campaigns.update",
     "campaigns.publish",
+    "approvals.read",
   ],
   USER: [
     "clients.read",
@@ -417,6 +419,7 @@ const ROLE_PERMISSION_SETS: Record<RoleKey, readonly string[] | "*"> = {
     // Phase 14 — USER can draft campaigns but not publish/archive them.
     "campaigns.read",
     "campaigns.create",
+    "approvals.read",
   ],
   VIEWER: [
     "users.read",
@@ -481,6 +484,7 @@ const ROLE_PERMISSION_SETS: Record<RoleKey, readonly string[] | "*"> = {
     "forms.read",
     // Phase 14 — VIEWER is read-only for campaigns, same convention.
     "campaigns.read",
+    "approvals.read",
   ],
   CLIENT_PORTAL: [
     "portal.dashboard.read",

@@ -86,6 +86,24 @@ export const AiApprovalsPage: React.FC = () => {
         </h1>
         <p className="text-xs" style={{ color: "var(--text-muted)" }}>
           HIGH-risk AI actions (money movement, contract-binding changes) wait here until a human decides — never executed automatically.
+          {hasPermission(user?.role.permissions, "approvals.read") && (
+            <>
+              {" "}
+              <a
+                href="/approvals"
+                onClick={(e) => {
+                  // Plain link + popstate so this page needs no router context (behaviour of the page itself is unchanged).
+                  e.preventDefault();
+                  window.history.pushState({}, "", "/approvals");
+                  window.dispatchEvent(new PopStateEvent("popstate"));
+                }}
+                className="underline font-semibold"
+                style={{ color: "var(--accent-soft-text)" }}
+              >
+                See all approvals
+              </a>
+            </>
+          )}
         </p>
       </div>
 

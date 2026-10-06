@@ -56,7 +56,7 @@ describe("visibleNavItems", () => {
 
 describe("sidebar structure (Step 1 redesign)", () => {
   const EXPECTED: Record<string, string[]> = {
-    Dashboard: ["/dashboard", "/my-work", "/notifications", "/analytics", "/reports"],
+    Dashboard: ["/dashboard", "/my-work", "/notifications", "/approvals", "/analytics", "/reports"],
     "Website Management": [
       "/website/templates", "/website/template-parts", "/website/navigation-menus", "/website/homepage", "/website/site-identity", "/website/global-styles", "/website/site-editor",
       "/cms/pages", "/cms/posts", "/cms/case-studies", "/cms/taxonomy", "/cms/authors", "/cms/media",
@@ -81,12 +81,12 @@ describe("sidebar structure (Step 1 redesign)", () => {
     }
   });
 
-  it("keeps every one of the 62 existing pages plus the new /social page, with unique ids and paths", () => {
+  it("keeps every one of the 62 existing pages plus the new /social and /approvals pages, with unique ids and paths", () => {
     const all = Object.values(EXPECTED).flat();
-    expect(all).toHaveLength(63);
-    expect(NAV_ITEMS).toHaveLength(63);
-    expect(new Set(NAV_ITEMS.map((i) => i.path)).size).toBe(63);
-    expect(new Set(NAV_ITEMS.map((i) => i.id)).size).toBe(63);
+    expect(all).toHaveLength(64);
+    expect(NAV_ITEMS).toHaveLength(64);
+    expect(new Set(NAV_ITEMS.map((i) => i.path)).size).toBe(64);
+    expect(new Set(NAV_ITEMS.map((i) => i.id)).size).toBe(64);
     expect(NAV_ITEMS.map((i) => i.path).sort()).toEqual([...all].sort());
   });
 

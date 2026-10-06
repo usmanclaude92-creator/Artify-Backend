@@ -172,6 +172,31 @@
   border-radius: var(--radius-control);
   padding: 0.25rem;
 }
+.cc-badge {
+  min-width: 1.25rem;
+  height: 1.25rem;
+  padding: 0 0.375rem;
+  border-radius: 9999px;
+  background: var(--accent);
+  color: var(--accent-foreground);
+  font-size: 0.625rem;
+  font-weight: 700;
+  line-height: 1.25rem;
+  text-align: center;
+}
+.dark .cc-badge {
+  background: var(--accent-soft-text);
+  color: #0e0e16;
+}
+.cc-dot {
+  width: 0.4rem;
+  height: 0.4rem;
+  border-radius: 9999px;
+  background: var(--accent);
+}
+.dark .cc-dot {
+  background: var(--accent-soft-text);
+}
 .cc-subheading {
   padding: 0.5rem 0.75rem 0.125rem;
   font-size: 0.625rem;

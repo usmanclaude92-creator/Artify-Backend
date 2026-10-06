@@ -2,11 +2,20 @@ import React, { useEffect, useRef, useState } from "react";
 import { X, ShieldCheck, ChevronDown } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
 import { useRouter } from "../../lib/router";
+import { useNavBadges } from "../../lib/useNavBadges";
+import type { NavBadges } from "../../lib/api";
 import { visibleNavItems, NAV_SECTIONS, NAV_ORDER, type NavSection } from "../../lib/permissions";
 
 type Section = NavSection;
 
 const SECTIONS: Section[] = NAV_SECTIONS;
+
+/** Which live count (if any) each nav item shows, and the word a screen reader hears after the number. */
+const BADGE_FOR_ITEM: Record<string, { key: keyof NavBadges; word: string }> = {
+  approvals: { key: "approvals", word: "pending" },
+  "notification-center": { key: "notifications", word: "unread" },
+  "my-work": { key: "myWork", word: "open" },
+};
 
 /** Presentation state only, like the theme preference — safe to persist client-side. */
 const EXPANDED_STORAGE_KEY = "artify_cc_sidebar_expanded_section";
@@ -26,6 +35,11 @@ export const Sidebar: React.FC<{ mobileOpen: boolean; onCloseMobile: () => void 
   const { user } = useAuth();
   const { path, navigate } = useRouter();
   const items = visibleNavItems(user?.role.permissions);
+  const badges = useNavBadges();
+  const countFor = (itemId: string): number => {
+    const def = BADGE_FOR_ITEM[itemId];
+    return def ? (badges?.[def.key] ?? 0) : 0;
+  };
   const activeSection = items.find((item) => item.path === path)?.section ?? null;
   // Strict accordion: exactly one section open at a time. Opening a section closes the others — including
   // the one holding the current page. Navigating to a page opens that page's section.
@@ -71,6 +85,7 @@ export const Sidebar: React.FC<{ mobileOpen: boolean; onCloseMobile: () => void 
           if (sectionItems.length === 0) return null;
 
           const isCollapsed = expanded !== section;
+          const sectionHasCount = sectionItems.some((item) => countFor(item.id) > 0);
 
           return (
             <div key={section} className="space-y-1">
@@ -80,7 +95,15 @@ export const Sidebar: React.FC<{ mobileOpen: boolean; onCloseMobile: () => void 
                 aria-expanded={!isCollapsed}
                 className="cc-section-head"
               >
-                <span>{section}</span>
+                <span className="flex items-center gap-1.5">
+                  {section}
+                  {isCollapsed && sectionHasCount && (
+                    <>
+                      <span className="cc-dot" aria-hidden="true" />
+                      <span className="sr-only">(has items needing attention)</span>
+                    </>
+                  )}
+                </span>
                 <ChevronDown
                   className="w-3 h-3 shrink-0 transition-transform duration-150"
                   style={{ transform: isCollapsed ? "rotate(-90deg)" : "rotate(0deg)" }}
@@ -105,10 +128,16 @@ export const Sidebar: React.FC<{ mobileOpen: boolean; onCloseMobile: () => void 
                           onCloseMobile();
                         }}
                         aria-current={active ? "page" : undefined}
+                        aria-label={countFor(item.id) > 0 ? `${item.label}, ${countFor(item.id)} ${BADGE_FOR_ITEM[item.id]!.word}` : undefined}
                         className="cc-nav-item"
                       >
                         <Icon className="w-4 h-4 shrink-0" />
-                        {item.label}
+                        <span className="flex-1 min-w-0">{item.label}</span>
+                        {countFor(item.id) > 0 && (
+                          <span className="cc-badge" aria-hidden="true">
+                            {countFor(item.id) > 99 ? "99+" : countFor(item.id)}
+                          </span>
+                        )}
                       </button>
                     </React.Fragment>
                   );
