@@ -1,17 +1,19 @@
 /** After OAuth for providers where one login manages several Pages: choose which ones to connect. Tokens never reach the browser. */
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
 import { socialApi, type ConnectSelection } from "../../lib/api";
 import { ApiClientError } from "../../lib/apiClient";
 import { useToast } from "../../context/ToastContext";
 import { Badge, Button, Modal } from "../ui/ui";
 import { ProviderAvatar } from "./socialShared";
 
-export const ConnectPagePicker: React.FC<{ selection: ConnectSelection | null; onClose: () => void; onConnected: () => void }> = ({ selection, onClose, onConnected }) => {
+export const ConnectPagePicker: React.FC<{ selection: ConnectSelection | null; onClose: () => void; onConnected: () => void }> = ({ selection, ...rest }) =>
+  selection ? <PickerBody key={selection.id} selection={selection} {...rest} /> : null;
+
+const PickerBody: React.FC<{ selection: ConnectSelection; onClose: () => void; onConnected: () => void }> = ({ selection, onClose, onConnected }) => {
   const { notify } = useToast();
-  const [chosen, setChosen] = useState<Set<string>>(new Set());
+  // A single Page is preselected from the first render (state is keyed by the selection id).
+  const [chosen, setChosen] = useState<Set<string>>(() => new Set(selection.pages.length === 1 ? [selection.pages[0]!.externalId] : []));
   const [busy, setBusy] = useState(false);
-  useEffect(() => { setChosen(new Set(selection && selection.pages.length === 1 ? [selection.pages[0]!.externalId] : [])); }, [selection]);
-  if (!selection) return null;
 
   const toggle = (id: string) => setChosen((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
   const connect = async () => {
