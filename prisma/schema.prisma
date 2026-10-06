@@ -53,26 +53,30 @@ enum OrganizationStatus {
 // consistently enforced). Artify Solutions' own operating entity and every
 // client organization are both rows here — see ADR-010.
 model Organization {
-  navPins   UserNavPin[]
-  id        String             @id @default(uuid())
-  name      String
-  legalName String?            @map("legal_name")
-  slug      String             @unique
-  type      OrganizationType   @default(CLIENT)
-  tier      OrganizationTier   @default(GROWTH)
-  status    OrganizationStatus @default(TRIAL)
-  email     String?
-  phone     String?
-  website   String?
-  address   String?
-  country   String?
-  timezone  String             @default("UTC")
-  currency  String             @default("USD") @db.Char(3)
-  locale    String             @default("en")
-  metadata  Json               @default("{}")
-  createdAt DateTime           @default(now()) @map("created_at")
-  updatedAt DateTime           @updatedAt @map("updated_at")
-  deletedAt DateTime?          @map("deleted_at")
+  socialBrandVoice       SocialBrandVoice?
+  socialWorkspaceSetting SocialWorkspaceSetting?
+  socialPosts            SocialPost[]
+  socialContentPlans     SocialContentPlan[]
+  navPins                UserNavPin[]
+  id                     String                  @id @default(uuid())
+  name                   String
+  legalName              String?                 @map("legal_name")
+  slug                   String                  @unique
+  type                   OrganizationType        @default(CLIENT)
+  tier                   OrganizationTier        @default(GROWTH)
+  status                 OrganizationStatus      @default(TRIAL)
+  email                  String?
+  phone                  String?
+  website                String?
+  address                String?
+  country                String?
+  timezone               String                  @default("UTC")
+  currency               String                  @default("USD") @db.Char(3)
+  locale                 String                  @default("en")
+  metadata               Json                    @default("{}")
+  createdAt              DateTime                @default(now()) @map("created_at")
+  updatedAt              DateTime                @updatedAt @map("updated_at")
+  deletedAt              DateTime?               @map("deleted_at")
 
   memberships                OrganizationMembership[]
   users                      User[] // legacy/home-organization pointer — see OrganizationMembership doc comment
@@ -194,6 +198,8 @@ model User {
   navPins                        UserNavPin[]
   socialAccountsConnected        SocialAccount[]             @relation("SocialAccountConnectedBy")
   socialOAuthStates              SocialOAuthState[]
+  socialPostsCreated             SocialPost[]                @relation("SocialPostCreatedBy")
+  socialPlansCreated             SocialContentPlan[]         @relation("SocialPlanCreatedBy")
   author                         Author?
   assignedLeads                  Lead[]                      @relation("LeadAssignee")
   managedClients                 Client[]                    @relation("ClientAccountManager")
@@ -451,6 +457,7 @@ model SocialAccount {
   organization Organization             @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   connectedBy  User?                    @relation("SocialAccountConnectedBy", fields: [connectedByUserId], references: [id], onDelete: SetNull)
   credentials  SocialAccountCredential?
+  postTargets  SocialPostTarget[]
 
   @@unique([organizationId, provider, externalAccountId])
   @@index([organizationId, status])
@@ -471,6 +478,150 @@ model SocialAccountCredential {
 }
 
 // Single-use OAuth `state` (CSRF protection), stored hashed, bound to user + workspace + provider.
+// ---- Social content (Step 5): brand voice, posts, targets, plans. No publishing yet; SCHEDULED waits for Step 6's workers. ----
+enum SocialPostStatus {
+  DRAFT
+  PENDING_APPROVAL
+  APPROVED
+  SCHEDULED
+  PUBLISHING
+  PUBLISHED
+  FAILED
+  REJECTED
+  CANCELLED
+}
+
+enum SocialPostTargetStatus {
+  PENDING
+  SCHEDULED
+  PUBLISHING
+  PUBLISHED
+  FAILED
+  CANCELLED
+}
+
+enum SocialPlanStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+enum SocialApprovalMode {
+  ALWAYS_REQUIRE
+  AUTO_IF_GUARDRAILS_PASS
+}
+
+model SocialBrandVoice {
+  id                  String   @id @default(uuid())
+  organizationId      String   @unique @map("organization_id")
+  toneDescriptors     String[] @default([]) @map("tone_descriptors")
+  audience            String?
+  dos                 String[] @default([])
+  donts               String[] @default([])
+  bannedWords         String[] @default([]) @map("banned_words")
+  requiredDisclaimers String[] @default([]) @map("required_disclaimers")
+  defaultHashtags     String[] @default([]) @map("default_hashtags")
+  ctaPhrases          String[] @default([]) @map("cta_phrases")
+  languages           String[] @default(["en"])
+  updatedById         String?  @map("updated_by")
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@map("social_brand_voices")
+}
+
+model SocialWorkspaceSetting {
+  id             String             @id @default(uuid())
+  organizationId String             @unique @map("organization_id")
+  approvalMode   SocialApprovalMode @default(ALWAYS_REQUIRE) @map("approval_mode")
+  updatedById    String?            @map("updated_by")
+  updatedAt      DateTime           @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@map("social_workspace_settings")
+}
+
+// The instruction that generated a batch of drafts, so every AI draft traces back to it.
+model SocialContentPlan {
+  id             String           @id @default(uuid())
+  organizationId String           @map("organization_id")
+  brief          String
+  accountIds     String[]         @default([]) @map("account_ids")
+  cadencePerWeek Int              @map("cadence_per_week")
+  startDate      DateTime         @map("start_date")
+  endDate        DateTime         @map("end_date")
+  status         SocialPlanStatus @default(ACTIVE)
+  aiExecutionId  String?          @map("ai_execution_id")
+  createdById    String?          @map("created_by")
+  createdAt      DateTime         @default(now()) @map("created_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdBy    User?        @relation("SocialPlanCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  posts        SocialPost[]
+
+  @@index([organizationId, createdAt])
+  @@map("social_content_plans")
+}
+
+model SocialPost {
+  id                String           @id @default(uuid())
+  organizationId    String           @map("organization_id")
+  title             String
+  body              String
+  mediaIds          String[]         @default([]) @map("media_ids")
+  linkUrl           String?          @map("link_url")
+  status            SocialPostStatus @default(DRAFT)
+  scheduledAt       DateTime?        @map("scheduled_at")
+  timezone          String           @default("UTC")
+  createdById       String?          @map("created_by")
+  aiGenerated       Boolean          @default(false) @map("ai_generated")
+  aiExecutionId     String?          @map("ai_execution_id")
+  sourceContentType String?          @map("source_content_type")
+  sourceContentId   String?          @map("source_content_id")
+  planId            String?          @map("plan_id")
+  rejectionReason   String?          @map("rejection_reason")
+  decidedById       String?          @map("decided_by")
+  decidedAt         DateTime?        @map("decided_at")
+  guardrailResult   Json?            @map("guardrail_result")
+  deletedAt         DateTime?        @map("deleted_at")
+  createdAt         DateTime         @default(now()) @map("created_at")
+  updatedAt         DateTime         @updatedAt @map("updated_at")
+
+  organization Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdBy    User?              @relation("SocialPostCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  plan         SocialContentPlan? @relation(fields: [planId], references: [id], onDelete: SetNull)
+  targets      SocialPostTarget[]
+
+  @@index([organizationId, status])
+  @@index([organizationId, scheduledAt])
+  @@map("social_posts")
+}
+
+model SocialPostTarget {
+  id              String                 @id @default(uuid())
+  postId          String                 @map("post_id")
+  socialAccountId String                 @map("social_account_id")
+  bodyOverride    String?                @map("body_override")
+  status          SocialPostTargetStatus @default(PENDING)
+  scheduledAt     DateTime?              @map("scheduled_at")
+  // Reserved for Step 6 (publishing workers) — never written in this step.
+  publishedAt     DateTime?              @map("published_at")
+  externalPostId  String?                @map("external_post_id")
+  publishError    String?                @map("publish_error")
+  attempts        Int                    @default(0)
+  createdAt       DateTime               @default(now()) @map("created_at")
+  updatedAt       DateTime               @updatedAt @map("updated_at")
+
+  post    SocialPost    @relation(fields: [postId], references: [id], onDelete: Cascade)
+  account SocialAccount @relation(fields: [socialAccountId], references: [id], onDelete: Cascade)
+
+  @@unique([postId, socialAccountId])
+  @@index([socialAccountId])
+  @@map("social_post_targets")
+}
+
 model SocialOAuthState {
   id                 String    @id @default(uuid())
   stateHash          String    @unique @map("state_hash")

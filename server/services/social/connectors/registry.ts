@@ -1,6 +1,6 @@
 import { mockProvider } from "./mockProvider";
 import { linkedinProvider, metaProvider } from "./stubProviders";
-import type { SocialConnector } from "./types";
+import { DEFAULT_CONSTRAINTS, type SocialConnector, type SocialConstraints } from "./types";
 
 const CONNECTORS: SocialConnector[] = [metaProvider, linkedinProvider, mockProvider];
 
@@ -21,6 +21,10 @@ export const connectorRegistry = {
   getAvailable(key: string): SocialConnector | undefined {
     const c = this.get(key);
     return c && c.isConfigured() && c.implemented ? c : undefined;
+  },
+  /** Constraints for a provider/account type, falling back to conservative defaults for an unknown provider. */
+  constraintsFor(provider: string, accountType?: string | null): SocialConstraints {
+    return this.get(provider)?.getConstraints({ accountType }) ?? DEFAULT_CONSTRAINTS;
   },
   list(): ProviderInfo[] {
     return CONNECTORS.filter((c) => c.key !== "mock" || c.isConfigured()).map((c) => ({

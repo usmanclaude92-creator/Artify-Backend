@@ -8,6 +8,8 @@ export interface NavBadges {
   approvals?: number;
   notifications: number;
   myWork?: number;
+  /** Social posts awaiting approval — only for users who can approve them. */
+  socialApprovals?: number;
 }
 
 const TTL_MS = 30_000;
@@ -25,7 +27,7 @@ export const navBadgeService = {
 
     const perms = caller.role.permissions;
     const universal = caller.role.key === "ADMIN" || caller.role.key === "SUPER_ADMIN";
-    const [notifications, approvals, myWork] = await Promise.all([
+    const [notifications, approvals, myWork, socialApprovals] = await Promise.all([
       notificationRepository.unreadCount(caller.id, caller.organizationId),
       perms.includes("approvals.read") ? approvalCenterService.summary(caller).then((s) => s.total) : Promise.resolve(undefined),
       perms.includes("automation.read")
@@ -35,9 +37,10 @@ export const navBadgeService = {
             prisma.automationApproval.count({ where: { organizationId: caller.organizationId, status: "PENDING", ...(universal ? {} : { requiredRole: caller.role.key }) } }),
           ]).then(([tasks, pending]) => tasks + pending)
         : Promise.resolve(undefined),
+      perms.includes("social.approve") ? prisma.socialPost.count({ where: { organizationId: caller.organizationId, deletedAt: null, status: "PENDING_APPROVAL" } }) : Promise.resolve(undefined),
     ]);
 
-    const value: NavBadges = { notifications, ...(approvals !== undefined ? { approvals } : {}), ...(myWork !== undefined ? { myWork } : {}) };
+    const value: NavBadges = { notifications, ...(approvals !== undefined ? { approvals } : {}), ...(myWork !== undefined ? { myWork } : {}), ...(socialApprovals !== undefined ? { socialApprovals } : {}) };
     cache.set(key, { at: Date.now(), value });
     return value;
   },

@@ -25,3 +25,9 @@ provider) -> provider -> browser returns to `/social/accounts?state=&code=` -> t
 `runTokenHealthJob()` runs inside the existing daily cron tick (`/automation/internal/tick`). Tokens expiring within 7
 days are refreshed; if refresh or the health check fails the account becomes `NEEDS_REAUTH` (or `ERROR`) and every
 active user holding `social.accounts.manage` in that workspace is notified once.
+
+## Step 5 — content (Composer, Calendar, Brand Voice, AI drafting)
+- Tables: `social_brand_voices`, `social_workspace_settings` (approval mode), `social_content_plans`, `social_posts`, `social_post_targets`.
+- Lifecycle: DRAFT → PENDING_APPROVAL → APPROVED → SCHEDULED (PUBLISHING/PUBLISHED/FAILED are reserved for Step 6 workers). Guardrails (banned words, disclaimers, length, media, link, duplicates, account health) block PENDING_APPROVAL / SCHEDULED.
+- Approvals: `social` is the fourth source in `/v1/approvals`; decisions delegate to `socialPostService.decide`.
+- AI: prompts are registered per workspace in the AI prompt catalog (`social.draft_from_brief`, `social.content_plan`, `social.rewrite`); every call is an `AIExecution` + `AIUsageRecord`, goes through the AI adapter layer, and respects daily AI limits. AI output is always a DRAFT.

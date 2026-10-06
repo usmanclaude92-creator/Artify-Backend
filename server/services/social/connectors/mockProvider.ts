@@ -6,7 +6,7 @@
 import { randomBytes } from "node:crypto";
 import { config } from "../../../config/env";
 import type { SocialTokenSet } from "../tokenVault";
-import type { ConnectResult, HealthResult, SocialConnector, SocialProfile } from "./types";
+import { DEFAULT_CONSTRAINTS, type ConnectResult, type HealthResult, type SocialConnector, type SocialProfile } from "./types";
 
 const tokenFor = (name: string, kind: "at" | "rt") => `mock_${kind}_${name}_${randomBytes(8).toString("hex")}`;
 
@@ -16,6 +16,7 @@ export const mockProvider: SocialConnector = {
   implemented: true,
   defaultScopes: ["profile.read", "posts.write"],
   isConfigured: () => config.socialMockProviderEnabled,
+  getConstraints: () => ({ ...DEFAULT_CONSTRAINTS, maxChars: 500, maxHashtags: 5, maxMedia: 4 }),
 
   getAuthUrl({ state, redirectUri }) {
     // A real provider would send the user to its consent screen; the mock consents immediately.

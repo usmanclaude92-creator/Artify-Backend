@@ -3,13 +3,14 @@
  * (AI approval requests, automation workflow approvals, CMS content approvals) plus a thin decision
  * dispatcher that delegates to each source's existing service, so every source-level rule (payload-hash
  * guard, role check, publish-on-approve, workflow resume…) still applies untouched. There is no new
- * approvals table. "social" is reserved for a later phase and currently returns nothing.
+ * approvals table. "social" posts (PENDING_APPROVAL) are the fourth source; decisions delegate to socialPostService.
  */
 import type { Prisma } from "@prisma/client";
 import { prisma } from "../db/prisma";
 import { aiApprovalService } from "./aiApprovalService";
 import { automationService } from "./automation/AutomationService";
 import { contentApprovalService } from "./automation/ContentApprovalService";
+import { socialPostService } from "./social/socialPostService";
 import { auditLogRepository } from "../repositories/auditLogRepository";
 import { AuthorizationError, NotFoundError, ValidationError } from "../core/errors";
 import type { SanitizedUser } from "../types/domain";
@@ -36,15 +37,17 @@ export interface NormalizedApproval {
   canDecide: boolean;
 }
 
-const SOURCE_READ_PERMISSION: Record<Exclude<ApprovalSource, "social">, string> = {
+const SOURCE_READ_PERMISSION: Record<ApprovalSource, string> = {
   ai: "ai.approvals.read",
   automation: "automation.read",
   content: "content.update",
+  social: "social.read",
 };
-const SOURCE_DECIDE_PERMISSION: Record<Exclude<ApprovalSource, "social">, string> = {
+const SOURCE_DECIDE_PERMISSION: Record<ApprovalSource, string> = {
   ai: "ai.approvals.decide",
   automation: "automation.approve",
   content: "content.publish",
+  social: "social.approve",
 };
 const CONTENT_ENTITY_TYPES = ["page", "post"];
 
@@ -53,12 +56,12 @@ const isUniversalApprover = (caller: SanitizedUser) => caller.role.key === "ADMI
 const fullName = (u: { firstName: string; lastName: string } | null | undefined) => (u ? `${u.firstName} ${u.lastName}`.trim() : "");
 
 /** The sources a caller may see at all: approvals.read AND the source-level read permission. */
-export function visibleSources(caller: SanitizedUser): Array<Exclude<ApprovalSource, "social">> {
+export function visibleSources(caller: SanitizedUser): Array<ApprovalSource> {
   if (!has(caller, "approvals.read")) return [];
-  return (Object.keys(SOURCE_READ_PERMISSION) as Array<Exclude<ApprovalSource, "social">>).filter((s) => has(caller, SOURCE_READ_PERMISSION[s]));
+  return (Object.keys(SOURCE_READ_PERMISSION) as Array<ApprovalSource>).filter((s) => has(caller, SOURCE_READ_PERMISSION[s]));
 }
 
-function canDecideSource(caller: SanitizedUser, source: Exclude<ApprovalSource, "social">): boolean {
+function canDecideSource(caller: SanitizedUser, source: ApprovalSource): boolean {
   return has(caller, SOURCE_DECIDE_PERMISSION[source]);
 }
 
@@ -194,14 +197,48 @@ async function fetchAutomation(caller: SanitizedUser, q: ListApprovalsQuery, tak
   return { items, total };
 }
 
+async function fetchSocial(caller: SanitizedUser, q: ListApprovalsQuery, take: number) {
+  const status = q.status === "pending" ? { status: "PENDING_APPROVAL" as const } : q.status === "approved" ? { status: { in: ["APPROVED", "SCHEDULED", "PUBLISHING", "PUBLISHED"] as Array<"APPROVED" | "SCHEDULED" | "PUBLISHING" | "PUBLISHED"> } } : { status: "REJECTED" as const };
+  const where: Prisma.SocialPostWhereInput = {
+    organizationId: caller.organizationId,
+    deletedAt: null,
+    ...status,
+    ...(q.assignee === "me" && q.status !== "pending" ? { OR: [{ createdById: caller.id }, { decidedById: caller.id }] } : {}),
+    ...(q.search ? { OR: [{ title: { contains: q.search, mode: "insensitive" } }, { body: { contains: q.search, mode: "insensitive" } }] } : {}),
+    ...(q.from || q.to ? { createdAt: { ...(q.from ? { gte: q.from } : {}), ...(q.to ? { lte: q.to } : {}) } } : {}),
+  };
+  const [rows, total] = await Promise.all([
+    prisma.socialPost.findMany({ where, orderBy: { updatedAt: "desc" }, take, include: { createdBy: { select: { id: true, firstName: true, lastName: true } }, targets: { include: { account: { select: { displayName: true, provider: true } } } } } }),
+    prisma.socialPost.count({ where }),
+  ]);
+  const decidedBy = await usersById(rows.map((r) => r.decidedById ?? ""));
+  const canDecide = canDecideSource(caller, "social");
+  const items: NormalizedApproval[] = rows.map((r) => ({
+    id: r.id,
+    source: "social",
+    title: r.title,
+    summary: `${r.targets.map((t) => t.account.displayName).join(", ") || "No accounts"} · ${r.body.slice(0, 120)}${r.body.length > 120 ? "…" : ""}`,
+    requestedBy: person(r.createdBy),
+    requestedAt: r.updatedAt,
+    status: r.status === "PENDING_APPROVAL" ? "pending" : r.status === "REJECTED" ? "rejected" : "approved",
+    dueAt: r.scheduledAt,
+    link: `/social/compose?post=${r.id}`,
+    decidedBy: person(r.decidedById ? decidedBy.get(r.decidedById) : null),
+    decidedAt: r.decidedAt,
+    decisionComment: r.rejectionReason,
+    canDecide: canDecide && r.status === "PENDING_APPROVAL",
+  }));
+  return { items, total };
+}
+
 export const approvalCenterService = {
   async list(caller: SanitizedUser, q: ListApprovalsQuery) {
     const allowed = visibleSources(caller);
-    const wanted = (q.source ? [q.source] : ["ai", "automation", "content"]).filter((s): s is "ai" | "automation" | "content" => allowed.includes(s as never));
+    const wanted = (q.source ? [q.source] : ["ai", "automation", "content", "social"]).filter((s): s is "ai" | "automation" | "content" | "social" => allowed.includes(s as never));
     const take = Math.min(q.page * q.limit, 500);
 
     const parts = await Promise.all(
-      wanted.map((s) => (s === "ai" ? fetchAi(caller, q, take) : fetchAutomation(caller, q, take, s === "content")))
+      wanted.map((s) => (s === "ai" ? fetchAi(caller, q, take) : s === "social" ? fetchSocial(caller, q, take) : fetchAutomation(caller, q, take, s === "content")))
     );
     const merged = parts.flatMap((p) => p.items).sort((a, b) => b.requestedAt.getTime() - a.requestedAt.getTime());
     const total = parts.reduce((n, p) => n + p.total, 0);
@@ -226,19 +263,21 @@ export const approvalCenterService = {
             .count({ where: automationBaseWhere(caller, { status: "pending", assignee: "me", page: 1, limit: 1 }, true) })
             .then((n) => (counts.content = n))
         : null,
+      allowed.includes("social") ? prisma.socialPost.count({ where: { organizationId: orgId, deletedAt: null, status: "PENDING_APPROVAL" } }).then((n) => (counts.social = n)) : null,
     ]);
     return { total: counts.ai + counts.automation + counts.content + counts.social, counts, sources: allowed };
   },
 
   async decide(caller: SanitizedUser, source: ApprovalSource, id: string, input: ApprovalDecisionInput, meta: RequestMeta = {}) {
-    if (source === "social") throw new ValidationError("Social approvals are not available yet.");
     const allowed = visibleSources(caller);
     if (!allowed.includes(source)) throw new AuthorizationError("You do not have access to this approval source.");
     if (!canDecideSource(caller, source)) throw new AuthorizationError(`Missing permission: ${SOURCE_DECIDE_PERMISSION[source]}`);
 
     const approve = input.decision === "approve";
     let result: unknown;
-    if (source === "ai") {
+    if (source === "social") {
+      result = await socialPostService.decide(caller, id, approve, input.comment, meta);
+    } else if (source === "ai") {
       result = await aiApprovalService.decide(caller, id, { decision: approve ? "APPROVE" : "REJECT", rejectionReason: input.comment }, meta);
     } else {
       const row = await prisma.automationApproval.findFirst({ where: { id, organizationId: caller.organizationId }, select: { entityType: true } });

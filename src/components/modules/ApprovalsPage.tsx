@@ -219,7 +219,7 @@ export const ApprovalsPage: React.FC = () => {
         <div className="flex flex-wrap gap-2">
           <Select aria-label="Source" value={source} onChange={(e) => setSource(e.target.value as ApprovalSourceKey | "")}>
             <option value="">All sources</option>
-            {(["ai", "automation", "content"] as const)
+            {(["ai", "automation", "content", "social"] as const)
               .filter((s) => sources.includes(s))
               .map((s) => (
                 <option key={s} value={s}>

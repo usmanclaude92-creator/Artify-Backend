@@ -93,3 +93,13 @@ describe("Sidebar live badges", () => {
     expect(admin.querySelector(".cc-dot")).toBeNull();
   });
 });
+
+describe("Sidebar social approvals badge", () => {
+  it("shows the pending social approvals count next to Posts for approvers", async () => {
+    mockBadges = { notifications: 0, socialApprovals: 4 };
+    mockPath = "/social/posts";
+    const { Sidebar } = await import("./Sidebar");
+    render(<Sidebar mobileOpen={false} onCloseMobile={() => {}} />);
+    expect(screen.getByRole("button", { name: "Posts, 4 awaiting approval" })).toBeInTheDocument();
+  });
+});

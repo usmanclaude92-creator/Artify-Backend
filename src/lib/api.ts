@@ -2891,6 +2891,7 @@ export interface NavBadges {
   approvals?: number;
   notifications: number;
   myWork?: number;
+  socialApprovals?: number;
 }
 
 export const approvalsApi = {
@@ -2956,4 +2957,132 @@ export const socialApi = {
   reconnect: (id: string) => apiClient.post<{ authUrl: string }>(`/social/accounts/${id}/reconnect`),
   disconnect: (id: string) => apiClient.post<{ account: SocialAccountSummary }>(`/social/accounts/${id}/disconnect`),
   checkHealth: (id: string) => apiClient.post<{ account: SocialAccountSummary }>(`/social/accounts/${id}/health`),
+};
+
+// ---- Social content: posts, calendar, brand voice, AI (Step 5) ----
+export type SocialPostStatus = "DRAFT" | "PENDING_APPROVAL" | "APPROVED" | "SCHEDULED" | "PUBLISHING" | "PUBLISHED" | "FAILED" | "REJECTED" | "CANCELLED";
+
+export interface GuardrailIssue {
+  rule: string;
+  severity: "block" | "warn";
+  message: string;
+  socialAccountId?: string;
+}
+export interface GuardrailResult {
+  passed: boolean;
+  issues: GuardrailIssue[];
+  checkedAt: string;
+}
+export interface SocialConstraints {
+  maxChars: number;
+  maxHashtags: number;
+  maxMedia: number;
+  requiresMedia: boolean;
+  allowedMediaTypes: string[];
+  supportsLink: boolean;
+  hashtagPrefix: string;
+  mentionPrefix: string;
+}
+export interface SocialPostTarget {
+  id: string;
+  accountId: string;
+  bodyOverride: string | null;
+  status: string;
+  scheduledAt: string | null;
+  account: { id: string; provider: string; displayName: string; handle: string | null; accountType: string; status: string; avatarUrl: string | null };
+}
+export interface SocialPostView {
+  id: string;
+  title: string;
+  body: string;
+  mediaIds: string[];
+  linkUrl: string | null;
+  status: SocialPostStatus;
+  scheduledAt: string | null;
+  timezone: string;
+  aiGenerated: boolean;
+  aiExecutionId: string | null;
+  sourceContentType: string | null;
+  sourceContentId: string | null;
+  planId: string | null;
+  rejectionReason: string | null;
+  decidedAt: string | null;
+  guardrailResult: GuardrailResult | null;
+  createdAt: string;
+  updatedAt: string;
+  createdBy: { id: string; name: string } | null;
+  targets: SocialPostTarget[];
+}
+export interface SocialPostInput {
+  title: string;
+  body: string;
+  mediaIds: string[];
+  linkUrl: string | null;
+  scheduledAt: string | null;
+  timezone: string;
+  accountIds: string[];
+  bodyOverrides: Record<string, string>;
+  sourceContent?: { type: "post" | "case_study"; id: string };
+}
+export interface SocialBrandVoice {
+  toneDescriptors: string[];
+  audience: string | null;
+  dos: string[];
+  donts: string[];
+  bannedWords: string[];
+  requiredDisclaimers: string[];
+  defaultHashtags: string[];
+  ctaPhrases: string[];
+  languages: string[];
+}
+export interface SocialSourceContent {
+  type: "post" | "case_study";
+  id: string;
+  title: string;
+  excerpt: string;
+  url: string;
+  featuredMediaId: string | null;
+}
+export interface SocialPlanSummary {
+  id: string;
+  brief: string;
+  cadencePerWeek: number;
+  startDate: string;
+  endDate: string;
+  status: string;
+  createdAt: string;
+  postCount: number;
+}
+
+export const socialContentApi = {
+  constraints: () => apiClient.get<{ constraints: Record<string, SocialConstraints> }>("/social/constraints").then((r) => r.constraints),
+  contentSources: (type: "post" | "case_study", search?: string) => apiClient.get<{ items: SocialSourceContent[] }>(`/social/content-sources${toQuery({ type, search })}`).then((r) => r.items),
+  brandVoice: () => apiClient.get<{ brandVoice: SocialBrandVoice }>("/social/brand-voice").then((r) => r.brandVoice),
+  saveBrandVoice: (v: SocialBrandVoice) => apiClient.put<{ brandVoice: SocialBrandVoice }>("/social/brand-voice", v).then((r) => r.brandVoice),
+  settings: () => apiClient.get<{ settings: { approvalMode: "ALWAYS_REQUIRE" | "AUTO_IF_GUARDRAILS_PASS" } }>("/social/settings").then((r) => r.settings),
+  saveSettings: (approvalMode: "ALWAYS_REQUIRE" | "AUTO_IF_GUARDRAILS_PASS") => apiClient.put<{ settings: { approvalMode: string } }>("/social/settings", { approvalMode }).then((r) => r.settings),
+  listPosts: async (params: { status?: SocialPostStatus; accountId?: string; search?: string; page?: number; limit?: number }) => {
+    const raw = await apiClient.getRaw<{ posts: SocialPostView[] }>(`/social/posts${toQuery(params)}`);
+    const meta = raw.meta as EnvelopeMeta;
+    const data = raw.data as unknown as { posts: SocialPostView[] };
+    const total = meta.pagination?.total ?? data.posts.length;
+    const limit = meta.pagination?.limit ?? params.limit ?? 25;
+    return { posts: data.posts, total, totalPages: Math.max(1, Math.ceil(total / limit)) };
+  },
+  calendar: (params: { from: string; to: string; accountId?: string; status?: SocialPostStatus }) =>
+    apiClient.get<{ days: Record<string, SocialPostView[]>; total: number }>(`/social/calendar${toQuery(params)}`),
+  getPost: (id: string) => apiClient.get<{ post: SocialPostView }>(`/social/posts/${id}`).then((r) => r.post),
+  createPost: (input: SocialPostInput) => apiClient.post<{ post: SocialPostView }>("/social/posts", input).then((r) => r.post),
+  updatePost: (id: string, input: Partial<SocialPostInput>) => apiClient.patch<{ post: SocialPostView }>(`/social/posts/${id}`, input).then((r) => r.post),
+  reschedule: (id: string, scheduledAt: string | null, timezone?: string) => apiClient.patch<{ post: SocialPostView }>(`/social/posts/${id}/schedule`, { scheduledAt, timezone }).then((r) => r.post),
+  deletePost: (id: string) => apiClient.delete<{ message: string }>(`/social/posts/${id}`),
+  action: (id: string, action: "submit" | "withdraw" | "reopen" | "cancel" | "unschedule" | "approve" | "reject" | "schedule", body: { comment?: string; scheduledAt?: string; timezone?: string } = {}) =>
+    apiClient.post<{ post: SocialPostView }>(`/social/posts/${id}/${action}`, body).then((r) => r.post),
+  aiDraft: (input: { instruction: string; accountIds: string[]; sourceContent?: { type: "post" | "case_study"; id: string }; title?: string; language?: string }) =>
+    apiClient.post<{ post: SocialPostView; executionId: string }>("/social/ai/draft", input),
+  aiPlan: (input: { brief: string; accountIds: string[]; cadencePerWeek: number; startDate: string; endDate: string }) =>
+    apiClient.post<{ plan: SocialPlanSummary; posts: SocialPostView[]; executionId: string }>("/social/ai/plan", input),
+  aiRewrite: (id: string, input: { action: "rewrite" | "shorten" | "translate"; instruction?: string; language?: string; accountId?: string }) =>
+    apiClient.post<{ post: SocialPostView; previousBody: string; executionId: string }>(`/social/posts/${id}/ai/rewrite`, input),
+  plans: () => apiClient.get<{ plans: SocialPlanSummary[] }>("/social/plans").then((r) => r.plans),
 };

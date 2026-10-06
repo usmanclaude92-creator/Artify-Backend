@@ -48,6 +48,7 @@ const BADGE_FOR_ITEM: Record<string, { key: keyof NavBadges; word: string }> = {
   approvals: { key: "approvals", word: "pending" },
   "notification-center": { key: "notifications", word: "unread" },
   "my-work": { key: "myWork", word: "open" },
+  "social-posts": { key: "socialApprovals", word: "awaiting approval" },
 };
 
 /** Presentation state only, like the theme preference — safe to persist client-side. */
