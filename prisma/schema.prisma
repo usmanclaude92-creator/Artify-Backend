@@ -53,6 +53,7 @@ enum OrganizationStatus {
 // consistently enforced). Artify Solutions' own operating entity and every
 // client organization are both rows here — see ADR-010.
 model Organization {
+  navPins   UserNavPin[]
   id        String             @id @default(uuid())
   name      String
   legalName String?            @map("legal_name")
@@ -187,6 +188,8 @@ model User {
   passwordResetTokens            PasswordResetToken[]
   emailVerificationTokens        EmailVerificationToken[]
   authHandoffCodes               AuthHandoffCode[]
+  navPreference                  UserNavPreference?
+  navPins                        UserNavPin[]
   author                         Author?
   assignedLeads                  Lead[]                      @relation("LeadAssignee")
   managedClients                 Client[]                    @relation("ClientAccountManager")
@@ -411,6 +414,34 @@ model EmailVerificationToken {
   @@index([userId])
   @@index([expiresAt])
   @@map("email_verification_tokens")
+}
+
+// Per-user sidebar preferences (Step 3): rail collapse is per user; pins are per user AND per workspace (organization).
+model UserNavPreference {
+  id            String   @id @default(uuid())
+  userId        String   @unique @map("user_id")
+  railCollapsed Boolean  @default(false) @map("rail_collapsed")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_nav_preferences")
+}
+
+model UserNavPin {
+  id             String   @id @default(uuid())
+  userId         String   @map("user_id")
+  organizationId String   @map("organization_id")
+  itemId         String   @map("item_id")
+  position       Int
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, organizationId, itemId])
+  @@index([userId, organizationId])
+  @@map("user_nav_pins")
 }
 
 // Single-use, 60-second codes that carry a signed-in user from the public site to the Control Center

@@ -197,6 +197,131 @@
 .dark .cc-dot {
   background: var(--accent-soft-text);
 }
+.cc-section-label {
+  padding: 0.5rem 0.75rem 0.25rem;
+  font-size: 0.625rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+/* Nav row = nav button + sibling pin button (+ drag grip in the Pinned group). */
+.cc-nav-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.125rem;
+}
+.cc-nav-row .cc-nav-item {
+  flex: 1;
+  min-width: 0;
+}
+.cc-pin {
+  width: 0;
+  overflow: hidden;
+  opacity: 0;
+  flex-shrink: 0;
+  height: 1.75rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-control);
+  color: var(--text-muted);
+  transition: opacity 0.15s ease, width 0.15s ease, background-color 0.2s ease;
+}
+.cc-nav-row:hover .cc-pin,
+.cc-nav-row:focus-within .cc-pin,
+.cc-pin[aria-pressed="true"] {
+  width: 1.75rem;
+  opacity: 1;
+}
+.cc-pin:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+.cc-pin:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+/* Always available on touch devices (no hover). */
+@media (hover: none) {
+  .cc-pin {
+    width: 1.75rem;
+    opacity: 1;
+  }
+}
+.cc-grip {
+  width: 0.75rem;
+  height: 0.75rem;
+  flex-shrink: 0;
+  color: var(--text-muted);
+  cursor: grab;
+}
+/* Icon rail */
+.cc-rail-btn {
+  position: relative;
+  width: 2.5rem;
+  height: 2.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-control);
+  color: var(--text-secondary);
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+.cc-rail-btn:hover,
+.cc-rail-btn[aria-expanded="true"] {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+.cc-rail-btn[data-active="true"] {
+  background: var(--accent-soft);
+  color: var(--accent-soft-text);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.cc-rail-badge {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  min-width: 1rem;
+  height: 1rem;
+  padding: 0 0.25rem;
+  font-size: 0.5625rem;
+  line-height: 1rem;
+}
+.cc-tip::after {
+  content: attr(data-tip);
+  position: fixed;
+  left: 4.25rem;
+  padding: 0.25rem 0.5rem;
+  border-radius: 0.5rem;
+  background: var(--text-primary);
+  color: var(--bg-surface);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(-2px);
+  transition: opacity 0.12s ease;
+  z-index: 60;
+}
+.cc-tip:hover::after,
+.cc-tip:focus-visible::after {
+  opacity: 1;
+}
+.cc-rail-btn[aria-expanded="true"]::after {
+  opacity: 0;
+}
+.cc-flyout {
+  position: fixed;
+  left: 4.25rem;
+  z-index: 50;
+  width: 16rem;
+  max-height: calc(100vh - 1rem);
+  overflow-y: auto;
+  padding: 0.25rem;
+}
 .cc-subheading {
   padding: 0.5rem 0.75rem 0.125rem;
   font-size: 0.625rem;

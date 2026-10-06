@@ -1,8 +1,7 @@
 import React, { useState } from "react";
-import { Menu, Sun, Moon, ChevronDown, LogOut, LogOutIcon, KeyRound, Building2, Check, Search } from "lucide-react";
+import { Menu, Sun, Moon, ChevronDown, LogOut, LogOutIcon, KeyRound, Building2, Search } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
 import { useTheme } from "../../context/ThemeContext";
-import { useToast } from "../../context/ToastContext";
 import { useRouter } from "../../lib/router";
 import { ChangePasswordModal } from "../modules/ChangePasswordModal";
 import { NotificationBell } from "./NotificationBell";
@@ -11,25 +10,13 @@ export const Header: React.FC<{ onOpenMobileMenu: () => void; onOpenCommandPalet
   onOpenMobileMenu,
   onOpenCommandPalette,
 }) => {
-  const { user, organizations, logout, logoutAll, switchOrganization } = useAuth();
+  const { user, organizations, logout, logoutAll } = useAuth();
   const { theme, toggleTheme } = useTheme();
-  const { notify } = useToast();
   const { navigate } = useRouter();
   const [menuOpen, setMenuOpen] = useState(false);
-  const [orgMenuOpen, setOrgMenuOpen] = useState(false);
   const [changePasswordOpen, setChangePasswordOpen] = useState(false);
 
   const currentOrg = organizations.find((o) => o.isCurrent);
-
-  const handleSwitchOrg = async (organizationId: string) => {
-    setOrgMenuOpen(false);
-    try {
-      await switchOrganization(organizationId);
-      notify("Switched organization.", "success");
-    } catch {
-      notify("Could not switch organization.", "error");
-    }
-  };
 
   return (
     <header
@@ -40,41 +27,17 @@ export const Header: React.FC<{ onOpenMobileMenu: () => void; onOpenCommandPalet
         <Menu className="w-5 h-5" />
       </button>
 
-      <div className="relative">
-        <button
-          onClick={() => setOrgMenuOpen((v) => !v)}
-          aria-haspopup={organizations.length > 1 ? "menu" : undefined}
-          aria-expanded={organizations.length > 1 ? orgMenuOpen : undefined}
-          className="cc-field flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1.5"
+      {/* Read-only: the active workspace. Switching lives in the sidebar's workspace switcher. */}
+      {currentOrg && (
+        <span
+          className="cc-field hidden sm:flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1.5 max-w-[14rem]"
           style={{ color: "var(--text-secondary)" }}
+          aria-label={`Active workspace: ${currentOrg.organizationName}`}
         >
-          <Building2 className="w-3.5 h-3.5" />
-          {currentOrg?.organizationName ?? "Organization"}
-          {organizations.length > 1 && <ChevronDown className="w-3 h-3" />}
-        </button>
-        {orgMenuOpen && organizations.length > 1 && (
-          <div
-            className="cc-popover absolute left-0 mt-1 w-64 py-1 z-40"
-          >
-            {organizations.map((org) => (
-              <button
-                key={org.organizationId}
-                onClick={() => handleSwitchOrg(org.organizationId)}
-                className="cc-row w-full flex items-center justify-between gap-2 px-3 py-2 text-xs text-left"
-                style={{ color: "var(--text-primary)" }}
-              >
-                <span>
-                  {org.organizationName}
-                  <span className="block text-[10px]" style={{ color: "var(--text-muted)" }}>
-                    {org.roleName}
-                  </span>
-                </span>
-                {org.isCurrent && <Check className="w-3.5 h-3.5 text-emerald-500 shrink-0" />}
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
+          <Building2 className="w-3.5 h-3.5 shrink-0" />
+          <span className="truncate">{currentOrg.organizationName}</span>
+        </span>
+      )}
 
       <button
         onClick={onOpenCommandPalette}

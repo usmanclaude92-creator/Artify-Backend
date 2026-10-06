@@ -61,6 +61,14 @@ describe("Approvals center", () => {
     otherAdminToken = (await request(app).post("/api/v1/auth/register").set("X-Forwarded-For", "10.7.0.3").send({ email: "qa-other@example.com", password: "Str0ng-Passphrase-77", firstName: "QA", lastName: "Other", organizationName: "QA_TEST_2026_ Other" })).body.data.session.token;
   });
   afterAll(async () => {
+    // Roles are shared catalog data that resetDb() deliberately keeps — remove the custom role this suite created.
+    await prisma.rolePermission.deleteMany({ where: { role: { key: "QA_TEST_2026_AI_ONLY" } } });
+    await prisma.organizationMembership.deleteMany({ where: { role: { key: "QA_TEST_2026_AI_ONLY" } } });
+    const role = await prisma.role.findUnique({ where: { key: "QA_TEST_2026_AI_ONLY" } });
+    if (role) {
+      await prisma.user.deleteMany({ where: { roleId: role.id } });
+      await prisma.role.delete({ where: { id: role.id } });
+    }
     await disconnectPrisma();
   });
 

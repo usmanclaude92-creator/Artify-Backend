@@ -2910,3 +2910,13 @@ export const approvalsApi = {
 export const navApi = {
   badges: () => apiClient.get<{ badges: NavBadges }>("/nav/badges").then((r) => r.badges),
 };
+
+export interface NavPreferences {
+  railCollapsed: boolean;
+  pinned: string[];
+}
+
+export const navPreferencesApi = {
+  get: () => apiClient.get<{ preferences: NavPreferences }>("/nav/preferences").then((r) => r.preferences),
+  update: (patch: Partial<NavPreferences>) => apiClient.put<{ preferences: NavPreferences }>("/nav/preferences", patch).then((r) => r.preferences),
+};

@@ -17079,12 +17079,61 @@ var approvalCenterRoutes_default = router15;
 
 // server/routes/v1/navRoutes.ts
 import { Router as Router16 } from "express";
+import { z as z22 } from "zod";
+
+// server/services/navPreferenceService.ts
+var MAX_PINS = 8;
+var navPreferenceService = {
+  async get(caller) {
+    const [pref, pins] = await Promise.all([
+      prisma.userNavPreference.findUnique({ where: { userId: caller.id } }),
+      prisma.userNavPin.findMany({ where: { userId: caller.id, organizationId: caller.organizationId }, orderBy: { position: "asc" }, select: { itemId: true } })
+    ]);
+    return { railCollapsed: pref?.railCollapsed ?? false, pinned: pins.map((p) => p.itemId) };
+  },
+  async update(caller, input) {
+    if (input.railCollapsed !== void 0) {
+      await prisma.userNavPreference.upsert({
+        where: { userId: caller.id },
+        create: { userId: caller.id, railCollapsed: input.railCollapsed },
+        update: { railCollapsed: input.railCollapsed }
+      });
+    }
+    if (input.pinned !== void 0) {
+      const ids = [...new Set(input.pinned)].slice(0, MAX_PINS);
+      await prisma.$transaction([
+        prisma.userNavPin.deleteMany({ where: { userId: caller.id, organizationId: caller.organizationId } }),
+        prisma.userNavPin.createMany({ data: ids.map((itemId, position) => ({ userId: caller.id, organizationId: caller.organizationId, itemId, position })) })
+      ]);
+    }
+    return this.get(caller);
+  }
+};
+
+// server/routes/v1/navRoutes.ts
 var router16 = Router16();
 router16.use(authenticateToken);
 router16.get(
   "/badges",
   asyncHandler(async (req, res) => {
     sendSuccess(res, { badges: await navBadgeService.get(req.user) });
+  })
+);
+var updatePreferencesSchema = z22.object({
+  railCollapsed: z22.boolean().optional(),
+  pinned: z22.array(z22.string().regex(/^[a-z0-9-]{1,64}$/, "Invalid item id.")).max(MAX_PINS, `At most ${MAX_PINS} items can be pinned.`).refine((ids) => new Set(ids).size === ids.length, { message: "Pinned items must be unique." }).optional()
+}).refine((v) => v.railCollapsed !== void 0 || v.pinned !== void 0, { message: "Nothing to update." });
+router16.get(
+  "/preferences",
+  asyncHandler(async (req, res) => {
+    sendSuccess(res, { preferences: await navPreferenceService.get(req.user) });
+  })
+);
+router16.put(
+  "/preferences",
+  asyncHandler(async (req, res) => {
+    const input = updatePreferencesSchema.parse(req.body);
+    sendSuccess(res, { preferences: await navPreferenceService.update(req.user, input) });
   })
 );
 var navRoutes_default = router16;
@@ -17196,8 +17245,8 @@ var formService = {
 };
 
 // server/schemas/formSchemas.ts
-import { z as z22 } from "zod";
-var formFieldTypeSchema = z22.enum([
+import { z as z23 } from "zod";
+var formFieldTypeSchema = z23.enum([
   "text",
   "email",
   "tel",
@@ -17211,20 +17260,20 @@ var formFieldTypeSchema = z22.enum([
   "hidden"
 ]);
 var OPTION_TYPES = /* @__PURE__ */ new Set(["select", "multiselect", "radio"]);
-var formFieldOptionSchema = z22.object({
-  value: z22.string().trim().min(1).max(100),
-  label: z22.string().trim().min(1).max(150)
+var formFieldOptionSchema = z23.object({
+  value: z23.string().trim().min(1).max(100),
+  label: z23.string().trim().min(1).max(150)
 });
-var formFieldSchema = z22.object({
-  key: z22.string().trim().min(1).max(40).regex(/^[a-z][a-z0-9_]*$/, "key must start with a lowercase letter and contain only lowercase letters, digits, and underscores"),
-  label: z22.string().trim().min(1).max(100),
+var formFieldSchema = z23.object({
+  key: z23.string().trim().min(1).max(40).regex(/^[a-z][a-z0-9_]*$/, "key must start with a lowercase letter and contain only lowercase letters, digits, and underscores"),
+  label: z23.string().trim().min(1).max(100),
   type: formFieldTypeSchema.default("text"),
-  required: z22.boolean().default(false),
-  placeholder: z22.string().trim().max(150).optional(),
+  required: z23.boolean().default(false),
+  placeholder: z23.string().trim().max(150).optional(),
   /** select/multiselect/radio only — validated below (OPTION_TYPES). */
-  options: z22.array(formFieldOptionSchema).max(50).optional(),
-  min: z22.number().optional(),
-  max: z22.number().optional(),
+  options: z23.array(formFieldOptionSchema).max(50).optional(),
+  min: z23.number().optional(),
+  max: z23.number().optional(),
   /**
    * Conditional visibility — the simplest practical rule the roadmap
    * asks for: show this field only when another field (by key) equals
@@ -17232,57 +17281,57 @@ var formFieldSchema = z22.object({
    * server-side (publicFormService) so a hidden-but-still-submitted
    * value can never bypass required-field validation by hiding it.
    */
-  visibleWhen: z22.object({ fieldKey: z22.string().trim().min(1).max(40), equals: z22.string().trim().max(2e3) }).optional()
+  visibleWhen: z23.object({ fieldKey: z23.string().trim().min(1).max(40), equals: z23.string().trim().max(2e3) }).optional()
 }).refine((f) => !OPTION_TYPES.has(f.type) || f.options && f.options.length > 0, {
   message: "select/multiselect/radio fields need at least one option.",
   path: ["options"]
 });
-var formFieldsSchema = z22.array(formFieldSchema).min(1, "A form needs at least one field.").max(20, "A form may define at most 20 fields.").refine((fields) => new Set(fields.map((f) => f.key)).size === fields.length, { message: "Field keys must be unique." }).refine((fields) => fields.some((f) => f.key === "name" || f.key === "email"), {
+var formFieldsSchema = z23.array(formFieldSchema).min(1, "A form needs at least one field.").max(20, "A form may define at most 20 fields.").refine((fields) => new Set(fields.map((f) => f.key)).size === fields.length, { message: "Field keys must be unique." }).refine((fields) => fields.some((f) => f.key === "name" || f.key === "email"), {
   message: 'At least one field must use key "name" or "email" so a submission has an identity to attach to a CRM Lead.'
 }).refine((fields) => fields.every((f) => !f.visibleWhen || fields.some((other) => other.key === f.visibleWhen.fieldKey)), {
   message: "A field's conditional visibility must reference another real field on the same form."
 });
-var notifyUserIdsSchema = z22.array(z22.string().trim().uuid()).max(20).default([]);
-var listFormsQuerySchema = z22.object({
-  page: z22.coerce.number().int().positive().default(1),
-  limit: z22.coerce.number().int().positive().max(100).default(20),
-  search: z22.string().trim().max(200).optional(),
-  status: z22.enum(["ACTIVE", "ARCHIVED"]).optional(),
-  sort: z22.enum(["createdAt", "updatedAt", "name"]).default("createdAt"),
-  order: z22.enum(["asc", "desc"]).default("desc")
+var notifyUserIdsSchema = z23.array(z23.string().trim().uuid()).max(20).default([]);
+var listFormsQuerySchema = z23.object({
+  page: z23.coerce.number().int().positive().default(1),
+  limit: z23.coerce.number().int().positive().max(100).default(20),
+  search: z23.string().trim().max(200).optional(),
+  status: z23.enum(["ACTIVE", "ARCHIVED"]).optional(),
+  sort: z23.enum(["createdAt", "updatedAt", "name"]).default("createdAt"),
+  order: z23.enum(["asc", "desc"]).default("desc")
 });
-var slugSchema = z22.string().trim().min(1).max(150).regex(/^[a-z0-9]+(-[a-z0-9]+)*$/, "slug must be lowercase, alphanumeric, and hyphen-separated");
-var createFormSchema = z22.object({
-  name: z22.string().trim().min(1).max(200),
+var slugSchema = z23.string().trim().min(1).max(150).regex(/^[a-z0-9]+(-[a-z0-9]+)*$/, "slug must be lowercase, alphanumeric, and hyphen-separated");
+var createFormSchema = z23.object({
+  name: z23.string().trim().min(1).max(200),
   slug: slugSchema.optional(),
   fields: formFieldsSchema,
-  successMessage: z22.string().trim().max(500).optional(),
+  successMessage: z23.string().trim().max(500).optional(),
   notifyUserIds: notifyUserIdsSchema.optional()
 });
-var updateFormSchema = z22.object({
-  name: z22.string().trim().min(1).max(200).optional(),
+var updateFormSchema = z23.object({
+  name: z23.string().trim().min(1).max(200).optional(),
   slug: slugSchema.optional(),
   fields: formFieldsSchema.optional(),
-  successMessage: z22.string().trim().max(500).nullable().optional(),
-  status: z22.enum(["ACTIVE", "ARCHIVED"]).optional(),
+  successMessage: z23.string().trim().max(500).nullable().optional(),
+  status: z23.enum(["ACTIVE", "ARCHIVED"]).optional(),
   notifyUserIds: notifyUserIdsSchema.optional()
 }).refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
-var listFormSubmissionsQuerySchema = z22.object({
-  page: z22.coerce.number().int().positive().default(1),
-  limit: z22.coerce.number().int().positive().max(100).default(20)
+var listFormSubmissionsQuerySchema = z23.object({
+  page: z23.coerce.number().int().positive().default(1),
+  limit: z23.coerce.number().int().positive().max(100).default(20)
 });
-var submittedValueSchema = z22.union([z22.string().trim().max(2e3), z22.array(z22.string().trim().max(2e3)).max(50)]);
-var publicFormSubmitSchema = z22.object({
-  data: z22.record(submittedValueSchema).refine((obj) => Object.keys(obj).length <= 30, { message: "Too many fields submitted." }),
-  utmSource: z22.string().trim().max(200).optional(),
-  utmMedium: z22.string().trim().max(200).optional(),
-  utmCampaign: z22.string().trim().max(200).optional(),
-  utmTerm: z22.string().trim().max(200).optional(),
-  utmContent: z22.string().trim().max(200).optional(),
+var submittedValueSchema = z23.union([z23.string().trim().max(2e3), z23.array(z23.string().trim().max(2e3)).max(50)]);
+var publicFormSubmitSchema = z23.object({
+  data: z23.record(submittedValueSchema).refine((obj) => Object.keys(obj).length <= 30, { message: "Too many fields submitted." }),
+  utmSource: z23.string().trim().max(200).optional(),
+  utmMedium: z23.string().trim().max(200).optional(),
+  utmCampaign: z23.string().trim().max(200).optional(),
+  utmTerm: z23.string().trim().max(200).optional(),
+  utmContent: z23.string().trim().max(200).optional(),
   /** Site-relative path the visitor submitted from, e.g. /landing/spring-sale — for attribution only, never trusted as an identity/auth signal. */
-  landingPagePath: z22.string().trim().max(500).optional(),
+  landingPagePath: z23.string().trim().max(500).optional(),
   /** Honeypot — must stay empty; never render this field visibly to a real visitor (mirrors createPublicLeadSchema's `website`). */
-  website: z22.string().trim().max(200).optional()
+  website: z23.string().trim().max(200).optional()
 });
 
 // server/routes/v1/formRoutes.ts
@@ -17966,71 +18015,71 @@ var campaignService = {
 };
 
 // server/schemas/campaignSchemas.ts
-import { z as z23 } from "zod";
-var uuidArray = (max) => z23.array(z23.string().trim().uuid()).max(max);
+import { z as z24 } from "zod";
+var uuidArray = (max) => z24.array(z24.string().trim().uuid()).max(max);
 var CAMPAIGN_STATUS_VALUES = ["DRAFT", "ACTIVE", "PAUSED", "ARCHIVED"];
 var CAMPAIGN_CHANNEL_VALUES = ["EMAIL", "SOCIAL", "PAID_SEARCH", "PAID_SOCIAL", "CONTENT", "EVENT", "REFERRAL", "DIRECT", "OTHER"];
-var utmFieldSchema = z23.string().trim().min(1).max(150);
-var createCampaignSchema = z23.object({
-  name: z23.string().trim().min(1).max(200),
-  description: z23.string().trim().max(5e3).optional(),
-  channel: z23.enum(CAMPAIGN_CHANNEL_VALUES).default("OTHER"),
-  startDate: z23.coerce.date().optional(),
-  endDate: z23.coerce.date().optional(),
-  ownerId: z23.string().trim().uuid().optional(),
-  budget: z23.coerce.number().nonnegative().optional(),
-  currency: z23.string().trim().length(3).toUpperCase().optional(),
-  landingPageId: z23.string().trim().uuid().optional(),
-  formId: z23.string().trim().uuid().optional(),
+var utmFieldSchema = z24.string().trim().min(1).max(150);
+var createCampaignSchema = z24.object({
+  name: z24.string().trim().min(1).max(200),
+  description: z24.string().trim().max(5e3).optional(),
+  channel: z24.enum(CAMPAIGN_CHANNEL_VALUES).default("OTHER"),
+  startDate: z24.coerce.date().optional(),
+  endDate: z24.coerce.date().optional(),
+  ownerId: z24.string().trim().uuid().optional(),
+  budget: z24.coerce.number().nonnegative().optional(),
+  currency: z24.string().trim().length(3).toUpperCase().optional(),
+  landingPageId: z24.string().trim().uuid().optional(),
+  formId: z24.string().trim().uuid().optional(),
   utmSource: utmFieldSchema.optional(),
   utmMedium: utmFieldSchema.optional(),
   utmCampaign: utmFieldSchema.optional(),
   utmTerm: utmFieldSchema.optional(),
   utmContent: utmFieldSchema.optional(),
-  targetAudience: z23.string().trim().max(2e3).optional(),
-  notes: z23.string().trim().max(5e3).optional(),
+  targetAudience: z24.string().trim().max(2e3).optional(),
+  notes: z24.string().trim().max(5e3).optional(),
   productIds: uuidArray(50).optional(),
   relatedPageIds: uuidArray(50).optional(),
   relatedPostIds: uuidArray(50).optional(),
   relatedCaseStudyIds: uuidArray(50).optional(),
   mediaIds: uuidArray(50).optional()
 }).refine((v) => !v.startDate || !v.endDate || v.startDate <= v.endDate, { message: "startDate must be before or equal to endDate.", path: ["endDate"] });
-var updateCampaignSchema = z23.object({
-  name: z23.string().trim().min(1).max(200).optional(),
-  description: z23.string().trim().max(5e3).nullable().optional(),
-  channel: z23.enum(CAMPAIGN_CHANNEL_VALUES).optional(),
-  startDate: z23.coerce.date().nullable().optional(),
-  endDate: z23.coerce.date().nullable().optional(),
-  ownerId: z23.string().trim().uuid().nullable().optional(),
-  budget: z23.coerce.number().nonnegative().nullable().optional(),
-  currency: z23.string().trim().length(3).toUpperCase().nullable().optional(),
-  landingPageId: z23.string().trim().uuid().nullable().optional(),
-  formId: z23.string().trim().uuid().nullable().optional(),
+var updateCampaignSchema = z24.object({
+  name: z24.string().trim().min(1).max(200).optional(),
+  description: z24.string().trim().max(5e3).nullable().optional(),
+  channel: z24.enum(CAMPAIGN_CHANNEL_VALUES).optional(),
+  startDate: z24.coerce.date().nullable().optional(),
+  endDate: z24.coerce.date().nullable().optional(),
+  ownerId: z24.string().trim().uuid().nullable().optional(),
+  budget: z24.coerce.number().nonnegative().nullable().optional(),
+  currency: z24.string().trim().length(3).toUpperCase().nullable().optional(),
+  landingPageId: z24.string().trim().uuid().nullable().optional(),
+  formId: z24.string().trim().uuid().nullable().optional(),
   utmSource: utmFieldSchema.nullable().optional(),
   utmMedium: utmFieldSchema.nullable().optional(),
   utmCampaign: utmFieldSchema.nullable().optional(),
   utmTerm: utmFieldSchema.nullable().optional(),
   utmContent: utmFieldSchema.nullable().optional(),
-  targetAudience: z23.string().trim().max(2e3).nullable().optional(),
-  notes: z23.string().trim().max(5e3).nullable().optional(),
+  targetAudience: z24.string().trim().max(2e3).nullable().optional(),
+  notes: z24.string().trim().max(5e3).nullable().optional(),
   productIds: uuidArray(50).optional(),
   relatedPageIds: uuidArray(50).optional(),
   relatedPostIds: uuidArray(50).optional(),
   relatedCaseStudyIds: uuidArray(50).optional(),
   mediaIds: uuidArray(50).optional()
 }).refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
-var listCampaignsQuerySchema = z23.object({
-  page: z23.coerce.number().int().positive().default(1),
-  limit: z23.coerce.number().int().positive().max(100).default(20),
-  search: z23.string().trim().max(200).optional(),
-  status: z23.enum(CAMPAIGN_STATUS_VALUES).optional(),
-  channel: z23.enum(CAMPAIGN_CHANNEL_VALUES).optional(),
-  ownerId: z23.string().trim().uuid().optional(),
-  sort: z23.enum(["name", "status", "channel", "startDate", "endDate", "createdAt", "updatedAt"]).default("updatedAt"),
-  order: z23.enum(["asc", "desc"]).default("desc")
+var listCampaignsQuerySchema = z24.object({
+  page: z24.coerce.number().int().positive().default(1),
+  limit: z24.coerce.number().int().positive().max(100).default(20),
+  search: z24.string().trim().max(200).optional(),
+  status: z24.enum(CAMPAIGN_STATUS_VALUES).optional(),
+  channel: z24.enum(CAMPAIGN_CHANNEL_VALUES).optional(),
+  ownerId: z24.string().trim().uuid().optional(),
+  sort: z24.enum(["name", "status", "channel", "startDate", "endDate", "createdAt", "updatedAt"]).default("updatedAt"),
+  order: z24.enum(["asc", "desc"]).default("desc")
 });
-var duplicateCampaignSchema = z23.object({
-  name: z23.string().trim().min(1).max(200).optional()
+var duplicateCampaignSchema = z24.object({
+  name: z24.string().trim().min(1).max(200).optional()
 });
 
 // server/routes/v1/campaignRoutes.ts
@@ -18535,21 +18584,21 @@ var invitationService = {
 };
 
 // server/schemas/invitationSchemas.ts
-import { z as z24 } from "zod";
-var createInvitationSchema = z24.object({
-  email: z24.string().trim().min(1).email()
+import { z as z25 } from "zod";
+var createInvitationSchema = z25.object({
+  email: z25.string().trim().min(1).email()
 });
-var listInvitationsQuerySchema = z24.object({
-  page: z24.coerce.number().int().positive().default(1),
-  limit: z24.coerce.number().int().positive().max(100).default(20)
+var listInvitationsQuerySchema = z25.object({
+  page: z25.coerce.number().int().positive().default(1),
+  limit: z25.coerce.number().int().positive().max(100).default(20)
 });
-var newPasswordSchema3 = z24.string().superRefine((password, ctx) => {
+var newPasswordSchema3 = z25.string().superRefine((password, ctx) => {
   const issue = validatePasswordPolicy(password);
-  if (issue) ctx.addIssue({ code: z24.ZodIssueCode.custom, message: issue });
+  if (issue) ctx.addIssue({ code: z25.ZodIssueCode.custom, message: issue });
 });
-var acceptInvitationSchema = z24.object({
-  firstName: z24.string().trim().min(1).max(100).optional(),
-  lastName: z24.string().trim().min(1).max(100).optional(),
+var acceptInvitationSchema = z25.object({
+  firstName: z25.string().trim().min(1).max(100).optional(),
+  lastName: z25.string().trim().min(1).max(100).optional(),
   password: newPasswordSchema3.optional()
 });
 
@@ -18809,170 +18858,170 @@ var productModuleService = {
 };
 
 // server/schemas/productSchemas.ts
-import { z as z26 } from "zod";
+import { z as z27 } from "zod";
 
 // server/schemas/contentSchemas.ts
-import { z as z25 } from "zod";
-var contentStatusSchema = z25.enum(["DRAFT", "IN_REVIEW", "SCHEDULED", "PUBLISHED", "ARCHIVED"]);
-var patchableContentStatusSchema = z25.enum(["DRAFT"]);
-var expectedUpdatedAtSchema = z25.coerce.date().optional();
-var seoMetadataSchema = z25.object({
-  metaTitle: z25.string().trim().min(1).max(70).optional(),
-  metaDescription: z25.string().trim().min(1).max(320).optional(),
-  focusKeywords: z25.array(z25.string().trim().min(1).max(60)).max(10).optional(),
-  canonicalUrl: z25.string().trim().url().max(500).optional(),
-  ogTitle: z25.string().trim().min(1).max(95).optional(),
-  ogDescription: z25.string().trim().min(1).max(320).optional(),
-  ogImage: z25.string().trim().url().max(1e3).optional(),
-  twitterImage: z25.string().trim().url().max(1e3).optional(),
-  ogType: z25.enum(["article", "website", "news"]).optional(),
-  twitterCard: z25.enum(["summary_large_image", "summary"]).optional(),
-  robotsDirective: z25.enum(["index, follow", "noindex, nofollow", "noindex, follow"]).optional(),
-  schemaType: z25.enum(["TechArticle", "NewsArticle", "BlogPosting", "Report"]).optional()
+import { z as z26 } from "zod";
+var contentStatusSchema = z26.enum(["DRAFT", "IN_REVIEW", "SCHEDULED", "PUBLISHED", "ARCHIVED"]);
+var patchableContentStatusSchema = z26.enum(["DRAFT"]);
+var expectedUpdatedAtSchema = z26.coerce.date().optional();
+var seoMetadataSchema = z26.object({
+  metaTitle: z26.string().trim().min(1).max(70).optional(),
+  metaDescription: z26.string().trim().min(1).max(320).optional(),
+  focusKeywords: z26.array(z26.string().trim().min(1).max(60)).max(10).optional(),
+  canonicalUrl: z26.string().trim().url().max(500).optional(),
+  ogTitle: z26.string().trim().min(1).max(95).optional(),
+  ogDescription: z26.string().trim().min(1).max(320).optional(),
+  ogImage: z26.string().trim().url().max(1e3).optional(),
+  twitterImage: z26.string().trim().url().max(1e3).optional(),
+  ogType: z26.enum(["article", "website", "news"]).optional(),
+  twitterCard: z26.enum(["summary_large_image", "summary"]).optional(),
+  robotsDirective: z26.enum(["index, follow", "noindex, nofollow", "noindex, follow"]).optional(),
+  schemaType: z26.enum(["TechArticle", "NewsArticle", "BlogPosting", "Report"]).optional()
 }).strict();
-var revertContentSchema = z25.object({
-  revisionId: z25.string().trim().uuid()
+var revertContentSchema = z26.object({
+  revisionId: z26.string().trim().uuid()
 });
 var SORT_FIELDS = ["title", "slug", "status", "createdAt", "updatedAt", "publishedAt"];
-var listContentQuerySchema = z25.object({
-  page: z25.coerce.number().int().positive().default(1),
-  limit: z25.coerce.number().int().positive().max(100).default(20),
-  search: z25.string().trim().max(200).optional(),
-  status: contentStatusSchema.optional(),
-  // Phase 7 — Content Dashboard date filtering, inclusive range over createdAt.
-  fromDate: z25.coerce.date().optional(),
-  toDate: z25.coerce.date().optional(),
-  sort: z25.enum(SORT_FIELDS).default("updatedAt"),
-  order: z25.enum(["asc", "desc"]).default("desc")
-});
-var scheduleContentSchema = z25.object({
-  scheduledAt: z25.coerce.date().refine((d) => d.getTime() > Date.now(), { message: "scheduledAt must be in the future" })
-});
-var slugSchema2 = z25.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)");
-var createCategorySchema = z25.object({
-  name: z25.string().trim().min(1).max(150),
-  slug: slugSchema2.optional(),
-  description: z25.string().trim().max(2e3).optional(),
-  // Phase 7 — optional parent for a simple hierarchy (Category.parentId).
-  parentId: z25.string().trim().uuid().optional()
-});
-var updateCategorySchema = z25.object({
-  name: z25.string().trim().min(1).max(150).optional(),
-  slug: slugSchema2.optional(),
-  description: z25.string().trim().max(2e3).nullable().optional(),
-  parentId: z25.string().trim().uuid().nullable().optional()
-}).refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
-var createTagSchema = z25.object({
-  name: z25.string().trim().min(1).max(100),
-  slug: slugSchema2.optional(),
-  // Phase 7 — optional description, matching Category's own field.
-  description: z25.string().trim().max(2e3).optional()
-});
-var updateTagSchema = z25.object({
-  name: z25.string().trim().min(1).max(100).optional(),
-  slug: slugSchema2.optional(),
-  description: z25.string().trim().max(2e3).nullable().optional()
-}).refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
-var bulkContentIdsSchema = z25.object({
-  ids: z25.array(z25.string().trim().uuid()).min(1).max(100)
-});
-
-// server/schemas/productSchemas.ts
-var productTypeSchema = z26.enum(["PRODUCT", "SERVICE", "SOLUTION"]);
-var productStatusSchema = z26.enum(["DRAFT", "ACTIVE", "INACTIVE", "ARCHIVED"]);
-var SORT_FIELDS2 = ["name", "code", "type", "status", "displayOrder", "createdAt", "updatedAt"];
-var listProductsQuerySchema = z26.object({
+var listContentQuerySchema = z26.object({
   page: z26.coerce.number().int().positive().default(1),
   limit: z26.coerce.number().int().positive().max(100).default(20),
   search: z26.string().trim().max(200).optional(),
-  type: productTypeSchema.optional(),
-  status: productStatusSchema.optional(),
-  isFeatured: z26.coerce.boolean().optional(),
-  categoryId: z26.string().trim().uuid().optional(),
-  industryId: z26.string().trim().uuid().optional(),
-  sort: z26.enum(SORT_FIELDS2).default("displayOrder"),
-  order: z26.enum(["asc", "desc"]).default("asc")
+  status: contentStatusSchema.optional(),
+  // Phase 7 — Content Dashboard date filtering, inclusive range over createdAt.
+  fromDate: z26.coerce.date().optional(),
+  toDate: z26.coerce.date().optional(),
+  sort: z26.enum(SORT_FIELDS).default("updatedAt"),
+  order: z26.enum(["asc", "desc"]).default("desc")
 });
-var productContentSchema = z26.object({
-  benefits: z26.array(z26.string().trim().min(1).max(200)).max(20).optional(),
-  features: z26.array(z26.string().trim().min(1).max(200)).max(20).optional(),
-  businessProblem: z26.string().trim().max(2e3).optional(),
-  // Validated for real existence against the public org's Forms at save
-  // time in productService — never trusted as a bare uuid alone.
-  ctaFormId: z26.string().trim().uuid().optional(),
-  seo: seoMetadataSchema.optional()
+var scheduleContentSchema = z26.object({
+  scheduledAt: z26.coerce.date().refine((d) => d.getTime() > Date.now(), { message: "scheduledAt must be in the future" })
 });
-var codeSchema = z26.string().trim().min(1).max(50).regex(/^[A-Za-z0-9._-]+$/, "code may only contain letters, numbers, dots, underscores, and hyphens").transform((v) => v.toUpperCase());
-var createProductSchema = z26.object({
-  code: codeSchema,
-  name: z26.string().trim().min(1).max(200),
-  slug: z26.string().trim().min(1).max(100).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)").optional(),
-  type: productTypeSchema,
-  shortDescription: z26.string().trim().max(300).optional(),
-  description: z26.string().trim().max(1e4).optional(),
-  status: productStatusSchema.optional(),
-  isFeatured: z26.boolean().optional(),
-  displayOrder: z26.number().int().min(0).optional(),
-  featuredMediaId: z26.string().trim().uuid().optional(),
-  categoryId: z26.string().trim().uuid().optional(),
-  content: productContentSchema.optional(),
-  relatedProductIds: z26.array(z26.string().trim().uuid()).max(30).optional(),
-  industryIds: z26.array(z26.string().trim().uuid()).max(30).optional()
+var slugSchema2 = z26.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)");
+var createCategorySchema = z26.object({
+  name: z26.string().trim().min(1).max(150),
+  slug: slugSchema2.optional(),
+  description: z26.string().trim().max(2e3).optional(),
+  // Phase 7 — optional parent for a simple hierarchy (Category.parentId).
+  parentId: z26.string().trim().uuid().optional()
 });
-var updateProductSchema = z26.object({
-  name: z26.string().trim().min(1).max(200).optional(),
-  slug: z26.string().trim().min(1).max(100).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)").optional(),
-  type: productTypeSchema.optional(),
-  shortDescription: z26.string().trim().max(300).nullable().optional(),
-  description: z26.string().trim().max(1e4).nullable().optional(),
-  status: productStatusSchema.optional(),
-  isFeatured: z26.boolean().optional(),
-  displayOrder: z26.number().int().min(0).optional(),
-  featuredMediaId: z26.string().trim().uuid().nullable().optional(),
-  categoryId: z26.string().trim().uuid().nullable().optional(),
-  content: productContentSchema.optional(),
-  relatedProductIds: z26.array(z26.string().trim().uuid()).max(30).optional(),
-  industryIds: z26.array(z26.string().trim().uuid()).max(30).optional()
+var updateCategorySchema = z26.object({
+  name: z26.string().trim().min(1).max(150).optional(),
+  slug: slugSchema2.optional(),
+  description: z26.string().trim().max(2e3).nullable().optional(),
+  parentId: z26.string().trim().uuid().nullable().optional()
 }).refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
-var revertProductSchema = z26.object({
-  revisionId: z26.string().trim().uuid()
+var createTagSchema = z26.object({
+  name: z26.string().trim().min(1).max(100),
+  slug: slugSchema2.optional(),
+  // Phase 7 — optional description, matching Category's own field.
+  description: z26.string().trim().max(2e3).optional()
 });
-var duplicateProductSchema = z26.object({
-  name: z26.string().trim().min(1).max(200).optional()
-});
-var bulkArchiveProductsSchema = z26.object({
+var updateTagSchema = z26.object({
+  name: z26.string().trim().min(1).max(100).optional(),
+  slug: slugSchema2.optional(),
+  description: z26.string().trim().max(2e3).nullable().optional()
+}).refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
+var bulkContentIdsSchema = z26.object({
   ids: z26.array(z26.string().trim().uuid()).min(1).max(100)
 });
 
-// server/schemas/productModuleSchemas.ts
-import { z as z27 } from "zod";
-var productModuleStatusSchema = z27.enum(["DRAFT", "ACTIVE", "INACTIVE"]);
-var listProductModulesQuerySchema = z27.object({
+// server/schemas/productSchemas.ts
+var productTypeSchema = z27.enum(["PRODUCT", "SERVICE", "SOLUTION"]);
+var productStatusSchema = z27.enum(["DRAFT", "ACTIVE", "INACTIVE", "ARCHIVED"]);
+var SORT_FIELDS2 = ["name", "code", "type", "status", "displayOrder", "createdAt", "updatedAt"];
+var listProductsQuerySchema = z27.object({
   page: z27.coerce.number().int().positive().default(1),
-  limit: z27.coerce.number().int().positive().max(100).default(50),
+  limit: z27.coerce.number().int().positive().max(100).default(20),
+  search: z27.string().trim().max(200).optional(),
+  type: productTypeSchema.optional(),
+  status: productStatusSchema.optional(),
+  isFeatured: z27.coerce.boolean().optional(),
+  categoryId: z27.string().trim().uuid().optional(),
+  industryId: z27.string().trim().uuid().optional(),
+  sort: z27.enum(SORT_FIELDS2).default("displayOrder"),
+  order: z27.enum(["asc", "desc"]).default("asc")
+});
+var productContentSchema = z27.object({
+  benefits: z27.array(z27.string().trim().min(1).max(200)).max(20).optional(),
+  features: z27.array(z27.string().trim().min(1).max(200)).max(20).optional(),
+  businessProblem: z27.string().trim().max(2e3).optional(),
+  // Validated for real existence against the public org's Forms at save
+  // time in productService — never trusted as a bare uuid alone.
+  ctaFormId: z27.string().trim().uuid().optional(),
+  seo: seoMetadataSchema.optional()
+});
+var codeSchema = z27.string().trim().min(1).max(50).regex(/^[A-Za-z0-9._-]+$/, "code may only contain letters, numbers, dots, underscores, and hyphens").transform((v) => v.toUpperCase());
+var createProductSchema = z27.object({
+  code: codeSchema,
+  name: z27.string().trim().min(1).max(200),
+  slug: z27.string().trim().min(1).max(100).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)").optional(),
+  type: productTypeSchema,
+  shortDescription: z27.string().trim().max(300).optional(),
+  description: z27.string().trim().max(1e4).optional(),
+  status: productStatusSchema.optional(),
+  isFeatured: z27.boolean().optional(),
+  displayOrder: z27.number().int().min(0).optional(),
+  featuredMediaId: z27.string().trim().uuid().optional(),
+  categoryId: z27.string().trim().uuid().optional(),
+  content: productContentSchema.optional(),
+  relatedProductIds: z27.array(z27.string().trim().uuid()).max(30).optional(),
+  industryIds: z27.array(z27.string().trim().uuid()).max(30).optional()
+});
+var updateProductSchema = z27.object({
+  name: z27.string().trim().min(1).max(200).optional(),
+  slug: z27.string().trim().min(1).max(100).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)").optional(),
+  type: productTypeSchema.optional(),
+  shortDescription: z27.string().trim().max(300).nullable().optional(),
+  description: z27.string().trim().max(1e4).nullable().optional(),
+  status: productStatusSchema.optional(),
+  isFeatured: z27.boolean().optional(),
+  displayOrder: z27.number().int().min(0).optional(),
+  featuredMediaId: z27.string().trim().uuid().nullable().optional(),
+  categoryId: z27.string().trim().uuid().nullable().optional(),
+  content: productContentSchema.optional(),
+  relatedProductIds: z27.array(z27.string().trim().uuid()).max(30).optional(),
+  industryIds: z27.array(z27.string().trim().uuid()).max(30).optional()
+}).refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
+var revertProductSchema = z27.object({
+  revisionId: z27.string().trim().uuid()
+});
+var duplicateProductSchema = z27.object({
+  name: z27.string().trim().min(1).max(200).optional()
+});
+var bulkArchiveProductsSchema = z27.object({
+  ids: z27.array(z27.string().trim().uuid()).min(1).max(100)
+});
+
+// server/schemas/productModuleSchemas.ts
+import { z as z28 } from "zod";
+var productModuleStatusSchema = z28.enum(["DRAFT", "ACTIVE", "INACTIVE"]);
+var listProductModulesQuerySchema = z28.object({
+  page: z28.coerce.number().int().positive().default(1),
+  limit: z28.coerce.number().int().positive().max(100).default(50),
   status: productModuleStatusSchema.optional()
 });
-var codeSchema2 = z27.string().trim().min(1).max(50).regex(/^[A-Za-z0-9._-]+$/, "code may only contain letters, numbers, dots, underscores, and hyphens").transform((v) => v.toUpperCase());
-var slugSchema3 = z27.string().trim().min(1).max(100).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)");
-var createProductModuleSchema = z27.object({
+var codeSchema2 = z28.string().trim().min(1).max(50).regex(/^[A-Za-z0-9._-]+$/, "code may only contain letters, numbers, dots, underscores, and hyphens").transform((v) => v.toUpperCase());
+var slugSchema3 = z28.string().trim().min(1).max(100).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)");
+var createProductModuleSchema = z28.object({
   code: codeSchema2,
-  name: z27.string().trim().min(1).max(200),
+  name: z28.string().trim().min(1).max(200),
   slug: slugSchema3.optional(),
-  description: z27.string().trim().max(1e4).optional(),
+  description: z28.string().trim().max(1e4).optional(),
   status: productModuleStatusSchema.optional(),
-  isCore: z27.boolean().optional(),
-  displayOrder: z27.number().int().min(0).optional()
+  isCore: z28.boolean().optional(),
+  displayOrder: z28.number().int().min(0).optional()
 });
-var updateProductModuleSchema = z27.object({
-  name: z27.string().trim().min(1).max(200).optional(),
+var updateProductModuleSchema = z28.object({
+  name: z28.string().trim().min(1).max(200).optional(),
   slug: slugSchema3.optional(),
-  description: z27.string().trim().max(1e4).nullable().optional(),
+  description: z28.string().trim().max(1e4).nullable().optional(),
   status: productModuleStatusSchema.optional(),
-  isCore: z27.boolean().optional(),
-  displayOrder: z27.number().int().min(0).optional()
+  isCore: z28.boolean().optional(),
+  displayOrder: z28.number().int().min(0).optional()
 }).refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
-var reorderProductModulesSchema = z27.object({
-  moduleIds: z27.array(z27.string().trim().uuid()).min(1).max(200)
+var reorderProductModulesSchema = z28.object({
+  moduleIds: z28.array(z28.string().trim().uuid()).min(1).max(200)
 });
 
 // server/routes/v1/productRoutes.ts
@@ -19217,21 +19266,21 @@ var productCategoryService = {
 };
 
 // server/schemas/productCategorySchemas.ts
-import { z as z28 } from "zod";
-var listProductCategoriesQuerySchema = z28.object({
-  search: z28.string().trim().max(200).optional()
+import { z as z29 } from "zod";
+var listProductCategoriesQuerySchema = z29.object({
+  search: z29.string().trim().max(200).optional()
 });
-var createProductCategorySchema = z28.object({
-  name: z28.string().trim().min(1).max(150),
-  slug: z28.string().trim().min(1).max(100).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)").optional(),
-  description: z28.string().trim().max(1e3).optional(),
-  displayOrder: z28.number().int().min(0).optional()
+var createProductCategorySchema = z29.object({
+  name: z29.string().trim().min(1).max(150),
+  slug: z29.string().trim().min(1).max(100).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)").optional(),
+  description: z29.string().trim().max(1e3).optional(),
+  displayOrder: z29.number().int().min(0).optional()
 });
-var updateProductCategorySchema = z28.object({
-  name: z28.string().trim().min(1).max(150).optional(),
-  slug: z28.string().trim().min(1).max(100).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)").optional(),
-  description: z28.string().trim().max(1e3).nullable().optional(),
-  displayOrder: z28.number().int().min(0).optional()
+var updateProductCategorySchema = z29.object({
+  name: z29.string().trim().min(1).max(150).optional(),
+  slug: z29.string().trim().min(1).max(100).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)").optional(),
+  description: z29.string().trim().max(1e3).nullable().optional(),
+  displayOrder: z29.number().int().min(0).optional()
 }).refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
 
 // server/routes/v1/productCategoryRoutes.ts
@@ -19366,21 +19415,21 @@ var industryService = {
 };
 
 // server/schemas/industrySchemas.ts
-import { z as z29 } from "zod";
-var listIndustriesQuerySchema = z29.object({
-  search: z29.string().trim().max(200).optional()
+import { z as z30 } from "zod";
+var listIndustriesQuerySchema = z30.object({
+  search: z30.string().trim().max(200).optional()
 });
-var createIndustrySchema = z29.object({
-  name: z29.string().trim().min(1).max(150),
-  slug: z29.string().trim().min(1).max(100).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)").optional(),
-  description: z29.string().trim().max(1e3).optional(),
-  displayOrder: z29.number().int().min(0).optional()
+var createIndustrySchema = z30.object({
+  name: z30.string().trim().min(1).max(150),
+  slug: z30.string().trim().min(1).max(100).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)").optional(),
+  description: z30.string().trim().max(1e3).optional(),
+  displayOrder: z30.number().int().min(0).optional()
 });
-var updateIndustrySchema = z29.object({
-  name: z29.string().trim().min(1).max(150).optional(),
-  slug: z29.string().trim().min(1).max(100).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)").optional(),
-  description: z29.string().trim().max(1e3).nullable().optional(),
-  displayOrder: z29.number().int().min(0).optional()
+var updateIndustrySchema = z30.object({
+  name: z30.string().trim().min(1).max(150).optional(),
+  slug: z30.string().trim().min(1).max(100).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)").optional(),
+  description: z30.string().trim().max(1e3).nullable().optional(),
+  displayOrder: z30.number().int().min(0).optional()
 }).refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
 
 // server/routes/v1/industryRoutes.ts
@@ -19430,55 +19479,55 @@ var industryRoutes_default = router27;
 import { Router as Router28 } from "express";
 
 // server/schemas/pageSchemas.ts
-import { z as z30 } from "zod";
-var slugSchema4 = z30.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)");
-var pageTypeSchema = z30.enum(["STANDARD", "LANDING"]);
-var createPageSchema = z30.object({
-  title: z30.string().trim().min(1).max(200),
+import { z as z31 } from "zod";
+var slugSchema4 = z31.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)");
+var pageTypeSchema = z31.enum(["STANDARD", "LANDING"]);
+var createPageSchema = z31.object({
+  title: z31.string().trim().min(1).max(200),
   slug: slugSchema4.optional(),
-  body: z30.string().trim().max(5e5).default(""),
+  body: z31.string().trim().max(5e5).default(""),
   // Phase 7 — short author-written summary, distinct from SEO metaDescription.
-  excerpt: z30.string().trim().max(500).optional(),
+  excerpt: z31.string().trim().max(500).optional(),
   metadata: seoMetadataSchema.optional(),
   // Phase 2 (Site Editor) — additive, optional. A page created without it
   // behaves exactly as before: body/metadata alone drive rendering
   // (publicSiteService.ts falls back whenever editorBlocks is absent).
   editorBlocks: editorDocumentSchema.optional(),
-  featuredMediaId: z30.string().trim().uuid().optional(),
-  templateId: z30.string().trim().uuid().optional(),
+  featuredMediaId: z31.string().trim().uuid().optional(),
+  templateId: z31.string().trim().uuid().optional(),
   pageType: pageTypeSchema.optional(),
-  isHomepage: z30.boolean().optional(),
+  isHomepage: z31.boolean().optional(),
   // Phase 5 — additive, optional. A page created without it behaves
   // exactly as before: parentId null, no hierarchy.
-  parentId: z30.string().trim().uuid().optional()
+  parentId: z31.string().trim().uuid().optional()
 });
-var updatePageSchema = z30.object({
-  title: z30.string().trim().min(1).max(200).optional(),
+var updatePageSchema = z31.object({
+  title: z31.string().trim().min(1).max(200).optional(),
   slug: slugSchema4.optional(),
-  body: z30.string().trim().max(5e5).optional(),
-  excerpt: z30.string().trim().max(500).nullable().optional(),
+  body: z31.string().trim().max(5e5).optional(),
+  excerpt: z31.string().trim().max(500).nullable().optional(),
   metadata: seoMetadataSchema.optional(),
   // null clears the editor composition (falls back to body-only
   // rendering); omitted leaves it unchanged.
   editorBlocks: editorDocumentSchema.nullable().optional(),
   status: patchableContentStatusSchema.optional(),
-  featuredMediaId: z30.string().trim().uuid().nullable().optional(),
+  featuredMediaId: z31.string().trim().uuid().nullable().optional(),
   // null explicitly unassigns the template (falls back to default
   // rendering — see publicSiteService.ts); omitted leaves it unchanged.
-  templateId: z30.string().trim().uuid().nullable().optional(),
+  templateId: z31.string().trim().uuid().nullable().optional(),
   pageType: pageTypeSchema.optional(),
-  isHomepage: z30.boolean().optional(),
+  isHomepage: z31.boolean().optional(),
   // null explicitly clears the parent (promotes to top-level); omitted
   // leaves it unchanged.
-  parentId: z30.string().trim().uuid().nullable().optional(),
+  parentId: z31.string().trim().uuid().nullable().optional(),
   expectedUpdatedAt: expectedUpdatedAtSchema
 }).refine((v) => Object.keys(v).filter((k) => k !== "expectedUpdatedAt").length > 0, { message: "At least one field must be provided." });
 
 // server/routes/v1/pageRoutes.ts
-import { z as z31 } from "zod";
-var trashQuerySchema = z31.object({
-  page: z31.coerce.number().int().positive().default(1),
-  limit: z31.coerce.number().int().positive().max(100).default(20)
+import { z as z32 } from "zod";
+var trashQuerySchema = z32.object({
+  page: z32.coerce.number().int().positive().default(1),
+  limit: z32.coerce.number().int().positive().max(100).default(20)
 });
 var router28 = Router28();
 router28.use(authenticateToken);
@@ -20090,8 +20139,8 @@ var templateService = {
 };
 
 // server/schemas/templateSchemas.ts
-import { z as z32 } from "zod";
-var templateTypeSchema = z32.enum([
+import { z as z33 } from "zod";
+var templateTypeSchema = z33.enum([
   "HOMEPAGE",
   "STANDARD_PAGE",
   "BLOG_INDEX",
@@ -20108,7 +20157,7 @@ var templateTypeSchema = z32.enum([
   "CASE_STUDY",
   "LANDING_PAGE"
 ]);
-var templatePartTypeSchema = z32.enum([
+var templatePartTypeSchema = z33.enum([
   "HEADER",
   "FOOTER",
   "PRIMARY_NAVIGATION",
@@ -20120,65 +20169,65 @@ var templatePartTypeSchema = z32.enum([
   "CONTACT_SECTION",
   "SOCIAL_SECTION"
 ]);
-var templateWorkflowStatusSchema = z32.enum(["DRAFT", "PUBLISHED", "ARCHIVED"]);
-var slugSchema5 = z32.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)");
+var templateWorkflowStatusSchema = z33.enum(["DRAFT", "PUBLISHED", "ARCHIVED"]);
+var slugSchema5 = z33.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)");
 var SORT_FIELDS3 = ["name", "slug", "type", "status", "createdAt", "updatedAt"];
-var listTemplatesQuerySchema = z32.object({
-  page: z32.coerce.number().int().positive().default(1),
-  limit: z32.coerce.number().int().positive().max(100).default(20),
-  search: z32.string().trim().max(200).optional(),
+var listTemplatesQuerySchema = z33.object({
+  page: z33.coerce.number().int().positive().default(1),
+  limit: z33.coerce.number().int().positive().max(100).default(20),
+  search: z33.string().trim().max(200).optional(),
   status: templateWorkflowStatusSchema.optional(),
   type: templateTypeSchema.optional(),
-  sort: z32.enum(SORT_FIELDS3).default("updatedAt"),
-  order: z32.enum(["asc", "desc"]).default("desc")
+  sort: z33.enum(SORT_FIELDS3).default("updatedAt"),
+  order: z33.enum(["asc", "desc"]).default("desc")
 });
-var templateStructureSchema = z32.record(z32.unknown());
-var createTemplateSchema = z32.object({
+var templateStructureSchema = z33.record(z33.unknown());
+var createTemplateSchema = z33.object({
   type: templateTypeSchema,
-  name: z32.string().trim().min(1).max(150),
+  name: z33.string().trim().min(1).max(150),
   slug: slugSchema5.optional(),
-  description: z32.string().trim().max(2e3).optional(),
+  description: z33.string().trim().max(2e3).optional(),
   structure: templateStructureSchema.default({})
 });
-var updateTemplateSchema = z32.object({
-  name: z32.string().trim().min(1).max(150).optional(),
+var updateTemplateSchema = z33.object({
+  name: z33.string().trim().min(1).max(150).optional(),
   slug: slugSchema5.optional(),
-  description: z32.string().trim().max(2e3).nullable().optional(),
+  description: z33.string().trim().max(2e3).nullable().optional(),
   structure: templateStructureSchema.optional(),
   expectedUpdatedAt: expectedUpdatedAtSchema
 }).refine((v) => Object.keys(v).filter((k) => k !== "expectedUpdatedAt").length > 0, { message: "At least one field must be provided." });
-var duplicateTemplateSchema = z32.object({
-  name: z32.string().trim().min(1).max(150).optional()
+var duplicateTemplateSchema = z33.object({
+  name: z33.string().trim().min(1).max(150).optional()
 });
-var revertTemplateSchema = z32.object({
-  revisionId: z32.string().trim().uuid()
+var revertTemplateSchema = z33.object({
+  revisionId: z33.string().trim().uuid()
 });
-var listTemplatePartsQuerySchema = z32.object({
-  page: z32.coerce.number().int().positive().default(1),
-  limit: z32.coerce.number().int().positive().max(100).default(20),
-  search: z32.string().trim().max(200).optional(),
+var listTemplatePartsQuerySchema = z33.object({
+  page: z33.coerce.number().int().positive().default(1),
+  limit: z33.coerce.number().int().positive().max(100).default(20),
+  search: z33.string().trim().max(200).optional(),
   status: templateWorkflowStatusSchema.optional(),
   type: templatePartTypeSchema.optional(),
-  sort: z32.enum(SORT_FIELDS3).default("updatedAt"),
-  order: z32.enum(["asc", "desc"]).default("desc")
+  sort: z33.enum(SORT_FIELDS3).default("updatedAt"),
+  order: z33.enum(["asc", "desc"]).default("desc")
 });
-var createTemplatePartSchema = z32.object({
+var createTemplatePartSchema = z33.object({
   type: templatePartTypeSchema,
-  name: z32.string().trim().min(1).max(150),
+  name: z33.string().trim().min(1).max(150),
   slug: slugSchema5.optional(),
-  content: z32.record(z32.unknown()).default({})
+  content: z33.record(z33.unknown()).default({})
 });
-var updateTemplatePartSchema = z32.object({
-  name: z32.string().trim().min(1).max(150).optional(),
+var updateTemplatePartSchema = z33.object({
+  name: z33.string().trim().min(1).max(150).optional(),
   slug: slugSchema5.optional(),
-  content: z32.record(z32.unknown()).optional(),
+  content: z33.record(z33.unknown()).optional(),
   expectedUpdatedAt: expectedUpdatedAtSchema
 }).refine((v) => Object.keys(v).filter((k) => k !== "expectedUpdatedAt").length > 0, { message: "At least one field must be provided." });
-var duplicateTemplatePartSchema = z32.object({
-  name: z32.string().trim().min(1).max(150).optional()
+var duplicateTemplatePartSchema = z33.object({
+  name: z33.string().trim().min(1).max(150).optional()
 });
-var revertTemplatePartSchema = z32.object({
-  revisionId: z32.string().trim().uuid()
+var revertTemplatePartSchema = z33.object({
+  revisionId: z33.string().trim().uuid()
 });
 
 // server/routes/v1/templateRoutes.ts
@@ -21103,54 +21152,54 @@ var navigationMenuService = {
 };
 
 // server/schemas/navigationMenuSchemas.ts
-import { z as z33 } from "zod";
-var navigationMenuTypeSchema = z33.enum(["PRIMARY", "HEADER", "FOOTER", "MOBILE", "CUSTOM"]);
-var navigationMenuWorkflowStatusSchema = z33.enum(["DRAFT", "PUBLISHED", "ARCHIVED"]);
-var slugSchema6 = z33.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)");
+import { z as z34 } from "zod";
+var navigationMenuTypeSchema = z34.enum(["PRIMARY", "HEADER", "FOOTER", "MOBILE", "CUSTOM"]);
+var navigationMenuWorkflowStatusSchema = z34.enum(["DRAFT", "PUBLISHED", "ARCHIVED"]);
+var slugSchema6 = z34.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)");
 var SORT_FIELDS4 = ["name", "slug", "type", "status", "createdAt", "updatedAt"];
-var menuLinkTypeSchema = z33.enum(["page", "post", "category", "tag", "product", "custom"]);
+var menuLinkTypeSchema = z34.enum(["page", "post", "category", "tag", "product", "custom"]);
 var MAX_MENU_DEPTH = 4;
 function menuItemSchemaAtDepth(depth) {
-  return z33.object({
-    id: z33.string().trim().min(1).max(100),
-    label: z33.string().trim().min(1).max(150),
+  return z34.object({
+    id: z34.string().trim().min(1).max(100),
+    label: z34.string().trim().min(1).max(150),
     linkType: menuLinkTypeSchema,
-    targetId: z33.string().trim().uuid().optional(),
-    url: z33.string().trim().max(2e3).optional(),
-    openInNewTab: z33.boolean().default(false),
-    children: depth >= MAX_MENU_DEPTH ? z33.array(z33.never()).default([]) : z33.lazy(() => menuItemSchemaAtDepth(depth + 1).array()).default([])
+    targetId: z34.string().trim().uuid().optional(),
+    url: z34.string().trim().max(2e3).optional(),
+    openInNewTab: z34.boolean().default(false),
+    children: depth >= MAX_MENU_DEPTH ? z34.array(z34.never()).default([]) : z34.lazy(() => menuItemSchemaAtDepth(depth + 1).array()).default([])
   }).refine((item) => item.linkType === "custom" ? !!item.url : !!item.targetId, {
     message: "A custom link needs a url; any other link type needs a targetId."
   });
 }
 var menuItemSchema = menuItemSchemaAtDepth(0);
-var menuItemsSchema = z33.array(menuItemSchema).default([]);
-var listNavigationMenusQuerySchema = z33.object({
-  page: z33.coerce.number().int().positive().default(1),
-  limit: z33.coerce.number().int().positive().max(100).default(20),
-  search: z33.string().trim().max(200).optional(),
+var menuItemsSchema = z34.array(menuItemSchema).default([]);
+var listNavigationMenusQuerySchema = z34.object({
+  page: z34.coerce.number().int().positive().default(1),
+  limit: z34.coerce.number().int().positive().max(100).default(20),
+  search: z34.string().trim().max(200).optional(),
   status: navigationMenuWorkflowStatusSchema.optional(),
   type: navigationMenuTypeSchema.optional(),
-  sort: z33.enum(SORT_FIELDS4).default("updatedAt"),
-  order: z33.enum(["asc", "desc"]).default("desc")
+  sort: z34.enum(SORT_FIELDS4).default("updatedAt"),
+  order: z34.enum(["asc", "desc"]).default("desc")
 });
-var createNavigationMenuSchema = z33.object({
+var createNavigationMenuSchema = z34.object({
   type: navigationMenuTypeSchema,
-  name: z33.string().trim().min(1).max(150),
+  name: z34.string().trim().min(1).max(150),
   slug: slugSchema6.optional(),
   items: menuItemsSchema
 });
-var updateNavigationMenuSchema = z33.object({
-  name: z33.string().trim().min(1).max(150).optional(),
+var updateNavigationMenuSchema = z34.object({
+  name: z34.string().trim().min(1).max(150).optional(),
   slug: slugSchema6.optional(),
   items: menuItemsSchema.optional(),
   expectedUpdatedAt: expectedUpdatedAtSchema
 }).refine((v) => Object.keys(v).filter((k) => k !== "expectedUpdatedAt").length > 0, { message: "At least one field must be provided." });
-var duplicateNavigationMenuSchema = z33.object({
-  name: z33.string().trim().min(1).max(150).optional()
+var duplicateNavigationMenuSchema = z34.object({
+  name: z34.string().trim().min(1).max(150).optional()
 });
-var revertNavigationMenuSchema = z33.object({
-  revisionId: z33.string().trim().uuid()
+var revertNavigationMenuSchema = z34.object({
+  revisionId: z34.string().trim().uuid()
 });
 
 // server/routes/v1/navigationMenuRoutes.ts
@@ -21265,52 +21314,52 @@ var navigationMenuRoutes_default = router31;
 import { Router as Router32 } from "express";
 
 // server/schemas/postSchemas.ts
-import { z as z34 } from "zod";
-var slugSchema7 = z34.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)");
-var createPostSchema = z34.object({
-  title: z34.string().trim().min(1).max(200),
+import { z as z35 } from "zod";
+var slugSchema7 = z35.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)");
+var createPostSchema = z35.object({
+  title: z35.string().trim().min(1).max(200),
   slug: slugSchema7.optional(),
-  body: z34.string().trim().max(5e5).default(""),
+  body: z35.string().trim().max(5e5).default(""),
   // Phase 7 — short author-written summary, distinct from SEO metaDescription.
-  excerpt: z34.string().trim().max(500).optional(),
+  excerpt: z35.string().trim().max(500).optional(),
   metadata: seoMetadataSchema.optional(),
-  categoryId: z34.string().trim().uuid().optional(),
-  authorId: z34.string().trim().uuid().optional(),
-  tagIds: z34.array(z34.string().trim().uuid()).max(50).optional(),
-  featuredMediaId: z34.string().trim().uuid().optional()
+  categoryId: z35.string().trim().uuid().optional(),
+  authorId: z35.string().trim().uuid().optional(),
+  tagIds: z35.array(z35.string().trim().uuid()).max(50).optional(),
+  featuredMediaId: z35.string().trim().uuid().optional()
 });
-var updatePostSchema = z34.object({
-  title: z34.string().trim().min(1).max(200).optional(),
+var updatePostSchema = z35.object({
+  title: z35.string().trim().min(1).max(200).optional(),
   slug: slugSchema7.optional(),
-  body: z34.string().trim().max(5e5).optional(),
-  excerpt: z34.string().trim().max(500).nullable().optional(),
+  body: z35.string().trim().max(5e5).optional(),
+  excerpt: z35.string().trim().max(500).nullable().optional(),
   metadata: seoMetadataSchema.optional(),
   status: patchableContentStatusSchema.optional(),
-  categoryId: z34.string().trim().uuid().nullable().optional(),
-  authorId: z34.string().trim().uuid().nullable().optional(),
-  tagIds: z34.array(z34.string().trim().uuid()).max(50).optional(),
-  featuredMediaId: z34.string().trim().uuid().nullable().optional(),
+  categoryId: z35.string().trim().uuid().nullable().optional(),
+  authorId: z35.string().trim().uuid().nullable().optional(),
+  tagIds: z35.array(z35.string().trim().uuid()).max(50).optional(),
+  featuredMediaId: z35.string().trim().uuid().nullable().optional(),
   expectedUpdatedAt: expectedUpdatedAtSchema
 }).refine((v) => Object.keys(v).filter((k) => k !== "expectedUpdatedAt").length > 0, { message: "At least one field must be provided." });
-var listPostsQuerySchema = z34.object({
-  page: z34.coerce.number().int().positive().default(1),
-  limit: z34.coerce.number().int().positive().max(100).default(20),
-  search: z34.string().trim().max(200).optional(),
-  status: z34.enum(["DRAFT", "IN_REVIEW", "SCHEDULED", "PUBLISHED", "ARCHIVED"]).optional(),
-  categoryId: z34.string().trim().uuid().optional(),
-  tagId: z34.string().trim().uuid().optional(),
+var listPostsQuerySchema = z35.object({
+  page: z35.coerce.number().int().positive().default(1),
+  limit: z35.coerce.number().int().positive().max(100).default(20),
+  search: z35.string().trim().max(200).optional(),
+  status: z35.enum(["DRAFT", "IN_REVIEW", "SCHEDULED", "PUBLISHED", "ARCHIVED"]).optional(),
+  categoryId: z35.string().trim().uuid().optional(),
+  tagId: z35.string().trim().uuid().optional(),
   // Phase 7 — Content Dashboard date filtering, inclusive range over createdAt.
-  fromDate: z34.coerce.date().optional(),
-  toDate: z34.coerce.date().optional(),
-  sort: z34.enum(["title", "slug", "status", "createdAt", "updatedAt", "publishedAt"]).default("updatedAt"),
-  order: z34.enum(["asc", "desc"]).default("desc")
+  fromDate: z35.coerce.date().optional(),
+  toDate: z35.coerce.date().optional(),
+  sort: z35.enum(["title", "slug", "status", "createdAt", "updatedAt", "publishedAt"]).default("updatedAt"),
+  order: z35.enum(["asc", "desc"]).default("desc")
 });
 
 // server/routes/v1/postRoutes.ts
-import { z as z35 } from "zod";
-var trashQuerySchema2 = z35.object({
-  page: z35.coerce.number().int().positive().default(1),
-  limit: z35.coerce.number().int().positive().max(100).default(20)
+import { z as z36 } from "zod";
+var trashQuerySchema2 = z36.object({
+  page: z36.coerce.number().int().positive().default(1),
+  limit: z36.coerce.number().int().positive().max(100).default(20)
 });
 var router32 = Router32();
 router32.use(authenticateToken);
@@ -21937,69 +21986,69 @@ var caseStudyService = {
 };
 
 // server/schemas/caseStudySchemas.ts
-import { z as z36 } from "zod";
-var slugSchema8 = z36.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)");
-var uuidArray2 = (max) => z36.array(z36.string().trim().uuid()).max(max);
+import { z as z37 } from "zod";
+var slugSchema8 = z37.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)");
+var uuidArray2 = (max) => z37.array(z37.string().trim().uuid()).max(max);
 var caseStudyContentSchema = seoMetadataSchema.extend({
-  challenge: z36.string().trim().max(5e3).optional(),
-  solutionApproach: z36.string().trim().max(5e3).optional(),
-  implementation: z36.string().trim().max(5e3).optional(),
-  results: z36.string().trim().max(5e3).optional(),
-  testimonialQuote: z36.string().trim().max(2e3).optional(),
-  testimonialAuthorName: z36.string().trim().max(150).optional(),
-  testimonialAuthorTitle: z36.string().trim().max(150).optional(),
-  technologies: z36.array(z36.string().trim().min(1).max(80)).max(30).optional(),
+  challenge: z37.string().trim().max(5e3).optional(),
+  solutionApproach: z37.string().trim().max(5e3).optional(),
+  implementation: z37.string().trim().max(5e3).optional(),
+  results: z37.string().trim().max(5e3).optional(),
+  testimonialQuote: z37.string().trim().max(2e3).optional(),
+  testimonialAuthorName: z37.string().trim().max(150).optional(),
+  testimonialAuthorTitle: z37.string().trim().max(150).optional(),
+  technologies: z37.array(z37.string().trim().min(1).max(80)).max(30).optional(),
   galleryMediaIds: uuidArray2(30).optional(),
-  ctaFormId: z36.string().trim().uuid().optional()
+  ctaFormId: z37.string().trim().uuid().optional()
 });
-var createCaseStudySchema = z36.object({
-  title: z36.string().trim().min(1).max(200),
+var createCaseStudySchema = z37.object({
+  title: z37.string().trim().min(1).max(200),
   slug: slugSchema8.optional(),
-  body: z36.string().trim().max(5e5).default(""),
-  excerpt: z36.string().trim().max(500).optional(),
+  body: z37.string().trim().max(5e5).default(""),
+  excerpt: z37.string().trim().max(500).optional(),
   content: caseStudyContentSchema.optional(),
   editorBlocks: editorDocumentSchema.optional(),
-  clientName: z36.string().trim().min(1).max(200).optional(),
-  industryId: z36.string().trim().uuid().optional(),
-  featuredMediaId: z36.string().trim().uuid().optional(),
+  clientName: z37.string().trim().min(1).max(200).optional(),
+  industryId: z37.string().trim().uuid().optional(),
+  featuredMediaId: z37.string().trim().uuid().optional(),
   productIds: uuidArray2(50).optional(),
   relatedPageIds: uuidArray2(50).optional(),
   relatedPostIds: uuidArray2(50).optional()
 });
-var updateCaseStudySchema = z36.object({
-  title: z36.string().trim().min(1).max(200).optional(),
+var updateCaseStudySchema = z37.object({
+  title: z37.string().trim().min(1).max(200).optional(),
   slug: slugSchema8.optional(),
-  body: z36.string().trim().max(5e5).optional(),
-  excerpt: z36.string().trim().max(500).nullable().optional(),
+  body: z37.string().trim().max(5e5).optional(),
+  excerpt: z37.string().trim().max(500).nullable().optional(),
   content: caseStudyContentSchema.optional(),
   editorBlocks: editorDocumentSchema.nullable().optional(),
   status: patchableContentStatusSchema.optional(),
-  clientName: z36.string().trim().min(1).max(200).nullable().optional(),
-  industryId: z36.string().trim().uuid().nullable().optional(),
-  featuredMediaId: z36.string().trim().uuid().nullable().optional(),
+  clientName: z37.string().trim().min(1).max(200).nullable().optional(),
+  industryId: z37.string().trim().uuid().nullable().optional(),
+  featuredMediaId: z37.string().trim().uuid().nullable().optional(),
   productIds: uuidArray2(50).optional(),
   relatedPageIds: uuidArray2(50).optional(),
   relatedPostIds: uuidArray2(50).optional(),
   expectedUpdatedAt: expectedUpdatedAtSchema
 }).refine((v) => Object.keys(v).filter((k) => k !== "expectedUpdatedAt").length > 0, { message: "At least one field must be provided." });
-var listCaseStudiesQuerySchema = z36.object({
-  page: z36.coerce.number().int().positive().default(1),
-  limit: z36.coerce.number().int().positive().max(100).default(20),
-  search: z36.string().trim().max(200).optional(),
-  status: z36.enum(["DRAFT", "IN_REVIEW", "SCHEDULED", "PUBLISHED", "ARCHIVED"]).optional(),
-  industryId: z36.string().trim().uuid().optional(),
-  productId: z36.string().trim().uuid().optional(),
-  fromDate: z36.coerce.date().optional(),
-  toDate: z36.coerce.date().optional(),
-  sort: z36.enum(["title", "slug", "status", "createdAt", "updatedAt", "publishedAt"]).default("updatedAt"),
-  order: z36.enum(["asc", "desc"]).default("desc")
+var listCaseStudiesQuerySchema = z37.object({
+  page: z37.coerce.number().int().positive().default(1),
+  limit: z37.coerce.number().int().positive().max(100).default(20),
+  search: z37.string().trim().max(200).optional(),
+  status: z37.enum(["DRAFT", "IN_REVIEW", "SCHEDULED", "PUBLISHED", "ARCHIVED"]).optional(),
+  industryId: z37.string().trim().uuid().optional(),
+  productId: z37.string().trim().uuid().optional(),
+  fromDate: z37.coerce.date().optional(),
+  toDate: z37.coerce.date().optional(),
+  sort: z37.enum(["title", "slug", "status", "createdAt", "updatedAt", "publishedAt"]).default("updatedAt"),
+  order: z37.enum(["asc", "desc"]).default("desc")
 });
 
 // server/routes/v1/caseStudyRoutes.ts
-import { z as z37 } from "zod";
-var trashQuerySchema3 = z37.object({
-  page: z37.coerce.number().int().positive().default(1),
-  limit: z37.coerce.number().int().positive().max(100).default(20)
+import { z as z38 } from "zod";
+var trashQuerySchema3 = z38.object({
+  page: z38.coerce.number().int().positive().default(1),
+  limit: z38.coerce.number().int().positive().max(100).default(20)
 });
 var router33 = Router33();
 router33.use(authenticateToken);
@@ -22322,28 +22371,28 @@ var categoryRoutes_default = router34;
 import { Router as Router35 } from "express";
 
 // server/schemas/redirectSchemas.ts
-import { z as z38 } from "zod";
-var sitePathSchema = z38.string().trim().min(1).max(2048).refine((v) => v.startsWith("/") && !v.startsWith("//"), { message: "Must be a site-relative path starting with a single /." }).refine((v) => !/[a-z][a-z0-9+.-]*:/i.test(v), { message: "Must not contain a URL scheme." });
-var listRedirectsQuerySchema = z38.object({
-  page: z38.coerce.number().int().positive().default(1),
-  limit: z38.coerce.number().int().positive().max(100).default(20),
-  search: z38.string().trim().max(200).optional(),
-  isActive: z38.enum(["true", "false"]).optional().transform((v) => v === void 0 ? void 0 : v === "true"),
-  sort: z38.enum(["createdAt", "updatedAt", "fromPath", "toPath"]).default("createdAt"),
-  order: z38.enum(["asc", "desc"]).default("desc")
+import { z as z39 } from "zod";
+var sitePathSchema = z39.string().trim().min(1).max(2048).refine((v) => v.startsWith("/") && !v.startsWith("//"), { message: "Must be a site-relative path starting with a single /." }).refine((v) => !/[a-z][a-z0-9+.-]*:/i.test(v), { message: "Must not contain a URL scheme." });
+var listRedirectsQuerySchema = z39.object({
+  page: z39.coerce.number().int().positive().default(1),
+  limit: z39.coerce.number().int().positive().max(100).default(20),
+  search: z39.string().trim().max(200).optional(),
+  isActive: z39.enum(["true", "false"]).optional().transform((v) => v === void 0 ? void 0 : v === "true"),
+  sort: z39.enum(["createdAt", "updatedAt", "fromPath", "toPath"]).default("createdAt"),
+  order: z39.enum(["asc", "desc"]).default("desc")
 });
-var createRedirectSchema = z38.object({
+var createRedirectSchema = z39.object({
   fromPath: sitePathSchema,
   toPath: sitePathSchema,
-  statusCode: z38.union([z38.literal(301), z38.literal(302), z38.literal(307), z38.literal(308)]).default(301),
-  isActive: z38.boolean().default(true),
-  notes: z38.string().trim().max(1e3).optional()
+  statusCode: z39.union([z39.literal(301), z39.literal(302), z39.literal(307), z39.literal(308)]).default(301),
+  isActive: z39.boolean().default(true),
+  notes: z39.string().trim().max(1e3).optional()
 }).strict().refine((v) => v.fromPath !== v.toPath, { message: "fromPath and toPath must differ.", path: ["toPath"] });
-var updateRedirectSchema = z38.object({
+var updateRedirectSchema = z39.object({
   toPath: sitePathSchema.optional(),
-  statusCode: z38.union([z38.literal(301), z38.literal(302), z38.literal(307), z38.literal(308)]).optional(),
-  isActive: z38.boolean().optional(),
-  notes: z38.string().trim().max(1e3).nullable().optional()
+  statusCode: z39.union([z39.literal(301), z39.literal(302), z39.literal(307), z39.literal(308)]).optional(),
+  isActive: z39.boolean().optional(),
+  notes: z39.string().trim().max(1e3).nullable().optional()
 }).strict().refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
 
 // server/routes/v1/redirectRoutes.ts
@@ -22747,15 +22796,15 @@ var authorService = {
 };
 
 // server/schemas/authorSchemas.ts
-import { z as z39 } from "zod";
-var createAuthorSchema = z39.object({
-  userId: z39.string().trim().uuid(),
-  bio: z39.string().trim().max(2e3).optional(),
-  avatarUrl: z39.string().trim().url().max(500).optional()
+import { z as z40 } from "zod";
+var createAuthorSchema = z40.object({
+  userId: z40.string().trim().uuid(),
+  bio: z40.string().trim().max(2e3).optional(),
+  avatarUrl: z40.string().trim().url().max(500).optional()
 });
-var updateAuthorSchema = z39.object({
-  bio: z39.string().trim().max(2e3).nullable().optional(),
-  avatarUrl: z39.string().trim().url().max(500).nullable().optional()
+var updateAuthorSchema = z40.object({
+  bio: z40.string().trim().max(2e3).nullable().optional(),
+  avatarUrl: z40.string().trim().url().max(500).nullable().optional()
 }).refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
 
 // server/routes/v1/authorRoutes.ts
@@ -22805,48 +22854,48 @@ import { Router as Router39 } from "express";
 import express2 from "express";
 
 // server/schemas/mediaSchemas.ts
-import { z as z40 } from "zod";
+import { z as z41 } from "zod";
 var SORT_FIELDS5 = ["originalFilename", "displayName", "mimeType", "sizeBytes", "status", "createdAt", "updatedAt"];
-var listMediaQuerySchema = z40.object({
-  page: z40.coerce.number().int().positive().default(1),
-  limit: z40.coerce.number().int().positive().max(100).default(20),
-  search: z40.string().trim().max(200).optional(),
-  status: z40.enum(["PENDING", "ACTIVE", "FAILED", "ARCHIVED"]).optional(),
-  mimeType: z40.enum(ALLOWED_MIME_TYPES).optional(),
-  uploadedById: z40.string().trim().uuid().optional(),
-  dateFrom: z40.coerce.date().optional(),
-  dateTo: z40.coerce.date().optional(),
+var listMediaQuerySchema = z41.object({
+  page: z41.coerce.number().int().positive().default(1),
+  limit: z41.coerce.number().int().positive().max(100).default(20),
+  search: z41.string().trim().max(200).optional(),
+  status: z41.enum(["PENDING", "ACTIVE", "FAILED", "ARCHIVED"]).optional(),
+  mimeType: z41.enum(ALLOWED_MIME_TYPES).optional(),
+  uploadedById: z41.string().trim().uuid().optional(),
+  dateFrom: z41.coerce.date().optional(),
+  dateTo: z41.coerce.date().optional(),
   // Phase 13 — Client Documents: filter the same Media Library by the
   // client/onboarding record a document was uploaded against.
-  clientId: z40.string().trim().uuid().optional(),
-  onboardingId: z40.string().trim().uuid().optional(),
-  sort: z40.enum(SORT_FIELDS5).default("createdAt"),
-  order: z40.enum(["asc", "desc"]).default("desc")
+  clientId: z41.string().trim().uuid().optional(),
+  onboardingId: z41.string().trim().uuid().optional(),
+  sort: z41.enum(SORT_FIELDS5).default("createdAt"),
+  order: z41.enum(["asc", "desc"]).default("desc")
 });
-var createUploadSessionSchema = z40.object({
-  filename: z40.string().trim().min(1).max(255),
-  mimeType: z40.enum(ALLOWED_MIME_TYPES),
-  sizeBytes: z40.number().int().positive(),
-  displayName: z40.string().trim().max(255).optional(),
-  altText: z40.string().trim().max(500).optional(),
-  caption: z40.string().trim().max(1e3).optional(),
+var createUploadSessionSchema = z41.object({
+  filename: z41.string().trim().min(1).max(255),
+  mimeType: z41.enum(ALLOWED_MIME_TYPES),
+  sizeBytes: z41.number().int().positive(),
+  displayName: z41.string().trim().max(255).optional(),
+  altText: z41.string().trim().max(500).optional(),
+  caption: z41.string().trim().max(1e3).optional(),
   // Phase 13 — associates this upload with a Client (and optionally one
   // specific onboarding record) as a Client Document, reusing the same
   // signed-upload pipeline as every other media asset.
-  clientId: z40.string().trim().uuid().optional(),
-  onboardingId: z40.string().trim().uuid().optional(),
-  documentCategory: z40.string().trim().max(100).optional()
+  clientId: z41.string().trim().uuid().optional(),
+  onboardingId: z41.string().trim().uuid().optional(),
+  documentCategory: z41.string().trim().max(100).optional()
 });
-var completeUploadSchema = z40.object({
-  token: z40.string().trim().min(1)
+var completeUploadSchema = z41.object({
+  token: z41.string().trim().min(1)
 });
-var updateMediaSchema = z40.object({
-  displayName: z40.string().trim().max(255).nullable().optional(),
-  altText: z40.string().trim().max(500).nullable().optional(),
-  caption: z40.string().trim().max(1e3).nullable().optional(),
-  visibility: z40.enum(["PRIVATE", "PUBLIC"]).optional(),
-  documentCategory: z40.string().trim().max(100).nullable().optional(),
-  isClientVisible: z40.boolean().optional()
+var updateMediaSchema = z41.object({
+  displayName: z41.string().trim().max(255).nullable().optional(),
+  altText: z41.string().trim().max(500).nullable().optional(),
+  caption: z41.string().trim().max(1e3).nullable().optional(),
+  visibility: z41.enum(["PRIVATE", "PUBLIC"]).optional(),
+  documentCategory: z41.string().trim().max(100).nullable().optional(),
+  isClientVisible: z41.boolean().optional()
 }).refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
 
 // server/routes/v1/mediaRoutes.ts
@@ -22996,57 +23045,57 @@ var mediaRoutes_default = router39;
 import { Router as Router40 } from "express";
 
 // server/schemas/contractSchemas.ts
-import { z as z42 } from "zod";
+import { z as z43 } from "zod";
 
 // server/schemas/commercialSchemas.ts
-import { z as z41 } from "zod";
-var expectedUpdatedAtSchema2 = z41.coerce.date().optional();
-var currencyCodeSchema = z41.string().trim().toUpperCase().regex(/^[A-Z]{3}$/, "currency must be a 3-letter ISO 4217 code").default(DEFAULT_CURRENCY);
-var moneyAmountSchema = z41.union([z41.string(), z41.number()]).transform((v) => String(v).trim()).refine((v) => /^\d+(\.\d{1,3})?$/.test(v), { message: "amount must be a non-negative number with at most 3 decimal places" });
-var signedMoneyAmountSchema = z41.union([z41.string(), z41.number()]).transform((v) => String(v).trim()).refine((v) => /^-?\d+(\.\d{1,3})?$/.test(v), { message: "amount must be a number with at most 3 decimal places" });
+import { z as z42 } from "zod";
+var expectedUpdatedAtSchema2 = z42.coerce.date().optional();
+var currencyCodeSchema = z42.string().trim().toUpperCase().regex(/^[A-Z]{3}$/, "currency must be a 3-letter ISO 4217 code").default(DEFAULT_CURRENCY);
+var moneyAmountSchema = z42.union([z42.string(), z42.number()]).transform((v) => String(v).trim()).refine((v) => /^\d+(\.\d{1,3})?$/.test(v), { message: "amount must be a non-negative number with at most 3 decimal places" });
+var signedMoneyAmountSchema = z42.union([z42.string(), z42.number()]).transform((v) => String(v).trim()).refine((v) => /^-?\d+(\.\d{1,3})?$/.test(v), { message: "amount must be a number with at most 3 decimal places" });
 var SORT_ORDER = ["asc", "desc"];
 function paginationQuerySchema(sortFields, defaultSort, defaultOrder = "desc") {
   return {
-    page: z41.coerce.number().int().positive().default(1),
-    limit: z41.coerce.number().int().positive().max(100).default(20),
-    search: z41.string().trim().max(200).optional(),
-    sort: z41.enum(sortFields).default(defaultSort),
-    order: z41.enum(SORT_ORDER).default(defaultOrder)
+    page: z42.coerce.number().int().positive().default(1),
+    limit: z42.coerce.number().int().positive().max(100).default(20),
+    search: z42.string().trim().max(200).optional(),
+    sort: z42.enum(sortFields).default(defaultSort),
+    order: z42.enum(SORT_ORDER).default(defaultOrder)
   };
 }
 
 // server/schemas/contractSchemas.ts
-var contractStatusSchema = z42.enum(["DRAFT", "ACTIVE", "SUSPENDED", "EXPIRED", "TERMINATED"]);
+var contractStatusSchema = z43.enum(["DRAFT", "ACTIVE", "SUSPENDED", "EXPIRED", "TERMINATED"]);
 var SORT_FIELDS6 = ["contractNumber", "title", "status", "startDate", "endDate", "createdAt", "updatedAt"];
-var listContractsQuerySchema = z42.object({
+var listContractsQuerySchema = z43.object({
   ...paginationQuerySchema(SORT_FIELDS6, "createdAt"),
   status: contractStatusSchema.optional(),
-  clientId: z42.string().trim().uuid().optional()
+  clientId: z43.string().trim().uuid().optional()
 });
-var createContractSchema = z42.object({
-  clientId: z42.string().trim().uuid(),
-  title: z42.string().trim().min(1).max(200),
-  description: z42.string().trim().max(5e3).optional(),
-  startDate: z42.coerce.date(),
-  endDate: z42.coerce.date().optional(),
+var createContractSchema = z43.object({
+  clientId: z43.string().trim().uuid(),
+  title: z43.string().trim().min(1).max(200),
+  description: z43.string().trim().max(5e3).optional(),
+  startDate: z43.coerce.date(),
+  endDate: z43.coerce.date().optional(),
   contractValue: moneyAmountSchema,
   currency: currencyCodeSchema.optional(),
-  notes: z42.string().trim().max(5e3).optional()
+  notes: z43.string().trim().max(5e3).optional()
 });
-var updateContractSchema = z42.object({
-  title: z42.string().trim().min(1).max(200).optional(),
-  description: z42.string().trim().max(5e3).nullable().optional(),
-  endDate: z42.coerce.date().nullable().optional(),
-  notes: z42.string().trim().max(5e3).nullable().optional(),
+var updateContractSchema = z43.object({
+  title: z43.string().trim().min(1).max(200).optional(),
+  description: z43.string().trim().max(5e3).nullable().optional(),
+  endDate: z43.coerce.date().nullable().optional(),
+  notes: z43.string().trim().max(5e3).nullable().optional(),
   expectedUpdatedAt: expectedUpdatedAtSchema2
 }).refine((v) => Object.keys(v).some((k) => k !== "expectedUpdatedAt"), { message: "At least one field must be provided." });
-var terminateContractSchema = z42.object({
-  reason: z42.string().trim().min(1).max(1e3)
+var terminateContractSchema = z43.object({
+  reason: z43.string().trim().min(1).max(1e3)
 });
-var createContractVariationSchema = z42.object({
+var createContractVariationSchema = z43.object({
   amount: signedMoneyAmountSchema,
-  effectiveDate: z42.coerce.date(),
-  reason: z42.string().trim().min(1).max(1e3)
+  effectiveDate: z43.coerce.date(),
+  reason: z43.string().trim().min(1).max(1e3)
 });
 
 // server/routes/v1/contractRoutes.ts
@@ -23296,41 +23345,41 @@ var subscriptionService = {
 };
 
 // server/schemas/subscriptionSchemas.ts
-import { z as z43 } from "zod";
-var subscriptionStatusSchema = z43.enum(["DRAFT", "TRIALING", "ACTIVE", "PAST_DUE", "PAUSED", "CANCELLED", "EXPIRED"]);
-var billingCycleSchema = z43.enum(["ONE_TIME", "MONTHLY", "QUARTERLY", "ANNUAL"]);
+import { z as z44 } from "zod";
+var subscriptionStatusSchema = z44.enum(["DRAFT", "TRIALING", "ACTIVE", "PAST_DUE", "PAUSED", "CANCELLED", "EXPIRED"]);
+var billingCycleSchema = z44.enum(["ONE_TIME", "MONTHLY", "QUARTERLY", "ANNUAL"]);
 var SORT_FIELDS7 = ["subscriptionNumber", "status", "startDate", "renewalDate", "createdAt", "updatedAt"];
-var listSubscriptionsQuerySchema = z43.object({
+var listSubscriptionsQuerySchema = z44.object({
   ...paginationQuerySchema(SORT_FIELDS7, "createdAt"),
   status: subscriptionStatusSchema.optional(),
-  clientId: z43.string().trim().uuid().optional(),
-  productId: z43.string().trim().uuid().optional()
+  clientId: z44.string().trim().uuid().optional(),
+  productId: z44.string().trim().uuid().optional()
 });
-var subscriptionItemInputSchema = z43.object({
-  productModuleId: z43.string().trim().uuid().optional(),
-  description: z43.string().trim().min(1).max(500),
-  quantity: z43.number().int().positive().default(1),
+var subscriptionItemInputSchema = z44.object({
+  productModuleId: z44.string().trim().uuid().optional(),
+  description: z44.string().trim().min(1).max(500),
+  quantity: z44.number().int().positive().default(1),
   unitPrice: moneyAmountSchema
 });
-var createSubscriptionSchema = z43.object({
-  clientId: z43.string().trim().uuid(),
-  productId: z43.string().trim().uuid(),
-  startDate: z43.coerce.date(),
+var createSubscriptionSchema = z44.object({
+  clientId: z44.string().trim().uuid(),
+  productId: z44.string().trim().uuid(),
+  startDate: z44.coerce.date(),
   billingCycle: billingCycleSchema,
-  quantity: z43.number().int().positive().default(1),
+  quantity: z44.number().int().positive().default(1),
   price: moneyAmountSchema,
   currency: currencyCodeSchema.optional(),
-  items: z43.array(subscriptionItemInputSchema).default([])
+  items: z44.array(subscriptionItemInputSchema).default([])
 });
-var updateSubscriptionSchema = z43.object({
-  renewalDate: z43.coerce.date().nullable().optional(),
-  endDate: z43.coerce.date().nullable().optional(),
-  quantity: z43.number().int().positive().optional(),
+var updateSubscriptionSchema = z44.object({
+  renewalDate: z44.coerce.date().nullable().optional(),
+  endDate: z44.coerce.date().nullable().optional(),
+  quantity: z44.number().int().positive().optional(),
   price: moneyAmountSchema.optional(),
   expectedUpdatedAt: expectedUpdatedAtSchema2
 }).refine((v) => Object.keys(v).some((k) => k !== "expectedUpdatedAt"), { message: "At least one field must be provided." });
-var cancelSubscriptionSchema = z43.object({
-  reason: z43.string().trim().min(1).max(1e3)
+var cancelSubscriptionSchema = z44.object({
+  reason: z44.string().trim().min(1).max(1e3)
 });
 
 // server/routes/v1/subscriptionRoutes.ts
@@ -23468,59 +23517,59 @@ var paymentService = {
 };
 
 // server/schemas/invoiceSchemas.ts
-import { z as z44 } from "zod";
-var invoiceStatusSchema = z44.enum(["DRAFT", "ISSUED", "PARTIALLY_PAID", "PAID", "OVERDUE", "VOID", "CANCELLED"]);
-var paymentMethodSchema = z44.enum(["BANK_TRANSFER", "CARD", "CASH", "CHEQUE", "ONLINE", "OTHER"]);
-var paymentStatusSchema = z44.enum(["PENDING", "COMPLETED", "FAILED", "REVERSED"]);
+import { z as z45 } from "zod";
+var invoiceStatusSchema = z45.enum(["DRAFT", "ISSUED", "PARTIALLY_PAID", "PAID", "OVERDUE", "VOID", "CANCELLED"]);
+var paymentMethodSchema = z45.enum(["BANK_TRANSFER", "CARD", "CASH", "CHEQUE", "ONLINE", "OTHER"]);
+var paymentStatusSchema = z45.enum(["PENDING", "COMPLETED", "FAILED", "REVERSED"]);
 var SORT_FIELDS8 = ["invoiceNumber", "status", "issueDate", "dueDate", "total", "amountDue", "createdAt", "updatedAt"];
-var listInvoicesQuerySchema = z44.object({
+var listInvoicesQuerySchema = z45.object({
   ...paginationQuerySchema(SORT_FIELDS8, "issueDate"),
   status: invoiceStatusSchema.optional(),
-  clientId: z44.string().trim().uuid().optional(),
-  contractId: z44.string().trim().uuid().optional(),
-  subscriptionId: z44.string().trim().uuid().optional(),
-  dateFrom: z44.coerce.date().optional(),
-  dateTo: z44.coerce.date().optional()
+  clientId: z45.string().trim().uuid().optional(),
+  contractId: z45.string().trim().uuid().optional(),
+  subscriptionId: z45.string().trim().uuid().optional(),
+  dateFrom: z45.coerce.date().optional(),
+  dateTo: z45.coerce.date().optional()
 });
-var invoiceItemInputSchema = z44.object({
-  productModuleId: z44.string().trim().uuid().optional(),
-  description: z44.string().trim().min(1).max(500),
-  quantity: z44.number().int().positive().default(1),
+var invoiceItemInputSchema = z45.object({
+  productModuleId: z45.string().trim().uuid().optional(),
+  description: z45.string().trim().min(1).max(500),
+  quantity: z45.number().int().positive().default(1),
   unitPrice: moneyAmountSchema,
   discount: moneyAmountSchema.default("0")
 });
-var createInvoiceSchema = z44.object({
-  clientId: z44.string().trim().uuid(),
-  contractId: z44.string().trim().uuid().optional(),
-  subscriptionId: z44.string().trim().uuid().optional(),
-  issueDate: z44.coerce.date(),
-  dueDate: z44.coerce.date(),
+var createInvoiceSchema = z45.object({
+  clientId: z45.string().trim().uuid(),
+  contractId: z45.string().trim().uuid().optional(),
+  subscriptionId: z45.string().trim().uuid().optional(),
+  issueDate: z45.coerce.date(),
+  dueDate: z45.coerce.date(),
   currency: currencyCodeSchema.optional(),
   discount: moneyAmountSchema.default("0"),
   tax: moneyAmountSchema.default("0"),
-  notes: z44.string().trim().max(5e3).optional(),
-  items: z44.array(invoiceItemInputSchema).min(1, "An invoice needs at least one line item.")
+  notes: z45.string().trim().max(5e3).optional(),
+  items: z45.array(invoiceItemInputSchema).min(1, "An invoice needs at least one line item.")
 });
-var updateInvoiceSchema = z44.object({
-  issueDate: z44.coerce.date().optional(),
-  dueDate: z44.coerce.date().optional(),
+var updateInvoiceSchema = z45.object({
+  issueDate: z45.coerce.date().optional(),
+  dueDate: z45.coerce.date().optional(),
   discount: moneyAmountSchema.optional(),
   tax: moneyAmountSchema.optional(),
-  notes: z44.string().trim().max(5e3).nullable().optional(),
-  items: z44.array(invoiceItemInputSchema).min(1).optional(),
+  notes: z45.string().trim().max(5e3).nullable().optional(),
+  items: z45.array(invoiceItemInputSchema).min(1).optional(),
   expectedUpdatedAt: expectedUpdatedAtSchema2
 }).refine((v) => Object.keys(v).some((k) => k !== "expectedUpdatedAt"), { message: "At least one field must be provided." });
-var issueInvoiceSchema = z44.object({ expectedUpdatedAt: expectedUpdatedAtSchema2 });
-var voidInvoiceSchema = z44.object({
-  reason: z44.string().trim().min(1).max(1e3)
+var issueInvoiceSchema = z45.object({ expectedUpdatedAt: expectedUpdatedAtSchema2 });
+var voidInvoiceSchema = z45.object({
+  reason: z45.string().trim().min(1).max(1e3)
 });
-var recordPaymentSchema = z44.object({
+var recordPaymentSchema = z45.object({
   amount: moneyAmountSchema,
   currency: currencyCodeSchema.optional(),
-  paymentDate: z44.coerce.date(),
+  paymentDate: z45.coerce.date(),
   method: paymentMethodSchema,
-  reference: z44.string().trim().max(200).optional(),
-  notes: z44.string().trim().max(2e3).optional()
+  reference: z45.string().trim().max(200).optional(),
+  notes: z45.string().trim().max(2e3).optional()
 });
 
 // server/routes/v1/invoiceRoutes.ts
@@ -23620,19 +23669,19 @@ var invoiceRoutes_default = router42;
 import { Router as Router43 } from "express";
 
 // server/schemas/paymentSchemas.ts
-import { z as z45 } from "zod";
+import { z as z46 } from "zod";
 var SORT_FIELDS9 = ["paymentDate", "amount", "status", "createdAt"];
-var listPaymentsQuerySchema = z45.object({
+var listPaymentsQuerySchema = z46.object({
   ...paginationQuerySchema(SORT_FIELDS9, "paymentDate"),
   status: paymentStatusSchema.optional(),
   method: paymentMethodSchema.optional(),
-  invoiceId: z45.string().trim().uuid().optional(),
-  clientId: z45.string().trim().uuid().optional(),
-  dateFrom: z45.coerce.date().optional(),
-  dateTo: z45.coerce.date().optional()
+  invoiceId: z46.string().trim().uuid().optional(),
+  clientId: z46.string().trim().uuid().optional(),
+  dateFrom: z46.coerce.date().optional(),
+  dateTo: z46.coerce.date().optional()
 });
-var reversePaymentSchema = z45.object({
-  reason: z45.string().trim().min(1).max(1e3)
+var reversePaymentSchema = z46.object({
+  reason: z46.string().trim().min(1).max(1e3)
 });
 
 // server/routes/v1/paymentRoutes.ts
@@ -23678,7 +23727,7 @@ var paymentRoutes_default = router43;
 
 // server/routes/v1/portalRoutes.ts
 import { Router as Router44 } from "express";
-import { z as z46 } from "zod";
+import { z as z47 } from "zod";
 
 // server/services/clientPortalService.ts
 async function resolveClientForCaller(caller) {
@@ -23789,9 +23838,9 @@ var clientPortalService = {
 // server/routes/v1/portalRoutes.ts
 var router44 = Router44();
 router44.use(authenticateToken);
-var pageQuerySchema2 = z46.object({
-  page: z46.coerce.number().int().positive().default(1),
-  limit: z46.coerce.number().int().positive().max(100).default(20)
+var pageQuerySchema2 = z47.object({
+  page: z47.coerce.number().int().positive().default(1),
+  limit: z47.coerce.number().int().positive().max(100).default(20)
 });
 router44.get(
   "/dashboard",
@@ -24667,86 +24716,86 @@ var publicLeadService = {
 };
 
 // server/schemas/publicSchemas.ts
-import { z as z47 } from "zod";
+import { z as z48 } from "zod";
 var SORT_FIELDS10 = ["publishedAt", "createdAt", "title"];
-var listPublicPostsQuerySchema = z47.object({
-  page: z47.coerce.number().int().positive().default(1),
-  limit: z47.coerce.number().int().positive().max(50).default(12),
-  search: z47.string().trim().max(200).optional(),
-  category: z47.string().trim().max(150).optional(),
-  tag: z47.string().trim().max(150).optional(),
-  sort: z47.enum(SORT_FIELDS10).default("publishedAt"),
-  order: z47.enum(["asc", "desc"]).default("desc")
+var listPublicPostsQuerySchema = z48.object({
+  page: z48.coerce.number().int().positive().default(1),
+  limit: z48.coerce.number().int().positive().max(50).default(12),
+  search: z48.string().trim().max(200).optional(),
+  category: z48.string().trim().max(150).optional(),
+  tag: z48.string().trim().max(150).optional(),
+  sort: z48.enum(SORT_FIELDS10).default("publishedAt"),
+  order: z48.enum(["asc", "desc"]).default("desc")
 });
-var listPublicProductsQuerySchema = z47.object({
-  page: z47.coerce.number().int().positive().default(1),
-  limit: z47.coerce.number().int().positive().max(50).default(20),
-  search: z47.string().trim().max(200).optional(),
-  type: z47.enum(["PRODUCT", "SERVICE", "SOLUTION"]).optional(),
+var listPublicProductsQuerySchema = z48.object({
+  page: z48.coerce.number().int().positive().default(1),
+  limit: z48.coerce.number().int().positive().max(50).default(20),
+  search: z48.string().trim().max(200).optional(),
+  type: z48.enum(["PRODUCT", "SERVICE", "SOLUTION"]).optional(),
   // Phase 10 — filter by the real category/industry taxonomy, by slug
   // (never an internal id crossing the public boundary).
-  categorySlug: z47.string().trim().max(100).optional(),
-  industrySlug: z47.string().trim().max(100).optional()
+  categorySlug: z48.string().trim().max(100).optional(),
+  industrySlug: z48.string().trim().max(100).optional()
 });
-var listPublicCaseStudiesQuerySchema = z47.object({
-  page: z47.coerce.number().int().positive().default(1),
-  limit: z47.coerce.number().int().positive().max(50).default(12),
-  search: z47.string().trim().max(200).optional(),
-  industrySlug: z47.string().trim().max(100).optional(),
-  productSlug: z47.string().trim().max(150).optional(),
-  sort: z47.enum(SORT_FIELDS10).default("publishedAt"),
-  order: z47.enum(["asc", "desc"]).default("desc")
+var listPublicCaseStudiesQuerySchema = z48.object({
+  page: z48.coerce.number().int().positive().default(1),
+  limit: z48.coerce.number().int().positive().max(50).default(12),
+  search: z48.string().trim().max(200).optional(),
+  industrySlug: z48.string().trim().max(100).optional(),
+  productSlug: z48.string().trim().max(150).optional(),
+  sort: z48.enum(SORT_FIELDS10).default("publishedAt"),
+  order: z48.enum(["asc", "desc"]).default("desc")
 });
-var publicNavigationMenuTypeSchema = z47.enum(["PRIMARY", "HEADER", "FOOTER", "MOBILE", "CUSTOM"]);
-var publicRedirectLookupQuerySchema = z47.object({
-  path: z47.string().trim().min(1).max(2048).refine((v) => v.startsWith("/") && !v.startsWith("//"), { message: "Must be a site-relative path starting with a single /." })
+var publicNavigationMenuTypeSchema = z48.enum(["PRIMARY", "HEADER", "FOOTER", "MOBILE", "CUSTOM"]);
+var publicRedirectLookupQuerySchema = z48.object({
+  path: z48.string().trim().min(1).max(2048).refine((v) => v.startsWith("/") && !v.startsWith("//"), { message: "Must be a site-relative path starting with a single /." })
 });
-var nonEmptyTrimmed = (max) => z47.string().trim().min(1).max(max);
-var createPublicLeadSchema = z47.object({
+var nonEmptyTrimmed = (max) => z48.string().trim().min(1).max(max);
+var createPublicLeadSchema = z48.object({
   name: nonEmptyTrimmed(200),
-  company: z47.string().trim().max(200).optional(),
-  email: z47.string().trim().email().max(320),
-  phone: z47.string().trim().max(50).optional(),
-  subject: z47.string().trim().max(200).optional(),
+  company: z48.string().trim().max(200).optional(),
+  email: z48.string().trim().email().max(320),
+  phone: z48.string().trim().max(50).optional(),
+  subject: z48.string().trim().max(200).optional(),
   message: nonEmptyTrimmed(5e3),
-  productInterest: z47.string().trim().max(200).optional(),
-  source: z47.enum(["contact_form", "product_inquiry", "project_brief", "other"]).default("contact_form"),
-  consent: z47.literal(true, { errorMap: () => ({ message: "Consent is required to submit this form." }) }),
-  website: z47.string().trim().max(200).optional(),
+  productInterest: z48.string().trim().max(200).optional(),
+  source: z48.enum(["contact_form", "product_inquiry", "project_brief", "other"]).default("contact_form"),
+  consent: z48.literal(true, { errorMap: () => ({ message: "Consent is required to submit this form." }) }),
+  website: z48.string().trim().max(200).optional(),
   // Phase 12 (CRM Integration) — same real attribution capture
   // publicFormSubmitSchema already has for Control-Center-authored
   // Forms, extended to this site's own hardcoded contact/brief form so
   // every lead-capture surface records real source data, not just free text.
-  utmSource: z47.string().trim().max(200).optional(),
-  utmMedium: z47.string().trim().max(200).optional(),
-  utmCampaign: z47.string().trim().max(200).optional(),
-  utmTerm: z47.string().trim().max(200).optional(),
-  utmContent: z47.string().trim().max(200).optional(),
-  landingPagePath: z47.string().trim().max(500).optional()
-});
-
-// server/schemas/analyticsSchemas.ts
-import { z as z48 } from "zod";
-var publicAnalyticsEventSchema = z48.object({
-  eventType: z48.enum(PUBLIC_EVENT_TYPES),
-  path: z48.string().trim().max(500).optional(),
-  referrer: z48.string().trim().max(2e3).optional(),
-  sessionId: z48.string().trim().max(100).optional(),
   utmSource: z48.string().trim().max(200).optional(),
   utmMedium: z48.string().trim().max(200).optional(),
   utmCampaign: z48.string().trim().max(200).optional(),
   utmTerm: z48.string().trim().max(200).optional(),
-  utmContent: z48.string().trim().max(200).optional()
+  utmContent: z48.string().trim().max(200).optional(),
+  landingPagePath: z48.string().trim().max(500).optional()
+});
+
+// server/schemas/analyticsSchemas.ts
+import { z as z49 } from "zod";
+var publicAnalyticsEventSchema = z49.object({
+  eventType: z49.enum(PUBLIC_EVENT_TYPES),
+  path: z49.string().trim().max(500).optional(),
+  referrer: z49.string().trim().max(2e3).optional(),
+  sessionId: z49.string().trim().max(100).optional(),
+  utmSource: z49.string().trim().max(200).optional(),
+  utmMedium: z49.string().trim().max(200).optional(),
+  utmCampaign: z49.string().trim().max(200).optional(),
+  utmTerm: z49.string().trim().max(200).optional(),
+  utmContent: z49.string().trim().max(200).optional()
 });
 var dateRangeShape = {
-  from: z48.coerce.date().optional(),
-  to: z48.coerce.date().optional(),
-  compare: z48.coerce.boolean().optional().default(false)
+  from: z49.coerce.date().optional(),
+  to: z49.coerce.date().optional(),
+  compare: z49.coerce.boolean().optional().default(false)
 };
-var analyticsOverviewQuerySchema = z48.object(dateRangeShape);
-var analyticsTopPagesQuerySchema = z48.object({
+var analyticsOverviewQuerySchema = z49.object(dateRangeShape);
+var analyticsTopPagesQuerySchema = z49.object({
   ...dateRangeShape,
-  limit: z48.coerce.number().int().positive().max(50).default(10)
+  limit: z49.coerce.number().int().positive().max(50).default(10)
 });
 var REPORT_TYPES = [
   "executive_summary",
@@ -24759,9 +24808,9 @@ var REPORT_TYPES = [
   "conversion_report",
   "client_acquisition"
 ];
-var reportQuerySchema = z48.object({
+var reportQuerySchema = z49.object({
   ...dateRangeShape,
-  format: z48.enum(["json", "csv"]).default("json")
+  format: z49.enum(["json", "csv"]).default("json")
 });
 
 // server/routes/v1/publicRoutes.ts
@@ -25103,107 +25152,107 @@ var aiProviderService = {
 };
 
 // server/schemas/aiSchemas.ts
-import { z as z49 } from "zod";
-var createAiProviderSchema = z49.object({
-  code: z49.string().trim().min(1).max(50),
-  name: z49.string().trim().min(1).max(200),
-  status: z49.enum(["ACTIVE", "INACTIVE"]).optional(),
-  isDefault: z49.boolean().optional()
+import { z as z50 } from "zod";
+var createAiProviderSchema = z50.object({
+  code: z50.string().trim().min(1).max(50),
+  name: z50.string().trim().min(1).max(200),
+  status: z50.enum(["ACTIVE", "INACTIVE"]).optional(),
+  isDefault: z50.boolean().optional()
 });
-var updateAiProviderSchema = z49.object({
-  name: z49.string().trim().min(1).max(200).optional(),
-  status: z49.enum(["ACTIVE", "INACTIVE"]).optional(),
-  isDefault: z49.boolean().optional()
+var updateAiProviderSchema = z50.object({
+  name: z50.string().trim().min(1).max(200).optional(),
+  status: z50.enum(["ACTIVE", "INACTIVE"]).optional(),
+  isDefault: z50.boolean().optional()
 });
-var createAiModelSchema = z49.object({
-  providerId: z49.string().uuid(),
-  modelId: z49.string().trim().min(1).max(100),
-  displayName: z49.string().trim().min(1).max(200),
-  contextWindow: z49.number().int().positive().optional(),
-  supportsStructuredOutput: z49.boolean().optional(),
-  supportsToolCalling: z49.boolean().optional(),
-  inputPricePerMillionTokens: z49.number().nonnegative().optional(),
-  outputPricePerMillionTokens: z49.number().nonnegative().optional(),
-  isActive: z49.boolean().optional(),
-  isDefault: z49.boolean().optional()
+var createAiModelSchema = z50.object({
+  providerId: z50.string().uuid(),
+  modelId: z50.string().trim().min(1).max(100),
+  displayName: z50.string().trim().min(1).max(200),
+  contextWindow: z50.number().int().positive().optional(),
+  supportsStructuredOutput: z50.boolean().optional(),
+  supportsToolCalling: z50.boolean().optional(),
+  inputPricePerMillionTokens: z50.number().nonnegative().optional(),
+  outputPricePerMillionTokens: z50.number().nonnegative().optional(),
+  isActive: z50.boolean().optional(),
+  isDefault: z50.boolean().optional()
 });
 var updateAiModelSchema = createAiModelSchema.partial().omit({ providerId: true, modelId: true });
-var updateAiOrgToolSettingSchema = z49.object({
-  enabled: z49.boolean().optional(),
-  requireApprovalOverride: z49.boolean().nullable().optional()
+var updateAiOrgToolSettingSchema = z50.object({
+  enabled: z50.boolean().optional(),
+  requireApprovalOverride: z50.boolean().nullable().optional()
 });
 var PROMPT_SORT_FIELDS = ["key", "name", "status", "createdAt", "updatedAt"];
-var listAiPromptsQuerySchema = z49.object(paginationQuerySchema(PROMPT_SORT_FIELDS, "createdAt", "desc"));
-var createAiPromptTemplateSchema = z49.object({
-  key: z49.string().trim().min(1).max(100).regex(/^[a-z0-9._-]+$/, "key must be lowercase, URL-safe (letters, numbers, dots, hyphens, underscores)"),
-  name: z49.string().trim().min(1).max(200),
-  purpose: z49.string().trim().max(1e3).optional(),
-  systemInstructions: z49.string().trim().min(1).max(2e4),
-  userTemplate: z49.string().trim().min(1).max(2e4),
-  variablesSchema: z49.record(z49.unknown()).optional()
+var listAiPromptsQuerySchema = z50.object(paginationQuerySchema(PROMPT_SORT_FIELDS, "createdAt", "desc"));
+var createAiPromptTemplateSchema = z50.object({
+  key: z50.string().trim().min(1).max(100).regex(/^[a-z0-9._-]+$/, "key must be lowercase, URL-safe (letters, numbers, dots, hyphens, underscores)"),
+  name: z50.string().trim().min(1).max(200),
+  purpose: z50.string().trim().max(1e3).optional(),
+  systemInstructions: z50.string().trim().min(1).max(2e4),
+  userTemplate: z50.string().trim().min(1).max(2e4),
+  variablesSchema: z50.record(z50.unknown()).optional()
 });
-var createAiPromptVersionSchema = z49.object({
-  systemInstructions: z49.string().trim().min(1).max(2e4),
-  userTemplate: z49.string().trim().min(1).max(2e4),
-  variablesSchema: z49.record(z49.unknown()).optional()
+var createAiPromptVersionSchema = z50.object({
+  systemInstructions: z50.string().trim().min(1).max(2e4),
+  userTemplate: z50.string().trim().min(1).max(2e4),
+  variablesSchema: z50.record(z50.unknown()).optional()
 });
-var updateAiPromptTemplateSchema = z49.object({
-  name: z49.string().trim().min(1).max(200).optional(),
-  purpose: z49.string().trim().max(1e3).nullable().optional(),
-  status: z49.enum(["DRAFT", "ACTIVE", "ARCHIVED"]).optional()
+var updateAiPromptTemplateSchema = z50.object({
+  name: z50.string().trim().min(1).max(200).optional(),
+  purpose: z50.string().trim().max(1e3).nullable().optional(),
+  status: z50.enum(["DRAFT", "ACTIVE", "ARCHIVED"]).optional()
 });
-var publishAiPromptVersionSchema = z49.object({
-  versionId: z49.string().uuid()
+var publishAiPromptVersionSchema = z50.object({
+  versionId: z50.string().uuid()
 });
 var WORKFLOW_SORT_FIELDS = ["key", "name", "status", "createdAt", "updatedAt"];
-var listAiWorkflowsQuerySchema = z49.object(paginationQuerySchema(WORKFLOW_SORT_FIELDS, "createdAt", "desc"));
-var workflowStepSchema = z49.object({
-  order: z49.number().int().nonnegative(),
-  toolCode: z49.string().trim().min(1).max(100),
-  description: z49.string().trim().max(500).optional()
+var listAiWorkflowsQuerySchema = z50.object(paginationQuerySchema(WORKFLOW_SORT_FIELDS, "createdAt", "desc"));
+var workflowStepSchema = z50.object({
+  order: z50.number().int().nonnegative(),
+  toolCode: z50.string().trim().min(1).max(100),
+  description: z50.string().trim().max(500).optional()
 });
-var createAiWorkflowSchema = z49.object({
-  key: z49.string().trim().min(1).max(100).regex(/^[a-z0-9._-]+$/, "key must be lowercase, URL-safe (letters, numbers, dots, hyphens, underscores)"),
-  name: z49.string().trim().min(1).max(200),
-  description: z49.string().trim().max(2e3).optional(),
-  steps: z49.array(workflowStepSchema).min(1).max(10),
-  maxSteps: z49.number().int().positive().max(10).optional(),
-  timeoutMs: z49.number().int().positive().max(12e4).optional()
+var createAiWorkflowSchema = z50.object({
+  key: z50.string().trim().min(1).max(100).regex(/^[a-z0-9._-]+$/, "key must be lowercase, URL-safe (letters, numbers, dots, hyphens, underscores)"),
+  name: z50.string().trim().min(1).max(200),
+  description: z50.string().trim().max(2e3).optional(),
+  steps: z50.array(workflowStepSchema).min(1).max(10),
+  maxSteps: z50.number().int().positive().max(10).optional(),
+  timeoutMs: z50.number().int().positive().max(12e4).optional()
 });
-var updateAiWorkflowSchema = z49.object({
-  name: z49.string().trim().min(1).max(200).optional(),
-  description: z49.string().trim().max(2e3).nullable().optional(),
-  steps: z49.array(workflowStepSchema).min(1).max(10).optional(),
-  maxSteps: z49.number().int().positive().max(10).optional(),
-  timeoutMs: z49.number().int().positive().max(12e4).optional(),
+var updateAiWorkflowSchema = z50.object({
+  name: z50.string().trim().min(1).max(200).optional(),
+  description: z50.string().trim().max(2e3).nullable().optional(),
+  steps: z50.array(workflowStepSchema).min(1).max(10).optional(),
+  maxSteps: z50.number().int().positive().max(10).optional(),
+  timeoutMs: z50.number().int().positive().max(12e4).optional(),
   expectedUpdatedAt: expectedUpdatedAtSchema2
 });
-var executeAiWorkflowSchema = z49.object({
+var executeAiWorkflowSchema = z50.object({
   /** Keyed by step order — each step's tool input, supplied by the caller (Phase 12 has no autonomous planning, see AIWorkflow's schema.prisma doc comment). */
-  stepInputs: z49.record(z49.string(), z49.record(z49.unknown())).default({})
+  stepInputs: z50.record(z50.string(), z50.record(z50.unknown())).default({})
 });
-var executeAiToolSchema = z49.object({
-  toolCode: z49.string().trim().min(1).max(100),
-  input: z49.record(z49.unknown()).default({})
+var executeAiToolSchema = z50.object({
+  toolCode: z50.string().trim().min(1).max(100),
+  input: z50.record(z50.unknown()).default({})
 });
 var EXECUTION_SORT_FIELDS = ["createdAt", "startedAt", "status"];
-var listAiExecutionsQuerySchema = z49.object({
+var listAiExecutionsQuerySchema = z50.object({
   ...paginationQuerySchema(EXECUTION_SORT_FIELDS, "createdAt", "desc"),
-  kind: z49.enum(["TOOL_CALL", "WORKFLOW"]).optional(),
-  status: z49.enum(["PENDING", "RUNNING", "AWAITING_APPROVAL", "COMPLETED", "FAILED", "CANCELLED"]).optional()
+  kind: z50.enum(["TOOL_CALL", "WORKFLOW"]).optional(),
+  status: z50.enum(["PENDING", "RUNNING", "AWAITING_APPROVAL", "COMPLETED", "FAILED", "CANCELLED"]).optional()
 });
-var usageSummaryQuerySchema = z49.object({
-  dateFrom: z49.coerce.date().optional(),
-  dateTo: z49.coerce.date().optional()
+var usageSummaryQuerySchema = z50.object({
+  dateFrom: z50.coerce.date().optional(),
+  dateTo: z50.coerce.date().optional()
 });
 var APPROVAL_SORT_FIELDS = ["createdAt", "expiresAt", "status"];
-var listAiApprovalsQuerySchema = z49.object({
+var listAiApprovalsQuerySchema = z50.object({
   ...paginationQuerySchema(APPROVAL_SORT_FIELDS, "createdAt", "desc"),
-  status: z49.enum(["PENDING", "APPROVED", "REJECTED", "EXPIRED"]).optional()
+  status: z50.enum(["PENDING", "APPROVED", "REJECTED", "EXPIRED"]).optional()
 });
-var decideAiApprovalSchema = z49.object({
-  decision: z49.enum(["APPROVE", "REJECT"]),
-  rejectionReason: z49.string().trim().max(2e3).optional()
+var decideAiApprovalSchema = z50.object({
+  decision: z50.enum(["APPROVE", "REJECT"]),
+  rejectionReason: z50.string().trim().max(2e3).optional()
 });
 
 // server/routes/v1/aiProviderRoutes.ts
@@ -26277,7 +26326,7 @@ var aiHealthRoutes_default = router52;
 
 // server/routes/v1/portalRegistrationRoutes.ts
 import { Router as Router53 } from "express";
-import { z as z50 } from "zod";
+import { z as z51 } from "zod";
 
 // server/services/portalRegistrationService.ts
 function assertOperator(caller) {
@@ -26377,7 +26426,7 @@ router53.post(
   requirePermission("workspaces.update"),
   sensitiveActionLimiter,
   asyncHandler(async (req, res) => {
-    const { clientId } = z50.object({ clientId: z50.string().uuid() }).parse(req.body);
+    const { clientId } = z51.object({ clientId: z51.string().uuid() }).parse(req.body);
     await portalRegistrationService.link(req.user, req.params.organizationId, clientId, meta2(req));
     sendSuccess(res, { linked: true });
   })
@@ -26438,7 +26487,7 @@ var aiApprovalRoutes_default = router54;
 // server/routes/v1/automationRoutes.ts
 import { timingSafeEqual as timingSafeEqual2 } from "node:crypto";
 import { Router as Router55 } from "express";
-import { z as z51 } from "zod";
+import { z as z52 } from "zod";
 
 // server/services/contentSchedulingService.ts
 function hasPublishableContent(revision) {
@@ -26563,82 +26612,82 @@ router55.get(
   })
 );
 router55.use(authenticateToken);
-var CreateWorkflowSchema = z51.object({
-  name: z51.string().min(1).max(200),
-  description: z51.string().optional(),
-  category: z51.string().default("GENERAL"),
-  triggerType: z51.enum(["EVENT", "SCHEDULE", "MANUAL", "API", "CONDITIONAL"]).default("EVENT"),
-  triggerConfig: z51.record(z51.unknown()).default({}),
-  conditions: z51.unknown().default([]),
-  steps: z51.array(z51.record(z51.unknown())).default([]),
-  retryPolicy: z51.object({
-    maxRetries: z51.number().int().min(0).max(5).default(2),
-    backoffMs: z51.number().int().min(100).max(6e4).default(1e3),
-    exponential: z51.boolean().default(true)
+var CreateWorkflowSchema = z52.object({
+  name: z52.string().min(1).max(200),
+  description: z52.string().optional(),
+  category: z52.string().default("GENERAL"),
+  triggerType: z52.enum(["EVENT", "SCHEDULE", "MANUAL", "API", "CONDITIONAL"]).default("EVENT"),
+  triggerConfig: z52.record(z52.unknown()).default({}),
+  conditions: z52.unknown().default([]),
+  steps: z52.array(z52.record(z52.unknown())).default([]),
+  retryPolicy: z52.object({
+    maxRetries: z52.number().int().min(0).max(5).default(2),
+    backoffMs: z52.number().int().min(100).max(6e4).default(1e3),
+    exponential: z52.boolean().default(true)
   }).optional(),
-  limits: z51.object({
-    maxSteps: z51.number().int().min(1).max(100).default(50),
-    maxDurationMs: z51.number().int().min(5e3).max(6e5).default(3e5),
-    maxAiCalls: z51.number().int().min(0).max(50).default(10),
-    maxToolCalls: z51.number().int().min(0).max(50).default(15),
-    maxLoopIterations: z51.number().int().min(1).max(50).default(10)
+  limits: z52.object({
+    maxSteps: z52.number().int().min(1).max(100).default(50),
+    maxDurationMs: z52.number().int().min(5e3).max(6e5).default(3e5),
+    maxAiCalls: z52.number().int().min(0).max(50).default(10),
+    maxToolCalls: z52.number().int().min(0).max(50).default(15),
+    maxLoopIterations: z52.number().int().min(1).max(50).default(10)
   }).optional()
 });
 var UpdateWorkflowSchema = CreateWorkflowSchema.partial().extend({
-  status: z51.enum(["DRAFT", "ACTIVE", "PAUSED", "ARCHIVED"]).optional()
+  status: z52.enum(["DRAFT", "ACTIVE", "PAUSED", "ARCHIVED"]).optional()
 });
-var TriggerWorkflowSchema = z51.object({
-  input: z51.record(z51.unknown()).default({}),
-  correlationId: z51.string().optional()
+var TriggerWorkflowSchema = z52.object({
+  input: z52.record(z52.unknown()).default({}),
+  correlationId: z52.string().optional()
 });
-var DecideApprovalSchema = z51.object({
-  decision: z51.enum(["APPROVED", "REJECTED"]),
-  reason: z51.string().optional()
+var DecideApprovalSchema = z52.object({
+  decision: z52.enum(["APPROVED", "REJECTED"]),
+  reason: z52.string().optional()
 });
-var CreateTaskSchema = z51.object({
-  title: z51.string().min(1),
-  description: z51.string().optional(),
-  assignedUserId: z51.string().optional(),
-  assignedRole: z51.string().optional(),
-  priority: z51.enum(["LOW", "MEDIUM", "HIGH", "URGENT"]).default("MEDIUM"),
-  dueDate: z51.string().optional(),
-  sourceWorkflowId: z51.string().optional(),
-  sourceExecutionId: z51.string().optional(),
-  sourceEntityType: z51.string().optional(),
-  sourceEntityId: z51.string().optional(),
-  isAiGenerated: z51.boolean().default(false),
-  metadata: z51.record(z51.unknown()).optional()
+var CreateTaskSchema = z52.object({
+  title: z52.string().min(1),
+  description: z52.string().optional(),
+  assignedUserId: z52.string().optional(),
+  assignedRole: z52.string().optional(),
+  priority: z52.enum(["LOW", "MEDIUM", "HIGH", "URGENT"]).default("MEDIUM"),
+  dueDate: z52.string().optional(),
+  sourceWorkflowId: z52.string().optional(),
+  sourceExecutionId: z52.string().optional(),
+  sourceEntityType: z52.string().optional(),
+  sourceEntityId: z52.string().optional(),
+  isAiGenerated: z52.boolean().default(false),
+  metadata: z52.record(z52.unknown()).optional()
 });
-var UpdateTaskSchema = z51.object({
-  status: z51.enum(["PENDING", "IN_PROGRESS", "COMPLETED", "CANCELLED"]).optional(),
-  assignedUserId: z51.string().optional(),
-  priority: z51.enum(["LOW", "MEDIUM", "HIGH", "URGENT"]).optional(),
-  dueDate: z51.string().optional()
+var UpdateTaskSchema = z52.object({
+  status: z52.enum(["PENDING", "IN_PROGRESS", "COMPLETED", "CANCELLED"]).optional(),
+  assignedUserId: z52.string().optional(),
+  priority: z52.enum(["LOW", "MEDIUM", "HIGH", "URGENT"]).optional(),
+  dueDate: z52.string().optional()
 });
-var AddTaskCommentSchema = z51.object({
-  text: z51.string().trim().min(1).max(4e3)
+var AddTaskCommentSchema = z52.object({
+  text: z52.string().trim().min(1).max(4e3)
 });
-var CreateScheduleSchema = z51.object({
-  workflowId: z51.string().uuid(),
-  name: z51.string().min(1),
-  description: z51.string().optional(),
-  scheduleType: z51.enum(["ONE_TIME", "RECURRING", "CRON"]).default("RECURRING"),
-  cronExpression: z51.string().optional(),
-  timezone: z51.string().default("UTC"),
-  intervalSeconds: z51.number().int().positive().optional(),
-  config: z51.record(z51.unknown()).optional()
+var CreateScheduleSchema = z52.object({
+  workflowId: z52.string().uuid(),
+  name: z52.string().min(1),
+  description: z52.string().optional(),
+  scheduleType: z52.enum(["ONE_TIME", "RECURRING", "CRON"]).default("RECURRING"),
+  cronExpression: z52.string().optional(),
+  timezone: z52.string().default("UTC"),
+  intervalSeconds: z52.number().int().positive().optional(),
+  config: z52.record(z52.unknown()).optional()
 });
-var EmitEventSchema = z51.object({
-  eventType: z51.string().min(1),
-  entityType: z51.string().min(1),
-  entityId: z51.string().min(1),
-  sourceModule: z51.string().optional(),
-  payload: z51.record(z51.unknown()).default({}),
-  correlationId: z51.string().optional()
+var EmitEventSchema = z52.object({
+  eventType: z52.string().min(1),
+  entityType: z52.string().min(1),
+  entityId: z52.string().min(1),
+  sourceModule: z52.string().optional(),
+  payload: z52.record(z52.unknown()).default({}),
+  correlationId: z52.string().optional()
 });
-var ExecuteActionSchema = z51.object({
-  actionId: z51.string().min(1),
-  input: z51.record(z51.unknown()).default({})
+var ExecuteActionSchema = z52.object({
+  actionId: z52.string().min(1),
+  input: z52.record(z52.unknown()).default({})
 });
 router55.get(
   "/dashboard",
@@ -26720,7 +26769,7 @@ router55.post(
   "/workflows/:id/publish",
   requirePermission("automation.publish"),
   asyncHandler(async (req, res) => {
-    const body = z51.object({ changeSummary: z51.string().optional() }).parse(req.body || {});
+    const body = z52.object({ changeSummary: z52.string().optional() }).parse(req.body || {});
     const published = await automationService.publishWorkflow({
       id: req.params.id,
       organizationId: req.user.organizationId,
@@ -26789,7 +26838,7 @@ router55.post(
   "/executions/:id/cancel",
   requirePermission("automation.manage"),
   asyncHandler(async (req, res) => {
-    const body = z51.object({ reason: z51.string().optional() }).parse(req.body || {});
+    const body = z52.object({ reason: z52.string().optional() }).parse(req.body || {});
     const result = await automationService.cancelExecution(req.params.id, req.user.organizationId, body.reason);
     sendSuccess(res, { execution: result });
   })
@@ -26919,7 +26968,7 @@ router55.patch(
   "/schedules/:id/toggle",
   requirePermission("automation.manage"),
   asyncHandler(async (req, res) => {
-    const body = z51.object({ isActive: z51.boolean().optional() }).parse(req.body || {});
+    const body = z52.object({ isActive: z52.boolean().optional() }).parse(req.body || {});
     const schedule = await automationService.toggleSchedule(req.params.id, req.user.organizationId, body.isActive);
     sendSuccess(res, { schedule });
   })
@@ -26998,9 +27047,9 @@ import { Router as Router56 } from "express";
 import express3 from "express";
 
 // server/schemas/knowledgeSchemas.ts
-import { z as z52 } from "zod";
-var knowledgeAccessPolicySchema = z52.enum(["PUBLIC", "RESTRICTED", "ROLE_BASED", "OWNER_ONLY"]);
-var knowledgeSourceTypeSchema = z52.enum([
+import { z as z53 } from "zod";
+var knowledgeAccessPolicySchema = z53.enum(["PUBLIC", "RESTRICTED", "ROLE_BASED", "OWNER_ONLY"]);
+var knowledgeSourceTypeSchema = z53.enum([
   "UPLOADED_DOCUMENT",
   "MEDIA_ASSET",
   "CMS_CONTENT",
@@ -27012,47 +27061,47 @@ var knowledgeSourceTypeSchema = z52.enum([
   "MANUAL_ENTRY",
   "EXTERNAL_CONNECTOR"
 ]);
-var createCollectionSchema = z52.object({
-  name: z52.string().trim().min(1).max(200),
-  description: z52.string().trim().max(2e3).optional(),
+var createCollectionSchema = z53.object({
+  name: z53.string().trim().min(1).max(200),
+  description: z53.string().trim().max(2e3).optional(),
   accessPolicy: knowledgeAccessPolicySchema.optional(),
-  allowedRoles: z52.array(z52.string().trim().min(1)).max(50).optional(),
-  metadata: z52.record(z52.unknown()).optional()
+  allowedRoles: z53.array(z53.string().trim().min(1)).max(50).optional(),
+  metadata: z53.record(z53.unknown()).optional()
 });
-var registerSourceSchema = z52.object({
-  collectionId: z52.string().trim().uuid().optional(),
-  name: z52.string().trim().min(1).max(200),
+var registerSourceSchema = z53.object({
+  collectionId: z53.string().trim().uuid().optional(),
+  name: z53.string().trim().min(1).max(200),
   sourceType: knowledgeSourceTypeSchema,
-  entityType: z52.string().trim().max(100).optional(),
-  entityId: z52.string().trim().max(200).optional(),
-  config: z52.record(z52.unknown()).optional()
+  entityType: z53.string().trim().max(100).optional(),
+  entityId: z53.string().trim().max(200).optional(),
+  config: z53.record(z53.unknown()).optional()
 });
-var listDocumentsQuerySchema = z52.object({
-  collectionId: z52.string().trim().uuid().optional(),
-  sourceId: z52.string().trim().uuid().optional(),
-  status: z52.enum(["UPLOADED", "PROCESSING", "EXTRACTED", "CHUNKED", "INDEXING", "INDEXED", "FAILED", "ARCHIVED"]).optional()
+var listDocumentsQuerySchema = z53.object({
+  collectionId: z53.string().trim().uuid().optional(),
+  sourceId: z53.string().trim().uuid().optional(),
+  status: z53.enum(["UPLOADED", "PROCESSING", "EXTRACTED", "CHUNKED", "INDEXING", "INDEXED", "FAILED", "ARCHIVED"]).optional()
 });
-var uploadDocumentSchema = z52.object({
-  text: z52.string().max(2e6).optional(),
-  contentBase64: z52.string().max(4e7).optional(),
-  mimeType: z52.string().trim().max(100).optional(),
-  filename: z52.string().trim().max(300).optional(),
-  title: z52.string().trim().max(300).optional(),
-  description: z52.string().trim().max(2e3).optional(),
-  collectionId: z52.string().trim().uuid().optional(),
-  sourceId: z52.string().trim().uuid().optional(),
-  securityScope: z52.string().trim().max(100).optional(),
-  requiredRole: z52.string().trim().max(100).optional(),
-  metadata: z52.record(z52.unknown()).optional()
+var uploadDocumentSchema = z53.object({
+  text: z53.string().max(2e6).optional(),
+  contentBase64: z53.string().max(4e7).optional(),
+  mimeType: z53.string().trim().max(100).optional(),
+  filename: z53.string().trim().max(300).optional(),
+  title: z53.string().trim().max(300).optional(),
+  description: z53.string().trim().max(2e3).optional(),
+  collectionId: z53.string().trim().uuid().optional(),
+  sourceId: z53.string().trim().uuid().optional(),
+  securityScope: z53.string().trim().max(100).optional(),
+  requiredRole: z53.string().trim().max(100).optional(),
+  metadata: z53.record(z53.unknown()).optional()
 }).refine((v) => v.contentBase64 !== void 0 || v.text !== void 0, {
   message: "Either text or contentBase64 is required."
 });
-var searchKnowledgeSchema = z52.object({
-  query: z52.string().trim().min(1).max(2e3),
-  mode: z52.enum(["KEYWORD", "SEMANTIC", "HYBRID"]).optional(),
-  limit: z52.coerce.number().int().positive().max(50).optional(),
-  minScore: z52.coerce.number().min(0).max(1).optional(),
-  filter: z52.record(z52.unknown()).optional()
+var searchKnowledgeSchema = z53.object({
+  query: z53.string().trim().min(1).max(2e3),
+  mode: z53.enum(["KEYWORD", "SEMANTIC", "HYBRID"]).optional(),
+  limit: z53.coerce.number().int().positive().max(50).optional(),
+  minScore: z53.coerce.number().min(0).max(1).optional(),
+  filter: z53.record(z53.unknown()).optional()
 });
 
 // server/routes/v1/knowledgeRoutes.ts
@@ -28033,46 +28082,46 @@ ${JSON.stringify(executionResult, null, 2)}
 };
 
 // server/schemas/copilotSchemas.ts
-import { z as z53 } from "zod";
-var conversationModeSchema = z53.enum(["ANSWER", "EXPLAIN", "SUMMARIZE", "ANALYZE", "RECOMMEND", "DRAFT", "EXECUTE"]);
-var createWorkspaceSchema = z53.object({
-  name: z53.string().trim().min(1).max(200),
-  slug: z53.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)").optional(),
-  description: z53.string().trim().max(2e3).optional(),
-  icon: z53.string().trim().max(100).optional(),
-  allowedTools: z53.array(z53.string().trim().min(1)).max(100).optional(),
-  allowedModules: z53.array(z53.string().trim().min(1)).max(100).optional(),
-  requiredPermissions: z53.array(z53.string().trim().min(1)).max(100).optional(),
-  systemInstruction: z53.string().trim().max(1e4).optional(),
+import { z as z54 } from "zod";
+var conversationModeSchema = z54.enum(["ANSWER", "EXPLAIN", "SUMMARIZE", "ANALYZE", "RECOMMEND", "DRAFT", "EXECUTE"]);
+var createWorkspaceSchema = z54.object({
+  name: z54.string().trim().min(1).max(200),
+  slug: z54.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)").optional(),
+  description: z54.string().trim().max(2e3).optional(),
+  icon: z54.string().trim().max(100).optional(),
+  allowedTools: z54.array(z54.string().trim().min(1)).max(100).optional(),
+  allowedModules: z54.array(z54.string().trim().min(1)).max(100).optional(),
+  requiredPermissions: z54.array(z54.string().trim().min(1)).max(100).optional(),
+  systemInstruction: z54.string().trim().max(1e4).optional(),
   defaultMode: conversationModeSchema.optional(),
-  temperature: z53.coerce.number().min(0).max(2).optional(),
-  maxTokens: z53.coerce.number().int().positive().max(32e3).optional(),
-  requireCitations: z53.coerce.boolean().optional()
+  temperature: z54.coerce.number().min(0).max(2).optional(),
+  maxTokens: z54.coerce.number().int().positive().max(32e3).optional(),
+  requireCitations: z54.coerce.boolean().optional()
 });
-var createConversationSchema = z53.object({
-  workspaceId: z53.string().trim().uuid().optional(),
-  title: z53.string().trim().max(300).optional(),
-  contextMetadata: z53.record(z53.unknown()).optional()
+var createConversationSchema = z54.object({
+  workspaceId: z54.string().trim().uuid().optional(),
+  title: z54.string().trim().max(300).optional(),
+  contextMetadata: z54.record(z54.unknown()).optional()
 });
-var listConversationsQuerySchema = z53.object({
-  workspaceId: z53.string().trim().uuid().optional(),
-  status: z53.string().trim().max(50).optional(),
-  search: z53.string().trim().max(300).optional(),
-  limit: z53.coerce.number().int().positive().max(100).optional(),
-  offset: z53.coerce.number().int().nonnegative().optional()
+var listConversationsQuerySchema = z54.object({
+  workspaceId: z54.string().trim().uuid().optional(),
+  status: z54.string().trim().max(50).optional(),
+  search: z54.string().trim().max(300).optional(),
+  limit: z54.coerce.number().int().positive().max(100).optional(),
+  offset: z54.coerce.number().int().nonnegative().optional()
 });
-var contextMetadataSchema = z53.object({
-  currentModule: z53.string().trim().max(200).optional(),
-  currentPage: z53.string().trim().max(200).optional(),
-  selectedClientId: z53.string().trim().uuid().optional(),
-  selectedInvoiceId: z53.string().trim().uuid().optional(),
-  selectedDocumentId: z53.string().trim().uuid().optional(),
-  selectedWorkflowId: z53.string().trim().uuid().optional()
-}).catchall(z53.unknown()).optional();
-var sendMessageSchema = z53.object({
-  conversationId: z53.string().trim().uuid().optional(),
-  workspaceId: z53.string().trim().uuid().optional(),
-  content: z53.string().trim().min(1).max(2e4),
+var contextMetadataSchema = z54.object({
+  currentModule: z54.string().trim().max(200).optional(),
+  currentPage: z54.string().trim().max(200).optional(),
+  selectedClientId: z54.string().trim().uuid().optional(),
+  selectedInvoiceId: z54.string().trim().uuid().optional(),
+  selectedDocumentId: z54.string().trim().uuid().optional(),
+  selectedWorkflowId: z54.string().trim().uuid().optional()
+}).catchall(z54.unknown()).optional();
+var sendMessageSchema = z54.object({
+  conversationId: z54.string().trim().uuid().optional(),
+  workspaceId: z54.string().trim().uuid().optional(),
+  content: z54.string().trim().min(1).max(2e4),
   mode: conversationModeSchema.optional(),
   contextMetadata: contextMetadataSchema
 });
@@ -28262,7 +28311,7 @@ var copilotRoutes_default = router57;
 
 // server/routes/v1/adminRoutes.ts
 import { Router as Router58 } from "express";
-import { z as z54 } from "zod";
+import { z as z55 } from "zod";
 
 // server/services/admin/adminOverviewService.ts
 var SECURITY_EVENT_ACTIONS = [
@@ -28398,7 +28447,7 @@ var router58 = Router58();
 router58.use(authenticateToken);
 router58.get("/overview", requirePermission("security.read"), asyncHandler(async (req, res) => sendSuccess(res, { overview: await adminOverviewService.overview(req.user) })));
 router58.get("/security/policy", requirePermission("security.read"), (_req, res) => sendSuccess(res, { policy: adminOverviewService.policy() }));
-var pageQuery = z54.object({ page: z54.coerce.number().int().positive().default(1), limit: z54.coerce.number().int().positive().max(100).default(20) });
+var pageQuery = z55.object({ page: z55.coerce.number().int().positive().default(1), limit: z55.coerce.number().int().positive().max(100).default(20) });
 router58.get(
   "/security/events",
   requirePermission("security.read"),
@@ -29206,16 +29255,16 @@ var reportsRoutes_default = router61;
 
 // server/routes/v1/contentApprovalRoutes.ts
 import { Router as Router63 } from "express";
-import { z as z55 } from "zod";
+import { z as z56 } from "zod";
 var router62 = Router63();
 router62.use(authenticateToken);
-var SubmitSchema = z55.object({
-  contentType: z55.enum(["page", "post"]),
-  contentId: z55.string().min(1)
+var SubmitSchema = z56.object({
+  contentType: z56.enum(["page", "post"]),
+  contentId: z56.string().min(1)
 });
-var DecideSchema = z55.object({
-  decision: z55.enum(["APPROVED", "REJECTED", "CHANGES_REQUESTED"]),
-  reason: z55.string().max(2e3).optional()
+var DecideSchema = z56.object({
+  decision: z56.enum(["APPROVED", "REJECTED", "CHANGES_REQUESTED"]),
+  reason: z56.string().max(2e3).optional()
 });
 router62.get(
   "/",

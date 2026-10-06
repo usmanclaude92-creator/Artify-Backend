@@ -4,6 +4,8 @@
  */
 import React from "react";
 import { AuthProvider, useAuth } from "./context/AuthContext";
+import { NavPreferencesProvider } from "./context/NavPreferencesContext";
+import { ActiveWorkspaceProvider } from "./context/ActiveWorkspaceContext";
 import { ThemeProvider } from "./context/ThemeContext";
 import { ToastProvider } from "./context/ToastContext";
 import { RouterProvider, useRouter } from "./lib/router";
@@ -83,7 +85,11 @@ export default function App() {
       <ToastProvider>
         <RouterProvider>
           <AuthProvider>
-            <AppContent />
+            <ActiveWorkspaceProvider>
+              <NavPreferencesProvider>
+                <AppContent />
+              </NavPreferencesProvider>
+            </ActiveWorkspaceProvider>
           </AuthProvider>
         </RouterProvider>
       </ToastProvider>

@@ -20,6 +20,8 @@
  */
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
+  Pin,
+  PinOff,
   Search,
   CornerDownLeft,
   FileText,
@@ -35,6 +37,7 @@ import {
 } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
 import { useRouter } from "../../lib/router";
+import { useNavPreferences } from "../../context/NavPreferencesContext";
 import { hasPermission, visibleNavItems } from "../../lib/permissions";
 import { postsApi, pagesApi, leadsApi, clientsApi, productsApi, mediaApi, opportunitiesApi, formsApi, caseStudiesApi } from "../../lib/api";
 
@@ -185,7 +188,8 @@ const ENTITY_SEARCHERS: {
 
 export const CommandPalette: React.FC<CommandPaletteProps> = ({ open, onClose }) => {
   const { user } = useAuth();
-  const { navigate } = useRouter();
+  const { navigate, path } = useRouter();
+  const prefs = useNavPreferences();
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
   const [entityResults, setEntityResults] = useState<PaletteItem[]>([]);
@@ -275,9 +279,33 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ open, onClose })
     }));
   }, [query, permissions]);
 
+  // "Pin / Unpin current page" — only for a page the user can actually see in the sidebar.
+  const pinActionResults = useMemo((): PaletteItem[] => {
+    const trimmed = query.trim().toLowerCase();
+    if (trimmed && !"pin unpin current page favourite favorite".includes(trimmed) && !trimmed.includes("pin")) return [];
+    const current = visibleNavItems(permissions).find((i) => i.path === path);
+    if (!current) return [];
+    const pinned = prefs.isPinned(current.id);
+    if (!pinned && prefs.pinned.length >= prefs.maxPins) return [];
+    return [
+      {
+        id: "qa-toggle-pin",
+        label: pinned ? "Unpin current page" : "Pin current page",
+        sublabel: current.label,
+        group: "Quick actions",
+        icon: pinned ? PinOff : Pin,
+        onSelect: () => {
+          prefs.togglePin(current.id);
+          onClose();
+        },
+      },
+    ];
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query, permissions, path, prefs.pinned]);
+
   const allItems = useMemo(
-    () => [...quickActionResults, ...navItemResults, ...entityResults],
-    [quickActionResults, navItemResults, entityResults]
+    () => [...quickActionResults, ...pinActionResults, ...navItemResults, ...entityResults],
+    [quickActionResults, pinActionResults, navItemResults, entityResults]
   );
 
   useEffect(() => {

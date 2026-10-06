@@ -18,7 +18,7 @@ describe("Sidebar", () => {
   it("shows the new section order, only sections with visible items, and an accordion", async () => {
     const { Sidebar } = await import("./Sidebar");
     render(<Sidebar mobileOpen={false} onCloseMobile={() => {}} />);
-    const headers = screen.getAllByRole("button", { expanded: true }).concat(screen.getAllByRole("button", { expanded: false }));
+    const headers = screen.getAllByRole("button", { expanded: true }).concat(screen.getAllByRole("button", { expanded: false })).filter((b) => b.classList.contains("cc-section-head"));
     const names = headers.map((b) => b.textContent);
     expect(names).toContain("Dashboard");
     expect(names).toContain("Social Media");
@@ -56,7 +56,7 @@ describe("Sidebar accordion", () => {
     const admin = screen.getByRole("button", { name: /^Administration$/ });
     expect(admin.getAttribute("aria-expanded")).toBe("true");
     fireEvent.click(screen.getByRole("button", { name: /Social Media/ }));
-    expect(screen.getAllByRole("button", { expanded: true })).toHaveLength(1);
+    expect(screen.getAllByRole("button", { expanded: true }).filter((b) => b.classList.contains("cc-section-head"))).toHaveLength(1);
     expect(admin.getAttribute("aria-expanded")).toBe("false");
   });
 });
