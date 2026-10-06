@@ -15,6 +15,7 @@ import { authenticateToken, requirePermission } from "../../middleware/auth";
 import { asyncHandler } from "../../utils/asyncHandler";
 import { sendSuccess } from "../../core/apiResponse";
 import { automationService } from "../../services/automation/AutomationService";
+import { socialAccountService } from "../../services/social/socialAccountService";
 import { contentSchedulingService } from "../../services/contentSchedulingService";
 import { config } from "../../config/env";
 import { AuthenticationError, NotFoundError } from "../../core/errors";
@@ -57,12 +58,14 @@ router.get(
     if (!constantTimeEquals(req.headers.authorization ?? "", `Bearer ${config.cronSecret}`)) {
       throw new AuthenticationError("Invalid cron credentials.");
     }
-    const [automation, content, webhookRetries] = await Promise.all([
+    const [automation, content, webhookRetries, socialTokenHealth] = await Promise.all([
       automationService.runCronTick(),
       contentSchedulingService.publishDueScheduled(),
       webhookEndpointService.processDueRetries(),
+      // Daily social token check; a failure here must never break the other jobs sharing this cron entry.
+      socialAccountService.runTokenHealthJob().catch(() => ({ checked: 0, needsAttention: 0, errors: 1 })),
     ]);
-    sendSuccess(res, { automation, content, webhookRetries });
+    sendSuccess(res, { automation, content, webhookRetries, socialTokenHealth });
   })
 );
 

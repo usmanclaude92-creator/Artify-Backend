@@ -63,7 +63,7 @@ describe("sidebar structure (Step 1 redesign)", () => {
       "/seo/issues", "/seo/redirects",
     ],
     CRM: ["/crm", "/crm/leads", "/crm/clients", "/crm/contacts", "/crm/opportunities", "/onboarding", "/onboarding/pending", "/marketing/forms"],
-    "Social Media": ["/social"],
+    "Social Media": ["/social", "/social/accounts"],
     Marketing: ["/marketing", "/marketing/campaigns"],
     Catalog: ["/products", "/products/modules", "/services", "/solutions", "/products/taxonomy"],
     Commercial: ["/commercial/contracts", "/commercial/subscriptions", "/commercial/invoices", "/commercial/payments"],
@@ -83,10 +83,10 @@ describe("sidebar structure (Step 1 redesign)", () => {
 
   it("keeps every one of the 62 existing pages plus the new /social and /approvals pages, with unique ids and paths", () => {
     const all = Object.values(EXPECTED).flat();
-    expect(all).toHaveLength(64);
-    expect(NAV_ITEMS).toHaveLength(64);
-    expect(new Set(NAV_ITEMS.map((i) => i.path)).size).toBe(64);
-    expect(new Set(NAV_ITEMS.map((i) => i.id)).size).toBe(64);
+    expect(all).toHaveLength(65);
+    expect(NAV_ITEMS).toHaveLength(65);
+    expect(new Set(NAV_ITEMS.map((i) => i.path)).size).toBe(65);
+    expect(new Set(NAV_ITEMS.map((i) => i.id)).size).toBe(65);
     expect(NAV_ITEMS.map((i) => i.path).sort()).toEqual([...all].sort());
   });
 

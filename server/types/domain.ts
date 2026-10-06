@@ -146,6 +146,11 @@ export const PERMISSION_KEYS = [
   "analytics.read",
   // Step 1 redesign — Social Media Management section (placeholder page now; real module in a later phase).
   "social.read",
+  "social.accounts.manage",
+  "social.publish",
+  "social.approve",
+  "social.reply",
+  "social.analytics.read",
   // Step 2 redesign — global Approvals center front door (each source still needs its own permission).
   "approvals.read",
   "settings.read",

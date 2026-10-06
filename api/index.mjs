@@ -117,7 +117,21 @@ var envSchema = z.object({
   // when unset, a key is derived (HKDF) from SESSION_SECRET instead, which
   // works but ties stored secrets to that value — set this to rotate the
   // two independently. Min 32 chars when set.
-  INTEGRATIONS_ENCRYPTION_KEY: z.string().optional().default("")
+  INTEGRATIONS_ENCRYPTION_KEY: z.string().optional().default(""),
+  // Step 4 — Social Media foundation. Token vault key ring: "1:<secret>,2:<secret>" (each secret >= 32 chars);
+  // new credentials use SOCIAL_VAULT_ACTIVE_KEY_VERSION. Unset = a key derived from INTEGRATIONS_ENCRYPTION_KEY /
+  // SESSION_SECRET (version 1), which works but ties stored tokens to that value.
+  SOCIAL_VAULT_KEYS: z.string().optional().default(""),
+  SOCIAL_VAULT_ACTIVE_KEY_VERSION: z.coerce.number().int().positive().optional(),
+  // The mock connector exists for dev/tests; it is disabled in production unless this flag is "true".
+  SOCIAL_MOCK_PROVIDER_ENABLED: z.enum(["true", "false"]).optional(),
+  // Public origin of the Control Center, used to build OAuth redirect URIs.
+  CONTROL_CENTER_BASE_URL: z.string().optional().default(""),
+  // Network app credentials (names only; connectors stay "not configured" until set AND implemented).
+  META_APP_ID: z.string().optional().default(""),
+  META_APP_SECRET: z.string().optional().default(""),
+  LINKEDIN_CLIENT_ID: z.string().optional().default(""),
+  LINKEDIN_CLIENT_SECRET: z.string().optional().default("")
 }).superRefine((val, ctx) => {
   const isProdLike = val.NODE_ENV === "production" || val.NODE_ENV === "staging";
   if (val.INTEGRATIONS_ENCRYPTION_KEY && val.INTEGRATIONS_ENCRYPTION_KEY.length < 32) {
@@ -260,7 +274,15 @@ function validateEnv(raw) {
       publicSiteBaseUrl: env.PUBLIC_SITE_BASE_URL,
       cronSecret: env.CRON_SECRET,
       redisUrl: env.REDIS_URL,
-      integrationsEncryptionKey: env.INTEGRATIONS_ENCRYPTION_KEY
+      integrationsEncryptionKey: env.INTEGRATIONS_ENCRYPTION_KEY,
+      socialVaultKeys: env.SOCIAL_VAULT_KEYS,
+      socialVaultActiveKeyVersion: env.SOCIAL_VAULT_ACTIVE_KEY_VERSION,
+      socialMockProviderEnabled: env.SOCIAL_MOCK_PROVIDER_ENABLED ? env.SOCIAL_MOCK_PROVIDER_ENABLED === "true" : env.NODE_ENV !== "production",
+      controlCenterBaseUrl: (env.CONTROL_CENTER_BASE_URL || (env.NODE_ENV === "production" ? "https://cc.artifysols.com" : "http://localhost:3000")).replace(/\/+$/, ""),
+      metaAppId: env.META_APP_ID,
+      metaAppSecret: env.META_APP_SECRET,
+      linkedinClientId: env.LINKEDIN_CLIENT_ID,
+      linkedinClientSecret: env.LINKEDIN_CLIENT_SECRET
     })
   };
 }
@@ -910,7 +932,7 @@ var webhookEndpointService = {
       }
     }));
   },
-  async create(caller, input, meta4 = {}) {
+  async create(caller, input, meta5 = {}) {
     const count = await prisma.webhookEndpoint.count({ where: { organizationId: caller.organizationId, deletedAt: null } });
     if (count >= MAX_ENDPOINTS_PER_ORG) throw new ConflictError(`An organization can have at most ${MAX_ENDPOINTS_PER_ORG} webhook endpoints.`);
     await assertSafeOutboundUrl(input.url);
@@ -935,12 +957,12 @@ var webhookEndpointService = {
       resourceType: "webhook_endpoint",
       resourceId: endpoint.id,
       afterData: { name: endpoint.name, url: endpoint.url, events },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return { endpoint: projectEndpoint(endpoint), secret };
   },
-  async update(caller, id, input, meta4 = {}) {
+  async update(caller, id, input, meta5 = {}) {
     const existing = await loadInOrg(id, caller.organizationId);
     if (input.url !== void 0) await assertSafeOutboundUrl(input.url);
     const endpoint = await prisma.webhookEndpoint.update({
@@ -961,12 +983,12 @@ var webhookEndpointService = {
       resourceId: id,
       beforeData: { url: existing.url, events: existing.events, enabled: existing.enabled },
       afterData: { url: endpoint.url, events: endpoint.events, enabled: endpoint.enabled },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return projectEndpoint(endpoint);
   },
-  async rotateSecret(caller, id, meta4 = {}) {
+  async rotateSecret(caller, id, meta5 = {}) {
     const existing = await loadInOrg(id, caller.organizationId);
     const secret = newSigningSecret();
     const endpoint = await prisma.webhookEndpoint.update({ where: { id: existing.id }, data: { secretCiphertext: encryptSecret(secret), secretLast4: last4(secret) } });
@@ -977,12 +999,12 @@ var webhookEndpointService = {
       action: "WEBHOOK_SECRET_ROTATED",
       resourceType: "webhook_endpoint",
       resourceId: id,
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return { endpoint: projectEndpoint(endpoint), secret };
   },
-  async remove(caller, id, meta4 = {}) {
+  async remove(caller, id, meta5 = {}) {
     const existing = await loadInOrg(id, caller.organizationId);
     await prisma.webhookEndpoint.update({ where: { id: existing.id }, data: { deletedAt: /* @__PURE__ */ new Date(), enabled: false } });
     await auditLogRepository.record({
@@ -993,8 +1015,8 @@ var webhookEndpointService = {
       resourceType: "webhook_endpoint",
       resourceId: id,
       beforeData: { name: existing.name, url: existing.url },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
   },
   async test(caller, id) {
@@ -1347,7 +1369,7 @@ var aiExecutionLimiter = rateLimit({
 });
 
 // server/routes/v1/index.ts
-import { Router as Router64 } from "express";
+import { Router as Router65 } from "express";
 
 // server/routes/v1/authRoutes.ts
 import { Router } from "express";
@@ -1998,6 +2020,11 @@ var PERMISSION_KEYS = [
   "analytics.read",
   // Step 1 redesign — Social Media Management section (placeholder page now; real module in a later phase).
   "social.read",
+  "social.accounts.manage",
+  "social.publish",
+  "social.approve",
+  "social.reply",
+  "social.analytics.read",
   // Step 2 redesign — global Approvals center front door (each source still needs its own permission).
   "approvals.read",
   "settings.read",
@@ -2176,7 +2203,7 @@ var authService = {
    * Issues a single-use code that lets the caller's CURRENT, already-authenticated session continue
    * on the Control Center origin. Client-portal accounts never get one — they have nothing to open there.
    */
-  async issueHandoffCode(user, meta4 = {}) {
+  async issueHandoffCode(user, meta5 = {}) {
     if (user.role.key === PORTAL_REGISTRATION_ROLE_KEY) {
       throw new AuthorizationError("This account does not have Control Center access.");
     }
@@ -2190,13 +2217,13 @@ var authService = {
       action: "AUTH_HANDOFF_ISSUED",
       resourceType: "session",
       resourceId: user.id,
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return { code, expiresAt };
   },
   /** Exchanges a handoff code for a brand-new session (the originating session/token is never shared). */
-  async exchangeHandoffCode(code, meta4 = {}) {
+  async exchangeHandoffCode(code, meta5 = {}) {
     const claimed = await authHandoffRepository.consume(code);
     const failure = () => new AuthenticationError("This sign-in link is invalid or has expired. Please sign in again.");
     if (!claimed) throw failure();
@@ -2211,8 +2238,8 @@ var authService = {
       userId: user.id,
       organizationId: claimed.organizationId,
       expiresAt,
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     await auditLogRepository.record({
       organizationId: claimed.organizationId,
@@ -2222,12 +2249,12 @@ var authService = {
       action: "AUTH_HANDOFF_EXCHANGED",
       resourceType: "session",
       resourceId: user.id,
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return { session: { token, expiresAt }, user: sanitized };
   },
-  async login(email, password, meta4 = {}, targetOrganizationId) {
+  async login(email, password, meta5 = {}, targetOrganizationId) {
     const user = await userRepository.findByEmail(email);
     const genericFailure = () => new AuthenticationError("Invalid email or password credentials.");
     if (!user) throw genericFailure();
@@ -2247,8 +2274,8 @@ var authService = {
         resourceType: "session",
         resourceId: user.id,
         result: "FAILURE",
-        ipAddress: meta4.ip,
-        userAgent: meta4.userAgent
+        ipAddress: meta5.ip,
+        userAgent: meta5.userAgent
       });
       if (nowLocked) {
         logger.warn({ event: "account_locked", userId: user.id }, "Account locked after repeated failed logins");
@@ -2260,8 +2287,8 @@ var authService = {
           resourceType: "user",
           resourceId: user.id,
           result: "FAILURE",
-          ipAddress: meta4.ip,
-          userAgent: meta4.userAgent
+          ipAddress: meta5.ip,
+          userAgent: meta5.userAgent
         });
       }
       throw genericFailure();
@@ -2285,8 +2312,8 @@ var authService = {
       userId: user.id,
       organizationId,
       expiresAt,
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     await auditLogRepository.record({
       organizationId,
@@ -2296,8 +2323,8 @@ var authService = {
       action: "AUTH_LOGIN",
       resourceType: "session",
       resourceId: user.id,
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return { session: { token, expiresAt }, user: sanitized };
   },
@@ -2363,7 +2390,7 @@ var authService = {
    * link it to a CRM client. Without email delivery it falls back to the
    * degraded mode: immediate sign-in, and a duplicate address returns 409.
    */
-  async registerPortalAccount(payload, meta4 = {}) {
+  async registerPortalAccount(payload, meta5 = {}) {
     const emailOn = emailService.isEnabled();
     const email = payload.email.trim().toLowerCase();
     const existing = await userRepository.findByEmail(email);
@@ -2407,8 +2434,8 @@ var authService = {
       action: "AUTH_PORTAL_REGISTERED",
       resourceType: "user",
       resourceId: created.user.id,
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     void this.notifyOperatorsOfRegistration(created.organization.id, created.organization.name, `${payload.firstName} ${payload.lastName}`.trim());
     if (emailOn) {
@@ -2417,7 +2444,7 @@ var authService = {
       );
       return { status: "verification_required" };
     }
-    const login = await this.login(email, payload.password, meta4);
+    const login = await this.login(email, payload.password, meta5);
     return { status: "registered", ...login };
   },
   /** Tells the agency's own admins (the public website organization) that a new client account is waiting to be linked. Best-effort. */
@@ -2453,7 +2480,7 @@ var authService = {
     await emailVerificationRepository.create({ token, userId, expiresAt: new Date(Date.now() + config.emailVerificationTtlHours * 60 * 60 * 1e3) });
     await emailService.sendVerification(email, firstName, token);
   },
-  async verifyEmail(token, meta4 = {}) {
+  async verifyEmail(token, meta5 = {}) {
     const row = await emailVerificationRepository.findValidByToken(token);
     if (!row) throw new AuthenticationError("This verification link is invalid or has expired.");
     const user = await userRepository.findById(row.userId);
@@ -2468,8 +2495,8 @@ var authService = {
       action: "AUTH_EMAIL_VERIFIED",
       resourceType: "user",
       resourceId: user.id,
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
   },
   /** Always resolves silently — never reveals whether the address exists or is already verified. */
@@ -2491,7 +2518,7 @@ var authService = {
     void sessionRepository.touchLastUsed(session.id);
     return sanitized;
   },
-  async logout(token, actor, meta4 = {}) {
+  async logout(token, actor, meta5 = {}) {
     await sessionRepository.revoke(token);
     if (actor) {
       await auditLogRepository.record({
@@ -2500,13 +2527,13 @@ var authService = {
         actorType: "USER",
         action: "AUTH_LOGOUT",
         resourceType: "session",
-        ipAddress: meta4.ip,
-        userAgent: meta4.userAgent
+        ipAddress: meta5.ip,
+        userAgent: meta5.userAgent
       });
     }
   },
   /** Revokes every active session for the user (all devices/tabs) — a broader action than logout(), which only revokes the caller's current session. */
-  async logoutAll(user, meta4 = {}) {
+  async logoutAll(user, meta5 = {}) {
     await sessionRepository.revokeAllForUser(user.id);
     await auditLogRepository.record({
       organizationId: user.organizationId,
@@ -2515,11 +2542,11 @@ var authService = {
       action: "AUTH_LOGOUT_ALL",
       resourceType: "user",
       resourceId: user.id,
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
   },
-  async changePassword(user, currentSessionToken, currentPassword, newPassword, meta4 = {}) {
+  async changePassword(user, currentSessionToken, currentPassword, newPassword, meta5 = {}) {
     const fullUser = await userRepository.findById(user.id);
     if (!fullUser) throw new InternalError("User record could not be loaded.");
     const validCurrent = await verifyPassword(currentPassword, fullUser.passwordHash);
@@ -2536,8 +2563,8 @@ var authService = {
       action: "AUTH_PASSWORD_CHANGE",
       resourceType: "user",
       resourceId: user.id,
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
   },
   /**
@@ -2548,7 +2575,7 @@ var authService = {
    * undefined; the raw token is never logged, never included in a
    * production response, and never persisted anywhere but as a hash.
    */
-  async requestPasswordReset(email, meta4 = {}) {
+  async requestPasswordReset(email, meta5 = {}) {
     const user = await userRepository.findByEmail(email);
     if (!user || user.status !== "ACTIVE") {
       return {};
@@ -2560,8 +2587,8 @@ var authService = {
       token,
       userId: user.id,
       expiresAt,
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     await auditLogRepository.record({
       organizationId: user.organizationId,
@@ -2570,8 +2597,8 @@ var authService = {
       action: "AUTH_PASSWORD_RESET_REQUESTED",
       resourceType: "user",
       resourceId: user.id,
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     if (emailService.isEnabled()) {
       await emailService.sendPasswordReset(user.email, user.firstName, token).catch(
@@ -2581,7 +2608,7 @@ var authService = {
     }
     return config.isProduction ? {} : { devToken: token };
   },
-  async confirmPasswordReset(token, newPassword, meta4 = {}) {
+  async confirmPasswordReset(token, newPassword, meta5 = {}) {
     const resetRow = await passwordResetRepository.findValidByToken(token);
     if (!resetRow) {
       throw new AuthenticationError("This password reset link is invalid or has expired.");
@@ -2603,8 +2630,8 @@ var authService = {
       action: "AUTH_PASSWORD_RESET_COMPLETED",
       resourceType: "user",
       resourceId: user.id,
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
   },
   /**
@@ -2615,7 +2642,7 @@ var authService = {
    * rotation (new token issued, old one revoked) rather than mutating the
    * existing session row in place.
    */
-  async switchOrganization(user, currentSessionToken, targetOrganizationId, meta4 = {}) {
+  async switchOrganization(user, currentSessionToken, targetOrganizationId, meta5 = {}) {
     const fullUser = await userRepository.findById(user.id);
     if (!fullUser) throw new InternalError("User record could not be loaded.");
     const sanitized = await resolveSanitizedUserForOrganization(fullUser, targetOrganizationId);
@@ -2629,8 +2656,8 @@ var authService = {
       userId: user.id,
       organizationId: targetOrganizationId,
       expiresAt,
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     await sessionRepository.revoke(currentSessionToken);
     await auditLogRepository.record({
@@ -2642,8 +2669,8 @@ var authService = {
       resourceId: user.id,
       beforeData: { organizationId: user.organizationId },
       afterData: { organizationId: targetOrganizationId },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return { session: { token, expiresAt }, user: sanitized };
   },
@@ -3259,6 +3286,11 @@ var ROLE_PERMISSION_SETS = {
     "reports.export",
     "analytics.read",
     "social.read",
+    "social.accounts.manage",
+    "social.publish",
+    "social.approve",
+    "social.reply",
+    "social.analytics.read",
     "settings.read",
     "settings.manage",
     "audit.read",
@@ -3507,7 +3539,8 @@ var ROLE_PERMISSION_SETS = {
     "campaigns.create",
     "campaigns.update",
     "campaigns.publish",
-    "approvals.read"
+    "approvals.read",
+    "social.read"
   ],
   USER: [
     "clients.read",
@@ -3645,7 +3678,8 @@ var ROLE_PERMISSION_SETS = {
     "forms.read",
     // Phase 14 — VIEWER is read-only for campaigns, same convention.
     "campaigns.read",
-    "approvals.read"
+    "approvals.read",
+    "social.read"
   ],
   CLIENT_PORTAL: [
     "portal.dashboard.read",
@@ -4210,7 +4244,7 @@ var userService = {
   async getUser(organizationId, userId) {
     return loadUserInOrgOrThrow(userId, organizationId);
   },
-  async createUser(caller, input, meta4 = {}) {
+  async createUser(caller, input, meta5 = {}) {
     const existing = await userRepository.findByEmail(input.email);
     if (existing) throw new ConflictError("An account with this email address already exists.");
     const role = await resolveRoleOrThrow(input.roleKey);
@@ -4239,12 +4273,12 @@ var userService = {
       resourceType: "user",
       resourceId: user.id,
       afterData: { email: user.email, roleKey: role.key },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return sanitizeUser({ ...user, organizationId: caller.organizationId }, { id: role.id, key: role.key, name: role.name, permissions: [] });
   },
-  async updateUser(caller, targetUserId, input, callerPermissions, meta4 = {}) {
+  async updateUser(caller, targetUserId, input, callerPermissions, meta5 = {}) {
     const membership = await organizationMembershipRepository.findByUserAndOrg(targetUserId, caller.organizationId);
     if (!membership) throw new NotFoundError("User not found.");
     const beforeRoleKey = membership.role.key;
@@ -4271,8 +4305,8 @@ var userService = {
         resourceId: targetUserId,
         beforeData: { roleKey: beforeRoleKey },
         afterData: { roleKey: newRole.key },
-        ipAddress: meta4.ip,
-        userAgent: meta4.userAgent
+        ipAddress: meta5.ip,
+        userAgent: meta5.userAgent
       });
     }
     const profilePatch = {};
@@ -4292,8 +4326,8 @@ var userService = {
           resourceType: "user",
           resourceId: targetUserId,
           afterData: { status: input.status },
-          ipAddress: meta4.ip,
-          userAgent: meta4.userAgent
+          ipAddress: meta5.ip,
+          userAgent: meta5.userAgent
         });
         if (input.status === "DISABLED") {
           await sessionRepository.revokeAllForUser(targetUserId);
@@ -4307,8 +4341,8 @@ var userService = {
           resourceType: "user",
           resourceId: targetUserId,
           afterData: profilePatch,
-          ipAddress: meta4.ip,
-          userAgent: meta4.userAgent
+          ipAddress: meta5.ip,
+          userAgent: meta5.userAgent
         });
       }
     }
@@ -4332,7 +4366,7 @@ var userSecurityService = {
       orderBy: { createdAt: "desc" }
     });
   },
-  async revokeAllForUser(caller, userId, meta4 = {}) {
+  async revokeAllForUser(caller, userId, meta5 = {}) {
     const membership = await loadMember(caller, userId);
     assertCallerMayManageTarget(caller, membership.role.key);
     const result = await prisma.session.updateMany({ where: { userId, revokedAt: null }, data: { revokedAt: /* @__PURE__ */ new Date() } });
@@ -4344,13 +4378,13 @@ var userSecurityService = {
       resourceType: "user",
       resourceId: userId,
       afterData: { revoked: result.count },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return { revoked: result.count };
   },
   /** Clears a lockout caused by repeated failed sign-ins. */
-  async unlock(caller, userId, meta4 = {}) {
+  async unlock(caller, userId, meta5 = {}) {
     const membership = await loadMember(caller, userId);
     assertCallerMayManageTarget(caller, membership.role.key);
     await prisma.user.update({ where: { id: userId }, data: { failedLoginAttempts: 0, lockedUntil: null } });
@@ -4361,8 +4395,8 @@ var userSecurityService = {
       action: "USER_UNLOCKED",
       resourceType: "user",
       resourceId: userId,
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
   },
   /** Active sessions across the caller's organization (security.read). */
@@ -4380,7 +4414,7 @@ var userSecurityService = {
     ]);
     return { sessions: rows, total };
   },
-  async revokeOrganizationSession(caller, sessionId, meta4 = {}) {
+  async revokeOrganizationSession(caller, sessionId, meta5 = {}) {
     const session = await prisma.session.findFirst({ where: { id: sessionId, organizationId: caller.organizationId, revokedAt: null } });
     if (!session) throw new NotFoundError("Session not found.");
     if (session.userId !== caller.id) {
@@ -4396,8 +4430,8 @@ var userSecurityService = {
       resourceType: "session",
       resourceId: sessionId,
       afterData: { userId: session.userId },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
   }
 };
@@ -4564,7 +4598,7 @@ var roleAdminService = {
       permissions: r.rolePermissions.map((rp) => rp.permission.key).sort()
     }));
   },
-  async create(caller, input, meta4 = {}) {
+  async create(caller, input, meta5 = {}) {
     requireSuperAdmin(caller);
     const key2 = slugKey(input.name);
     if (key2 === "CUSTOM_") throw new ValidationError("Role name must contain letters or digits.");
@@ -4587,12 +4621,12 @@ var roleAdminService = {
       resourceType: "role",
       resourceId: role.id,
       afterData: { key: key2, permissions: perms.map((p) => p.key).sort() },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return role;
   },
-  async update(caller, id, input, meta4 = {}) {
+  async update(caller, id, input, meta5 = {}) {
     requireSuperAdmin(caller);
     const role = await loadCustomRole(id);
     const updated = await prisma.role.update({ where: { id }, data: { name: input.name, description: input.description } });
@@ -4605,12 +4639,12 @@ var roleAdminService = {
       resourceId: id,
       beforeData: { name: role.name, description: role.description },
       afterData: { name: updated.name, description: updated.description },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return updated;
   },
-  async setPermissions(caller, id, permissionKeys2, confirmCritical, meta4 = {}) {
+  async setPermissions(caller, id, permissionKeys2, confirmCritical, meta5 = {}) {
     requireSuperAdmin(caller);
     const role = await loadCustomRole(id);
     const perms = await resolvePermissionIds(permissionKeys2, confirmCritical);
@@ -4629,12 +4663,12 @@ var roleAdminService = {
       resourceId: id,
       beforeData: { permissions: before },
       afterData: { permissions: after, added: after.filter((k) => !before.includes(k)), removed: before.filter((k) => !after.includes(k)) },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return { id, key: role.key, permissions: after };
   },
-  async remove(caller, id, meta4 = {}) {
+  async remove(caller, id, meta5 = {}) {
     requireSuperAdmin(caller);
     const role = await loadCustomRole(id);
     const [memberships, invitations] = await Promise.all([
@@ -4659,8 +4693,8 @@ var roleAdminService = {
       resourceType: "role",
       resourceId: id,
       beforeData: { key: role.key, name: role.name },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
   }
 };
@@ -4815,7 +4849,7 @@ var organizationService = {
     if (!org) throw new NotFoundError("Organization not found.");
     return org;
   },
-  async addMember(caller, organizationId, input, meta4 = {}) {
+  async addMember(caller, organizationId, input, meta5 = {}) {
     if (caller.role.key !== "SUPER_ADMIN" && organizationId !== caller.organizationId) {
       throw new AuthorizationError("Access denied: resource belongs to a different organization");
     }
@@ -4838,12 +4872,12 @@ var organizationService = {
       resourceType: "organization_membership",
       resourceId: membership.id,
       afterData: { userId: input.userId, roleKey: role.key },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return membership;
   },
-  async updateMember(caller, organizationId, targetUserId, input, callerPermissions, meta4 = {}) {
+  async updateMember(caller, organizationId, targetUserId, input, callerPermissions, meta5 = {}) {
     if (caller.role.key !== "SUPER_ADMIN" && organizationId !== caller.organizationId) {
       throw new AuthorizationError("Access denied: resource belongs to a different organization");
     }
@@ -4868,8 +4902,8 @@ var organizationService = {
         resourceId: membership.id,
         beforeData: { roleKey: membership.role.key },
         afterData: { roleKey: role.key },
-        ipAddress: meta4.ip,
-        userAgent: meta4.userAgent
+        ipAddress: meta5.ip,
+        userAgent: meta5.userAgent
       });
     }
     if (input.status !== void 0) {
@@ -4882,13 +4916,13 @@ var organizationService = {
         resourceType: "organization_membership",
         resourceId: membership.id,
         afterData: { status: input.status },
-        ipAddress: meta4.ip,
-        userAgent: meta4.userAgent
+        ipAddress: meta5.ip,
+        userAgent: meta5.userAgent
       });
     }
     return organizationMembershipRepository.findById(membership.id);
   },
-  async removeMember(caller, organizationId, targetUserId, meta4 = {}) {
+  async removeMember(caller, organizationId, targetUserId, meta5 = {}) {
     if (caller.role.key !== "SUPER_ADMIN" && organizationId !== caller.organizationId) {
       throw new AuthorizationError("Access denied: resource belongs to a different organization");
     }
@@ -4906,8 +4940,8 @@ var organizationService = {
       resourceType: "organization_membership",
       resourceId: targetUserId,
       beforeData: { roleKey: membership.role.key },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
   }
 };
@@ -5988,7 +6022,7 @@ var mediaService = {
   async getMedia(organizationId, id) {
     return toApiMedia(await loadMediaOrThrow(id, organizationId));
   },
-  async createUploadSession(caller, input, meta4 = {}) {
+  async createUploadSession(caller, input, meta5 = {}) {
     const organizationId = caller.organizationId;
     if (!extensionMatchesMimeType(input.filename, input.mimeType)) {
       throw new ValidationError(`The file extension does not match the declared type (${input.mimeType}).`);
@@ -6045,12 +6079,12 @@ var mediaService = {
       resourceType: "media",
       resourceId: mediaId,
       afterData: { originalFilename: input.filename, mimeType: input.mimeType, sizeBytes: input.sizeBytes },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return { media: toApiMedia(media), upload, uploadToken: rawToken };
   },
-  async completeUpload(caller, id, token, meta4 = {}) {
+  async completeUpload(caller, id, token, meta5 = {}) {
     const organizationId = caller.organizationId;
     const media = await loadMediaOrThrow(id, organizationId);
     if (media.status !== "PENDING") {
@@ -6093,8 +6127,8 @@ var mediaService = {
       resourceType: "media",
       resourceId: id,
       afterData: { sizeBytes: verifiedSize },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return toApiMedia(activated);
   },
@@ -6109,7 +6143,7 @@ var mediaService = {
    * caller with media.update can choose to make this specific image
    * public by embedding it, audited like any other visibility change.
    */
-  async getEmbedUrl(caller, id, meta4 = {}) {
+  async getEmbedUrl(caller, id, meta5 = {}) {
     const organizationId = caller.organizationId;
     const media = await loadMediaOrThrow(id, organizationId);
     if (media.status !== "ACTIVE") throw new ConflictError("This media has no readable object yet.");
@@ -6125,15 +6159,15 @@ var mediaService = {
         resourceId: id,
         beforeData: { visibility: media.visibility },
         afterData: { visibility: "PUBLIC" },
-        ipAddress: meta4.ip,
-        userAgent: meta4.userAgent
+        ipAddress: meta5.ip,
+        userAgent: meta5.userAgent
       });
     }
     const provider = getStorageProvider();
     const url = provider.getPublicUrl(media.storageKey) ?? await provider.createSignedReadUrl({ key: media.storageKey, expiresInSeconds: config.mediaPublicSignedUrlTtlSeconds });
     return { url };
   },
-  async getReadUrl(caller, id, meta4 = {}) {
+  async getReadUrl(caller, id, meta5 = {}) {
     const organizationId = caller.organizationId;
     const media = await loadMediaOrThrow(id, organizationId);
     if (media.status !== "ACTIVE" && media.status !== "ARCHIVED") {
@@ -6150,12 +6184,12 @@ var mediaService = {
       resourceType: "media",
       resourceId: id,
       afterData: { expiresAt: expiresAt.toISOString() },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return { url, expiresAt: expiresAt.toISOString() };
   },
-  async updateMedia(caller, id, input, meta4 = {}) {
+  async updateMedia(caller, id, input, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadMediaOrThrow(id, organizationId);
     const patch = {};
@@ -6180,12 +6214,12 @@ var mediaService = {
       resourceId: id,
       beforeData: { displayName: existing.displayName, altText: existing.altText, caption: existing.caption, visibility: existing.visibility },
       afterData: patch,
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return toApiMedia(updated);
   },
-  async archiveMedia(caller, id, meta4 = {}) {
+  async archiveMedia(caller, id, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadMediaOrThrow(id, organizationId);
     if (existing.status === "ARCHIVED") throw new ConflictError("This media is already archived.");
@@ -6200,12 +6234,12 @@ var mediaService = {
       resourceType: "media",
       resourceId: id,
       beforeData: { status: existing.status },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return toApiMedia(updated);
   },
-  async deleteMedia(caller, id, meta4 = {}) {
+  async deleteMedia(caller, id, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadMediaOrThrow(id, organizationId);
     const referenceCount = await mediaRepository.countContentReferences(id);
@@ -6223,8 +6257,8 @@ var mediaService = {
       resourceType: "media",
       resourceId: id,
       beforeData: { status: existing.status, originalFilename: existing.originalFilename },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
   }
 };
@@ -6385,7 +6419,7 @@ async function assertSiteIdentityMediaUsable(input, organizationId) {
     if (mediaId) await assertFeaturedMediaUsable(mediaId, organizationId);
   }
 }
-async function publishGroup(caller, publishedKey, draftKey, schema, revalidate, auditResourceType, meta4) {
+async function publishGroup(caller, publishedKey, draftKey, schema, revalidate, auditResourceType, meta5) {
   const organizationId = caller.organizationId;
   const draftRow = await systemSettingRepository.findByKey(organizationId, draftKey);
   const value = schema.parse(draftRow?.value ?? {});
@@ -6401,12 +6435,12 @@ async function publishGroup(caller, publishedKey, draftKey, schema, revalidate, 
     action: "SETTINGS_PUBLISHED",
     resourceType: auditResourceType,
     resourceId: publishedKey,
-    ipAddress: meta4.ip,
-    userAgent: meta4.userAgent
+    ipAddress: meta5.ip,
+    userAgent: meta5.userAgent
   });
   return value;
 }
-async function revertGroup(caller, publishedKey, draftKey, schema, auditResourceType, meta4) {
+async function revertGroup(caller, publishedKey, draftKey, schema, auditResourceType, meta5) {
   const organizationId = caller.organizationId;
   const publishedRow = await systemSettingRepository.findByKey(organizationId, publishedKey);
   const value = schema.parse(publishedRow?.value ?? {});
@@ -6418,8 +6452,8 @@ async function revertGroup(caller, publishedKey, draftKey, schema, auditResource
     action: "SETTINGS_REVERTED",
     resourceType: auditResourceType,
     resourceId: draftKey,
-    ipAddress: meta4.ip,
-    userAgent: meta4.userAgent
+    ipAddress: meta5.ip,
+    userAgent: meta5.userAgent
   });
   return value;
 }
@@ -6439,7 +6473,7 @@ var siteSettingsService = {
     const row = await systemSettingRepository.findByKey(organizationId, GLOBAL_STYLES_KEY);
     return globalStylesSchema.parse(row?.value ?? {});
   },
-  async saveSiteIdentityDraft(caller, input, meta4 = {}) {
+  async saveSiteIdentityDraft(caller, input, meta5 = {}) {
     const organizationId = caller.organizationId;
     await assertSiteIdentityMediaUsable(input, organizationId);
     await saveDraft(organizationId, SITE_IDENTITY_DRAFT_KEY, input, caller.id);
@@ -6450,12 +6484,12 @@ var siteSettingsService = {
       action: "SETTINGS_UPDATED",
       resourceType: "site_identity",
       resourceId: SITE_IDENTITY_DRAFT_KEY,
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return input;
   },
-  async saveGlobalStylesDraft(caller, input, meta4 = {}) {
+  async saveGlobalStylesDraft(caller, input, meta5 = {}) {
     const organizationId = caller.organizationId;
     await saveDraft(organizationId, GLOBAL_STYLES_DRAFT_KEY, input, caller.id);
     await auditLogRepository.record({
@@ -6465,12 +6499,12 @@ var siteSettingsService = {
       action: "SETTINGS_UPDATED",
       resourceType: "global_styles",
       resourceId: GLOBAL_STYLES_DRAFT_KEY,
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return input;
   },
-  async publishSiteIdentity(caller, meta4 = {}) {
+  async publishSiteIdentity(caller, meta5 = {}) {
     return publishGroup(
       caller,
       SITE_IDENTITY_KEY,
@@ -6478,17 +6512,17 @@ var siteSettingsService = {
       siteIdentitySchema,
       (value) => assertSiteIdentityMediaUsable(value, caller.organizationId),
       "site_identity",
-      meta4
+      meta5
     );
   },
-  async publishGlobalStyles(caller, meta4 = {}) {
-    return publishGroup(caller, GLOBAL_STYLES_KEY, GLOBAL_STYLES_DRAFT_KEY, globalStylesSchema, async () => void 0, "global_styles", meta4);
+  async publishGlobalStyles(caller, meta5 = {}) {
+    return publishGroup(caller, GLOBAL_STYLES_KEY, GLOBAL_STYLES_DRAFT_KEY, globalStylesSchema, async () => void 0, "global_styles", meta5);
   },
-  async revertSiteIdentityDraft(caller, meta4 = {}) {
-    return revertGroup(caller, SITE_IDENTITY_KEY, SITE_IDENTITY_DRAFT_KEY, siteIdentitySchema, "site_identity", meta4);
+  async revertSiteIdentityDraft(caller, meta5 = {}) {
+    return revertGroup(caller, SITE_IDENTITY_KEY, SITE_IDENTITY_DRAFT_KEY, siteIdentitySchema, "site_identity", meta5);
   },
-  async revertGlobalStylesDraft(caller, meta4 = {}) {
-    return revertGroup(caller, GLOBAL_STYLES_KEY, GLOBAL_STYLES_DRAFT_KEY, globalStylesSchema, "global_styles", meta4);
+  async revertGlobalStylesDraft(caller, meta5 = {}) {
+    return revertGroup(caller, GLOBAL_STYLES_KEY, GLOBAL_STYLES_DRAFT_KEY, globalStylesSchema, "global_styles", meta5);
   }
 };
 
@@ -7077,7 +7111,7 @@ var leadService = {
   async getLead(organizationId, id) {
     return loadLeadInOrgOrThrow(id, organizationId);
   },
-  async createLead(caller, input, meta4 = {}) {
+  async createLead(caller, input, meta5 = {}) {
     const email = input.email || void 0;
     if (email) {
       const duplicates = await leadRepository.findByEmailInOrg(caller.organizationId, email);
@@ -7106,8 +7140,8 @@ var leadService = {
       resourceType: "lead",
       resourceId: lead.id,
       afterData: { companyName: lead.companyName, status: lead.status },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     if (lead.assignedTo && lead.assignedTo !== caller.id) {
       await notificationService.notify({
@@ -7133,7 +7167,7 @@ var leadService = {
     }
     return lead;
   },
-  async updateLead(caller, id, input, meta4 = {}) {
+  async updateLead(caller, id, input, meta5 = {}) {
     const existing = await loadLeadInOrgOrThrow(id, caller.organizationId);
     if (input.status !== void 0) {
       assertValidTransition(existing.status, input.status);
@@ -7159,8 +7193,8 @@ var leadService = {
       resourceId: id,
       beforeData: { status: existing.status },
       afterData: patch,
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     if (input.status !== void 0 && input.status !== existing.status) {
       try {
@@ -7188,7 +7222,7 @@ var leadService = {
     }
     return updated;
   },
-  async deleteLead(caller, id, meta4 = {}) {
+  async deleteLead(caller, id, meta5 = {}) {
     await loadLeadInOrgOrThrow(id, caller.organizationId);
     await leadRepository.softDelete(id);
     await auditLogRepository.record({
@@ -7198,8 +7232,8 @@ var leadService = {
       action: "LEAD_ARCHIVED",
       resourceType: "lead",
       resourceId: id,
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
   },
   /**
@@ -7210,7 +7244,7 @@ var leadService = {
    * rolls back the whole transaction (including the client/contact rows
    * already created in it), rather than racing on a read-then-write.
    */
-  async convertLead(caller, id, input, meta4 = {}) {
+  async convertLead(caller, id, input, meta5 = {}) {
     const lead = await loadLeadInOrgOrThrow(id, caller.organizationId);
     if (lead.status === "CONVERTED") {
       throw new ConflictError("This lead has already been converted.", { convertedClientId: lead.convertedClientId });
@@ -7283,8 +7317,8 @@ var leadService = {
       resourceType: "client",
       resourceId: result.client.id,
       afterData: { clientCode: result.client.clientCode, name: result.client.name, convertedFromLeadId: id },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     await auditLogRepository.record({
       organizationId: caller.organizationId,
@@ -7294,8 +7328,8 @@ var leadService = {
       resourceType: "lead",
       resourceId: id,
       afterData: { clientId: result.client.id, clientCode: result.client.clientCode },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     await analyticsEventService.recordBusinessEvent({
       organizationId: caller.organizationId,
@@ -7472,7 +7506,7 @@ var clientService = {
     const client3 = await loadClientInOrgOrThrow(id, organizationId);
     return withProvisioningStatus(client3);
   },
-  async createClient(caller, input, meta4 = {}) {
+  async createClient(caller, input, meta5 = {}) {
     const [byCode, byName] = await Promise.all([
       clientRepository.findByCodeInOrg(caller.organizationId, input.clientCode),
       clientRepository.findByNameInOrg(caller.organizationId, input.name)
@@ -7507,8 +7541,8 @@ var clientService = {
       resourceType: "client",
       resourceId: client3.id,
       afterData: { clientCode: client3.clientCode, name: client3.name, status: client3.status },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     try {
       await eventEngine.emit({
@@ -7525,7 +7559,7 @@ var clientService = {
     }
     return client3;
   },
-  async updateClient(caller, id, input, meta4 = {}) {
+  async updateClient(caller, id, input, meta5 = {}) {
     const existing = await loadClientInOrgOrThrow(id, caller.organizationId);
     if (input.name !== void 0 && input.name.toLowerCase() !== existing.name.toLowerCase()) {
       const dup = await clientRepository.findByNameInOrg(caller.organizationId, input.name);
@@ -7558,12 +7592,12 @@ var clientService = {
       resourceId: id,
       beforeData: { status: existing.status },
       afterData: patch,
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return updated;
   },
-  async deleteClient(caller, id, meta4 = {}) {
+  async deleteClient(caller, id, meta5 = {}) {
     await loadClientInOrgOrThrow(id, caller.organizationId);
     await clientRepository.softDelete(id);
     await auditLogRepository.record({
@@ -7573,8 +7607,8 @@ var clientService = {
       action: "CLIENT_ARCHIVED",
       resourceType: "client",
       resourceId: id,
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
   },
   async dashboardCounts(organizationId) {
@@ -7688,7 +7722,7 @@ var contactService = {
   async getContact(organizationId, id) {
     return loadContactInOrgOrThrow(id, organizationId);
   },
-  async createForClient(caller, clientId, input, meta4 = {}) {
+  async createForClient(caller, clientId, input, meta5 = {}) {
     await assertClientInOrg(clientId, caller.organizationId);
     const email = input.email || void 0;
     if (email) {
@@ -7720,12 +7754,12 @@ var contactService = {
       resourceType: "contact",
       resourceId: contact.id,
       afterData: { clientId, firstName: contact.firstName, lastName: contact.lastName },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return contact;
   },
-  async updateContact(caller, id, input, meta4 = {}) {
+  async updateContact(caller, id, input, meta5 = {}) {
     const existing = await loadContactInOrgOrThrow(id, caller.organizationId);
     if (input.email) {
       const dup = existing.clientId ? await contactRepository.findByEmailForClient(existing.clientId, caller.organizationId, input.email) : null;
@@ -7758,12 +7792,12 @@ var contactService = {
       resourceType: "contact",
       resourceId: id,
       afterData: patch,
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return updated;
   },
-  async deleteContact(caller, id, meta4 = {}) {
+  async deleteContact(caller, id, meta5 = {}) {
     await loadContactInOrgOrThrow(id, caller.organizationId);
     await contactRepository.softDelete(id);
     await auditLogRepository.record({
@@ -7773,8 +7807,8 @@ var contactService = {
       action: "CONTACT_DELETED",
       resourceType: "contact",
       resourceId: id,
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
   }
 };
@@ -7814,7 +7848,7 @@ var onboardingService = {
     const steps = await getCustomTemplateSteps(organizationId);
     return { steps: steps ?? defaultOnboardingTemplateSteps(), isCustom: !!steps };
   },
-  async updateTemplate(caller, steps, meta4 = {}) {
+  async updateTemplate(caller, steps, meta5 = {}) {
     await systemSettingRepository.upsert({
       organizationId: caller.organizationId,
       key: TEMPLATE_SETTING_KEY,
@@ -7831,12 +7865,12 @@ var onboardingService = {
       resourceType: "system_setting",
       resourceId: TEMPLATE_SETTING_KEY,
       afterData: { stepCount: steps.length },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return { steps, isCustom: true };
   },
-  async startOnboarding(caller, clientId, input = {}, meta4 = {}) {
+  async startOnboarding(caller, clientId, input = {}, meta5 = {}) {
     await loadClientInOrgOrThrow2(clientId, caller.organizationId);
     const existing = await clientOnboardingRepository.findByClientId(clientId);
     if (existing) {
@@ -7859,8 +7893,8 @@ var onboardingService = {
       resourceType: "client_onboarding",
       resourceId: record.id,
       afterData: { clientId, status: record.status },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     if (record.ownerId && record.ownerId !== caller.id) {
       await notificationService.notify({
@@ -7886,7 +7920,7 @@ var onboardingService = {
     }
     return record;
   },
-  async updateOnboarding(caller, id, input, meta4 = {}) {
+  async updateOnboarding(caller, id, input, meta5 = {}) {
     const existing = await loadOnboardingInOrgOrThrow(id, caller.organizationId);
     if (TERMINAL_STATUSES2.has(existing.status)) {
       throw new ConflictError(`This onboarding is already ${existing.status.toLowerCase()} and can no longer be changed.`);
@@ -7902,13 +7936,13 @@ var onboardingService = {
         resourceId: id,
         beforeData: { status: existing.status },
         afterData: { status: "CANCELLED" },
-        ipAddress: meta4.ip,
-        userAgent: meta4.userAgent
+        ipAddress: meta5.ip,
+        userAgent: meta5.userAgent
       });
       return updated;
     }
     if (input.completeStep) {
-      return this.completeStep(caller, id, input.completeStep, meta4);
+      return this.completeStep(caller, id, input.completeStep, meta5);
     }
     if (input.ownerId !== void 0 || input.dueDate !== void 0) {
       const patch = {};
@@ -7923,8 +7957,8 @@ var onboardingService = {
         resourceType: "client_onboarding",
         resourceId: id,
         afterData: patch,
-        ipAddress: meta4.ip,
-        userAgent: meta4.userAgent
+        ipAddress: meta5.ip,
+        userAgent: meta5.userAgent
       });
       if (input.ownerId && input.ownerId !== existing.ownerId && input.ownerId !== caller.id) {
         await notificationService.notify({
@@ -7946,7 +7980,7 @@ var onboardingService = {
    * ignored, since this is an explicit staff action (unlike
    * completeStepForClient's system-triggered no-op).
    */
-  async updateStep(caller, onboardingId, step, input, meta4 = {}) {
+  async updateStep(caller, onboardingId, step, input, meta5 = {}) {
     const record = await loadOnboardingInOrgOrThrow(onboardingId, caller.organizationId);
     if (TERMINAL_STATUSES2.has(record.status)) {
       throw new ConflictError(`This onboarding is already ${record.status.toLowerCase()} and can no longer be changed.`);
@@ -7971,8 +8005,8 @@ var onboardingService = {
       resourceType: "client_onboarding",
       resourceId: record.id,
       afterData: { step, ...input, dueDate: input.dueDate ? input.dueDate.toISOString() : input.dueDate },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     if (input.assignedTo && input.assignedTo !== caller.id) {
       await notificationService.notify({
@@ -7993,7 +8027,7 @@ var onboardingService = {
    * READY once every step is done — completion itself is a separate,
    * explicit action (completeOnboarding), never inferred (§7).
    */
-  async completeStep(caller, onboardingId, step, meta4 = {}) {
+  async completeStep(caller, onboardingId, step, meta5 = {}) {
     const record = await loadOnboardingInOrgOrThrow(onboardingId, caller.organizationId);
     if (TERMINAL_STATUSES2.has(record.status)) return record;
     const checklist = record.checklist ?? freshChecklist();
@@ -8017,8 +8051,8 @@ var onboardingService = {
       resourceType: "client_onboarding",
       resourceId: record.id,
       afterData: { step, status: updated.status },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     if (record.ownerId && record.ownerId !== caller.id) {
       await notificationService.notify({
@@ -8057,7 +8091,7 @@ var onboardingService = {
       afterData: { step }
     });
   },
-  async completeOnboarding(caller, id, meta4 = {}) {
+  async completeOnboarding(caller, id, meta5 = {}) {
     const existing = await loadOnboardingInOrgOrThrow(id, caller.organizationId);
     if (existing.status === "COMPLETED") {
       throw new ConflictError("This onboarding has already been completed.");
@@ -8078,8 +8112,8 @@ var onboardingService = {
       resourceType: "client_onboarding",
       resourceId: id,
       afterData: { status: "COMPLETED" },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     if (existing.ownerId && existing.ownerId !== caller.id) {
       await notificationService.notify({
@@ -8211,7 +8245,7 @@ var workspaceService = {
    * client both succeeding — the loser's transaction rolls back entirely,
    * including the Organization row it just created.
    */
-  async provisionWorkspace(caller, clientId, input, meta4 = {}) {
+  async provisionWorkspace(caller, clientId, input, meta5 = {}) {
     const client3 = await loadClientInOrgOrThrow3(clientId, caller.organizationId);
     if (client3.workspaceOrganizationId) {
       throw new ConflictError("This client has already been provisioned into a workspace.", {
@@ -8275,13 +8309,13 @@ var workspaceService = {
       resourceType: "organization",
       resourceId: result.workspace.id,
       afterData: { clientId, name: result.workspace.name, status: result.workspace.status },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     await onboardingService.completeStepForClient(clientId, "WORKSPACE_CREATED", caller.id);
     return result.workspace;
   },
-  async updateWorkspace(caller, id, input, callerPermissions, meta4 = {}) {
+  async updateWorkspace(caller, id, input, callerPermissions, meta5 = {}) {
     const existing = await loadWorkspaceForOwnerOrThrow(id, caller.organizationId);
     if (input.status !== void 0) {
       assertValidWorkspaceTransition(existing.status, input.status);
@@ -8310,8 +8344,8 @@ var workspaceService = {
       resourceId: id,
       beforeData: { status: existing.status },
       afterData: patch,
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     if (input.name !== void 0 || Object.keys(patch).some((k) => ["timezone", "currency", "locale", "email", "phone", "address"].includes(k))) {
       await onboardingService.completeStepForClient(existing.provisionedForClient.id, "WORKSPACE_CONFIGURED", caller.id);
@@ -8903,7 +8937,7 @@ var opportunityService = {
   async getOpportunity(organizationId, id) {
     return loadOpportunityOrThrow(id, organizationId);
   },
-  async createOpportunity(caller, input, meta4 = {}) {
+  async createOpportunity(caller, input, meta5 = {}) {
     const organizationId = caller.organizationId;
     if (input.clientId) {
       const client3 = await clientRepository.findByIdInOrg(input.clientId, organizationId);
@@ -8944,8 +8978,8 @@ var opportunityService = {
       resourceType: "opportunity",
       resourceId: opportunity.id,
       afterData: { name: opportunity.name, stage: opportunity.stage, clientId: opportunity.clientId, leadId: opportunity.leadId, value: opportunity.value.toString() },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     await analyticsEventService.recordBusinessEvent({
       organizationId,
@@ -8979,7 +9013,7 @@ var opportunityService = {
     }
     return opportunity;
   },
-  async updateOpportunity(caller, id, input, meta4 = {}) {
+  async updateOpportunity(caller, id, input, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadOpportunityOrThrow(id, organizationId);
     if (input.stage !== void 0) {
@@ -9012,15 +9046,15 @@ var opportunityService = {
       resourceId: id,
       beforeData: { stage: existing.stage, value: existing.value.toString() },
       afterData: { ...patch, value: patch.value !== void 0 ? patch.value.toString() : void 0 },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     if (input.stage !== void 0 && input.stage !== existing.stage) {
       await emitStageChangedEvent(organizationId, id, caller.id, existing.stage, input.stage);
     }
     return updated;
   },
-  async deleteOpportunity(caller, id, meta4 = {}) {
+  async deleteOpportunity(caller, id, meta5 = {}) {
     const organizationId = caller.organizationId;
     await loadOpportunityOrThrow(id, organizationId);
     await opportunityRepository.softDelete(id);
@@ -9031,11 +9065,11 @@ var opportunityService = {
       action: "OPPORTUNITY_DELETED",
       resourceType: "opportunity",
       resourceId: id,
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
   },
-  async winOpportunity(caller, id, meta4 = {}) {
+  async winOpportunity(caller, id, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadOpportunityOrThrow(id, organizationId);
     if (TERMINAL_STAGES.has(existing.stage)) {
@@ -9054,8 +9088,8 @@ var opportunityService = {
       resourceId: id,
       beforeData: { stage: existing.stage },
       afterData: { stage: "CLOSED_WON", value: existing.value.toString() },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     await notifyClose({
       organizationId,
@@ -9069,7 +9103,7 @@ var opportunityService = {
     await emitStageChangedEvent(organizationId, id, caller.id, existing.stage, "CLOSED_WON");
     return updated;
   },
-  async loseOpportunity(caller, id, input, meta4 = {}) {
+  async loseOpportunity(caller, id, input, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadOpportunityOrThrow(id, organizationId);
     if (TERMINAL_STAGES.has(existing.stage)) {
@@ -9089,8 +9123,8 @@ var opportunityService = {
       resourceId: id,
       beforeData: { stage: existing.stage },
       afterData: { stage: "CLOSED_LOST", lostReason: input.lostReason ?? null },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     await notifyClose({
       organizationId,
@@ -9118,7 +9152,7 @@ var opportunityService = {
    * converts anything itself (reuse leadService.convertLead for that) —
    * this only links two already-real records together.
    */
-  async linkClient(caller, id, input, meta4 = {}) {
+  async linkClient(caller, id, input, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadOpportunityOrThrow(id, organizationId);
     if (TERMINAL_STAGES.has(existing.stage)) {
@@ -9139,8 +9173,8 @@ var opportunityService = {
       resourceId: id,
       beforeData: { clientId: null },
       afterData: { clientId: input.clientId },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return updated;
   },
@@ -9783,7 +9817,7 @@ var redirectService = {
   async getRedirect(organizationId, id) {
     return loadRedirectOrThrow(id, organizationId);
   },
-  async createRedirect(caller, input, meta4 = {}) {
+  async createRedirect(caller, input, meta5 = {}) {
     const organizationId = caller.organizationId;
     const dup = await redirectRepository.findByFromPathInOrg(organizationId, input.fromPath);
     if (dup) throw new ConflictError(`A redirect from "${input.fromPath}" already exists.`, { existingRedirectId: dup.id });
@@ -9810,12 +9844,12 @@ var redirectService = {
       resourceType: "redirect",
       resourceId: redirect.id,
       afterData: { fromPath: redirect.fromPath, toPath: redirect.toPath, statusCode: redirect.statusCode },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return redirect;
   },
-  async updateRedirect(caller, id, input, meta4 = {}) {
+  async updateRedirect(caller, id, input, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadRedirectOrThrow(id, organizationId);
     if (input.toPath !== void 0) {
@@ -9836,12 +9870,12 @@ var redirectService = {
       resourceId: id,
       beforeData: { toPath: existing.toPath, statusCode: existing.statusCode },
       afterData: patch,
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return updated;
   },
-  async deleteRedirect(caller, id, meta4 = {}) {
+  async deleteRedirect(caller, id, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadRedirectOrThrow(id, organizationId);
     await redirectRepository.delete(id);
@@ -9853,8 +9887,8 @@ var redirectService = {
       resourceType: "redirect",
       resourceId: id,
       beforeData: { fromPath: existing.fromPath, toPath: existing.toPath },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
   },
   /**
@@ -9910,7 +9944,7 @@ var postService = {
     await loadPostOrThrow(id, organizationId);
     return postRepository.listRevisions(id);
   },
-  async createPost(caller, input, meta4 = {}) {
+  async createPost(caller, input, meta5 = {}) {
     const organizationId = caller.organizationId;
     const body = sanitizeContentHtml(input.body);
     await assertCategoryInOrg(input.categoryId, organizationId);
@@ -9965,12 +9999,12 @@ var postService = {
       resourceType: "post",
       resourceId: createdId,
       afterData: { title: input.title, slug },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return loadPostOrThrow(createdId, organizationId);
   },
-  async updatePost(caller, id, input, meta4 = {}) {
+  async updatePost(caller, id, input, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadPostOrThrow(id, organizationId);
     const sanitizedBody = input.body !== void 0 ? sanitizeContentHtml(input.body) : void 0;
@@ -10057,8 +10091,8 @@ var postService = {
       resourceId: id,
       beforeData: { status: existing.status, title: existing.title },
       afterData: { status: input.status, title: input.title, slug: input.slug },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     if (input.slug !== void 0 && input.slug !== existing.slug) {
       const finalStatus = input.status ?? existing.status;
@@ -10082,13 +10116,13 @@ var postService = {
         resourceId: id,
         beforeData: { featuredMediaId: existing.featuredMediaId },
         afterData: { featuredMediaId: input.featuredMediaId ?? null },
-        ipAddress: meta4.ip,
-        userAgent: meta4.userAgent
+        ipAddress: meta5.ip,
+        userAgent: meta5.userAgent
       });
     }
     return loadPostOrThrow(id, organizationId);
   },
-  async submitForReview(caller, id, meta4 = {}) {
+  async submitForReview(caller, id, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadPostOrThrow(id, organizationId);
     if (existing.status !== "DRAFT") throw new ConflictError(`Only a DRAFT post can be submitted for review (current status: ${existing.status}).`);
@@ -10105,8 +10139,8 @@ var postService = {
       resourceId: id,
       beforeData: { status: existing.status },
       afterData: { status: "IN_REVIEW" },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     try {
       await eventEngine.emit({
@@ -10123,7 +10157,7 @@ var postService = {
     }
     return loadPostOrThrow(id, organizationId);
   },
-  async publishPost(caller, id, meta4 = {}) {
+  async publishPost(caller, id, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadPostOrThrow(id, organizationId);
     if (existing.status === "ARCHIVED") throw new ConflictError("An archived post must be restored before it can be published.");
@@ -10144,8 +10178,8 @@ var postService = {
       resourceId: id,
       beforeData: { status: existing.status },
       afterData: { status: "PUBLISHED" },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     if (existing.createdById && existing.createdById !== caller.id) {
       await notificationService.notify({
@@ -10158,7 +10192,7 @@ var postService = {
     }
     return loadPostOrThrow(id, organizationId);
   },
-  async schedulePost(caller, id, input, meta4 = {}) {
+  async schedulePost(caller, id, input, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadPostOrThrow(id, organizationId);
     if (existing.status === "ARCHIVED") throw new ConflictError("An archived post must be restored before it can be scheduled.");
@@ -10174,12 +10208,12 @@ var postService = {
       resourceId: id,
       beforeData: { status: existing.status },
       afterData: { status: "SCHEDULED", scheduledAt: input.scheduledAt },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return loadPostOrThrow(id, organizationId);
   },
-  async archivePost(caller, id, meta4 = {}) {
+  async archivePost(caller, id, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadPostOrThrow(id, organizationId);
     if (existing.status === "ARCHIVED") throw new ConflictError("This post is already archived.");
@@ -10193,12 +10227,12 @@ var postService = {
       resourceId: id,
       beforeData: { status: existing.status },
       afterData: { status: "ARCHIVED" },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return loadPostOrThrow(id, organizationId);
   },
-  async revertPost(caller, id, input, meta4 = {}) {
+  async revertPost(caller, id, input, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadPostOrThrow(id, organizationId);
     if (existing.status === "ARCHIVED") throw new ConflictError("An archived post must be restored before its content can be reverted.");
@@ -10235,12 +10269,12 @@ var postService = {
       resourceId: id,
       beforeData: { fromVersion: current?.version, revertedToRevisionId: target.id, revertedToVersion: target.version },
       afterData: { newVersion: nextVersion },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return loadPostOrThrow(id, organizationId);
   },
-  async deletePost(caller, id, meta4 = {}) {
+  async deletePost(caller, id, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadPostOrThrow(id, organizationId);
     await postRepository.softDelete(id);
@@ -10252,15 +10286,15 @@ var postService = {
       resourceType: "post",
       resourceId: id,
       beforeData: { status: existing.status, title: existing.title },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
   },
   /** Phase 7 — Trash view (Content Dashboard): soft-deleted posts, paginated. */
   async listTrash(organizationId, page, limit) {
     return postRepository.listTrash(organizationId, page, limit);
   },
-  async restorePost(caller, id, meta4 = {}) {
+  async restorePost(caller, id, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await postRepository.findTrashedByIdInOrg(id, organizationId);
     if (!existing) throw new NotFoundError("Post not found in trash.");
@@ -10273,8 +10307,8 @@ var postService = {
       resourceType: "post",
       resourceId: id,
       beforeData: { status: existing.status, title: existing.title },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
   },
   /**
@@ -10286,14 +10320,14 @@ var postService = {
    * the rest of the batch — mirrors contentSchedulingService's per-item
    * isolation for the same reason.
    */
-  async bulkAction(caller, action, ids, meta4 = {}) {
+  async bulkAction(caller, action, ids, meta5 = {}) {
     const succeeded = [];
     const failed = [];
     for (const id of ids) {
       try {
-        if (action === "archive") await this.archivePost(caller, id, meta4);
-        else if (action === "trash") await this.deletePost(caller, id, meta4);
-        else await this.restorePost(caller, id, meta4);
+        if (action === "archive") await this.archivePost(caller, id, meta5);
+        else if (action === "trash") await this.deletePost(caller, id, meta5);
+        else await this.restorePost(caller, id, meta5);
         succeeded.push(id);
       } catch (err) {
         failed.push({ id, error: err instanceof Error ? err.message : "Action failed." });
@@ -10492,7 +10526,7 @@ var productService = {
     await loadProductOrThrow(id);
     return productRepository.listRevisions(id);
   },
-  async createProduct(caller, input, meta4 = {}) {
+  async createProduct(caller, input, meta5 = {}) {
     const existingCode = await productRepository.findByCode(input.code);
     if (existingCode) throw new ConflictError(`A product with code "${input.code}" already exists.`, { existingProductId: existingCode.id });
     let slug;
@@ -10549,12 +10583,12 @@ var productService = {
       resourceType: "product",
       resourceId: productId,
       afterData: { code: input.code, name: input.name, type: input.type, status: input.status ?? "DRAFT" },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return loadProductDetailOrThrow(productId);
   },
-  async updateProduct(caller, id, input, meta4 = {}) {
+  async updateProduct(caller, id, input, meta5 = {}) {
     const existing = await loadProductDetailOrThrow(id);
     if (TERMINAL_STATUSES3.has(existing.status)) {
       throw new ConflictError("This product is archived and can no longer be edited.");
@@ -10616,12 +10650,12 @@ var productService = {
       resourceId: id,
       beforeData: { status: existing.status, name: existing.name },
       afterData: patch,
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return loadProductDetailOrThrow(id);
   },
-  async revertProduct(caller, id, revisionId, meta4 = {}) {
+  async revertProduct(caller, id, revisionId, meta5 = {}) {
     const existing = await loadProductDetailOrThrow(id);
     if (TERMINAL_STATUSES3.has(existing.status)) throw new ConflictError("This product is archived and can no longer be edited.");
     const target = await productRepository.findRevision(id, revisionId);
@@ -10637,12 +10671,12 @@ var productService = {
       resourceId: id,
       beforeData: { fromVersion: existing.currentRevision?.version, revertedToVersion: target.version },
       afterData: { newVersion: nextVersion },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return loadProductDetailOrThrow(id);
   },
-  async duplicateProduct(caller, id, name, meta4 = {}) {
+  async duplicateProduct(caller, id, name, meta5 = {}) {
     const existing = await loadProductDetailOrThrow(id);
     const baseName = name ?? `${existing.name} (Copy)`;
     const slug = await productRepository.findUniqueSlug(baseName);
@@ -10691,12 +10725,12 @@ var productService = {
       resourceType: "product",
       resourceId: productId,
       afterData: { duplicatedFromId: id, name: baseName },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return loadProductDetailOrThrow(productId);
   },
-  async archiveProduct(caller, id, meta4 = {}) {
+  async archiveProduct(caller, id, meta5 = {}) {
     const existing = await loadProductOrThrow(id);
     if (existing.status === "ARCHIVED") {
       throw new ConflictError("This product is already archived.");
@@ -10709,18 +10743,18 @@ var productService = {
       resourceType: "product",
       resourceId: id,
       beforeData: { status: existing.status },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return archived;
   },
   /** Phase 10 — bulk archive, the one bulk action that's unambiguous and safe for a catalog that's never hard-deleted. */
-  async bulkArchiveProducts(caller, ids, meta4 = {}) {
+  async bulkArchiveProducts(caller, ids, meta5 = {}) {
     const skipped = [];
     let archived = 0;
     for (const id of ids) {
       try {
-        await productService.archiveProduct(caller, id, meta4);
+        await productService.archiveProduct(caller, id, meta5);
         archived += 1;
       } catch {
         skipped.push(id);
@@ -11143,7 +11177,7 @@ var invoiceService = {
   async getInvoice(organizationId, id) {
     return withEffectiveStatus(await loadInvoiceOrThrow(id, organizationId));
   },
-  async createInvoice(caller, input, meta4 = {}) {
+  async createInvoice(caller, input, meta5 = {}) {
     const organizationId = caller.organizationId;
     const client3 = await clientRepository.findByIdInOrg(input.clientId, organizationId);
     if (!client3) throw new ValidationError("The specified client does not exist in this organization.");
@@ -11194,12 +11228,12 @@ var invoiceService = {
       resourceType: "invoice",
       resourceId: invoice.id,
       afterData: { invoiceNumber, clientId: input.clientId, total: total.toString(), currency },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return withEffectiveStatus(invoice);
   },
-  async updateInvoice(caller, id, input, meta4 = {}) {
+  async updateInvoice(caller, id, input, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadInvoiceOrThrow(id, organizationId);
     if (existing.status !== "DRAFT") {
@@ -11246,12 +11280,12 @@ var invoiceService = {
       resourceType: "invoice",
       resourceId: id,
       beforeData: { total: existing.total.toString() },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return this.getInvoice(organizationId, id);
   },
-  async issueInvoice(caller, id, input, meta4 = {}) {
+  async issueInvoice(caller, id, input, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadInvoiceOrThrow(id, organizationId);
     if (existing.items.length === 0) throw new ValidationError("An invoice needs at least one line item before it can be issued.");
@@ -11273,12 +11307,12 @@ var invoiceService = {
       resourceId: id,
       beforeData: { status: existing.status },
       afterData: { status: "ISSUED", total: existing.total.toString() },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return this.getInvoice(organizationId, id);
   },
-  async voidInvoice(caller, id, input, meta4 = {}) {
+  async voidInvoice(caller, id, input, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadInvoiceOrThrow(id, organizationId);
     if (existing.status === "VOID" || existing.status === "CANCELLED" || existing.status === "PAID") {
@@ -11299,12 +11333,12 @@ var invoiceService = {
       resourceId: id,
       beforeData: { status: existing.status },
       afterData: { status: targetStatus, reason: input.reason },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return this.getInvoice(organizationId, id);
   },
-  async recordPayment(caller, invoiceId, input, meta4 = {}) {
+  async recordPayment(caller, invoiceId, input, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadInvoiceOrThrow(invoiceId, organizationId);
     const amount = toMoney(input.amount);
@@ -11348,8 +11382,8 @@ var invoiceService = {
       resourceType: "payment",
       resourceId: payment.id,
       afterData: { invoiceId, amount: amount.toString(), currency, method: input.method },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return payment;
   }
@@ -11379,7 +11413,7 @@ var contractService = {
   async getContract(organizationId, id) {
     return withCurrentValue(await loadContractOrThrow(id, organizationId));
   },
-  async createContract(caller, input, meta4 = {}) {
+  async createContract(caller, input, meta5 = {}) {
     const organizationId = caller.organizationId;
     await assertClientInOrg2(input.clientId, organizationId);
     if (input.endDate && input.endDate.getTime() < input.startDate.getTime()) {
@@ -11407,12 +11441,12 @@ var contractService = {
       resourceType: "contract",
       resourceId: contract.id,
       afterData: { contractNumber, clientId: input.clientId, contractValue: contract.contractValue.toString(), currency: contract.currency },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return this.getContract(organizationId, contract.id);
   },
-  async updateContract(caller, id, input, meta4 = {}) {
+  async updateContract(caller, id, input, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadContractOrThrow(id, organizationId);
     if (existing.status === "TERMINATED" || existing.status === "EXPIRED") {
@@ -11437,12 +11471,12 @@ var contractService = {
       resourceId: id,
       beforeData: { title: existing.title },
       afterData: patch,
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return this.getContract(organizationId, id);
   },
-  async activateContract(caller, id, meta4 = {}) {
+  async activateContract(caller, id, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadContractOrThrow(id, organizationId);
     const count = await contractRepository.transitionStatus(id, ACTIVATABLE_FROM, "ACTIVE");
@@ -11456,12 +11490,12 @@ var contractService = {
       resourceId: id,
       beforeData: { status: existing.status },
       afterData: { status: "ACTIVE" },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return this.getContract(organizationId, id);
   },
-  async suspendContract(caller, id, meta4 = {}) {
+  async suspendContract(caller, id, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadContractOrThrow(id, organizationId);
     const count = await contractRepository.transitionStatus(id, SUSPENDABLE_FROM, "SUSPENDED");
@@ -11475,12 +11509,12 @@ var contractService = {
       resourceId: id,
       beforeData: { status: existing.status },
       afterData: { status: "SUSPENDED" },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return this.getContract(organizationId, id);
   },
-  async terminateContract(caller, id, input, meta4 = {}) {
+  async terminateContract(caller, id, input, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadContractOrThrow(id, organizationId);
     const count = await contractRepository.transitionStatus(id, TERMINABLE_FROM, "TERMINATED");
@@ -11494,12 +11528,12 @@ var contractService = {
       resourceId: id,
       beforeData: { status: existing.status },
       afterData: { status: "TERMINATED", reason: input.reason },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return this.getContract(organizationId, id);
   },
-  async createVariation(caller, contractId, input, meta4 = {}) {
+  async createVariation(caller, contractId, input, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadContractOrThrow(contractId, organizationId);
     if (existing.status === "TERMINATED" || existing.status === "EXPIRED") {
@@ -11522,8 +11556,8 @@ var contractService = {
       resourceType: "contract",
       resourceId: contractId,
       afterData: { amount: amount.toString(), effectiveDate: input.effectiveDate, reason: input.reason },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return this.getContract(organizationId, contractId);
   }
@@ -11614,7 +11648,7 @@ var AI_TOOL_REGISTRY = Object.freeze({
     isMutating: true,
     requiresApproval: false,
     inputSchema: createLeadInput,
-    handler: async (caller, input, meta4) => leadService.createLead(caller, input, meta4)
+    handler: async (caller, input, meta5) => leadService.createLead(caller, input, meta5)
   }),
   "leads.convert": tool({
     code: "leads.convert",
@@ -11625,9 +11659,9 @@ var AI_TOOL_REGISTRY = Object.freeze({
     isMutating: true,
     requiresApproval: false,
     inputSchema: convertLeadInput,
-    handler: async (caller, input, meta4) => {
+    handler: async (caller, input, meta5) => {
       const { leadId, ...rest } = input;
-      return leadService.convertLead(caller, leadId, rest, meta4);
+      return leadService.convertLead(caller, leadId, rest, meta5);
     }
   }),
   "clients.list": tool({
@@ -11653,7 +11687,7 @@ var AI_TOOL_REGISTRY = Object.freeze({
     isMutating: true,
     requiresApproval: false,
     inputSchema: createClientInput,
-    handler: async (caller, input, meta4) => clientService.createClient(caller, input, meta4)
+    handler: async (caller, input, meta5) => clientService.createClient(caller, input, meta5)
   }),
   "content.list_posts": tool({
     code: "content.list_posts",
@@ -11678,7 +11712,7 @@ var AI_TOOL_REGISTRY = Object.freeze({
     isMutating: true,
     requiresApproval: false,
     inputSchema: createDraftPostInput,
-    handler: async (caller, input, meta4) => postService.createPost(caller, input, meta4)
+    handler: async (caller, input, meta5) => postService.createPost(caller, input, meta5)
   }),
   "products.list": tool({
     code: "products.list",
@@ -11703,7 +11737,7 @@ var AI_TOOL_REGISTRY = Object.freeze({
     isMutating: true,
     requiresApproval: true,
     inputSchema: issueInvoiceInput,
-    handler: async (caller, input, meta4) => invoiceService.issueInvoice(caller, input.invoiceId, {}, meta4)
+    handler: async (caller, input, meta5) => invoiceService.issueInvoice(caller, input.invoiceId, {}, meta5)
   }),
   "contracts.activate": tool({
     code: "contracts.activate",
@@ -11714,7 +11748,7 @@ var AI_TOOL_REGISTRY = Object.freeze({
     isMutating: true,
     requiresApproval: true,
     inputSchema: activateContractInput,
-    handler: async (caller, input, meta4) => contractService.activateContract(caller, input.contractId, meta4)
+    handler: async (caller, input, meta5) => contractService.activateContract(caller, input.contractId, meta5)
   })
 });
 function isRegisteredToolCode(code) {
@@ -11743,7 +11777,7 @@ async function assertToolEnabledForOrg(organizationId, toolCode) {
   }
 }
 async function executeGovernedTool(params) {
-  const { caller, toolCode, input, executionId, stepOrder, meta: meta4 = {} } = params;
+  const { caller, toolCode, input, executionId, stepOrder, meta: meta5 = {} } = params;
   if (!isRegisteredToolCode(toolCode)) {
     throw new NotFoundError(`AI tool "${toolCode}" is not registered.`);
   }
@@ -11801,8 +11835,8 @@ async function executeGovernedTool(params) {
       resourceType: "ai_tool",
       resourceId: toolCode,
       afterData: { approvalRequestId: approval.id, toolExecutionId: toolExecution2.id },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return { status: "AWAITING_APPROVAL", toolExecutionId: toolExecution2.id, approvalRequestId: approval.id };
   }
@@ -11818,12 +11852,12 @@ async function executeGovernedTool(params) {
       startedAt
     }
   });
-  return runToolHandler(definition, caller, validatedInput, meta4, toolExecution.id);
+  return runToolHandler(definition, caller, validatedInput, meta5, toolExecution.id);
 }
-async function runToolHandler(definition, caller, validatedInput, meta4, toolExecutionId) {
+async function runToolHandler(definition, caller, validatedInput, meta5, toolExecutionId) {
   const startedAt = /* @__PURE__ */ new Date();
   try {
-    const output = await definition.handler(caller, validatedInput, meta4);
+    const output = await definition.handler(caller, validatedInput, meta5);
     const completedAt = /* @__PURE__ */ new Date();
     await prisma.aIToolExecution.update({
       where: { id: toolExecutionId },
@@ -11843,8 +11877,8 @@ async function runToolHandler(definition, caller, validatedInput, meta4, toolExe
       resourceType: "ai_tool",
       resourceId: definition.code,
       afterData: { toolExecutionId },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return { status: "COMPLETED", output, toolExecutionId };
   } catch (err) {
@@ -11869,8 +11903,8 @@ async function runToolHandler(definition, caller, validatedInput, meta4, toolExe
       resourceId: definition.code,
       result: "FAILURE",
       afterData: { toolExecutionId, error: errorMessage },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return { status: "FAILED", error: errorMessage, toolExecutionId };
   }
@@ -11889,7 +11923,7 @@ var aiApprovalService = {
     if (!approval) throw new NotFoundError("AI approval request not found.");
     return approval;
   },
-  async decide(caller, id, input, meta4 = {}) {
+  async decide(caller, id, input, meta5 = {}) {
     const approval = await this.getApproval(caller.organizationId, id);
     if (approval.status !== "PENDING") {
       throw new ConflictError(`This approval request has already been ${approval.status.toLowerCase()}.`);
@@ -11914,8 +11948,8 @@ var aiApprovalService = {
         resourceType: "ai_approval_request",
         resourceId: id,
         afterData: { rejectionReason: input.rejectionReason },
-        ipAddress: meta4.ip,
-        userAgent: meta4.userAgent
+        ipAddress: meta5.ip,
+        userAgent: meta5.userAgent
       });
       return rejected;
     }
@@ -11938,8 +11972,8 @@ var aiApprovalService = {
       action: "AI_APPROVAL_APPROVED",
       resourceType: "ai_approval_request",
       resourceId: id,
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     const requestingUser = await userRepository.findById(approval.requestedById);
     if (!requestingUser) {
@@ -11949,7 +11983,7 @@ var aiApprovalService = {
     if (!requesterCaller) {
       throw new ConflictError("The user who originally requested this action no longer has access to this organization.");
     }
-    await runToolHandler(definition, requesterCaller, parsed.data, meta4, approval.toolExecutionId);
+    await runToolHandler(definition, requesterCaller, parsed.data, meta5, approval.toolExecutionId);
     return approved;
   }
 };
@@ -13270,7 +13304,7 @@ var aiQuotaService = {
     const parsed = aiLimitsSchema.safeParse(row?.value);
     return parsed.success ? parsed.data : { dailyRequests: 0, dailyTokens: 0 };
   },
-  async setLimits(organizationId, actorUserId, limits, meta4 = {}) {
+  async setLimits(organizationId, actorUserId, limits, meta5 = {}) {
     const before = await this.getLimits(organizationId);
     await systemSettingRepository.upsert({
       organizationId,
@@ -13288,8 +13322,8 @@ var aiQuotaService = {
       resourceType: "ai_limits",
       beforeData: before,
       afterData: limits,
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return limits;
   },
@@ -16229,7 +16263,7 @@ var pageService = {
     await loadPageOrThrow(id, organizationId);
     return pageRepository.listChildren(id, organizationId);
   },
-  async createPage(caller, input, meta4 = {}) {
+  async createPage(caller, input, meta5 = {}) {
     const organizationId = caller.organizationId;
     const body = sanitizeContentHtml(input.body);
     const editorBlocks = input.editorBlocks ? sanitizeEditorDocument(input.editorBlocks) : void 0;
@@ -16289,12 +16323,12 @@ var pageService = {
       resourceType: "page",
       resourceId: createdId,
       afterData: { title: input.title, slug },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return loadPageOrThrow(createdId, organizationId);
   },
-  async updatePage(caller, id, input, meta4 = {}) {
+  async updatePage(caller, id, input, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadPageOrThrow(id, organizationId);
     const sanitizedBody = input.body !== void 0 ? sanitizeContentHtml(input.body) : void 0;
@@ -16380,8 +16414,8 @@ var pageService = {
       resourceId: id,
       beforeData: { status: existing.status, title: existing.title },
       afterData: { status: input.status, title: input.title, slug: input.slug },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     if (hasFeaturedMediaEdit && input.featuredMediaId !== existing.featuredMediaId) {
       await auditLogRepository.record({
@@ -16393,8 +16427,8 @@ var pageService = {
         resourceId: id,
         beforeData: { featuredMediaId: existing.featuredMediaId },
         afterData: { featuredMediaId: input.featuredMediaId ?? null },
-        ipAddress: meta4.ip,
-        userAgent: meta4.userAgent
+        ipAddress: meta5.ip,
+        userAgent: meta5.userAgent
       });
     }
     if (input.slug !== void 0 && input.slug !== existing.slug) {
@@ -16411,7 +16445,7 @@ var pageService = {
     }
     return loadPageOrThrow(id, organizationId);
   },
-  async submitForReview(caller, id, meta4 = {}) {
+  async submitForReview(caller, id, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadPageOrThrow(id, organizationId);
     if (existing.status !== "DRAFT") throw new ConflictError(`Only a DRAFT page can be submitted for review (current status: ${existing.status}).`);
@@ -16428,8 +16462,8 @@ var pageService = {
       resourceId: id,
       beforeData: { status: existing.status },
       afterData: { status: "IN_REVIEW" },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     try {
       await eventEngine.emit({
@@ -16446,7 +16480,7 @@ var pageService = {
     }
     return loadPageOrThrow(id, organizationId);
   },
-  async publishPage(caller, id, meta4 = {}) {
+  async publishPage(caller, id, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadPageOrThrow(id, organizationId);
     if (existing.status === "ARCHIVED") throw new ConflictError("An archived page must be restored before it can be published.");
@@ -16467,8 +16501,8 @@ var pageService = {
       resourceId: id,
       beforeData: { status: existing.status },
       afterData: { status: "PUBLISHED" },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     if (existing.createdById && existing.createdById !== caller.id) {
       await notificationService.notify({
@@ -16481,7 +16515,7 @@ var pageService = {
     }
     return loadPageOrThrow(id, organizationId);
   },
-  async schedulePage(caller, id, input, meta4 = {}) {
+  async schedulePage(caller, id, input, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadPageOrThrow(id, organizationId);
     if (existing.status === "ARCHIVED") throw new ConflictError("An archived page must be restored before it can be scheduled.");
@@ -16497,12 +16531,12 @@ var pageService = {
       resourceId: id,
       beforeData: { status: existing.status },
       afterData: { status: "SCHEDULED", scheduledAt: input.scheduledAt },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return loadPageOrThrow(id, organizationId);
   },
-  async archivePage(caller, id, meta4 = {}) {
+  async archivePage(caller, id, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadPageOrThrow(id, organizationId);
     if (existing.status === "ARCHIVED") throw new ConflictError("This page is already archived.");
@@ -16516,12 +16550,12 @@ var pageService = {
       resourceId: id,
       beforeData: { status: existing.status },
       afterData: { status: "ARCHIVED" },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return loadPageOrThrow(id, organizationId);
   },
-  async revertPage(caller, id, input, meta4 = {}) {
+  async revertPage(caller, id, input, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadPageOrThrow(id, organizationId);
     if (existing.status === "ARCHIVED") throw new ConflictError("An archived page must be restored before its content can be reverted.");
@@ -16559,12 +16593,12 @@ var pageService = {
       resourceId: id,
       beforeData: { fromVersion: current?.version, revertedToRevisionId: target.id, revertedToVersion: target.version },
       afterData: { newVersion: nextVersion },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return loadPageOrThrow(id, organizationId);
   },
-  async deletePage(caller, id, meta4 = {}) {
+  async deletePage(caller, id, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadPageOrThrow(id, organizationId);
     await pageRepository.softDelete(id);
@@ -16576,15 +16610,15 @@ var pageService = {
       resourceType: "page",
       resourceId: id,
       beforeData: { status: existing.status, title: existing.title },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
   },
   /** Phase 7 — Trash view (Content Dashboard): soft-deleted pages, paginated. */
   async listTrash(organizationId, page, limit) {
     return pageRepository.listTrash(organizationId, page, limit);
   },
-  async restorePage(caller, id, meta4 = {}) {
+  async restorePage(caller, id, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await pageRepository.findTrashedByIdInOrg(id, organizationId);
     if (!existing) throw new NotFoundError("Page not found in trash.");
@@ -16597,19 +16631,19 @@ var pageService = {
       resourceType: "page",
       resourceId: id,
       beforeData: { status: existing.status, title: existing.title },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
   },
   /** Phase 7 — bulk workflow actions, same per-item isolation as postService.bulkAction. */
-  async bulkAction(caller, action, ids, meta4 = {}) {
+  async bulkAction(caller, action, ids, meta5 = {}) {
     const succeeded = [];
     const failed = [];
     for (const id of ids) {
       try {
-        if (action === "archive") await this.archivePage(caller, id, meta4);
-        else if (action === "trash") await this.deletePage(caller, id, meta4);
-        else await this.restorePage(caller, id, meta4);
+        if (action === "archive") await this.archivePage(caller, id, meta5);
+        else if (action === "trash") await this.deletePage(caller, id, meta5);
+        else await this.restorePage(caller, id, meta5);
         succeeded.push(id);
       } catch (err) {
         failed.push({ id, error: err instanceof Error ? err.message : "Action failed." });
@@ -16955,7 +16989,7 @@ var approvalCenterService = {
     ]);
     return { total: counts.ai + counts.automation + counts.content + counts.social, counts, sources: allowed };
   },
-  async decide(caller, source, id, input, meta4 = {}) {
+  async decide(caller, source, id, input, meta5 = {}) {
     if (source === "social") throw new ValidationError("Social approvals are not available yet.");
     const allowed = visibleSources(caller);
     if (!allowed.includes(source)) throw new AuthorizationError("You do not have access to this approval source.");
@@ -16963,7 +16997,7 @@ var approvalCenterService = {
     const approve = input.decision === "approve";
     let result;
     if (source === "ai") {
-      result = await aiApprovalService.decide(caller, id, { decision: approve ? "APPROVE" : "REJECT", rejectionReason: input.comment }, meta4);
+      result = await aiApprovalService.decide(caller, id, { decision: approve ? "APPROVE" : "REJECT", rejectionReason: input.comment }, meta5);
     } else {
       const row = await prisma.automationApproval.findFirst({ where: { id, organizationId: caller.organizationId }, select: { entityType: true } });
       if (!row) throw new NotFoundError("Approval request not found.");
@@ -16986,8 +17020,8 @@ var approvalCenterService = {
       resourceType: `${source}_approval`,
       resourceId: id,
       metadata: { source, decision: input.decision, comment: input.comment ?? null },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return { source, id, decision: input.decision, result };
   }
@@ -17138,8 +17172,485 @@ router16.put(
 );
 var navRoutes_default = router16;
 
-// server/routes/v1/formRoutes.ts
+// server/routes/v1/socialRoutes.ts
 import { Router as Router17 } from "express";
+
+// server/services/social/socialAccountService.ts
+import { randomBytes as randomBytes6 } from "node:crypto";
+
+// server/services/social/connectors/mockProvider.ts
+import { randomBytes as randomBytes4 } from "node:crypto";
+var tokenFor = (name, kind) => `mock_${kind}_${name}_${randomBytes4(8).toString("hex")}`;
+var mockProvider = {
+  key: "mock",
+  label: "Mock Network (dev/test)",
+  implemented: true,
+  defaultScopes: ["profile.read", "posts.write"],
+  isConfigured: () => config.socialMockProviderEnabled,
+  getAuthUrl({ state, redirectUri: redirectUri2 }) {
+    return `${redirectUri2}?code=mock_demo&state=${encodeURIComponent(state)}&provider=mock`;
+  },
+  async handleCallback({ code }) {
+    if (!code.startsWith("mock_")) throw new Error("Invalid authorization code.");
+    const name = code.slice("mock_".length);
+    if (name === "fail") throw new Error("The provider rejected the authorization.");
+    return {
+      profile: { externalAccountId: `mock-${name}`, displayName: `Mock ${name}`, handle: `@mock_${name}`, avatarUrl: null, accountType: "PAGE" },
+      tokens: { accessToken: tokenFor(name, "at"), refreshToken: tokenFor(name, "rt"), expiresAt: new Date(Date.now() + 60 * 864e5).toISOString(), scopes: ["profile.read", "posts.write"], mockName: name }
+    };
+  },
+  async refreshToken(tokens) {
+    const name = String(tokens.mockName ?? "demo");
+    if (!tokens.refreshToken || name === "norefresh") throw new Error("This account cannot be refreshed; please reconnect.");
+    return { ...tokens, accessToken: tokenFor(name, "at"), expiresAt: new Date(Date.now() + 60 * 864e5).toISOString() };
+  },
+  async getProfile(tokens) {
+    const name = String(tokens.mockName ?? "demo");
+    return { externalAccountId: `mock-${name}`, displayName: `Mock ${name}`, handle: `@mock_${name}`, accountType: "PAGE" };
+  },
+  async healthCheck(tokens) {
+    if (tokens.accessToken.includes("expired") || String(tokens.mockName) === "expired") return { ok: false, error: "The access token was rejected by the provider." };
+    return { ok: true, expiresAt: tokens.expiresAt ?? null };
+  }
+};
+
+// server/services/social/connectors/types.ts
+var ConnectorNotImplementedError = class extends Error {
+  constructor(provider, capability) {
+    super(`${provider} does not support "${capability}" yet.`);
+    this.name = "ConnectorNotImplementedError";
+  }
+};
+
+// server/services/social/connectors/stubProviders.ts
+function stub(key2, label, configured, scopes) {
+  const unavailable = (capability) => {
+    throw new ConnectorNotImplementedError(label, capability);
+  };
+  return {
+    key: key2,
+    label,
+    implemented: false,
+    defaultScopes: scopes,
+    isConfigured: configured,
+    getAuthUrl: () => unavailable("connect"),
+    handleCallback: async () => unavailable("connect"),
+    refreshToken: async () => unavailable("token refresh"),
+    getProfile: async () => unavailable("profile"),
+    healthCheck: async () => unavailable("health check")
+  };
+}
+var metaProvider = stub("meta", "Facebook & Instagram (Meta)", () => !!config.metaAppId && !!config.metaAppSecret, ["pages_show_list", "instagram_basic"]);
+var linkedinProvider = stub("linkedin", "LinkedIn", () => !!config.linkedinClientId && !!config.linkedinClientSecret, ["r_liteprofile", "w_member_social"]);
+
+// server/services/social/connectors/registry.ts
+var CONNECTORS = [metaProvider, linkedinProvider, mockProvider];
+var connectorRegistry = {
+  get(key2) {
+    return CONNECTORS.find((c) => c.key === key2);
+  },
+  /** Connectors that may actually be used to connect/refresh/health-check right now. */
+  getAvailable(key2) {
+    const c = this.get(key2);
+    return c && c.isConfigured() && c.implemented ? c : void 0;
+  },
+  list() {
+    return CONNECTORS.filter((c) => c.key !== "mock" || c.isConfigured()).map((c) => ({
+      key: c.key,
+      label: c.label,
+      configured: c.isConfigured(),
+      available: c.isConfigured() && c.implemented
+    }));
+  }
+};
+
+// server/services/social/tokenVault.ts
+import { createCipheriv as createCipheriv2, createDecipheriv as createDecipheriv2, hkdfSync as hkdfSync2, randomBytes as randomBytes5 } from "node:crypto";
+var FORMAT = "sv1";
+function keyRing() {
+  const ring = /* @__PURE__ */ new Map();
+  for (const entry of config.socialVaultKeys.split(",").map((e) => e.trim()).filter(Boolean)) {
+    const sep = entry.indexOf(":");
+    const version = Number(entry.slice(0, sep));
+    const secret = entry.slice(sep + 1);
+    if (!Number.isInteger(version) || version < 1 || secret.length < 32) {
+      throw new Error("SOCIAL_VAULT_KEYS must look like '1:<secret>,2:<secret>' with secrets of at least 32 characters.");
+    }
+    ring.set(version, Buffer.from(hkdfSync2("sha256", secret, "artify-social-vault-salt", `artify/social/token-vault/v${version}`, 32)));
+  }
+  if (ring.size === 0) {
+    const ikm = config.integrationsEncryptionKey || config.sessionSecret;
+    ring.set(1, Buffer.from(hkdfSync2("sha256", ikm, "artify-social-vault-salt", "artify/social/token-vault/derived", 32)));
+  }
+  return ring;
+}
+function activeKeyVersion() {
+  const ring = keyRing();
+  const wanted = config.socialVaultActiveKeyVersion ?? Math.max(...ring.keys());
+  if (!ring.has(wanted)) throw new Error(`SOCIAL_VAULT_ACTIVE_KEY_VERSION ${wanted} is not in SOCIAL_VAULT_KEYS.`);
+  return wanted;
+}
+var tokenVault = {
+  encrypt(tokens, accountId) {
+    const keyVersion = activeKeyVersion();
+    const key2 = keyRing().get(keyVersion);
+    const iv = randomBytes5(12);
+    const cipher = createCipheriv2("aes-256-gcm", key2, iv);
+    cipher.setAAD(Buffer.from(accountId));
+    const ct = Buffer.concat([cipher.update(JSON.stringify(tokens), "utf8"), cipher.final()]);
+    const ciphertext = [FORMAT, iv.toString("base64url"), cipher.getAuthTag().toString("base64url"), ct.toString("base64url")].join(".");
+    return { ciphertext, keyVersion };
+  },
+  decrypt(ciphertext, keyVersion, accountId) {
+    const key2 = keyRing().get(keyVersion);
+    if (!key2) throw new Error(`Social vault key version ${keyVersion} is not available.`);
+    const [format, iv, tag, ct] = ciphertext.split(".");
+    if (format !== FORMAT || !iv || !tag || !ct) throw new Error("Unsupported credential format.");
+    const decipher = createDecipheriv2("aes-256-gcm", key2, Buffer.from(iv, "base64url"));
+    decipher.setAAD(Buffer.from(accountId));
+    decipher.setAuthTag(Buffer.from(tag, "base64url"));
+    try {
+      return JSON.parse(Buffer.concat([decipher.update(Buffer.from(ct, "base64url")), decipher.final()]).toString("utf8"));
+    } catch {
+      throw new Error("Stored credentials could not be decrypted.");
+    }
+  },
+  /** True when a record is encrypted with a key version other than the active one. */
+  needsRotation(keyVersion) {
+    return keyVersion !== activeKeyVersion();
+  },
+  /** Re-encrypts a record under the active key version. */
+  rotate(ciphertext, keyVersion, accountId) {
+    return this.encrypt(this.decrypt(ciphertext, keyVersion, accountId), accountId);
+  }
+};
+var PATTERNS = [
+  /(bearer\s+)[a-z0-9._~+/=-]{8,}/gi,
+  /((?:access|refresh|id)_?token["'\s:=]+)[a-z0-9._~+/=-]{8,}/gi,
+  /((?:client_)?secret["'\s:=]+)[a-z0-9._~+/=-]{8,}/gi,
+  /(code=)[a-z0-9._~+/=-]{8,}/gi
+];
+function redactSecrets(input, knownSecrets = []) {
+  let text = input instanceof Error ? input.message : typeof input === "string" ? input : JSON.stringify(input) ?? "";
+  for (const secret of knownSecrets) if (secret && secret.length >= 6) text = text.split(secret).join("[redacted]");
+  for (const pattern of PATTERNS) text = text.replace(pattern, "$1[redacted]");
+  return text;
+}
+
+// server/services/social/socialAccountService.ts
+var STATE_TTL_MS = 10 * 60 * 1e3;
+var EXPIRY_WARNING_MS = 7 * 24 * 60 * 60 * 1e3;
+var ACCOUNT_SELECT = {
+  id: true,
+  organizationId: true,
+  provider: true,
+  externalAccountId: true,
+  displayName: true,
+  handle: true,
+  avatarUrl: true,
+  accountType: true,
+  status: true,
+  scopes: true,
+  tokenExpiresAt: true,
+  lastSyncAt: true,
+  lastError: true,
+  connectedByUserId: true,
+  createdAt: true,
+  updatedAt: true
+};
+var safeError = (err, secrets = []) => redactSecrets(err, secrets).slice(0, 300);
+var redirectUri = () => `${config.controlCenterBaseUrl}/social/accounts`;
+function connectorOrThrow(provider) {
+  const known = connectorRegistry.get(provider);
+  if (!known) throw new ValidationError("Unknown social provider.");
+  const connector = connectorRegistry.getAvailable(provider);
+  if (!connector) throw new ValidationError(`${known.label} is not configured yet.`);
+  return connector;
+}
+async function loadInOrgOrThrow(organizationId, id) {
+  const account = await prisma.socialAccount.findFirst({ where: { id, organizationId }, select: ACCOUNT_SELECT });
+  if (!account) throw new NotFoundError("Social account not found.");
+  return account;
+}
+async function saveTokens(accountId, tokens) {
+  const { ciphertext, keyVersion } = tokenVault.encrypt(tokens, accountId);
+  await prisma.socialAccountCredential.upsert({
+    where: { socialAccountId: accountId },
+    create: { socialAccountId: accountId, ciphertext, keyVersion },
+    update: { ciphertext, keyVersion }
+  });
+}
+async function loadTokens(accountId) {
+  const row = await prisma.socialAccountCredential.findUnique({ where: { socialAccountId: accountId } });
+  return row ? tokenVault.decrypt(row.ciphertext, row.keyVersion, accountId) : null;
+}
+async function managersOf(organizationId) {
+  const rows = await prisma.organizationMembership.findMany({
+    where: {
+      organizationId,
+      status: "ACTIVE",
+      user: { status: "ACTIVE", deletedAt: null },
+      role: { rolePermissions: { some: { permission: { key: "social.accounts.manage" } } } }
+    },
+    select: { userId: true },
+    take: 50
+  });
+  return rows.map((r) => r.userId);
+}
+async function notifyManagers(account, title, message) {
+  const userIds = await managersOf(account.organizationId);
+  await Promise.all(
+    userIds.map(
+      (userId) => notificationService.notify({ organizationId: account.organizationId, userId, type: "social_account_attention", title, message, entityType: "social_account", entityId: account.id })
+    )
+  );
+}
+var socialAccountService = {
+  async list(organizationId) {
+    const accounts = await prisma.socialAccount.findMany({ where: { organizationId }, orderBy: [{ status: "asc" }, { displayName: "asc" }], select: ACCOUNT_SELECT });
+    return { accounts, providers: connectorRegistry.list() };
+  },
+  get: (organizationId, id) => loadInOrgOrThrow(organizationId, id),
+  /** Begins OAuth: returns the provider URL. The single-use `state` is stored hashed and bound to this user + workspace + provider. */
+  async startConnect(user, provider, reconnectAccountId) {
+    const connector = connectorOrThrow(provider);
+    if (reconnectAccountId) {
+      const existing = await loadInOrgOrThrow(user.organizationId, reconnectAccountId);
+      if (existing.provider !== provider) throw new ValidationError("That account belongs to a different provider.");
+    }
+    const state = `art_oauth_${randomBytes6(32).toString("base64url")}`;
+    await prisma.socialOAuthState.create({
+      data: { stateHash: hashToken(state), organizationId: user.organizationId, userId: user.id, provider, reconnectAccountId: reconnectAccountId ?? null, expiresAt: new Date(Date.now() + STATE_TTL_MS) }
+    });
+    return { authUrl: connector.getAuthUrl({ state, redirectUri: redirectUri(), scopes: connector.defaultScopes }) };
+  },
+  async handleCallback(user, input, meta5 = {}) {
+    const invalid = () => new AuthenticationError("This connection request is invalid or has expired. Please start again.");
+    const stateHash = hashToken(input.state);
+    const row = await prisma.socialOAuthState.findUnique({ where: { stateHash } });
+    if (!row || row.usedAt || row.expiresAt.getTime() <= Date.now() || row.userId !== user.id || row.organizationId !== user.organizationId) throw invalid();
+    const claimed = await prisma.socialOAuthState.updateMany({ where: { stateHash, usedAt: null }, data: { usedAt: /* @__PURE__ */ new Date() } });
+    if (claimed.count !== 1) throw invalid();
+    const connector = connectorOrThrow(row.provider);
+    if (input.error || !input.code) throw new ValidationError("The provider did not grant access.");
+    let result;
+    try {
+      result = await connector.handleCallback({ code: input.code, redirectUri: redirectUri() });
+    } catch (err) {
+      await auditLogRepository.record({
+        organizationId: user.organizationId,
+        actorUserId: user.id,
+        actorType: "USER",
+        action: "SOCIAL_ACCOUNT_CONNECT_FAILED",
+        resourceType: "social_account",
+        result: "FAILURE",
+        metadata: { provider: row.provider, reason: safeError(err, [input.code]) },
+        ipAddress: meta5.ip,
+        userAgent: meta5.userAgent
+      });
+      throw new ValidationError("Could not connect the account. Please try again.");
+    }
+    const { profile, tokens } = result;
+    if (row.reconnectAccountId) {
+      const target = await loadInOrgOrThrow(user.organizationId, row.reconnectAccountId);
+      if (target.externalAccountId !== profile.externalAccountId) throw new ValidationError("You signed in with a different account than the one being reconnected.");
+    }
+    const previous = await prisma.socialAccount.findUnique({
+      where: { organizationId_provider_externalAccountId: { organizationId: user.organizationId, provider: row.provider, externalAccountId: profile.externalAccountId } },
+      select: { id: true, status: true }
+    });
+    const data = {
+      displayName: profile.displayName,
+      handle: profile.handle ?? null,
+      avatarUrl: profile.avatarUrl ?? null,
+      accountType: profile.accountType ?? "PROFILE",
+      status: "CONNECTED",
+      scopes: tokens.scopes ?? connector.defaultScopes,
+      tokenExpiresAt: tokens.expiresAt ? new Date(tokens.expiresAt) : null,
+      lastSyncAt: /* @__PURE__ */ new Date(),
+      lastError: null,
+      connectedByUserId: user.id
+    };
+    const account = await prisma.socialAccount.upsert({
+      where: { organizationId_provider_externalAccountId: { organizationId: user.organizationId, provider: row.provider, externalAccountId: profile.externalAccountId } },
+      create: { organizationId: user.organizationId, provider: row.provider, externalAccountId: profile.externalAccountId, ...data },
+      update: data,
+      select: ACCOUNT_SELECT
+    });
+    await saveTokens(account.id, tokens);
+    const reauth = !!previous && previous.status !== "CONNECTED";
+    await auditLogRepository.record({
+      organizationId: user.organizationId,
+      actorUserId: user.id,
+      actorType: "USER",
+      action: row.reconnectAccountId || reauth ? "SOCIAL_ACCOUNT_REAUTHENTICATED" : "SOCIAL_ACCOUNT_CONNECTED",
+      resourceType: "social_account",
+      resourceId: account.id,
+      metadata: { provider: account.provider, externalAccountId: account.externalAccountId, handle: account.handle },
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
+    });
+    return account;
+  },
+  async disconnect(user, id, meta5 = {}) {
+    const account = await loadInOrgOrThrow(user.organizationId, id);
+    await prisma.socialAccountCredential.deleteMany({ where: { socialAccountId: id } });
+    const updated = await prisma.socialAccount.update({ where: { id }, data: { status: "DISCONNECTED", tokenExpiresAt: null, lastError: null }, select: ACCOUNT_SELECT });
+    await auditLogRepository.record({
+      organizationId: user.organizationId,
+      actorUserId: user.id,
+      actorType: "USER",
+      action: "SOCIAL_ACCOUNT_DISCONNECTED",
+      resourceType: "social_account",
+      resourceId: id,
+      metadata: { provider: account.provider, externalAccountId: account.externalAccountId, handle: account.handle },
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
+    });
+    return updated;
+  },
+  /**
+   * Verifies one account: refreshes a token that is expiring within 7 days (or already expired), then asks the provider.
+   * On failure the account moves to NEEDS_REAUTH (or ERROR for infrastructure failures) and managers are notified once.
+   */
+  async checkHealth(accountId, opts = {}) {
+    const account = await prisma.socialAccount.findUnique({ where: { id: accountId }, select: ACCOUNT_SELECT });
+    if (!account) throw new NotFoundError("Social account not found.");
+    if (account.status === "DISCONNECTED") return account;
+    const connector = connectorRegistry.getAvailable(account.provider);
+    if (!connector) return account;
+    const fail = async (status, reason) => {
+      const updated = await prisma.socialAccount.update({ where: { id: account.id }, data: { status, lastError: reason }, select: ACCOUNT_SELECT });
+      if (account.status === "CONNECTED") {
+        await auditLogRepository.record({
+          organizationId: account.organizationId,
+          actorUserId: opts.actor?.id,
+          actorType: opts.actor ? "USER" : "SYSTEM",
+          action: "SOCIAL_ACCOUNT_NEEDS_ATTENTION",
+          resourceType: "social_account",
+          resourceId: account.id,
+          result: "FAILURE",
+          metadata: { provider: account.provider, status, reason },
+          ipAddress: opts.meta?.ip,
+          userAgent: opts.meta?.userAgent
+        });
+        await notifyManagers(updated, `${account.displayName} needs attention`, status === "NEEDS_REAUTH" ? `Reconnect ${account.displayName} (${account.provider}) to keep it working. ${reason}` : `${account.displayName} (${account.provider}) failed a health check. ${reason}`);
+      }
+      return updated;
+    };
+    let tokens;
+    try {
+      tokens = await loadTokens(account.id);
+    } catch (err) {
+      logger.error({ accountId: account.id, err: safeError(err) }, "[social] could not decrypt stored credentials");
+      return fail("ERROR", "Stored credentials could not be read.");
+    }
+    if (!tokens) return fail("NEEDS_REAUTH", "No stored credentials; reconnect this account.");
+    try {
+      const expiresSoon = !!account.tokenExpiresAt && account.tokenExpiresAt.getTime() - Date.now() < EXPIRY_WARNING_MS;
+      let expiresAt = account.tokenExpiresAt;
+      if (expiresSoon) {
+        try {
+          tokens = await connector.refreshToken(tokens);
+          await saveTokens(account.id, tokens);
+          expiresAt = tokens.expiresAt ? new Date(tokens.expiresAt) : null;
+        } catch (err) {
+          return fail("NEEDS_REAUTH", `Token expires ${account.tokenExpiresAt.toISOString().slice(0, 10)} and could not be refreshed. ${safeError(err, [tokens.accessToken, tokens.refreshToken])}`.slice(0, 300));
+        }
+      }
+      const health = await connector.healthCheck(tokens);
+      if (!health.ok) return fail("NEEDS_REAUTH", safeError(health.error ?? "The provider rejected the credentials.", [tokens.accessToken, tokens.refreshToken]));
+      return prisma.socialAccount.update({
+        where: { id: account.id },
+        data: { status: "CONNECTED", lastSyncAt: /* @__PURE__ */ new Date(), lastError: null, tokenExpiresAt: health.expiresAt ? new Date(health.expiresAt) : expiresAt },
+        select: ACCOUNT_SELECT
+      });
+    } catch (err) {
+      return fail("ERROR", safeError(err, [tokens?.accessToken, tokens?.refreshToken]));
+    }
+  },
+  /** Daily job: re-check every connected/errored account (bounded per run). Returns counts only. */
+  async runTokenHealthJob(limit = 500) {
+    const accounts = await prisma.socialAccount.findMany({ where: { status: { in: ["CONNECTED", "ERROR"] } }, select: { id: true }, orderBy: { lastSyncAt: "asc" }, take: limit });
+    let needsAttention = 0;
+    let errors = 0;
+    for (const { id } of accounts) {
+      try {
+        const result = await this.checkHealth(id);
+        if (result.status === "NEEDS_REAUTH" || result.status === "ERROR") needsAttention += 1;
+      } catch (err) {
+        errors += 1;
+        logger.error({ accountId: id, err: safeError(err) }, "[social] token health check crashed");
+      }
+    }
+    return { checked: accounts.length, needsAttention, errors };
+  }
+};
+
+// server/schemas/socialSchemas.ts
+import { z as z23 } from "zod";
+var connectStartSchema = z23.object({ provider: z23.string().regex(/^[a-z0-9_]{2,30}$/), accountId: z23.string().min(1).max(64).optional() });
+var connectCallbackSchema = z23.object({
+  state: z23.string().min(10).max(200),
+  code: z23.string().max(2e3).optional(),
+  error: z23.string().max(500).optional()
+});
+
+// server/routes/v1/socialRoutes.ts
+var meta2 = (req) => ({ ip: req.ip, userAgent: req.headers["user-agent"] });
+var noStore = (res) => res.setHeader("Cache-Control", "no-store");
+var socialAccountsRouter = Router17();
+socialAccountsRouter.use(authenticateToken);
+socialAccountsRouter.get("/", requirePermission("social.read"), asyncHandler(async (req, res) => sendSuccess(res, await socialAccountService.list(req.user.organizationId))));
+socialAccountsRouter.post(
+  "/connect/start",
+  requirePermission("social.accounts.manage"),
+  sensitiveActionLimiter,
+  asyncHandler(async (req, res) => {
+    const input = connectStartSchema.parse(req.body);
+    noStore(res);
+    sendSuccess(res, await socialAccountService.startConnect(req.user, input.provider, input.accountId));
+  })
+);
+socialAccountsRouter.post(
+  "/callback",
+  requirePermission("social.accounts.manage"),
+  sensitiveActionLimiter,
+  asyncHandler(async (req, res) => {
+    const input = connectCallbackSchema.parse(req.body);
+    noStore(res);
+    sendSuccess(res, { account: await socialAccountService.handleCallback(req.user, input, meta2(req)) });
+  })
+);
+socialAccountsRouter.get("/:id", requirePermission("social.read"), asyncHandler(async (req, res) => sendSuccess(res, { account: await socialAccountService.get(req.user.organizationId, req.params.id) })));
+socialAccountsRouter.post(
+  "/:id/reconnect",
+  requirePermission("social.accounts.manage"),
+  sensitiveActionLimiter,
+  asyncHandler(async (req, res) => {
+    const account = await socialAccountService.get(req.user.organizationId, req.params.id);
+    noStore(res);
+    sendSuccess(res, await socialAccountService.startConnect(req.user, account.provider, account.id));
+  })
+);
+socialAccountsRouter.post(
+  "/:id/disconnect",
+  requirePermission("social.accounts.manage"),
+  sensitiveActionLimiter,
+  asyncHandler(async (req, res) => sendSuccess(res, { account: await socialAccountService.disconnect(req.user, req.params.id, meta2(req)) }))
+);
+socialAccountsRouter.post(
+  "/:id/health",
+  requirePermission("social.accounts.manage"),
+  sensitiveActionLimiter,
+  asyncHandler(async (req, res) => {
+    await socialAccountService.get(req.user.organizationId, req.params.id);
+    sendSuccess(res, { account: await socialAccountService.checkHealth(req.params.id, { actor: req.user, meta: meta2(req) }) });
+  })
+);
+
+// server/routes/v1/formRoutes.ts
+import { Router as Router18 } from "express";
 
 // server/services/formService.ts
 async function loadFormOrThrow(id, organizationId) {
@@ -17159,7 +17670,7 @@ var formService = {
   async getForm(organizationId, id) {
     return loadFormOrThrow(id, organizationId);
   },
-  async createForm(caller, input, meta4 = {}) {
+  async createForm(caller, input, meta5 = {}) {
     const organizationId = caller.organizationId;
     if (input.slug) {
       const dup = await formRepository.findBySlugInOrg(organizationId, input.slug);
@@ -17184,12 +17695,12 @@ var formService = {
       resourceType: "form",
       resourceId: form.id,
       afterData: { name: form.name, slug: form.slug },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return form;
   },
-  async updateForm(caller, id, input, meta4 = {}) {
+  async updateForm(caller, id, input, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadFormOrThrow(id, organizationId);
     if (input.slug !== void 0 && input.slug !== existing.slug) {
@@ -17214,12 +17725,12 @@ var formService = {
       resourceId: id,
       beforeData: { name: existing.name, slug: existing.slug, status: existing.status },
       afterData: { name: input.name, slug: input.slug, status: input.status },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return updated;
   },
-  async deleteForm(caller, id, meta4 = {}) {
+  async deleteForm(caller, id, meta5 = {}) {
     const organizationId = caller.organizationId;
     await loadFormOrThrow(id, organizationId);
     const submissionCount = await formRepository.countSubmissions(id);
@@ -17234,8 +17745,8 @@ var formService = {
       action: "FORM_DELETED",
       resourceType: "form",
       resourceId: id,
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
   },
   async listSubmissions(organizationId, formId, page, limit) {
@@ -17245,8 +17756,8 @@ var formService = {
 };
 
 // server/schemas/formSchemas.ts
-import { z as z23 } from "zod";
-var formFieldTypeSchema = z23.enum([
+import { z as z24 } from "zod";
+var formFieldTypeSchema = z24.enum([
   "text",
   "email",
   "tel",
@@ -17260,20 +17771,20 @@ var formFieldTypeSchema = z23.enum([
   "hidden"
 ]);
 var OPTION_TYPES = /* @__PURE__ */ new Set(["select", "multiselect", "radio"]);
-var formFieldOptionSchema = z23.object({
-  value: z23.string().trim().min(1).max(100),
-  label: z23.string().trim().min(1).max(150)
+var formFieldOptionSchema = z24.object({
+  value: z24.string().trim().min(1).max(100),
+  label: z24.string().trim().min(1).max(150)
 });
-var formFieldSchema = z23.object({
-  key: z23.string().trim().min(1).max(40).regex(/^[a-z][a-z0-9_]*$/, "key must start with a lowercase letter and contain only lowercase letters, digits, and underscores"),
-  label: z23.string().trim().min(1).max(100),
+var formFieldSchema = z24.object({
+  key: z24.string().trim().min(1).max(40).regex(/^[a-z][a-z0-9_]*$/, "key must start with a lowercase letter and contain only lowercase letters, digits, and underscores"),
+  label: z24.string().trim().min(1).max(100),
   type: formFieldTypeSchema.default("text"),
-  required: z23.boolean().default(false),
-  placeholder: z23.string().trim().max(150).optional(),
+  required: z24.boolean().default(false),
+  placeholder: z24.string().trim().max(150).optional(),
   /** select/multiselect/radio only — validated below (OPTION_TYPES). */
-  options: z23.array(formFieldOptionSchema).max(50).optional(),
-  min: z23.number().optional(),
-  max: z23.number().optional(),
+  options: z24.array(formFieldOptionSchema).max(50).optional(),
+  min: z24.number().optional(),
+  max: z24.number().optional(),
   /**
    * Conditional visibility — the simplest practical rule the roadmap
    * asks for: show this field only when another field (by key) equals
@@ -17281,61 +17792,61 @@ var formFieldSchema = z23.object({
    * server-side (publicFormService) so a hidden-but-still-submitted
    * value can never bypass required-field validation by hiding it.
    */
-  visibleWhen: z23.object({ fieldKey: z23.string().trim().min(1).max(40), equals: z23.string().trim().max(2e3) }).optional()
+  visibleWhen: z24.object({ fieldKey: z24.string().trim().min(1).max(40), equals: z24.string().trim().max(2e3) }).optional()
 }).refine((f) => !OPTION_TYPES.has(f.type) || f.options && f.options.length > 0, {
   message: "select/multiselect/radio fields need at least one option.",
   path: ["options"]
 });
-var formFieldsSchema = z23.array(formFieldSchema).min(1, "A form needs at least one field.").max(20, "A form may define at most 20 fields.").refine((fields) => new Set(fields.map((f) => f.key)).size === fields.length, { message: "Field keys must be unique." }).refine((fields) => fields.some((f) => f.key === "name" || f.key === "email"), {
+var formFieldsSchema = z24.array(formFieldSchema).min(1, "A form needs at least one field.").max(20, "A form may define at most 20 fields.").refine((fields) => new Set(fields.map((f) => f.key)).size === fields.length, { message: "Field keys must be unique." }).refine((fields) => fields.some((f) => f.key === "name" || f.key === "email"), {
   message: 'At least one field must use key "name" or "email" so a submission has an identity to attach to a CRM Lead.'
 }).refine((fields) => fields.every((f) => !f.visibleWhen || fields.some((other) => other.key === f.visibleWhen.fieldKey)), {
   message: "A field's conditional visibility must reference another real field on the same form."
 });
-var notifyUserIdsSchema = z23.array(z23.string().trim().uuid()).max(20).default([]);
-var listFormsQuerySchema = z23.object({
-  page: z23.coerce.number().int().positive().default(1),
-  limit: z23.coerce.number().int().positive().max(100).default(20),
-  search: z23.string().trim().max(200).optional(),
-  status: z23.enum(["ACTIVE", "ARCHIVED"]).optional(),
-  sort: z23.enum(["createdAt", "updatedAt", "name"]).default("createdAt"),
-  order: z23.enum(["asc", "desc"]).default("desc")
+var notifyUserIdsSchema = z24.array(z24.string().trim().uuid()).max(20).default([]);
+var listFormsQuerySchema = z24.object({
+  page: z24.coerce.number().int().positive().default(1),
+  limit: z24.coerce.number().int().positive().max(100).default(20),
+  search: z24.string().trim().max(200).optional(),
+  status: z24.enum(["ACTIVE", "ARCHIVED"]).optional(),
+  sort: z24.enum(["createdAt", "updatedAt", "name"]).default("createdAt"),
+  order: z24.enum(["asc", "desc"]).default("desc")
 });
-var slugSchema = z23.string().trim().min(1).max(150).regex(/^[a-z0-9]+(-[a-z0-9]+)*$/, "slug must be lowercase, alphanumeric, and hyphen-separated");
-var createFormSchema = z23.object({
-  name: z23.string().trim().min(1).max(200),
+var slugSchema = z24.string().trim().min(1).max(150).regex(/^[a-z0-9]+(-[a-z0-9]+)*$/, "slug must be lowercase, alphanumeric, and hyphen-separated");
+var createFormSchema = z24.object({
+  name: z24.string().trim().min(1).max(200),
   slug: slugSchema.optional(),
   fields: formFieldsSchema,
-  successMessage: z23.string().trim().max(500).optional(),
+  successMessage: z24.string().trim().max(500).optional(),
   notifyUserIds: notifyUserIdsSchema.optional()
 });
-var updateFormSchema = z23.object({
-  name: z23.string().trim().min(1).max(200).optional(),
+var updateFormSchema = z24.object({
+  name: z24.string().trim().min(1).max(200).optional(),
   slug: slugSchema.optional(),
   fields: formFieldsSchema.optional(),
-  successMessage: z23.string().trim().max(500).nullable().optional(),
-  status: z23.enum(["ACTIVE", "ARCHIVED"]).optional(),
+  successMessage: z24.string().trim().max(500).nullable().optional(),
+  status: z24.enum(["ACTIVE", "ARCHIVED"]).optional(),
   notifyUserIds: notifyUserIdsSchema.optional()
 }).refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
-var listFormSubmissionsQuerySchema = z23.object({
-  page: z23.coerce.number().int().positive().default(1),
-  limit: z23.coerce.number().int().positive().max(100).default(20)
+var listFormSubmissionsQuerySchema = z24.object({
+  page: z24.coerce.number().int().positive().default(1),
+  limit: z24.coerce.number().int().positive().max(100).default(20)
 });
-var submittedValueSchema = z23.union([z23.string().trim().max(2e3), z23.array(z23.string().trim().max(2e3)).max(50)]);
-var publicFormSubmitSchema = z23.object({
-  data: z23.record(submittedValueSchema).refine((obj) => Object.keys(obj).length <= 30, { message: "Too many fields submitted." }),
-  utmSource: z23.string().trim().max(200).optional(),
-  utmMedium: z23.string().trim().max(200).optional(),
-  utmCampaign: z23.string().trim().max(200).optional(),
-  utmTerm: z23.string().trim().max(200).optional(),
-  utmContent: z23.string().trim().max(200).optional(),
+var submittedValueSchema = z24.union([z24.string().trim().max(2e3), z24.array(z24.string().trim().max(2e3)).max(50)]);
+var publicFormSubmitSchema = z24.object({
+  data: z24.record(submittedValueSchema).refine((obj) => Object.keys(obj).length <= 30, { message: "Too many fields submitted." }),
+  utmSource: z24.string().trim().max(200).optional(),
+  utmMedium: z24.string().trim().max(200).optional(),
+  utmCampaign: z24.string().trim().max(200).optional(),
+  utmTerm: z24.string().trim().max(200).optional(),
+  utmContent: z24.string().trim().max(200).optional(),
   /** Site-relative path the visitor submitted from, e.g. /landing/spring-sale — for attribution only, never trusted as an identity/auth signal. */
-  landingPagePath: z23.string().trim().max(500).optional(),
+  landingPagePath: z24.string().trim().max(500).optional(),
   /** Honeypot — must stay empty; never render this field visibly to a real visitor (mirrors createPublicLeadSchema's `website`). */
-  website: z23.string().trim().max(200).optional()
+  website: z24.string().trim().max(200).optional()
 });
 
 // server/routes/v1/formRoutes.ts
-var router17 = Router17();
+var router17 = Router18();
 router17.use(authenticateToken);
 function requestMeta8(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
@@ -17438,8 +17949,8 @@ router17.get(
 var formRoutes_default = router17;
 
 // server/routes/v1/crmRoutes.ts
-import { Router as Router18 } from "express";
-var router18 = Router18();
+import { Router as Router19 } from "express";
+var router18 = Router19();
 router18.use(authenticateToken);
 router18.get(
   "/summary",
@@ -17499,7 +18010,7 @@ router18.get(
 var crmRoutes_default = router18;
 
 // server/routes/v1/campaignRoutes.ts
-import { Router as Router19 } from "express";
+import { Router as Router20 } from "express";
 
 // server/repositories/caseStudyRepository.ts
 function slugify13(input) {
@@ -17761,7 +18272,7 @@ var campaignService = {
   async getCampaign(organizationId, id) {
     return loadCampaignOrThrow(id, organizationId);
   },
-  async createCampaign(caller, input, meta4 = {}) {
+  async createCampaign(caller, input, meta5 = {}) {
     const organizationId = caller.organizationId;
     await assertRelationshipsUsable(input, organizationId);
     const campaign = await campaignRepository.create({
@@ -17795,13 +18306,13 @@ var campaignService = {
       resourceType: "campaign",
       resourceId: campaign.id,
       afterData: { name: campaign.name, status: campaign.status, channel: campaign.channel, utmCampaign: campaign.utmCampaign },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     await emitCampaignEvent("campaign.created", campaign, caller.id);
     return loadCampaignOrThrow(campaign.id, organizationId);
   },
-  async updateCampaign(caller, id, input, meta4 = {}) {
+  async updateCampaign(caller, id, input, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadCampaignOrThrow(id, organizationId);
     if (TERMINAL_STATUSES4.has(existing.status)) {
@@ -17839,15 +18350,15 @@ var campaignService = {
       resourceId: id,
       beforeData: { name: existing.name, channel: existing.channel },
       afterData: patch,
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     const updated = await loadCampaignOrThrow(id, organizationId);
     await emitCampaignEvent("campaign.updated", updated, caller.id);
     return updated;
   },
   /** Creates a new DRAFT campaign copying this one's fields and relations (never its leads/opportunities/clients — those are this campaign's own attributed activity, not the new copy's). */
-  async duplicateCampaign(caller, id, input, meta4 = {}) {
+  async duplicateCampaign(caller, id, input, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadCampaignOrThrow(id, organizationId);
     const copy = await campaignRepository.create({
@@ -17892,12 +18403,12 @@ var campaignService = {
       resourceId: copy.id,
       beforeData: { duplicatedFromCampaignId: id },
       afterData: { name: copy.name },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return loadCampaignOrThrow(copy.id, organizationId);
   },
-  async activateCampaign(caller, id, meta4 = {}) {
+  async activateCampaign(caller, id, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadCampaignOrThrow(id, organizationId);
     assertValidTransition3(existing.status, "ACTIVE");
@@ -17912,14 +18423,14 @@ var campaignService = {
       resourceId: id,
       beforeData: { status: existing.status },
       afterData: { status: "ACTIVE" },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     const updated = await loadCampaignOrThrow(id, organizationId);
     await emitCampaignEvent("campaign.activated", updated, caller.id);
     return updated;
   },
-  async pauseCampaign(caller, id, meta4 = {}) {
+  async pauseCampaign(caller, id, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadCampaignOrThrow(id, organizationId);
     if (existing.status !== "ACTIVE") throw new ConflictError("Only an ACTIVE campaign can be paused.");
@@ -17933,14 +18444,14 @@ var campaignService = {
       resourceId: id,
       beforeData: { status: existing.status },
       afterData: { status: "PAUSED" },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     const updated = await loadCampaignOrThrow(id, organizationId);
     await emitCampaignEvent("campaign.paused", updated, caller.id);
     return updated;
   },
-  async archiveCampaign(caller, id, meta4 = {}) {
+  async archiveCampaign(caller, id, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadCampaignOrThrow(id, organizationId);
     if (existing.status === "ARCHIVED") throw new ConflictError("This campaign is already archived.");
@@ -17954,8 +18465,8 @@ var campaignService = {
       resourceId: id,
       beforeData: { status: existing.status },
       afterData: { status: "ARCHIVED" },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     const updated = await loadCampaignOrThrow(id, organizationId);
     await emitCampaignEvent("campaign.archived", updated, caller.id);
@@ -17970,7 +18481,7 @@ var campaignService = {
    * separately permissioned action), it only refuses to go live until
    * that's genuinely true.
    */
-  async publishCampaign(caller, id, meta4 = {}) {
+  async publishCampaign(caller, id, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadCampaignOrThrow(id, organizationId);
     assertValidTransition3(existing.status, "ACTIVE");
@@ -17978,7 +18489,7 @@ var campaignService = {
     if (existing.landingPageId && existing.landingPage?.status !== "PUBLISHED") {
       throw new ValidationError("This campaign's landing page must be published before the campaign can go live.");
     }
-    return this.activateCampaign(caller, id, meta4);
+    return this.activateCampaign(caller, id, meta5);
   },
   /**
    * Composes the real, resolvable preview URL for this campaign's landing
@@ -18015,75 +18526,75 @@ var campaignService = {
 };
 
 // server/schemas/campaignSchemas.ts
-import { z as z24 } from "zod";
-var uuidArray = (max) => z24.array(z24.string().trim().uuid()).max(max);
+import { z as z25 } from "zod";
+var uuidArray = (max) => z25.array(z25.string().trim().uuid()).max(max);
 var CAMPAIGN_STATUS_VALUES = ["DRAFT", "ACTIVE", "PAUSED", "ARCHIVED"];
 var CAMPAIGN_CHANNEL_VALUES = ["EMAIL", "SOCIAL", "PAID_SEARCH", "PAID_SOCIAL", "CONTENT", "EVENT", "REFERRAL", "DIRECT", "OTHER"];
-var utmFieldSchema = z24.string().trim().min(1).max(150);
-var createCampaignSchema = z24.object({
-  name: z24.string().trim().min(1).max(200),
-  description: z24.string().trim().max(5e3).optional(),
-  channel: z24.enum(CAMPAIGN_CHANNEL_VALUES).default("OTHER"),
-  startDate: z24.coerce.date().optional(),
-  endDate: z24.coerce.date().optional(),
-  ownerId: z24.string().trim().uuid().optional(),
-  budget: z24.coerce.number().nonnegative().optional(),
-  currency: z24.string().trim().length(3).toUpperCase().optional(),
-  landingPageId: z24.string().trim().uuid().optional(),
-  formId: z24.string().trim().uuid().optional(),
+var utmFieldSchema = z25.string().trim().min(1).max(150);
+var createCampaignSchema = z25.object({
+  name: z25.string().trim().min(1).max(200),
+  description: z25.string().trim().max(5e3).optional(),
+  channel: z25.enum(CAMPAIGN_CHANNEL_VALUES).default("OTHER"),
+  startDate: z25.coerce.date().optional(),
+  endDate: z25.coerce.date().optional(),
+  ownerId: z25.string().trim().uuid().optional(),
+  budget: z25.coerce.number().nonnegative().optional(),
+  currency: z25.string().trim().length(3).toUpperCase().optional(),
+  landingPageId: z25.string().trim().uuid().optional(),
+  formId: z25.string().trim().uuid().optional(),
   utmSource: utmFieldSchema.optional(),
   utmMedium: utmFieldSchema.optional(),
   utmCampaign: utmFieldSchema.optional(),
   utmTerm: utmFieldSchema.optional(),
   utmContent: utmFieldSchema.optional(),
-  targetAudience: z24.string().trim().max(2e3).optional(),
-  notes: z24.string().trim().max(5e3).optional(),
+  targetAudience: z25.string().trim().max(2e3).optional(),
+  notes: z25.string().trim().max(5e3).optional(),
   productIds: uuidArray(50).optional(),
   relatedPageIds: uuidArray(50).optional(),
   relatedPostIds: uuidArray(50).optional(),
   relatedCaseStudyIds: uuidArray(50).optional(),
   mediaIds: uuidArray(50).optional()
 }).refine((v) => !v.startDate || !v.endDate || v.startDate <= v.endDate, { message: "startDate must be before or equal to endDate.", path: ["endDate"] });
-var updateCampaignSchema = z24.object({
-  name: z24.string().trim().min(1).max(200).optional(),
-  description: z24.string().trim().max(5e3).nullable().optional(),
-  channel: z24.enum(CAMPAIGN_CHANNEL_VALUES).optional(),
-  startDate: z24.coerce.date().nullable().optional(),
-  endDate: z24.coerce.date().nullable().optional(),
-  ownerId: z24.string().trim().uuid().nullable().optional(),
-  budget: z24.coerce.number().nonnegative().nullable().optional(),
-  currency: z24.string().trim().length(3).toUpperCase().nullable().optional(),
-  landingPageId: z24.string().trim().uuid().nullable().optional(),
-  formId: z24.string().trim().uuid().nullable().optional(),
+var updateCampaignSchema = z25.object({
+  name: z25.string().trim().min(1).max(200).optional(),
+  description: z25.string().trim().max(5e3).nullable().optional(),
+  channel: z25.enum(CAMPAIGN_CHANNEL_VALUES).optional(),
+  startDate: z25.coerce.date().nullable().optional(),
+  endDate: z25.coerce.date().nullable().optional(),
+  ownerId: z25.string().trim().uuid().nullable().optional(),
+  budget: z25.coerce.number().nonnegative().nullable().optional(),
+  currency: z25.string().trim().length(3).toUpperCase().nullable().optional(),
+  landingPageId: z25.string().trim().uuid().nullable().optional(),
+  formId: z25.string().trim().uuid().nullable().optional(),
   utmSource: utmFieldSchema.nullable().optional(),
   utmMedium: utmFieldSchema.nullable().optional(),
   utmCampaign: utmFieldSchema.nullable().optional(),
   utmTerm: utmFieldSchema.nullable().optional(),
   utmContent: utmFieldSchema.nullable().optional(),
-  targetAudience: z24.string().trim().max(2e3).nullable().optional(),
-  notes: z24.string().trim().max(5e3).nullable().optional(),
+  targetAudience: z25.string().trim().max(2e3).nullable().optional(),
+  notes: z25.string().trim().max(5e3).nullable().optional(),
   productIds: uuidArray(50).optional(),
   relatedPageIds: uuidArray(50).optional(),
   relatedPostIds: uuidArray(50).optional(),
   relatedCaseStudyIds: uuidArray(50).optional(),
   mediaIds: uuidArray(50).optional()
 }).refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
-var listCampaignsQuerySchema = z24.object({
-  page: z24.coerce.number().int().positive().default(1),
-  limit: z24.coerce.number().int().positive().max(100).default(20),
-  search: z24.string().trim().max(200).optional(),
-  status: z24.enum(CAMPAIGN_STATUS_VALUES).optional(),
-  channel: z24.enum(CAMPAIGN_CHANNEL_VALUES).optional(),
-  ownerId: z24.string().trim().uuid().optional(),
-  sort: z24.enum(["name", "status", "channel", "startDate", "endDate", "createdAt", "updatedAt"]).default("updatedAt"),
-  order: z24.enum(["asc", "desc"]).default("desc")
+var listCampaignsQuerySchema = z25.object({
+  page: z25.coerce.number().int().positive().default(1),
+  limit: z25.coerce.number().int().positive().max(100).default(20),
+  search: z25.string().trim().max(200).optional(),
+  status: z25.enum(CAMPAIGN_STATUS_VALUES).optional(),
+  channel: z25.enum(CAMPAIGN_CHANNEL_VALUES).optional(),
+  ownerId: z25.string().trim().uuid().optional(),
+  sort: z25.enum(["name", "status", "channel", "startDate", "endDate", "createdAt", "updatedAt"]).default("updatedAt"),
+  order: z25.enum(["asc", "desc"]).default("desc")
 });
-var duplicateCampaignSchema = z24.object({
-  name: z24.string().trim().min(1).max(200).optional()
+var duplicateCampaignSchema = z25.object({
+  name: z25.string().trim().min(1).max(200).optional()
 });
 
 // server/routes/v1/campaignRoutes.ts
-var router19 = Router19();
+var router19 = Router20();
 router19.use(authenticateToken);
 function requestMeta9(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
@@ -18190,7 +18701,7 @@ router19.post(
 var campaignRoutes_default = router19;
 
 // server/routes/v1/marketingRoutes.ts
-import { Router as Router20 } from "express";
+import { Router as Router21 } from "express";
 
 // server/services/marketingService.ts
 var marketingService = {
@@ -18241,7 +18752,7 @@ var marketingService = {
 };
 
 // server/routes/v1/marketingRoutes.ts
-var router20 = Router20();
+var router20 = Router21();
 router20.use(authenticateToken);
 router20.get(
   "/summary",
@@ -18253,8 +18764,8 @@ router20.get(
 var marketingRoutes_default = router20;
 
 // server/routes/v1/onboardingRoutes.ts
-import { Router as Router21 } from "express";
-var router21 = Router21();
+import { Router as Router22 } from "express";
+var router21 = Router22();
 router21.use(authenticateToken);
 function requestMeta10(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
@@ -18335,7 +18846,7 @@ router21.post(
 var onboardingRoutes_default = router21;
 
 // server/routes/v1/workspaceRoutes.ts
-import { Router as Router22 } from "express";
+import { Router as Router23 } from "express";
 
 // server/repositories/workspaceInvitationRepository.ts
 var workspaceInvitationRepository = {
@@ -18419,7 +18930,7 @@ var invitationService = {
       total
     };
   },
-  async createInvitation(caller, workspaceId, input, meta4 = {}) {
+  async createInvitation(caller, workspaceId, input, meta5 = {}) {
     const workspace = await loadWorkspaceForOwnerOrThrow2(workspaceId, caller.organizationId);
     const adminRole = await roleRepository.findByKey(CLIENT_ADMIN_ROLE_KEY);
     if (!adminRole) throw new InternalError("Required role configuration is missing.");
@@ -18450,15 +18961,15 @@ var invitationService = {
       resourceType: "workspace_invitation",
       resourceId: invitation.id,
       afterData: { workspaceId: workspace.id, email, roleKey: CLIENT_ADMIN_ROLE_KEY },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     if (workspace.provisionedForClient) {
       await onboardingService.completeStepForClient(workspace.provisionedForClient.id, "ADMINISTRATOR_INVITED", caller.id);
     }
     return { invitation, devToken: config.isProduction ? void 0 : token };
   },
-  async revokeInvitation(caller, invitationId, meta4 = {}) {
+  async revokeInvitation(caller, invitationId, meta5 = {}) {
     const invitation = await workspaceInvitationRepository.findById(invitationId);
     const workspace = invitation ? await workspaceRepository.findByIdForOwner(invitation.organizationId, caller.organizationId) : null;
     if (!invitation || !workspace) throw new NotFoundError("Invitation not found.");
@@ -18474,8 +18985,8 @@ var invitationService = {
       action: "CLIENT_ADMIN_INVITATION_REVOKED",
       resourceType: "workspace_invitation",
       resourceId: invitationId,
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
   },
   /** Public, unauthenticated lookup for the acceptance page (§26) — returns only what's needed to render a safe form, never the token hash or workspace internals. */
@@ -18494,7 +19005,7 @@ var invitationService = {
     };
   },
   /** Transactional acceptance (§21) — race-safe against double-acceptance via a conditional updateMany, same TOCTOU-guard pattern as leadService.convertLead. */
-  async acceptInvitation(token, input, meta4 = {}) {
+  async acceptInvitation(token, input, meta5 = {}) {
     const invitation = await workspaceInvitationRepository.findByToken(token);
     if (!invitation || computeInvitationStatus(invitation) !== "PENDING") {
       throw new AuthenticationError("This invitation link is invalid or has expired.");
@@ -18559,8 +19070,8 @@ var invitationService = {
       userId: result.id,
       organizationId: invitation.organizationId,
       expiresAt,
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     const role = await roleRepository.resolveById(invitation.roleId);
     if (!role) throw new InternalError("Role could not be resolved.");
@@ -18572,8 +19083,8 @@ var invitationService = {
       action: "CLIENT_ADMIN_ACCEPTED",
       resourceType: "workspace_invitation",
       resourceId: invitation.id,
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     const client3 = await prisma.client.findUnique({ where: { workspaceOrganizationId: invitation.organizationId } });
     if (client3) {
@@ -18584,26 +19095,26 @@ var invitationService = {
 };
 
 // server/schemas/invitationSchemas.ts
-import { z as z25 } from "zod";
-var createInvitationSchema = z25.object({
-  email: z25.string().trim().min(1).email()
+import { z as z26 } from "zod";
+var createInvitationSchema = z26.object({
+  email: z26.string().trim().min(1).email()
 });
-var listInvitationsQuerySchema = z25.object({
-  page: z25.coerce.number().int().positive().default(1),
-  limit: z25.coerce.number().int().positive().max(100).default(20)
+var listInvitationsQuerySchema = z26.object({
+  page: z26.coerce.number().int().positive().default(1),
+  limit: z26.coerce.number().int().positive().max(100).default(20)
 });
-var newPasswordSchema3 = z25.string().superRefine((password, ctx) => {
+var newPasswordSchema3 = z26.string().superRefine((password, ctx) => {
   const issue = validatePasswordPolicy(password);
-  if (issue) ctx.addIssue({ code: z25.ZodIssueCode.custom, message: issue });
+  if (issue) ctx.addIssue({ code: z26.ZodIssueCode.custom, message: issue });
 });
-var acceptInvitationSchema = z25.object({
-  firstName: z25.string().trim().min(1).max(100).optional(),
-  lastName: z25.string().trim().min(1).max(100).optional(),
+var acceptInvitationSchema = z26.object({
+  firstName: z26.string().trim().min(1).max(100).optional(),
+  lastName: z26.string().trim().min(1).max(100).optional(),
   password: newPasswordSchema3.optional()
 });
 
 // server/routes/v1/workspaceRoutes.ts
-var router22 = Router22();
+var router22 = Router23();
 router22.use(authenticateToken);
 function requestMeta11(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
@@ -18682,8 +19193,8 @@ router22.post(
 var workspaceRoutes_default = router22;
 
 // server/routes/v1/invitationRoutes.ts
-import { Router as Router23 } from "express";
-var router23 = Router23();
+import { Router as Router24 } from "express";
+var router23 = Router24();
 function requestMeta12(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
@@ -18714,7 +19225,7 @@ router23.post(
 var invitationRoutes_default = router23;
 
 // server/routes/v1/productRoutes.ts
-import { Router as Router24 } from "express";
+import { Router as Router25 } from "express";
 
 // server/services/productModuleService.ts
 function isUniqueConstraintError5(err) {
@@ -18738,7 +19249,7 @@ var productModuleService = {
   async getModule(id) {
     return loadModuleOrThrow(id);
   },
-  async createModule(caller, productId, input, meta4 = {}) {
+  async createModule(caller, productId, input, meta5 = {}) {
     const product = await loadProductOrThrow2(productId);
     if (product.status === "ARCHIVED") {
       throw new ConflictError("Cannot add a module to an archived product.");
@@ -18776,12 +19287,12 @@ var productModuleService = {
       resourceType: "product_module",
       resourceId: module_.id,
       afterData: { productId, code: module_.code, name: module_.name, status: module_.status },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return module_;
   },
-  async updateModule(caller, id, input, meta4 = {}) {
+  async updateModule(caller, id, input, meta5 = {}) {
     const existing = await loadModuleOrThrow(id);
     if (input.slug !== void 0 && input.slug !== existing.slug) {
       const dup = await productModuleRepository.findBySlugForProduct(existing.productId, input.slug);
@@ -18811,12 +19322,12 @@ var productModuleService = {
       resourceId: id,
       beforeData: { status: existing.status, name: existing.name },
       afterData: patch,
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return updated;
   },
-  async archiveModule(caller, id, meta4 = {}) {
+  async archiveModule(caller, id, meta5 = {}) {
     const existing = await loadModuleOrThrow(id);
     if (existing.status === "INACTIVE") {
       throw new ConflictError("This module is already inactive.");
@@ -18829,13 +19340,13 @@ var productModuleService = {
       resourceType: "product_module",
       resourceId: id,
       beforeData: { status: existing.status },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return archived;
   },
   /** Transactional, all-or-nothing reorder — validates every id belongs to this exact product before applying anything (§36). */
-  async reorderModules(caller, productId, moduleIds, meta4 = {}) {
+  async reorderModules(caller, productId, moduleIds, meta5 = {}) {
     await loadProductOrThrow2(productId);
     const existingIds = await productModuleRepository.listAllIdsForProduct(productId);
     const existingSet = new Set(existingIds);
@@ -18851,181 +19362,181 @@ var productModuleService = {
       resourceType: "product",
       resourceId: productId,
       afterData: { order: moduleIds },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
   }
 };
 
 // server/schemas/productSchemas.ts
-import { z as z27 } from "zod";
+import { z as z28 } from "zod";
 
 // server/schemas/contentSchemas.ts
-import { z as z26 } from "zod";
-var contentStatusSchema = z26.enum(["DRAFT", "IN_REVIEW", "SCHEDULED", "PUBLISHED", "ARCHIVED"]);
-var patchableContentStatusSchema = z26.enum(["DRAFT"]);
-var expectedUpdatedAtSchema = z26.coerce.date().optional();
-var seoMetadataSchema = z26.object({
-  metaTitle: z26.string().trim().min(1).max(70).optional(),
-  metaDescription: z26.string().trim().min(1).max(320).optional(),
-  focusKeywords: z26.array(z26.string().trim().min(1).max(60)).max(10).optional(),
-  canonicalUrl: z26.string().trim().url().max(500).optional(),
-  ogTitle: z26.string().trim().min(1).max(95).optional(),
-  ogDescription: z26.string().trim().min(1).max(320).optional(),
-  ogImage: z26.string().trim().url().max(1e3).optional(),
-  twitterImage: z26.string().trim().url().max(1e3).optional(),
-  ogType: z26.enum(["article", "website", "news"]).optional(),
-  twitterCard: z26.enum(["summary_large_image", "summary"]).optional(),
-  robotsDirective: z26.enum(["index, follow", "noindex, nofollow", "noindex, follow"]).optional(),
-  schemaType: z26.enum(["TechArticle", "NewsArticle", "BlogPosting", "Report"]).optional()
+import { z as z27 } from "zod";
+var contentStatusSchema = z27.enum(["DRAFT", "IN_REVIEW", "SCHEDULED", "PUBLISHED", "ARCHIVED"]);
+var patchableContentStatusSchema = z27.enum(["DRAFT"]);
+var expectedUpdatedAtSchema = z27.coerce.date().optional();
+var seoMetadataSchema = z27.object({
+  metaTitle: z27.string().trim().min(1).max(70).optional(),
+  metaDescription: z27.string().trim().min(1).max(320).optional(),
+  focusKeywords: z27.array(z27.string().trim().min(1).max(60)).max(10).optional(),
+  canonicalUrl: z27.string().trim().url().max(500).optional(),
+  ogTitle: z27.string().trim().min(1).max(95).optional(),
+  ogDescription: z27.string().trim().min(1).max(320).optional(),
+  ogImage: z27.string().trim().url().max(1e3).optional(),
+  twitterImage: z27.string().trim().url().max(1e3).optional(),
+  ogType: z27.enum(["article", "website", "news"]).optional(),
+  twitterCard: z27.enum(["summary_large_image", "summary"]).optional(),
+  robotsDirective: z27.enum(["index, follow", "noindex, nofollow", "noindex, follow"]).optional(),
+  schemaType: z27.enum(["TechArticle", "NewsArticle", "BlogPosting", "Report"]).optional()
 }).strict();
-var revertContentSchema = z26.object({
-  revisionId: z26.string().trim().uuid()
+var revertContentSchema = z27.object({
+  revisionId: z27.string().trim().uuid()
 });
 var SORT_FIELDS = ["title", "slug", "status", "createdAt", "updatedAt", "publishedAt"];
-var listContentQuerySchema = z26.object({
-  page: z26.coerce.number().int().positive().default(1),
-  limit: z26.coerce.number().int().positive().max(100).default(20),
-  search: z26.string().trim().max(200).optional(),
-  status: contentStatusSchema.optional(),
-  // Phase 7 — Content Dashboard date filtering, inclusive range over createdAt.
-  fromDate: z26.coerce.date().optional(),
-  toDate: z26.coerce.date().optional(),
-  sort: z26.enum(SORT_FIELDS).default("updatedAt"),
-  order: z26.enum(["asc", "desc"]).default("desc")
-});
-var scheduleContentSchema = z26.object({
-  scheduledAt: z26.coerce.date().refine((d) => d.getTime() > Date.now(), { message: "scheduledAt must be in the future" })
-});
-var slugSchema2 = z26.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)");
-var createCategorySchema = z26.object({
-  name: z26.string().trim().min(1).max(150),
-  slug: slugSchema2.optional(),
-  description: z26.string().trim().max(2e3).optional(),
-  // Phase 7 — optional parent for a simple hierarchy (Category.parentId).
-  parentId: z26.string().trim().uuid().optional()
-});
-var updateCategorySchema = z26.object({
-  name: z26.string().trim().min(1).max(150).optional(),
-  slug: slugSchema2.optional(),
-  description: z26.string().trim().max(2e3).nullable().optional(),
-  parentId: z26.string().trim().uuid().nullable().optional()
-}).refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
-var createTagSchema = z26.object({
-  name: z26.string().trim().min(1).max(100),
-  slug: slugSchema2.optional(),
-  // Phase 7 — optional description, matching Category's own field.
-  description: z26.string().trim().max(2e3).optional()
-});
-var updateTagSchema = z26.object({
-  name: z26.string().trim().min(1).max(100).optional(),
-  slug: slugSchema2.optional(),
-  description: z26.string().trim().max(2e3).nullable().optional()
-}).refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
-var bulkContentIdsSchema = z26.object({
-  ids: z26.array(z26.string().trim().uuid()).min(1).max(100)
-});
-
-// server/schemas/productSchemas.ts
-var productTypeSchema = z27.enum(["PRODUCT", "SERVICE", "SOLUTION"]);
-var productStatusSchema = z27.enum(["DRAFT", "ACTIVE", "INACTIVE", "ARCHIVED"]);
-var SORT_FIELDS2 = ["name", "code", "type", "status", "displayOrder", "createdAt", "updatedAt"];
-var listProductsQuerySchema = z27.object({
+var listContentQuerySchema = z27.object({
   page: z27.coerce.number().int().positive().default(1),
   limit: z27.coerce.number().int().positive().max(100).default(20),
   search: z27.string().trim().max(200).optional(),
-  type: productTypeSchema.optional(),
-  status: productStatusSchema.optional(),
-  isFeatured: z27.coerce.boolean().optional(),
-  categoryId: z27.string().trim().uuid().optional(),
-  industryId: z27.string().trim().uuid().optional(),
-  sort: z27.enum(SORT_FIELDS2).default("displayOrder"),
-  order: z27.enum(["asc", "desc"]).default("asc")
+  status: contentStatusSchema.optional(),
+  // Phase 7 — Content Dashboard date filtering, inclusive range over createdAt.
+  fromDate: z27.coerce.date().optional(),
+  toDate: z27.coerce.date().optional(),
+  sort: z27.enum(SORT_FIELDS).default("updatedAt"),
+  order: z27.enum(["asc", "desc"]).default("desc")
 });
-var productContentSchema = z27.object({
-  benefits: z27.array(z27.string().trim().min(1).max(200)).max(20).optional(),
-  features: z27.array(z27.string().trim().min(1).max(200)).max(20).optional(),
-  businessProblem: z27.string().trim().max(2e3).optional(),
-  // Validated for real existence against the public org's Forms at save
-  // time in productService — never trusted as a bare uuid alone.
-  ctaFormId: z27.string().trim().uuid().optional(),
-  seo: seoMetadataSchema.optional()
+var scheduleContentSchema = z27.object({
+  scheduledAt: z27.coerce.date().refine((d) => d.getTime() > Date.now(), { message: "scheduledAt must be in the future" })
 });
-var codeSchema = z27.string().trim().min(1).max(50).regex(/^[A-Za-z0-9._-]+$/, "code may only contain letters, numbers, dots, underscores, and hyphens").transform((v) => v.toUpperCase());
-var createProductSchema = z27.object({
-  code: codeSchema,
-  name: z27.string().trim().min(1).max(200),
-  slug: z27.string().trim().min(1).max(100).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)").optional(),
-  type: productTypeSchema,
-  shortDescription: z27.string().trim().max(300).optional(),
-  description: z27.string().trim().max(1e4).optional(),
-  status: productStatusSchema.optional(),
-  isFeatured: z27.boolean().optional(),
-  displayOrder: z27.number().int().min(0).optional(),
-  featuredMediaId: z27.string().trim().uuid().optional(),
-  categoryId: z27.string().trim().uuid().optional(),
-  content: productContentSchema.optional(),
-  relatedProductIds: z27.array(z27.string().trim().uuid()).max(30).optional(),
-  industryIds: z27.array(z27.string().trim().uuid()).max(30).optional()
+var slugSchema2 = z27.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)");
+var createCategorySchema = z27.object({
+  name: z27.string().trim().min(1).max(150),
+  slug: slugSchema2.optional(),
+  description: z27.string().trim().max(2e3).optional(),
+  // Phase 7 — optional parent for a simple hierarchy (Category.parentId).
+  parentId: z27.string().trim().uuid().optional()
 });
-var updateProductSchema = z27.object({
-  name: z27.string().trim().min(1).max(200).optional(),
-  slug: z27.string().trim().min(1).max(100).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)").optional(),
-  type: productTypeSchema.optional(),
-  shortDescription: z27.string().trim().max(300).nullable().optional(),
-  description: z27.string().trim().max(1e4).nullable().optional(),
-  status: productStatusSchema.optional(),
-  isFeatured: z27.boolean().optional(),
-  displayOrder: z27.number().int().min(0).optional(),
-  featuredMediaId: z27.string().trim().uuid().nullable().optional(),
-  categoryId: z27.string().trim().uuid().nullable().optional(),
-  content: productContentSchema.optional(),
-  relatedProductIds: z27.array(z27.string().trim().uuid()).max(30).optional(),
-  industryIds: z27.array(z27.string().trim().uuid()).max(30).optional()
+var updateCategorySchema = z27.object({
+  name: z27.string().trim().min(1).max(150).optional(),
+  slug: slugSchema2.optional(),
+  description: z27.string().trim().max(2e3).nullable().optional(),
+  parentId: z27.string().trim().uuid().nullable().optional()
 }).refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
-var revertProductSchema = z27.object({
-  revisionId: z27.string().trim().uuid()
+var createTagSchema = z27.object({
+  name: z27.string().trim().min(1).max(100),
+  slug: slugSchema2.optional(),
+  // Phase 7 — optional description, matching Category's own field.
+  description: z27.string().trim().max(2e3).optional()
 });
-var duplicateProductSchema = z27.object({
-  name: z27.string().trim().min(1).max(200).optional()
-});
-var bulkArchiveProductsSchema = z27.object({
+var updateTagSchema = z27.object({
+  name: z27.string().trim().min(1).max(100).optional(),
+  slug: slugSchema2.optional(),
+  description: z27.string().trim().max(2e3).nullable().optional()
+}).refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
+var bulkContentIdsSchema = z27.object({
   ids: z27.array(z27.string().trim().uuid()).min(1).max(100)
 });
 
-// server/schemas/productModuleSchemas.ts
-import { z as z28 } from "zod";
-var productModuleStatusSchema = z28.enum(["DRAFT", "ACTIVE", "INACTIVE"]);
-var listProductModulesQuerySchema = z28.object({
+// server/schemas/productSchemas.ts
+var productTypeSchema = z28.enum(["PRODUCT", "SERVICE", "SOLUTION"]);
+var productStatusSchema = z28.enum(["DRAFT", "ACTIVE", "INACTIVE", "ARCHIVED"]);
+var SORT_FIELDS2 = ["name", "code", "type", "status", "displayOrder", "createdAt", "updatedAt"];
+var listProductsQuerySchema = z28.object({
   page: z28.coerce.number().int().positive().default(1),
-  limit: z28.coerce.number().int().positive().max(100).default(50),
+  limit: z28.coerce.number().int().positive().max(100).default(20),
+  search: z28.string().trim().max(200).optional(),
+  type: productTypeSchema.optional(),
+  status: productStatusSchema.optional(),
+  isFeatured: z28.coerce.boolean().optional(),
+  categoryId: z28.string().trim().uuid().optional(),
+  industryId: z28.string().trim().uuid().optional(),
+  sort: z28.enum(SORT_FIELDS2).default("displayOrder"),
+  order: z28.enum(["asc", "desc"]).default("asc")
+});
+var productContentSchema = z28.object({
+  benefits: z28.array(z28.string().trim().min(1).max(200)).max(20).optional(),
+  features: z28.array(z28.string().trim().min(1).max(200)).max(20).optional(),
+  businessProblem: z28.string().trim().max(2e3).optional(),
+  // Validated for real existence against the public org's Forms at save
+  // time in productService — never trusted as a bare uuid alone.
+  ctaFormId: z28.string().trim().uuid().optional(),
+  seo: seoMetadataSchema.optional()
+});
+var codeSchema = z28.string().trim().min(1).max(50).regex(/^[A-Za-z0-9._-]+$/, "code may only contain letters, numbers, dots, underscores, and hyphens").transform((v) => v.toUpperCase());
+var createProductSchema = z28.object({
+  code: codeSchema,
+  name: z28.string().trim().min(1).max(200),
+  slug: z28.string().trim().min(1).max(100).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)").optional(),
+  type: productTypeSchema,
+  shortDescription: z28.string().trim().max(300).optional(),
+  description: z28.string().trim().max(1e4).optional(),
+  status: productStatusSchema.optional(),
+  isFeatured: z28.boolean().optional(),
+  displayOrder: z28.number().int().min(0).optional(),
+  featuredMediaId: z28.string().trim().uuid().optional(),
+  categoryId: z28.string().trim().uuid().optional(),
+  content: productContentSchema.optional(),
+  relatedProductIds: z28.array(z28.string().trim().uuid()).max(30).optional(),
+  industryIds: z28.array(z28.string().trim().uuid()).max(30).optional()
+});
+var updateProductSchema = z28.object({
+  name: z28.string().trim().min(1).max(200).optional(),
+  slug: z28.string().trim().min(1).max(100).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)").optional(),
+  type: productTypeSchema.optional(),
+  shortDescription: z28.string().trim().max(300).nullable().optional(),
+  description: z28.string().trim().max(1e4).nullable().optional(),
+  status: productStatusSchema.optional(),
+  isFeatured: z28.boolean().optional(),
+  displayOrder: z28.number().int().min(0).optional(),
+  featuredMediaId: z28.string().trim().uuid().nullable().optional(),
+  categoryId: z28.string().trim().uuid().nullable().optional(),
+  content: productContentSchema.optional(),
+  relatedProductIds: z28.array(z28.string().trim().uuid()).max(30).optional(),
+  industryIds: z28.array(z28.string().trim().uuid()).max(30).optional()
+}).refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
+var revertProductSchema = z28.object({
+  revisionId: z28.string().trim().uuid()
+});
+var duplicateProductSchema = z28.object({
+  name: z28.string().trim().min(1).max(200).optional()
+});
+var bulkArchiveProductsSchema = z28.object({
+  ids: z28.array(z28.string().trim().uuid()).min(1).max(100)
+});
+
+// server/schemas/productModuleSchemas.ts
+import { z as z29 } from "zod";
+var productModuleStatusSchema = z29.enum(["DRAFT", "ACTIVE", "INACTIVE"]);
+var listProductModulesQuerySchema = z29.object({
+  page: z29.coerce.number().int().positive().default(1),
+  limit: z29.coerce.number().int().positive().max(100).default(50),
   status: productModuleStatusSchema.optional()
 });
-var codeSchema2 = z28.string().trim().min(1).max(50).regex(/^[A-Za-z0-9._-]+$/, "code may only contain letters, numbers, dots, underscores, and hyphens").transform((v) => v.toUpperCase());
-var slugSchema3 = z28.string().trim().min(1).max(100).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)");
-var createProductModuleSchema = z28.object({
+var codeSchema2 = z29.string().trim().min(1).max(50).regex(/^[A-Za-z0-9._-]+$/, "code may only contain letters, numbers, dots, underscores, and hyphens").transform((v) => v.toUpperCase());
+var slugSchema3 = z29.string().trim().min(1).max(100).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)");
+var createProductModuleSchema = z29.object({
   code: codeSchema2,
-  name: z28.string().trim().min(1).max(200),
+  name: z29.string().trim().min(1).max(200),
   slug: slugSchema3.optional(),
-  description: z28.string().trim().max(1e4).optional(),
+  description: z29.string().trim().max(1e4).optional(),
   status: productModuleStatusSchema.optional(),
-  isCore: z28.boolean().optional(),
-  displayOrder: z28.number().int().min(0).optional()
+  isCore: z29.boolean().optional(),
+  displayOrder: z29.number().int().min(0).optional()
 });
-var updateProductModuleSchema = z28.object({
-  name: z28.string().trim().min(1).max(200).optional(),
+var updateProductModuleSchema = z29.object({
+  name: z29.string().trim().min(1).max(200).optional(),
   slug: slugSchema3.optional(),
-  description: z28.string().trim().max(1e4).nullable().optional(),
+  description: z29.string().trim().max(1e4).nullable().optional(),
   status: productModuleStatusSchema.optional(),
-  isCore: z28.boolean().optional(),
-  displayOrder: z28.number().int().min(0).optional()
+  isCore: z29.boolean().optional(),
+  displayOrder: z29.number().int().min(0).optional()
 }).refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
-var reorderProductModulesSchema = z28.object({
-  moduleIds: z28.array(z28.string().trim().uuid()).min(1).max(200)
+var reorderProductModulesSchema = z29.object({
+  moduleIds: z29.array(z29.string().trim().uuid()).min(1).max(200)
 });
 
 // server/routes/v1/productRoutes.ts
-var router24 = Router24();
+var router24 = Router25();
 router24.use(authenticateToken);
 function requestMeta13(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
@@ -19144,8 +19655,8 @@ router24.post(
 var productRoutes_default = router24;
 
 // server/routes/v1/productModuleRoutes.ts
-import { Router as Router25 } from "express";
-var router25 = Router25();
+import { Router as Router26 } from "express";
+var router25 = Router26();
 router25.use(authenticateToken);
 function requestMeta14(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
@@ -19178,7 +19689,7 @@ router25.post(
 var productModuleRoutes_default = router25;
 
 // server/routes/v1/productCategoryRoutes.ts
-import { Router as Router26 } from "express";
+import { Router as Router27 } from "express";
 
 // server/services/productCategoryService.ts
 function isUniqueConstraintError6(err) {
@@ -19193,7 +19704,7 @@ var productCategoryService = {
   async list(search) {
     return productCategoryRepository.list(search);
   },
-  async create(caller, input, meta4 = {}) {
+  async create(caller, input, meta5 = {}) {
     let slug;
     if (input.slug) {
       const existing = await productCategoryRepository.findBySlug(input.slug);
@@ -19215,12 +19726,12 @@ var productCategoryService = {
       resourceType: "product_category",
       resourceId: category.id,
       afterData: { name: category.name, slug: category.slug },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return category;
   },
-  async update(caller, id, input, meta4 = {}) {
+  async update(caller, id, input, meta5 = {}) {
     const existing = await loadOrThrow(id);
     if (input.slug !== void 0 && input.slug !== existing.slug) {
       const dup = await productCategoryRepository.findBySlug(input.slug);
@@ -19240,12 +19751,12 @@ var productCategoryService = {
       resourceId: id,
       beforeData: { name: existing.name, slug: existing.slug },
       afterData: input,
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return updated;
   },
-  async delete(caller, id, meta4 = {}) {
+  async delete(caller, id, meta5 = {}) {
     const existing = await loadOrThrow(id);
     const productCount = await productCategoryRepository.countProducts(id);
     if (productCount > 0) {
@@ -19259,32 +19770,32 @@ var productCategoryService = {
       resourceType: "product_category",
       resourceId: id,
       beforeData: { name: existing.name, slug: existing.slug },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
   }
 };
 
 // server/schemas/productCategorySchemas.ts
-import { z as z29 } from "zod";
-var listProductCategoriesQuerySchema = z29.object({
-  search: z29.string().trim().max(200).optional()
+import { z as z30 } from "zod";
+var listProductCategoriesQuerySchema = z30.object({
+  search: z30.string().trim().max(200).optional()
 });
-var createProductCategorySchema = z29.object({
-  name: z29.string().trim().min(1).max(150),
-  slug: z29.string().trim().min(1).max(100).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)").optional(),
-  description: z29.string().trim().max(1e3).optional(),
-  displayOrder: z29.number().int().min(0).optional()
+var createProductCategorySchema = z30.object({
+  name: z30.string().trim().min(1).max(150),
+  slug: z30.string().trim().min(1).max(100).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)").optional(),
+  description: z30.string().trim().max(1e3).optional(),
+  displayOrder: z30.number().int().min(0).optional()
 });
-var updateProductCategorySchema = z29.object({
-  name: z29.string().trim().min(1).max(150).optional(),
-  slug: z29.string().trim().min(1).max(100).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)").optional(),
-  description: z29.string().trim().max(1e3).nullable().optional(),
-  displayOrder: z29.number().int().min(0).optional()
+var updateProductCategorySchema = z30.object({
+  name: z30.string().trim().min(1).max(150).optional(),
+  slug: z30.string().trim().min(1).max(100).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)").optional(),
+  description: z30.string().trim().max(1e3).nullable().optional(),
+  displayOrder: z30.number().int().min(0).optional()
 }).refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
 
 // server/routes/v1/productCategoryRoutes.ts
-var router26 = Router26();
+var router26 = Router27();
 router26.use(authenticateToken);
 function requestMeta15(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
@@ -19327,7 +19838,7 @@ router26.delete(
 var productCategoryRoutes_default = router26;
 
 // server/routes/v1/industryRoutes.ts
-import { Router as Router27 } from "express";
+import { Router as Router28 } from "express";
 
 // server/services/industryService.ts
 function isUniqueConstraintError7(err) {
@@ -19342,7 +19853,7 @@ var industryService = {
   async list(search) {
     return industryRepository.list(search);
   },
-  async create(caller, input, meta4 = {}) {
+  async create(caller, input, meta5 = {}) {
     let slug;
     if (input.slug) {
       const existing = await industryRepository.findBySlug(input.slug);
@@ -19364,12 +19875,12 @@ var industryService = {
       resourceType: "industry",
       resourceId: industry.id,
       afterData: { name: industry.name, slug: industry.slug },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return industry;
   },
-  async update(caller, id, input, meta4 = {}) {
+  async update(caller, id, input, meta5 = {}) {
     const existing = await loadOrThrow2(id);
     if (input.slug !== void 0 && input.slug !== existing.slug) {
       const dup = await industryRepository.findBySlug(input.slug);
@@ -19389,12 +19900,12 @@ var industryService = {
       resourceId: id,
       beforeData: { name: existing.name, slug: existing.slug },
       afterData: input,
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return updated;
   },
-  async delete(caller, id, meta4 = {}) {
+  async delete(caller, id, meta5 = {}) {
     const existing = await loadOrThrow2(id);
     const productCount = await industryRepository.countProducts(id);
     if (productCount > 0) {
@@ -19408,32 +19919,32 @@ var industryService = {
       resourceType: "industry",
       resourceId: id,
       beforeData: { name: existing.name, slug: existing.slug },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
   }
 };
 
 // server/schemas/industrySchemas.ts
-import { z as z30 } from "zod";
-var listIndustriesQuerySchema = z30.object({
-  search: z30.string().trim().max(200).optional()
+import { z as z31 } from "zod";
+var listIndustriesQuerySchema = z31.object({
+  search: z31.string().trim().max(200).optional()
 });
-var createIndustrySchema = z30.object({
-  name: z30.string().trim().min(1).max(150),
-  slug: z30.string().trim().min(1).max(100).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)").optional(),
-  description: z30.string().trim().max(1e3).optional(),
-  displayOrder: z30.number().int().min(0).optional()
+var createIndustrySchema = z31.object({
+  name: z31.string().trim().min(1).max(150),
+  slug: z31.string().trim().min(1).max(100).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)").optional(),
+  description: z31.string().trim().max(1e3).optional(),
+  displayOrder: z31.number().int().min(0).optional()
 });
-var updateIndustrySchema = z30.object({
-  name: z30.string().trim().min(1).max(150).optional(),
-  slug: z30.string().trim().min(1).max(100).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)").optional(),
-  description: z30.string().trim().max(1e3).nullable().optional(),
-  displayOrder: z30.number().int().min(0).optional()
+var updateIndustrySchema = z31.object({
+  name: z31.string().trim().min(1).max(150).optional(),
+  slug: z31.string().trim().min(1).max(100).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)").optional(),
+  description: z31.string().trim().max(1e3).nullable().optional(),
+  displayOrder: z31.number().int().min(0).optional()
 }).refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
 
 // server/routes/v1/industryRoutes.ts
-var router27 = Router27();
+var router27 = Router28();
 router27.use(authenticateToken);
 function requestMeta16(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
@@ -19476,60 +19987,60 @@ router27.delete(
 var industryRoutes_default = router27;
 
 // server/routes/v1/pageRoutes.ts
-import { Router as Router28 } from "express";
+import { Router as Router29 } from "express";
 
 // server/schemas/pageSchemas.ts
-import { z as z31 } from "zod";
-var slugSchema4 = z31.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)");
-var pageTypeSchema = z31.enum(["STANDARD", "LANDING"]);
-var createPageSchema = z31.object({
-  title: z31.string().trim().min(1).max(200),
+import { z as z32 } from "zod";
+var slugSchema4 = z32.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)");
+var pageTypeSchema = z32.enum(["STANDARD", "LANDING"]);
+var createPageSchema = z32.object({
+  title: z32.string().trim().min(1).max(200),
   slug: slugSchema4.optional(),
-  body: z31.string().trim().max(5e5).default(""),
+  body: z32.string().trim().max(5e5).default(""),
   // Phase 7 — short author-written summary, distinct from SEO metaDescription.
-  excerpt: z31.string().trim().max(500).optional(),
+  excerpt: z32.string().trim().max(500).optional(),
   metadata: seoMetadataSchema.optional(),
   // Phase 2 (Site Editor) — additive, optional. A page created without it
   // behaves exactly as before: body/metadata alone drive rendering
   // (publicSiteService.ts falls back whenever editorBlocks is absent).
   editorBlocks: editorDocumentSchema.optional(),
-  featuredMediaId: z31.string().trim().uuid().optional(),
-  templateId: z31.string().trim().uuid().optional(),
+  featuredMediaId: z32.string().trim().uuid().optional(),
+  templateId: z32.string().trim().uuid().optional(),
   pageType: pageTypeSchema.optional(),
-  isHomepage: z31.boolean().optional(),
+  isHomepage: z32.boolean().optional(),
   // Phase 5 — additive, optional. A page created without it behaves
   // exactly as before: parentId null, no hierarchy.
-  parentId: z31.string().trim().uuid().optional()
+  parentId: z32.string().trim().uuid().optional()
 });
-var updatePageSchema = z31.object({
-  title: z31.string().trim().min(1).max(200).optional(),
+var updatePageSchema = z32.object({
+  title: z32.string().trim().min(1).max(200).optional(),
   slug: slugSchema4.optional(),
-  body: z31.string().trim().max(5e5).optional(),
-  excerpt: z31.string().trim().max(500).nullable().optional(),
+  body: z32.string().trim().max(5e5).optional(),
+  excerpt: z32.string().trim().max(500).nullable().optional(),
   metadata: seoMetadataSchema.optional(),
   // null clears the editor composition (falls back to body-only
   // rendering); omitted leaves it unchanged.
   editorBlocks: editorDocumentSchema.nullable().optional(),
   status: patchableContentStatusSchema.optional(),
-  featuredMediaId: z31.string().trim().uuid().nullable().optional(),
+  featuredMediaId: z32.string().trim().uuid().nullable().optional(),
   // null explicitly unassigns the template (falls back to default
   // rendering — see publicSiteService.ts); omitted leaves it unchanged.
-  templateId: z31.string().trim().uuid().nullable().optional(),
+  templateId: z32.string().trim().uuid().nullable().optional(),
   pageType: pageTypeSchema.optional(),
-  isHomepage: z31.boolean().optional(),
+  isHomepage: z32.boolean().optional(),
   // null explicitly clears the parent (promotes to top-level); omitted
   // leaves it unchanged.
-  parentId: z31.string().trim().uuid().nullable().optional(),
+  parentId: z32.string().trim().uuid().nullable().optional(),
   expectedUpdatedAt: expectedUpdatedAtSchema
 }).refine((v) => Object.keys(v).filter((k) => k !== "expectedUpdatedAt").length > 0, { message: "At least one field must be provided." });
 
 // server/routes/v1/pageRoutes.ts
-import { z as z32 } from "zod";
-var trashQuerySchema = z32.object({
-  page: z32.coerce.number().int().positive().default(1),
-  limit: z32.coerce.number().int().positive().max(100).default(20)
+import { z as z33 } from "zod";
+var trashQuerySchema = z33.object({
+  page: z33.coerce.number().int().positive().default(1),
+  limit: z33.coerce.number().int().positive().max(100).default(20)
 });
-var router28 = Router28();
+var router28 = Router29();
 router28.use(authenticateToken);
 function requestMeta17(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
@@ -19689,7 +20200,7 @@ router28.delete(
 var pageRoutes_default = router28;
 
 // server/routes/v1/templateRoutes.ts
-import { Router as Router29 } from "express";
+import { Router as Router30 } from "express";
 
 // server/utils/templateStructure.ts
 function normalizeRegions(structure) {
@@ -19874,7 +20385,7 @@ var templateService = {
     );
     return { template, regions };
   },
-  async createTemplate(caller, input, meta4 = {}) {
+  async createTemplate(caller, input, meta5 = {}) {
     const organizationId = caller.organizationId;
     if (input.slug) {
       const dup = await templateRepository.findBySlugInOrg(organizationId, input.slug);
@@ -19919,12 +20430,12 @@ var templateService = {
       resourceType: "template",
       resourceId: createdId,
       afterData: { name: input.name, slug, type: input.type },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return loadTemplateOrThrow(createdId, organizationId);
   },
-  async updateTemplate(caller, id, input, meta4 = {}) {
+  async updateTemplate(caller, id, input, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadTemplateOrThrow(id, organizationId);
     assertNotSystem(existing, "edited");
@@ -19983,12 +20494,12 @@ var templateService = {
       resourceId: id,
       beforeData: { name: existing.name, slug: existing.slug },
       afterData: { name: input.name, slug: input.slug },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return loadTemplateOrThrow(id, organizationId);
   },
-  async publishTemplate(caller, id, meta4 = {}) {
+  async publishTemplate(caller, id, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadTemplateOrThrow(id, organizationId);
     assertNotSystem(existing, "published");
@@ -20009,12 +20520,12 @@ var templateService = {
       resourceId: id,
       beforeData: { status: existing.status },
       afterData: { status: "PUBLISHED" },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return loadTemplateOrThrow(id, organizationId);
   },
-  async archiveTemplate(caller, id, meta4 = {}) {
+  async archiveTemplate(caller, id, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadTemplateOrThrow(id, organizationId);
     assertNotSystem(existing, "archived");
@@ -20029,12 +20540,12 @@ var templateService = {
       resourceId: id,
       beforeData: { status: existing.status },
       afterData: { status: "ARCHIVED" },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return loadTemplateOrThrow(id, organizationId);
   },
-  async revertTemplate(caller, id, input, meta4 = {}) {
+  async revertTemplate(caller, id, input, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadTemplateOrThrow(id, organizationId);
     assertNotSystem(existing, "rolled back");
@@ -20066,12 +20577,12 @@ var templateService = {
       resourceId: id,
       beforeData: { fromVersion: current?.version, revertedToRevisionId: target.id, revertedToVersion: target.version },
       afterData: { newVersion: nextVersion },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return loadTemplateOrThrow(id, organizationId);
   },
-  async duplicateTemplate(caller, id, input, meta4 = {}) {
+  async duplicateTemplate(caller, id, input, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadTemplateOrThrow(id, organizationId);
     const baseName = input.name ?? `${existing.name} (Copy)`;
@@ -20111,12 +20622,12 @@ var templateService = {
       resourceType: "template",
       resourceId: createdId,
       afterData: { duplicatedFromId: id, name: baseName },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return loadTemplateOrThrow(createdId, organizationId);
   },
-  async deleteTemplate(caller, id, meta4 = {}) {
+  async deleteTemplate(caller, id, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadTemplateOrThrow(id, organizationId);
     assertNotSystem(existing, "deleted");
@@ -20132,15 +20643,15 @@ var templateService = {
       resourceType: "template",
       resourceId: id,
       beforeData: { name: existing.name, status: existing.status },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
   }
 };
 
 // server/schemas/templateSchemas.ts
-import { z as z33 } from "zod";
-var templateTypeSchema = z33.enum([
+import { z as z34 } from "zod";
+var templateTypeSchema = z34.enum([
   "HOMEPAGE",
   "STANDARD_PAGE",
   "BLOG_INDEX",
@@ -20157,7 +20668,7 @@ var templateTypeSchema = z33.enum([
   "CASE_STUDY",
   "LANDING_PAGE"
 ]);
-var templatePartTypeSchema = z33.enum([
+var templatePartTypeSchema = z34.enum([
   "HEADER",
   "FOOTER",
   "PRIMARY_NAVIGATION",
@@ -20169,69 +20680,69 @@ var templatePartTypeSchema = z33.enum([
   "CONTACT_SECTION",
   "SOCIAL_SECTION"
 ]);
-var templateWorkflowStatusSchema = z33.enum(["DRAFT", "PUBLISHED", "ARCHIVED"]);
-var slugSchema5 = z33.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)");
+var templateWorkflowStatusSchema = z34.enum(["DRAFT", "PUBLISHED", "ARCHIVED"]);
+var slugSchema5 = z34.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)");
 var SORT_FIELDS3 = ["name", "slug", "type", "status", "createdAt", "updatedAt"];
-var listTemplatesQuerySchema = z33.object({
-  page: z33.coerce.number().int().positive().default(1),
-  limit: z33.coerce.number().int().positive().max(100).default(20),
-  search: z33.string().trim().max(200).optional(),
+var listTemplatesQuerySchema = z34.object({
+  page: z34.coerce.number().int().positive().default(1),
+  limit: z34.coerce.number().int().positive().max(100).default(20),
+  search: z34.string().trim().max(200).optional(),
   status: templateWorkflowStatusSchema.optional(),
   type: templateTypeSchema.optional(),
-  sort: z33.enum(SORT_FIELDS3).default("updatedAt"),
-  order: z33.enum(["asc", "desc"]).default("desc")
+  sort: z34.enum(SORT_FIELDS3).default("updatedAt"),
+  order: z34.enum(["asc", "desc"]).default("desc")
 });
-var templateStructureSchema = z33.record(z33.unknown());
-var createTemplateSchema = z33.object({
+var templateStructureSchema = z34.record(z34.unknown());
+var createTemplateSchema = z34.object({
   type: templateTypeSchema,
-  name: z33.string().trim().min(1).max(150),
+  name: z34.string().trim().min(1).max(150),
   slug: slugSchema5.optional(),
-  description: z33.string().trim().max(2e3).optional(),
+  description: z34.string().trim().max(2e3).optional(),
   structure: templateStructureSchema.default({})
 });
-var updateTemplateSchema = z33.object({
-  name: z33.string().trim().min(1).max(150).optional(),
+var updateTemplateSchema = z34.object({
+  name: z34.string().trim().min(1).max(150).optional(),
   slug: slugSchema5.optional(),
-  description: z33.string().trim().max(2e3).nullable().optional(),
+  description: z34.string().trim().max(2e3).nullable().optional(),
   structure: templateStructureSchema.optional(),
   expectedUpdatedAt: expectedUpdatedAtSchema
 }).refine((v) => Object.keys(v).filter((k) => k !== "expectedUpdatedAt").length > 0, { message: "At least one field must be provided." });
-var duplicateTemplateSchema = z33.object({
-  name: z33.string().trim().min(1).max(150).optional()
+var duplicateTemplateSchema = z34.object({
+  name: z34.string().trim().min(1).max(150).optional()
 });
-var revertTemplateSchema = z33.object({
-  revisionId: z33.string().trim().uuid()
+var revertTemplateSchema = z34.object({
+  revisionId: z34.string().trim().uuid()
 });
-var listTemplatePartsQuerySchema = z33.object({
-  page: z33.coerce.number().int().positive().default(1),
-  limit: z33.coerce.number().int().positive().max(100).default(20),
-  search: z33.string().trim().max(200).optional(),
+var listTemplatePartsQuerySchema = z34.object({
+  page: z34.coerce.number().int().positive().default(1),
+  limit: z34.coerce.number().int().positive().max(100).default(20),
+  search: z34.string().trim().max(200).optional(),
   status: templateWorkflowStatusSchema.optional(),
   type: templatePartTypeSchema.optional(),
-  sort: z33.enum(SORT_FIELDS3).default("updatedAt"),
-  order: z33.enum(["asc", "desc"]).default("desc")
+  sort: z34.enum(SORT_FIELDS3).default("updatedAt"),
+  order: z34.enum(["asc", "desc"]).default("desc")
 });
-var createTemplatePartSchema = z33.object({
+var createTemplatePartSchema = z34.object({
   type: templatePartTypeSchema,
-  name: z33.string().trim().min(1).max(150),
+  name: z34.string().trim().min(1).max(150),
   slug: slugSchema5.optional(),
-  content: z33.record(z33.unknown()).default({})
+  content: z34.record(z34.unknown()).default({})
 });
-var updateTemplatePartSchema = z33.object({
-  name: z33.string().trim().min(1).max(150).optional(),
+var updateTemplatePartSchema = z34.object({
+  name: z34.string().trim().min(1).max(150).optional(),
   slug: slugSchema5.optional(),
-  content: z33.record(z33.unknown()).optional(),
+  content: z34.record(z34.unknown()).optional(),
   expectedUpdatedAt: expectedUpdatedAtSchema
 }).refine((v) => Object.keys(v).filter((k) => k !== "expectedUpdatedAt").length > 0, { message: "At least one field must be provided." });
-var duplicateTemplatePartSchema = z33.object({
-  name: z33.string().trim().min(1).max(150).optional()
+var duplicateTemplatePartSchema = z34.object({
+  name: z34.string().trim().min(1).max(150).optional()
 });
-var revertTemplatePartSchema = z33.object({
-  revisionId: z33.string().trim().uuid()
+var revertTemplatePartSchema = z34.object({
+  revisionId: z34.string().trim().uuid()
 });
 
 // server/routes/v1/templateRoutes.ts
-var router29 = Router29();
+var router29 = Router30();
 router29.use(authenticateToken);
 function requestMeta18(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
@@ -20347,7 +20858,7 @@ router29.delete(
 var templateRoutes_default = router29;
 
 // server/routes/v1/templatePartRoutes.ts
-import { Router as Router30 } from "express";
+import { Router as Router31 } from "express";
 
 // server/services/templatePartService.ts
 function isUniqueConstraintError9(err) {
@@ -20379,7 +20890,7 @@ var templatePartService = {
     await loadTemplatePartOrThrow(id, organizationId);
     return templatePartRepository.findUsage(id, organizationId);
   },
-  async createPart(caller, input, meta4 = {}) {
+  async createPart(caller, input, meta5 = {}) {
     const organizationId = caller.organizationId;
     if (input.slug) {
       const dup = await templatePartRepository.findBySlugInOrg(organizationId, input.slug);
@@ -20424,12 +20935,12 @@ var templatePartService = {
       resourceType: "template_part",
       resourceId: createdId,
       afterData: { name: input.name, slug, type: input.type },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return loadTemplatePartOrThrow(createdId, organizationId);
   },
-  async updatePart(caller, id, input, meta4 = {}) {
+  async updatePart(caller, id, input, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadTemplatePartOrThrow(id, organizationId);
     assertNotSystem2(existing, "edited");
@@ -20488,12 +20999,12 @@ var templatePartService = {
       resourceId: id,
       beforeData: { name: existing.name, slug: existing.slug },
       afterData: { name: input.name, slug: input.slug },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return loadTemplatePartOrThrow(id, organizationId);
   },
-  async publishPart(caller, id, meta4 = {}) {
+  async publishPart(caller, id, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadTemplatePartOrThrow(id, organizationId);
     assertNotSystem2(existing, "published");
@@ -20513,12 +21024,12 @@ var templatePartService = {
       resourceId: id,
       beforeData: { status: existing.status },
       afterData: { status: "PUBLISHED" },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return loadTemplatePartOrThrow(id, organizationId);
   },
-  async archivePart(caller, id, meta4 = {}) {
+  async archivePart(caller, id, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadTemplatePartOrThrow(id, organizationId);
     assertNotSystem2(existing, "archived");
@@ -20533,12 +21044,12 @@ var templatePartService = {
       resourceId: id,
       beforeData: { status: existing.status },
       afterData: { status: "ARCHIVED" },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return loadTemplatePartOrThrow(id, organizationId);
   },
-  async revertPart(caller, id, input, meta4 = {}) {
+  async revertPart(caller, id, input, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadTemplatePartOrThrow(id, organizationId);
     assertNotSystem2(existing, "rolled back");
@@ -20570,12 +21081,12 @@ var templatePartService = {
       resourceId: id,
       beforeData: { fromVersion: current?.version, revertedToRevisionId: target.id, revertedToVersion: target.version },
       afterData: { newVersion: nextVersion },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return loadTemplatePartOrThrow(id, organizationId);
   },
-  async duplicatePart(caller, id, input, meta4 = {}) {
+  async duplicatePart(caller, id, input, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadTemplatePartOrThrow(id, organizationId);
     const baseName = input.name ?? `${existing.name} (Copy)`;
@@ -20614,12 +21125,12 @@ var templatePartService = {
       resourceType: "template_part",
       resourceId: createdId,
       afterData: { duplicatedFromId: id, name: baseName },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return loadTemplatePartOrThrow(createdId, organizationId);
   },
-  async deletePart(caller, id, meta4 = {}) {
+  async deletePart(caller, id, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadTemplatePartOrThrow(id, organizationId);
     assertNotSystem2(existing, "deleted");
@@ -20639,14 +21150,14 @@ var templatePartService = {
       resourceType: "template_part",
       resourceId: id,
       beforeData: { name: existing.name, status: existing.status },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
   }
 };
 
 // server/routes/v1/templatePartRoutes.ts
-var router30 = Router30();
+var router30 = Router31();
 router30.use(authenticateToken);
 function requestMeta19(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
@@ -20754,7 +21265,7 @@ router30.delete(
 var templatePartRoutes_default = router30;
 
 // server/routes/v1/navigationMenuRoutes.ts
-import { Router as Router31 } from "express";
+import { Router as Router32 } from "express";
 
 // server/repositories/navigationMenuRepository.ts
 function slugify15(input) {
@@ -20908,7 +21419,7 @@ var navigationMenuService = {
     await loadMenuOrThrow(id, organizationId);
     return navigationMenuRepository.findUsage(id, organizationId);
   },
-  async createMenu(caller, input, meta4 = {}) {
+  async createMenu(caller, input, meta5 = {}) {
     const organizationId = caller.organizationId;
     if (input.slug) {
       const dup = await navigationMenuRepository.findBySlugInOrg(organizationId, input.slug);
@@ -20945,12 +21456,12 @@ var navigationMenuService = {
       resourceType: "navigation_menu",
       resourceId: createdId,
       afterData: { name: input.name, slug, type: input.type },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return loadMenuOrThrow(createdId, organizationId);
   },
-  async updateMenu(caller, id, input, meta4 = {}) {
+  async updateMenu(caller, id, input, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadMenuOrThrow(id, organizationId);
     assertNotSystem3(existing, "edited");
@@ -21008,12 +21519,12 @@ var navigationMenuService = {
       resourceId: id,
       beforeData: { name: existing.name, slug: existing.slug },
       afterData: { name: input.name, slug: input.slug },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return loadMenuOrThrow(id, organizationId);
   },
-  async publishMenu(caller, id, meta4 = {}) {
+  async publishMenu(caller, id, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadMenuOrThrow(id, organizationId);
     assertNotSystem3(existing, "published");
@@ -21034,12 +21545,12 @@ var navigationMenuService = {
       resourceId: id,
       beforeData: { status: existing.status },
       afterData: { status: "PUBLISHED" },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return loadMenuOrThrow(id, organizationId);
   },
-  async archiveMenu(caller, id, meta4 = {}) {
+  async archiveMenu(caller, id, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadMenuOrThrow(id, organizationId);
     assertNotSystem3(existing, "archived");
@@ -21054,12 +21565,12 @@ var navigationMenuService = {
       resourceId: id,
       beforeData: { status: existing.status },
       afterData: { status: "ARCHIVED" },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return loadMenuOrThrow(id, organizationId);
   },
-  async revertMenu(caller, id, input, meta4 = {}) {
+  async revertMenu(caller, id, input, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadMenuOrThrow(id, organizationId);
     assertNotSystem3(existing, "rolled back");
@@ -21091,12 +21602,12 @@ var navigationMenuService = {
       resourceId: id,
       beforeData: { fromVersion: current?.version, revertedToRevisionId: target.id, revertedToVersion: target.version },
       afterData: { newVersion: nextVersion },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return loadMenuOrThrow(id, organizationId);
   },
-  async duplicateMenu(caller, id, input, meta4 = {}) {
+  async duplicateMenu(caller, id, input, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadMenuOrThrow(id, organizationId);
     const baseName = input.name ?? `${existing.name} (Copy)`;
@@ -21120,12 +21631,12 @@ var navigationMenuService = {
       resourceType: "navigation_menu",
       resourceId: createdId,
       afterData: { duplicatedFromId: id, name: baseName },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return loadMenuOrThrow(createdId, organizationId);
   },
-  async deleteMenu(caller, id, meta4 = {}) {
+  async deleteMenu(caller, id, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadMenuOrThrow(id, organizationId);
     assertNotSystem3(existing, "deleted");
@@ -21145,65 +21656,65 @@ var navigationMenuService = {
       resourceType: "navigation_menu",
       resourceId: id,
       beforeData: { name: existing.name, status: existing.status },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
   }
 };
 
 // server/schemas/navigationMenuSchemas.ts
-import { z as z34 } from "zod";
-var navigationMenuTypeSchema = z34.enum(["PRIMARY", "HEADER", "FOOTER", "MOBILE", "CUSTOM"]);
-var navigationMenuWorkflowStatusSchema = z34.enum(["DRAFT", "PUBLISHED", "ARCHIVED"]);
-var slugSchema6 = z34.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)");
+import { z as z35 } from "zod";
+var navigationMenuTypeSchema = z35.enum(["PRIMARY", "HEADER", "FOOTER", "MOBILE", "CUSTOM"]);
+var navigationMenuWorkflowStatusSchema = z35.enum(["DRAFT", "PUBLISHED", "ARCHIVED"]);
+var slugSchema6 = z35.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)");
 var SORT_FIELDS4 = ["name", "slug", "type", "status", "createdAt", "updatedAt"];
-var menuLinkTypeSchema = z34.enum(["page", "post", "category", "tag", "product", "custom"]);
+var menuLinkTypeSchema = z35.enum(["page", "post", "category", "tag", "product", "custom"]);
 var MAX_MENU_DEPTH = 4;
 function menuItemSchemaAtDepth(depth) {
-  return z34.object({
-    id: z34.string().trim().min(1).max(100),
-    label: z34.string().trim().min(1).max(150),
+  return z35.object({
+    id: z35.string().trim().min(1).max(100),
+    label: z35.string().trim().min(1).max(150),
     linkType: menuLinkTypeSchema,
-    targetId: z34.string().trim().uuid().optional(),
-    url: z34.string().trim().max(2e3).optional(),
-    openInNewTab: z34.boolean().default(false),
-    children: depth >= MAX_MENU_DEPTH ? z34.array(z34.never()).default([]) : z34.lazy(() => menuItemSchemaAtDepth(depth + 1).array()).default([])
+    targetId: z35.string().trim().uuid().optional(),
+    url: z35.string().trim().max(2e3).optional(),
+    openInNewTab: z35.boolean().default(false),
+    children: depth >= MAX_MENU_DEPTH ? z35.array(z35.never()).default([]) : z35.lazy(() => menuItemSchemaAtDepth(depth + 1).array()).default([])
   }).refine((item) => item.linkType === "custom" ? !!item.url : !!item.targetId, {
     message: "A custom link needs a url; any other link type needs a targetId."
   });
 }
 var menuItemSchema = menuItemSchemaAtDepth(0);
-var menuItemsSchema = z34.array(menuItemSchema).default([]);
-var listNavigationMenusQuerySchema = z34.object({
-  page: z34.coerce.number().int().positive().default(1),
-  limit: z34.coerce.number().int().positive().max(100).default(20),
-  search: z34.string().trim().max(200).optional(),
+var menuItemsSchema = z35.array(menuItemSchema).default([]);
+var listNavigationMenusQuerySchema = z35.object({
+  page: z35.coerce.number().int().positive().default(1),
+  limit: z35.coerce.number().int().positive().max(100).default(20),
+  search: z35.string().trim().max(200).optional(),
   status: navigationMenuWorkflowStatusSchema.optional(),
   type: navigationMenuTypeSchema.optional(),
-  sort: z34.enum(SORT_FIELDS4).default("updatedAt"),
-  order: z34.enum(["asc", "desc"]).default("desc")
+  sort: z35.enum(SORT_FIELDS4).default("updatedAt"),
+  order: z35.enum(["asc", "desc"]).default("desc")
 });
-var createNavigationMenuSchema = z34.object({
+var createNavigationMenuSchema = z35.object({
   type: navigationMenuTypeSchema,
-  name: z34.string().trim().min(1).max(150),
+  name: z35.string().trim().min(1).max(150),
   slug: slugSchema6.optional(),
   items: menuItemsSchema
 });
-var updateNavigationMenuSchema = z34.object({
-  name: z34.string().trim().min(1).max(150).optional(),
+var updateNavigationMenuSchema = z35.object({
+  name: z35.string().trim().min(1).max(150).optional(),
   slug: slugSchema6.optional(),
   items: menuItemsSchema.optional(),
   expectedUpdatedAt: expectedUpdatedAtSchema
 }).refine((v) => Object.keys(v).filter((k) => k !== "expectedUpdatedAt").length > 0, { message: "At least one field must be provided." });
-var duplicateNavigationMenuSchema = z34.object({
-  name: z34.string().trim().min(1).max(150).optional()
+var duplicateNavigationMenuSchema = z35.object({
+  name: z35.string().trim().min(1).max(150).optional()
 });
-var revertNavigationMenuSchema = z34.object({
-  revisionId: z34.string().trim().uuid()
+var revertNavigationMenuSchema = z35.object({
+  revisionId: z35.string().trim().uuid()
 });
 
 // server/routes/v1/navigationMenuRoutes.ts
-var router31 = Router31();
+var router31 = Router32();
 router31.use(authenticateToken);
 function requestMeta20(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
@@ -21311,57 +21822,57 @@ router31.delete(
 var navigationMenuRoutes_default = router31;
 
 // server/routes/v1/postRoutes.ts
-import { Router as Router32 } from "express";
+import { Router as Router33 } from "express";
 
 // server/schemas/postSchemas.ts
-import { z as z35 } from "zod";
-var slugSchema7 = z35.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)");
-var createPostSchema = z35.object({
-  title: z35.string().trim().min(1).max(200),
+import { z as z36 } from "zod";
+var slugSchema7 = z36.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)");
+var createPostSchema = z36.object({
+  title: z36.string().trim().min(1).max(200),
   slug: slugSchema7.optional(),
-  body: z35.string().trim().max(5e5).default(""),
+  body: z36.string().trim().max(5e5).default(""),
   // Phase 7 — short author-written summary, distinct from SEO metaDescription.
-  excerpt: z35.string().trim().max(500).optional(),
+  excerpt: z36.string().trim().max(500).optional(),
   metadata: seoMetadataSchema.optional(),
-  categoryId: z35.string().trim().uuid().optional(),
-  authorId: z35.string().trim().uuid().optional(),
-  tagIds: z35.array(z35.string().trim().uuid()).max(50).optional(),
-  featuredMediaId: z35.string().trim().uuid().optional()
+  categoryId: z36.string().trim().uuid().optional(),
+  authorId: z36.string().trim().uuid().optional(),
+  tagIds: z36.array(z36.string().trim().uuid()).max(50).optional(),
+  featuredMediaId: z36.string().trim().uuid().optional()
 });
-var updatePostSchema = z35.object({
-  title: z35.string().trim().min(1).max(200).optional(),
+var updatePostSchema = z36.object({
+  title: z36.string().trim().min(1).max(200).optional(),
   slug: slugSchema7.optional(),
-  body: z35.string().trim().max(5e5).optional(),
-  excerpt: z35.string().trim().max(500).nullable().optional(),
+  body: z36.string().trim().max(5e5).optional(),
+  excerpt: z36.string().trim().max(500).nullable().optional(),
   metadata: seoMetadataSchema.optional(),
   status: patchableContentStatusSchema.optional(),
-  categoryId: z35.string().trim().uuid().nullable().optional(),
-  authorId: z35.string().trim().uuid().nullable().optional(),
-  tagIds: z35.array(z35.string().trim().uuid()).max(50).optional(),
-  featuredMediaId: z35.string().trim().uuid().nullable().optional(),
+  categoryId: z36.string().trim().uuid().nullable().optional(),
+  authorId: z36.string().trim().uuid().nullable().optional(),
+  tagIds: z36.array(z36.string().trim().uuid()).max(50).optional(),
+  featuredMediaId: z36.string().trim().uuid().nullable().optional(),
   expectedUpdatedAt: expectedUpdatedAtSchema
 }).refine((v) => Object.keys(v).filter((k) => k !== "expectedUpdatedAt").length > 0, { message: "At least one field must be provided." });
-var listPostsQuerySchema = z35.object({
-  page: z35.coerce.number().int().positive().default(1),
-  limit: z35.coerce.number().int().positive().max(100).default(20),
-  search: z35.string().trim().max(200).optional(),
-  status: z35.enum(["DRAFT", "IN_REVIEW", "SCHEDULED", "PUBLISHED", "ARCHIVED"]).optional(),
-  categoryId: z35.string().trim().uuid().optional(),
-  tagId: z35.string().trim().uuid().optional(),
+var listPostsQuerySchema = z36.object({
+  page: z36.coerce.number().int().positive().default(1),
+  limit: z36.coerce.number().int().positive().max(100).default(20),
+  search: z36.string().trim().max(200).optional(),
+  status: z36.enum(["DRAFT", "IN_REVIEW", "SCHEDULED", "PUBLISHED", "ARCHIVED"]).optional(),
+  categoryId: z36.string().trim().uuid().optional(),
+  tagId: z36.string().trim().uuid().optional(),
   // Phase 7 — Content Dashboard date filtering, inclusive range over createdAt.
-  fromDate: z35.coerce.date().optional(),
-  toDate: z35.coerce.date().optional(),
-  sort: z35.enum(["title", "slug", "status", "createdAt", "updatedAt", "publishedAt"]).default("updatedAt"),
-  order: z35.enum(["asc", "desc"]).default("desc")
+  fromDate: z36.coerce.date().optional(),
+  toDate: z36.coerce.date().optional(),
+  sort: z36.enum(["title", "slug", "status", "createdAt", "updatedAt", "publishedAt"]).default("updatedAt"),
+  order: z36.enum(["asc", "desc"]).default("desc")
 });
 
 // server/routes/v1/postRoutes.ts
-import { z as z36 } from "zod";
-var trashQuerySchema2 = z36.object({
-  page: z36.coerce.number().int().positive().default(1),
-  limit: z36.coerce.number().int().positive().max(100).default(20)
+import { z as z37 } from "zod";
+var trashQuerySchema2 = z37.object({
+  page: z37.coerce.number().int().positive().default(1),
+  limit: z37.coerce.number().int().positive().max(100).default(20)
 });
-var router32 = Router32();
+var router32 = Router33();
 router32.use(authenticateToken);
 function requestMeta21(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
@@ -21513,7 +22024,7 @@ router32.delete(
 var postRoutes_default = router32;
 
 // server/routes/v1/caseStudyRoutes.ts
-import { Router as Router33 } from "express";
+import { Router as Router34 } from "express";
 
 // server/services/caseStudyService.ts
 import { Prisma as Prisma7 } from "@prisma/client";
@@ -21592,7 +22103,7 @@ var caseStudyService = {
     await loadCaseStudyOrThrow(id, organizationId);
     return caseStudyRepository.listRevisions(id);
   },
-  async createCaseStudy(caller, input, meta4 = {}) {
+  async createCaseStudy(caller, input, meta5 = {}) {
     const organizationId = caller.organizationId;
     const body = sanitizeContentHtml(input.body);
     const editorBlocks = input.editorBlocks ? sanitizeEditorDocument(input.editorBlocks) : void 0;
@@ -21654,12 +22165,12 @@ var caseStudyService = {
       resourceType: "case_study",
       resourceId: createdId,
       afterData: { title: input.title, slug },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return loadCaseStudyOrThrow(createdId, organizationId);
   },
-  async updateCaseStudy(caller, id, input, meta4 = {}) {
+  async updateCaseStudy(caller, id, input, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadCaseStudyOrThrow(id, organizationId);
     const sanitizedBody = input.body !== void 0 ? sanitizeContentHtml(input.body) : void 0;
@@ -21763,8 +22274,8 @@ var caseStudyService = {
       resourceId: id,
       beforeData: { status: existing.status, title: existing.title },
       afterData: { status: input.status, title: input.title, slug: input.slug },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     if (hasFeaturedMediaEdit && input.featuredMediaId !== existing.featuredMediaId) {
       await auditLogRepository.record({
@@ -21776,8 +22287,8 @@ var caseStudyService = {
         resourceId: id,
         beforeData: { featuredMediaId: existing.featuredMediaId },
         afterData: { featuredMediaId: input.featuredMediaId ?? null },
-        ipAddress: meta4.ip,
-        userAgent: meta4.userAgent
+        ipAddress: meta5.ip,
+        userAgent: meta5.userAgent
       });
     }
     if (input.slug !== void 0 && input.slug !== existing.slug) {
@@ -21794,7 +22305,7 @@ var caseStudyService = {
     }
     return loadCaseStudyOrThrow(id, organizationId);
   },
-  async submitForReview(caller, id, meta4 = {}) {
+  async submitForReview(caller, id, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadCaseStudyOrThrow(id, organizationId);
     if (existing.status !== "DRAFT") throw new ConflictError(`Only a DRAFT case study can be submitted for review (current status: ${existing.status}).`);
@@ -21811,12 +22322,12 @@ var caseStudyService = {
       resourceId: id,
       beforeData: { status: existing.status },
       afterData: { status: "IN_REVIEW" },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return loadCaseStudyOrThrow(id, organizationId);
   },
-  async publishCaseStudy(caller, id, meta4 = {}) {
+  async publishCaseStudy(caller, id, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadCaseStudyOrThrow(id, organizationId);
     if (existing.status === "ARCHIVED") throw new ConflictError("An archived case study must be restored before it can be published.");
@@ -21837,8 +22348,8 @@ var caseStudyService = {
       resourceId: id,
       beforeData: { status: existing.status },
       afterData: { status: "PUBLISHED" },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     if (existing.createdById && existing.createdById !== caller.id) {
       await notificationService.notify({
@@ -21851,7 +22362,7 @@ var caseStudyService = {
     }
     return loadCaseStudyOrThrow(id, organizationId);
   },
-  async scheduleCaseStudy(caller, id, input, meta4 = {}) {
+  async scheduleCaseStudy(caller, id, input, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadCaseStudyOrThrow(id, organizationId);
     if (existing.status === "ARCHIVED") throw new ConflictError("An archived case study must be restored before it can be scheduled.");
@@ -21867,12 +22378,12 @@ var caseStudyService = {
       resourceId: id,
       beforeData: { status: existing.status },
       afterData: { status: "SCHEDULED", scheduledAt: input.scheduledAt },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return loadCaseStudyOrThrow(id, organizationId);
   },
-  async archiveCaseStudy(caller, id, meta4 = {}) {
+  async archiveCaseStudy(caller, id, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadCaseStudyOrThrow(id, organizationId);
     if (existing.status === "ARCHIVED") throw new ConflictError("This case study is already archived.");
@@ -21886,12 +22397,12 @@ var caseStudyService = {
       resourceId: id,
       beforeData: { status: existing.status },
       afterData: { status: "ARCHIVED" },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return loadCaseStudyOrThrow(id, organizationId);
   },
-  async revertCaseStudy(caller, id, input, meta4 = {}) {
+  async revertCaseStudy(caller, id, input, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadCaseStudyOrThrow(id, organizationId);
     if (existing.status === "ARCHIVED") throw new ConflictError("An archived case study must be restored before its content can be reverted.");
@@ -21926,12 +22437,12 @@ var caseStudyService = {
       resourceId: id,
       beforeData: { fromVersion: current?.version, revertedToRevisionId: target.id, revertedToVersion: target.version },
       afterData: { newVersion: nextVersion },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return loadCaseStudyOrThrow(id, organizationId);
   },
-  async deleteCaseStudy(caller, id, meta4 = {}) {
+  async deleteCaseStudy(caller, id, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadCaseStudyOrThrow(id, organizationId);
     await caseStudyRepository.softDelete(id);
@@ -21943,14 +22454,14 @@ var caseStudyService = {
       resourceType: "case_study",
       resourceId: id,
       beforeData: { status: existing.status, title: existing.title },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
   },
   async listTrash(organizationId, page, limit) {
     return caseStudyRepository.listTrash(organizationId, page, limit);
   },
-  async restoreCaseStudy(caller, id, meta4 = {}) {
+  async restoreCaseStudy(caller, id, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await caseStudyRepository.findTrashedByIdInOrg(id, organizationId);
     if (!existing) throw new NotFoundError("Case study not found in trash.");
@@ -21963,19 +22474,19 @@ var caseStudyService = {
       resourceType: "case_study",
       resourceId: id,
       beforeData: { status: existing.status, title: existing.title },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
   },
   /** Bulk workflow actions for the list view — same per-item isolation as postService.bulkAction/pageService.bulkAction. */
-  async bulkAction(caller, action, ids, meta4 = {}) {
+  async bulkAction(caller, action, ids, meta5 = {}) {
     const succeeded = [];
     const failed = [];
     for (const id of ids) {
       try {
-        if (action === "archive") await this.archiveCaseStudy(caller, id, meta4);
-        else if (action === "trash") await this.deleteCaseStudy(caller, id, meta4);
-        else await this.restoreCaseStudy(caller, id, meta4);
+        if (action === "archive") await this.archiveCaseStudy(caller, id, meta5);
+        else if (action === "trash") await this.deleteCaseStudy(caller, id, meta5);
+        else await this.restoreCaseStudy(caller, id, meta5);
         succeeded.push(id);
       } catch (err) {
         failed.push({ id, error: err instanceof Error ? err.message : "Action failed." });
@@ -21986,71 +22497,71 @@ var caseStudyService = {
 };
 
 // server/schemas/caseStudySchemas.ts
-import { z as z37 } from "zod";
-var slugSchema8 = z37.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)");
-var uuidArray2 = (max) => z37.array(z37.string().trim().uuid()).max(max);
+import { z as z38 } from "zod";
+var slugSchema8 = z38.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)");
+var uuidArray2 = (max) => z38.array(z38.string().trim().uuid()).max(max);
 var caseStudyContentSchema = seoMetadataSchema.extend({
-  challenge: z37.string().trim().max(5e3).optional(),
-  solutionApproach: z37.string().trim().max(5e3).optional(),
-  implementation: z37.string().trim().max(5e3).optional(),
-  results: z37.string().trim().max(5e3).optional(),
-  testimonialQuote: z37.string().trim().max(2e3).optional(),
-  testimonialAuthorName: z37.string().trim().max(150).optional(),
-  testimonialAuthorTitle: z37.string().trim().max(150).optional(),
-  technologies: z37.array(z37.string().trim().min(1).max(80)).max(30).optional(),
+  challenge: z38.string().trim().max(5e3).optional(),
+  solutionApproach: z38.string().trim().max(5e3).optional(),
+  implementation: z38.string().trim().max(5e3).optional(),
+  results: z38.string().trim().max(5e3).optional(),
+  testimonialQuote: z38.string().trim().max(2e3).optional(),
+  testimonialAuthorName: z38.string().trim().max(150).optional(),
+  testimonialAuthorTitle: z38.string().trim().max(150).optional(),
+  technologies: z38.array(z38.string().trim().min(1).max(80)).max(30).optional(),
   galleryMediaIds: uuidArray2(30).optional(),
-  ctaFormId: z37.string().trim().uuid().optional()
+  ctaFormId: z38.string().trim().uuid().optional()
 });
-var createCaseStudySchema = z37.object({
-  title: z37.string().trim().min(1).max(200),
+var createCaseStudySchema = z38.object({
+  title: z38.string().trim().min(1).max(200),
   slug: slugSchema8.optional(),
-  body: z37.string().trim().max(5e5).default(""),
-  excerpt: z37.string().trim().max(500).optional(),
+  body: z38.string().trim().max(5e5).default(""),
+  excerpt: z38.string().trim().max(500).optional(),
   content: caseStudyContentSchema.optional(),
   editorBlocks: editorDocumentSchema.optional(),
-  clientName: z37.string().trim().min(1).max(200).optional(),
-  industryId: z37.string().trim().uuid().optional(),
-  featuredMediaId: z37.string().trim().uuid().optional(),
+  clientName: z38.string().trim().min(1).max(200).optional(),
+  industryId: z38.string().trim().uuid().optional(),
+  featuredMediaId: z38.string().trim().uuid().optional(),
   productIds: uuidArray2(50).optional(),
   relatedPageIds: uuidArray2(50).optional(),
   relatedPostIds: uuidArray2(50).optional()
 });
-var updateCaseStudySchema = z37.object({
-  title: z37.string().trim().min(1).max(200).optional(),
+var updateCaseStudySchema = z38.object({
+  title: z38.string().trim().min(1).max(200).optional(),
   slug: slugSchema8.optional(),
-  body: z37.string().trim().max(5e5).optional(),
-  excerpt: z37.string().trim().max(500).nullable().optional(),
+  body: z38.string().trim().max(5e5).optional(),
+  excerpt: z38.string().trim().max(500).nullable().optional(),
   content: caseStudyContentSchema.optional(),
   editorBlocks: editorDocumentSchema.nullable().optional(),
   status: patchableContentStatusSchema.optional(),
-  clientName: z37.string().trim().min(1).max(200).nullable().optional(),
-  industryId: z37.string().trim().uuid().nullable().optional(),
-  featuredMediaId: z37.string().trim().uuid().nullable().optional(),
+  clientName: z38.string().trim().min(1).max(200).nullable().optional(),
+  industryId: z38.string().trim().uuid().nullable().optional(),
+  featuredMediaId: z38.string().trim().uuid().nullable().optional(),
   productIds: uuidArray2(50).optional(),
   relatedPageIds: uuidArray2(50).optional(),
   relatedPostIds: uuidArray2(50).optional(),
   expectedUpdatedAt: expectedUpdatedAtSchema
 }).refine((v) => Object.keys(v).filter((k) => k !== "expectedUpdatedAt").length > 0, { message: "At least one field must be provided." });
-var listCaseStudiesQuerySchema = z37.object({
-  page: z37.coerce.number().int().positive().default(1),
-  limit: z37.coerce.number().int().positive().max(100).default(20),
-  search: z37.string().trim().max(200).optional(),
-  status: z37.enum(["DRAFT", "IN_REVIEW", "SCHEDULED", "PUBLISHED", "ARCHIVED"]).optional(),
-  industryId: z37.string().trim().uuid().optional(),
-  productId: z37.string().trim().uuid().optional(),
-  fromDate: z37.coerce.date().optional(),
-  toDate: z37.coerce.date().optional(),
-  sort: z37.enum(["title", "slug", "status", "createdAt", "updatedAt", "publishedAt"]).default("updatedAt"),
-  order: z37.enum(["asc", "desc"]).default("desc")
+var listCaseStudiesQuerySchema = z38.object({
+  page: z38.coerce.number().int().positive().default(1),
+  limit: z38.coerce.number().int().positive().max(100).default(20),
+  search: z38.string().trim().max(200).optional(),
+  status: z38.enum(["DRAFT", "IN_REVIEW", "SCHEDULED", "PUBLISHED", "ARCHIVED"]).optional(),
+  industryId: z38.string().trim().uuid().optional(),
+  productId: z38.string().trim().uuid().optional(),
+  fromDate: z38.coerce.date().optional(),
+  toDate: z38.coerce.date().optional(),
+  sort: z38.enum(["title", "slug", "status", "createdAt", "updatedAt", "publishedAt"]).default("updatedAt"),
+  order: z38.enum(["asc", "desc"]).default("desc")
 });
 
 // server/routes/v1/caseStudyRoutes.ts
-import { z as z38 } from "zod";
-var trashQuerySchema3 = z38.object({
-  page: z38.coerce.number().int().positive().default(1),
-  limit: z38.coerce.number().int().positive().max(100).default(20)
+import { z as z39 } from "zod";
+var trashQuerySchema3 = z39.object({
+  page: z39.coerce.number().int().positive().default(1),
+  limit: z39.coerce.number().int().positive().max(100).default(20)
 });
-var router33 = Router33();
+var router33 = Router34();
 router33.use(authenticateToken);
 function requestMeta22(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
@@ -22202,7 +22713,7 @@ router33.delete(
 var caseStudyRoutes_default = router33;
 
 // server/routes/v1/categoryRoutes.ts
-import { Router as Router34 } from "express";
+import { Router as Router35 } from "express";
 
 // server/services/categoryService.ts
 function isUniqueConstraintError12(err) {
@@ -22235,7 +22746,7 @@ var categoryService = {
   async getCategory(organizationId, id) {
     return loadCategoryOrThrow(id, organizationId);
   },
-  async createCategory(caller, input, meta4 = {}) {
+  async createCategory(caller, input, meta5 = {}) {
     const organizationId = caller.organizationId;
     if (input.slug) {
       const dup = await categoryRepository.findBySlugInOrg(organizationId, input.slug);
@@ -22257,12 +22768,12 @@ var categoryService = {
       resourceType: "category",
       resourceId: category.id,
       afterData: { name: category.name, slug: category.slug },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return category;
   },
-  async updateCategory(caller, id, input, meta4 = {}) {
+  async updateCategory(caller, id, input, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadCategoryOrThrow(id, organizationId);
     if (input.slug !== void 0 && input.slug !== existing.slug) {
@@ -22290,12 +22801,12 @@ var categoryService = {
       resourceId: id,
       beforeData: { name: existing.name, slug: existing.slug },
       afterData: patch,
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return updated;
   },
-  async deleteCategory(caller, id, meta4 = {}) {
+  async deleteCategory(caller, id, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadCategoryOrThrow(id, organizationId);
     const postCount = await categoryRepository.countPostsUsing(id);
@@ -22311,14 +22822,14 @@ var categoryService = {
       resourceType: "category",
       resourceId: id,
       beforeData: { name: existing.name, slug: existing.slug },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
   }
 };
 
 // server/routes/v1/categoryRoutes.ts
-var router34 = Router34();
+var router34 = Router35();
 router34.use(authenticateToken);
 function requestMeta23(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
@@ -22368,35 +22879,35 @@ router34.delete(
 var categoryRoutes_default = router34;
 
 // server/routes/v1/redirectRoutes.ts
-import { Router as Router35 } from "express";
+import { Router as Router36 } from "express";
 
 // server/schemas/redirectSchemas.ts
-import { z as z39 } from "zod";
-var sitePathSchema = z39.string().trim().min(1).max(2048).refine((v) => v.startsWith("/") && !v.startsWith("//"), { message: "Must be a site-relative path starting with a single /." }).refine((v) => !/[a-z][a-z0-9+.-]*:/i.test(v), { message: "Must not contain a URL scheme." });
-var listRedirectsQuerySchema = z39.object({
-  page: z39.coerce.number().int().positive().default(1),
-  limit: z39.coerce.number().int().positive().max(100).default(20),
-  search: z39.string().trim().max(200).optional(),
-  isActive: z39.enum(["true", "false"]).optional().transform((v) => v === void 0 ? void 0 : v === "true"),
-  sort: z39.enum(["createdAt", "updatedAt", "fromPath", "toPath"]).default("createdAt"),
-  order: z39.enum(["asc", "desc"]).default("desc")
+import { z as z40 } from "zod";
+var sitePathSchema = z40.string().trim().min(1).max(2048).refine((v) => v.startsWith("/") && !v.startsWith("//"), { message: "Must be a site-relative path starting with a single /." }).refine((v) => !/[a-z][a-z0-9+.-]*:/i.test(v), { message: "Must not contain a URL scheme." });
+var listRedirectsQuerySchema = z40.object({
+  page: z40.coerce.number().int().positive().default(1),
+  limit: z40.coerce.number().int().positive().max(100).default(20),
+  search: z40.string().trim().max(200).optional(),
+  isActive: z40.enum(["true", "false"]).optional().transform((v) => v === void 0 ? void 0 : v === "true"),
+  sort: z40.enum(["createdAt", "updatedAt", "fromPath", "toPath"]).default("createdAt"),
+  order: z40.enum(["asc", "desc"]).default("desc")
 });
-var createRedirectSchema = z39.object({
+var createRedirectSchema = z40.object({
   fromPath: sitePathSchema,
   toPath: sitePathSchema,
-  statusCode: z39.union([z39.literal(301), z39.literal(302), z39.literal(307), z39.literal(308)]).default(301),
-  isActive: z39.boolean().default(true),
-  notes: z39.string().trim().max(1e3).optional()
+  statusCode: z40.union([z40.literal(301), z40.literal(302), z40.literal(307), z40.literal(308)]).default(301),
+  isActive: z40.boolean().default(true),
+  notes: z40.string().trim().max(1e3).optional()
 }).strict().refine((v) => v.fromPath !== v.toPath, { message: "fromPath and toPath must differ.", path: ["toPath"] });
-var updateRedirectSchema = z39.object({
+var updateRedirectSchema = z40.object({
   toPath: sitePathSchema.optional(),
-  statusCode: z39.union([z39.literal(301), z39.literal(302), z39.literal(307), z39.literal(308)]).optional(),
-  isActive: z39.boolean().optional(),
-  notes: z39.string().trim().max(1e3).nullable().optional()
+  statusCode: z40.union([z40.literal(301), z40.literal(302), z40.literal(307), z40.literal(308)]).optional(),
+  isActive: z40.boolean().optional(),
+  notes: z40.string().trim().max(1e3).nullable().optional()
 }).strict().refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
 
 // server/routes/v1/redirectRoutes.ts
-var router35 = Router35();
+var router35 = Router36();
 router35.use(authenticateToken);
 function requestMeta24(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
@@ -22454,7 +22965,7 @@ router35.delete(
 var redirectRoutes_default = router35;
 
 // server/routes/v1/seoRoutes.ts
-import { Router as Router36 } from "express";
+import { Router as Router37 } from "express";
 
 // server/services/seoAuditService.ts
 var LIVE_STATUSES = /* @__PURE__ */ new Set(["PUBLISHED", "SCHEDULED"]);
@@ -22465,27 +22976,27 @@ var VALID_SLUG_PATTERN = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 function checkRecord(resourceType, record) {
   const issues = [];
   const isLive = LIVE_STATUSES.has(record.status);
-  const meta4 = record.currentRevision?.metadata ?? {};
+  const meta5 = record.currentRevision?.metadata ?? {};
   const displayTitle = record.currentRevision?.title || record.title;
   function push(severity, code, message) {
     issues.push({ resourceType, resourceId: record.id, resourceTitle: displayTitle, slug: record.slug, status: record.status, severity, code, message });
   }
-  if (!meta4.metaTitle) {
+  if (!meta5.metaTitle) {
     push(isLive ? "critical" : "warning", "missing_meta_title", "No SEO title set \u2014 search engines will fall back to the content title, which may not be optimized.");
-  } else if (meta4.metaTitle.length > META_TITLE_IDEAL_MAX) {
-    push("warning", "meta_title_too_long", `SEO title is ${meta4.metaTitle.length} characters \u2014 search engines typically truncate titles beyond ~${META_TITLE_IDEAL_MAX}.`);
+  } else if (meta5.metaTitle.length > META_TITLE_IDEAL_MAX) {
+    push("warning", "meta_title_too_long", `SEO title is ${meta5.metaTitle.length} characters \u2014 search engines typically truncate titles beyond ~${META_TITLE_IDEAL_MAX}.`);
   }
-  if (!meta4.metaDescription) {
+  if (!meta5.metaDescription) {
     push(isLive ? "critical" : "warning", "missing_meta_description", "No meta description set \u2014 search engines will auto-generate a snippet from the page content instead.");
-  } else if (meta4.metaDescription.length > META_DESCRIPTION_IDEAL_MAX) {
-    push("warning", "meta_description_too_long", `Meta description is ${meta4.metaDescription.length} characters \u2014 likely to be truncated beyond ~${META_DESCRIPTION_IDEAL_MAX}.`);
-  } else if (meta4.metaDescription.length < META_DESCRIPTION_IDEAL_MIN) {
-    push("warning", "meta_description_too_short", `Meta description is only ${meta4.metaDescription.length} characters \u2014 likely too short to be a useful search-result snippet.`);
+  } else if (meta5.metaDescription.length > META_DESCRIPTION_IDEAL_MAX) {
+    push("warning", "meta_description_too_long", `Meta description is ${meta5.metaDescription.length} characters \u2014 likely to be truncated beyond ~${META_DESCRIPTION_IDEAL_MAX}.`);
+  } else if (meta5.metaDescription.length < META_DESCRIPTION_IDEAL_MIN) {
+    push("warning", "meta_description_too_short", `Meta description is only ${meta5.metaDescription.length} characters \u2014 likely too short to be a useful search-result snippet.`);
   }
   if (record.featuredMedia && !record.featuredMedia.altText) {
     push("warning", "missing_featured_image_alt_text", "Featured image has no alt text \u2014 hurts accessibility and image search visibility.");
   }
-  if (isLive && !meta4.ogImage && !record.featuredMedia) {
+  if (isLive && !meta5.ogImage && !record.featuredMedia) {
     push("warning", "missing_social_image", "No social share image (Open Graph image or featured image) set \u2014 links shared on social platforms will show no preview image.");
   }
   if (!VALID_SLUG_PATTERN.test(record.slug)) {
@@ -22530,11 +23041,11 @@ var seoAuditService = {
     const titleIndex = [];
     const descriptionIndex = [];
     function indexRecord(resourceType, record) {
-      const meta4 = record.currentRevision?.metadata ?? {};
+      const meta5 = record.currentRevision?.metadata ?? {};
       const title = record.currentRevision?.title || record.title;
       const base = { resourceType, id: record.id, slug: record.slug, title, status: record.status };
-      if (meta4.metaTitle) titleIndex.push({ ...base, value: meta4.metaTitle });
-      if (meta4.metaDescription) descriptionIndex.push({ ...base, value: meta4.metaDescription });
+      if (meta5.metaTitle) titleIndex.push({ ...base, value: meta5.metaTitle });
+      if (meta5.metaDescription) descriptionIndex.push({ ...base, value: meta5.metaDescription });
     }
     for (const post of posts) {
       issues.push(...checkRecord("post", post));
@@ -22555,7 +23066,7 @@ var seoAuditService = {
 };
 
 // server/routes/v1/seoRoutes.ts
-var router36 = Router36();
+var router36 = Router37();
 router36.use(authenticateToken);
 router36.get(
   "/issues",
@@ -22568,7 +23079,7 @@ router36.get(
 var seoRoutes_default = router36;
 
 // server/routes/v1/tagRoutes.ts
-import { Router as Router37 } from "express";
+import { Router as Router38 } from "express";
 
 // server/services/tagService.ts
 function isUniqueConstraintError13(err) {
@@ -22586,7 +23097,7 @@ var tagService = {
   async getTag(organizationId, id) {
     return loadTagOrThrow(id, organizationId);
   },
-  async createTag(caller, input, meta4 = {}) {
+  async createTag(caller, input, meta5 = {}) {
     const organizationId = caller.organizationId;
     if (input.slug) {
       const dup = await tagRepository.findBySlugInOrg(organizationId, input.slug);
@@ -22607,12 +23118,12 @@ var tagService = {
       resourceType: "tag",
       resourceId: tag.id,
       afterData: { name: tag.name, slug: tag.slug },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return tag;
   },
-  async updateTag(caller, id, input, meta4 = {}) {
+  async updateTag(caller, id, input, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadTagOrThrow(id, organizationId);
     if (input.slug !== void 0 && input.slug !== existing.slug) {
@@ -22638,12 +23149,12 @@ var tagService = {
       resourceId: id,
       beforeData: { name: existing.name, slug: existing.slug },
       afterData: patch,
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return updated;
   },
-  async deleteTag(caller, id, meta4 = {}) {
+  async deleteTag(caller, id, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadTagOrThrow(id, organizationId);
     const postCount = await tagRepository.countPostsUsing(id);
@@ -22659,14 +23170,14 @@ var tagService = {
       resourceType: "tag",
       resourceId: id,
       beforeData: { name: existing.name, slug: existing.slug },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
   }
 };
 
 // server/routes/v1/tagRoutes.ts
-var router37 = Router37();
+var router37 = Router38();
 router37.use(authenticateToken);
 function requestMeta25(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
@@ -22716,7 +23227,7 @@ router37.delete(
 var tagRoutes_default = router37;
 
 // server/routes/v1/authorRoutes.ts
-import { Router as Router38 } from "express";
+import { Router as Router39 } from "express";
 
 // server/repositories/authorRepository.ts
 var withUser = { include: { user: { select: { id: true, email: true, firstName: true, lastName: true, displayName: true, status: true } } } };
@@ -22756,7 +23267,7 @@ var authorService = {
   async getAuthor(id) {
     return loadAuthorOrThrow(id);
   },
-  async createAuthor(caller, input, meta4 = {}) {
+  async createAuthor(caller, input, meta5 = {}) {
     const user = await userRepository.findById(input.userId);
     if (!user) throw new ValidationError("userId does not refer to an existing user.");
     const existing = await authorRepository.findByUserId(input.userId);
@@ -22769,12 +23280,12 @@ var authorService = {
       resourceType: "author",
       resourceId: author.id,
       afterData: { userId: input.userId },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return author;
   },
-  async updateAuthor(caller, id, input, meta4 = {}) {
+  async updateAuthor(caller, id, input, meta5 = {}) {
     const existing = await loadAuthorOrThrow(id);
     const patch = {};
     if (input.bio !== void 0) patch.bio = input.bio;
@@ -22788,27 +23299,27 @@ var authorService = {
       resourceId: id,
       beforeData: { bio: existing.bio, avatarUrl: existing.avatarUrl },
       afterData: patch,
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return updated;
   }
 };
 
 // server/schemas/authorSchemas.ts
-import { z as z40 } from "zod";
-var createAuthorSchema = z40.object({
-  userId: z40.string().trim().uuid(),
-  bio: z40.string().trim().max(2e3).optional(),
-  avatarUrl: z40.string().trim().url().max(500).optional()
+import { z as z41 } from "zod";
+var createAuthorSchema = z41.object({
+  userId: z41.string().trim().uuid(),
+  bio: z41.string().trim().max(2e3).optional(),
+  avatarUrl: z41.string().trim().url().max(500).optional()
 });
-var updateAuthorSchema = z40.object({
-  bio: z40.string().trim().max(2e3).nullable().optional(),
-  avatarUrl: z40.string().trim().url().max(500).nullable().optional()
+var updateAuthorSchema = z41.object({
+  bio: z41.string().trim().max(2e3).nullable().optional(),
+  avatarUrl: z41.string().trim().url().max(500).nullable().optional()
 }).refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
 
 // server/routes/v1/authorRoutes.ts
-var router38 = Router38();
+var router38 = Router39();
 router38.use(authenticateToken);
 function requestMeta26(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
@@ -22850,56 +23361,56 @@ router38.patch(
 var authorRoutes_default = router38;
 
 // server/routes/v1/mediaRoutes.ts
-import { Router as Router39 } from "express";
+import { Router as Router40 } from "express";
 import express2 from "express";
 
 // server/schemas/mediaSchemas.ts
-import { z as z41 } from "zod";
+import { z as z42 } from "zod";
 var SORT_FIELDS5 = ["originalFilename", "displayName", "mimeType", "sizeBytes", "status", "createdAt", "updatedAt"];
-var listMediaQuerySchema = z41.object({
-  page: z41.coerce.number().int().positive().default(1),
-  limit: z41.coerce.number().int().positive().max(100).default(20),
-  search: z41.string().trim().max(200).optional(),
-  status: z41.enum(["PENDING", "ACTIVE", "FAILED", "ARCHIVED"]).optional(),
-  mimeType: z41.enum(ALLOWED_MIME_TYPES).optional(),
-  uploadedById: z41.string().trim().uuid().optional(),
-  dateFrom: z41.coerce.date().optional(),
-  dateTo: z41.coerce.date().optional(),
+var listMediaQuerySchema = z42.object({
+  page: z42.coerce.number().int().positive().default(1),
+  limit: z42.coerce.number().int().positive().max(100).default(20),
+  search: z42.string().trim().max(200).optional(),
+  status: z42.enum(["PENDING", "ACTIVE", "FAILED", "ARCHIVED"]).optional(),
+  mimeType: z42.enum(ALLOWED_MIME_TYPES).optional(),
+  uploadedById: z42.string().trim().uuid().optional(),
+  dateFrom: z42.coerce.date().optional(),
+  dateTo: z42.coerce.date().optional(),
   // Phase 13 — Client Documents: filter the same Media Library by the
   // client/onboarding record a document was uploaded against.
-  clientId: z41.string().trim().uuid().optional(),
-  onboardingId: z41.string().trim().uuid().optional(),
-  sort: z41.enum(SORT_FIELDS5).default("createdAt"),
-  order: z41.enum(["asc", "desc"]).default("desc")
+  clientId: z42.string().trim().uuid().optional(),
+  onboardingId: z42.string().trim().uuid().optional(),
+  sort: z42.enum(SORT_FIELDS5).default("createdAt"),
+  order: z42.enum(["asc", "desc"]).default("desc")
 });
-var createUploadSessionSchema = z41.object({
-  filename: z41.string().trim().min(1).max(255),
-  mimeType: z41.enum(ALLOWED_MIME_TYPES),
-  sizeBytes: z41.number().int().positive(),
-  displayName: z41.string().trim().max(255).optional(),
-  altText: z41.string().trim().max(500).optional(),
-  caption: z41.string().trim().max(1e3).optional(),
+var createUploadSessionSchema = z42.object({
+  filename: z42.string().trim().min(1).max(255),
+  mimeType: z42.enum(ALLOWED_MIME_TYPES),
+  sizeBytes: z42.number().int().positive(),
+  displayName: z42.string().trim().max(255).optional(),
+  altText: z42.string().trim().max(500).optional(),
+  caption: z42.string().trim().max(1e3).optional(),
   // Phase 13 — associates this upload with a Client (and optionally one
   // specific onboarding record) as a Client Document, reusing the same
   // signed-upload pipeline as every other media asset.
-  clientId: z41.string().trim().uuid().optional(),
-  onboardingId: z41.string().trim().uuid().optional(),
-  documentCategory: z41.string().trim().max(100).optional()
+  clientId: z42.string().trim().uuid().optional(),
+  onboardingId: z42.string().trim().uuid().optional(),
+  documentCategory: z42.string().trim().max(100).optional()
 });
-var completeUploadSchema = z41.object({
-  token: z41.string().trim().min(1)
+var completeUploadSchema = z42.object({
+  token: z42.string().trim().min(1)
 });
-var updateMediaSchema = z41.object({
-  displayName: z41.string().trim().max(255).nullable().optional(),
-  altText: z41.string().trim().max(500).nullable().optional(),
-  caption: z41.string().trim().max(1e3).nullable().optional(),
-  visibility: z41.enum(["PRIVATE", "PUBLIC"]).optional(),
-  documentCategory: z41.string().trim().max(100).nullable().optional(),
-  isClientVisible: z41.boolean().optional()
+var updateMediaSchema = z42.object({
+  displayName: z42.string().trim().max(255).nullable().optional(),
+  altText: z42.string().trim().max(500).nullable().optional(),
+  caption: z42.string().trim().max(1e3).nullable().optional(),
+  visibility: z42.enum(["PRIVATE", "PUBLIC"]).optional(),
+  documentCategory: z42.string().trim().max(100).nullable().optional(),
+  isClientVisible: z42.boolean().optional()
 }).refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
 
 // server/routes/v1/mediaRoutes.ts
-var router39 = Router39();
+var router39 = Router40();
 function requestMeta27(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
@@ -23042,64 +23553,64 @@ router39.delete(
 var mediaRoutes_default = router39;
 
 // server/routes/v1/contractRoutes.ts
-import { Router as Router40 } from "express";
+import { Router as Router41 } from "express";
 
 // server/schemas/contractSchemas.ts
-import { z as z43 } from "zod";
+import { z as z44 } from "zod";
 
 // server/schemas/commercialSchemas.ts
-import { z as z42 } from "zod";
-var expectedUpdatedAtSchema2 = z42.coerce.date().optional();
-var currencyCodeSchema = z42.string().trim().toUpperCase().regex(/^[A-Z]{3}$/, "currency must be a 3-letter ISO 4217 code").default(DEFAULT_CURRENCY);
-var moneyAmountSchema = z42.union([z42.string(), z42.number()]).transform((v) => String(v).trim()).refine((v) => /^\d+(\.\d{1,3})?$/.test(v), { message: "amount must be a non-negative number with at most 3 decimal places" });
-var signedMoneyAmountSchema = z42.union([z42.string(), z42.number()]).transform((v) => String(v).trim()).refine((v) => /^-?\d+(\.\d{1,3})?$/.test(v), { message: "amount must be a number with at most 3 decimal places" });
+import { z as z43 } from "zod";
+var expectedUpdatedAtSchema2 = z43.coerce.date().optional();
+var currencyCodeSchema = z43.string().trim().toUpperCase().regex(/^[A-Z]{3}$/, "currency must be a 3-letter ISO 4217 code").default(DEFAULT_CURRENCY);
+var moneyAmountSchema = z43.union([z43.string(), z43.number()]).transform((v) => String(v).trim()).refine((v) => /^\d+(\.\d{1,3})?$/.test(v), { message: "amount must be a non-negative number with at most 3 decimal places" });
+var signedMoneyAmountSchema = z43.union([z43.string(), z43.number()]).transform((v) => String(v).trim()).refine((v) => /^-?\d+(\.\d{1,3})?$/.test(v), { message: "amount must be a number with at most 3 decimal places" });
 var SORT_ORDER = ["asc", "desc"];
 function paginationQuerySchema(sortFields, defaultSort, defaultOrder = "desc") {
   return {
-    page: z42.coerce.number().int().positive().default(1),
-    limit: z42.coerce.number().int().positive().max(100).default(20),
-    search: z42.string().trim().max(200).optional(),
-    sort: z42.enum(sortFields).default(defaultSort),
-    order: z42.enum(SORT_ORDER).default(defaultOrder)
+    page: z43.coerce.number().int().positive().default(1),
+    limit: z43.coerce.number().int().positive().max(100).default(20),
+    search: z43.string().trim().max(200).optional(),
+    sort: z43.enum(sortFields).default(defaultSort),
+    order: z43.enum(SORT_ORDER).default(defaultOrder)
   };
 }
 
 // server/schemas/contractSchemas.ts
-var contractStatusSchema = z43.enum(["DRAFT", "ACTIVE", "SUSPENDED", "EXPIRED", "TERMINATED"]);
+var contractStatusSchema = z44.enum(["DRAFT", "ACTIVE", "SUSPENDED", "EXPIRED", "TERMINATED"]);
 var SORT_FIELDS6 = ["contractNumber", "title", "status", "startDate", "endDate", "createdAt", "updatedAt"];
-var listContractsQuerySchema = z43.object({
+var listContractsQuerySchema = z44.object({
   ...paginationQuerySchema(SORT_FIELDS6, "createdAt"),
   status: contractStatusSchema.optional(),
-  clientId: z43.string().trim().uuid().optional()
+  clientId: z44.string().trim().uuid().optional()
 });
-var createContractSchema = z43.object({
-  clientId: z43.string().trim().uuid(),
-  title: z43.string().trim().min(1).max(200),
-  description: z43.string().trim().max(5e3).optional(),
-  startDate: z43.coerce.date(),
-  endDate: z43.coerce.date().optional(),
+var createContractSchema = z44.object({
+  clientId: z44.string().trim().uuid(),
+  title: z44.string().trim().min(1).max(200),
+  description: z44.string().trim().max(5e3).optional(),
+  startDate: z44.coerce.date(),
+  endDate: z44.coerce.date().optional(),
   contractValue: moneyAmountSchema,
   currency: currencyCodeSchema.optional(),
-  notes: z43.string().trim().max(5e3).optional()
+  notes: z44.string().trim().max(5e3).optional()
 });
-var updateContractSchema = z43.object({
-  title: z43.string().trim().min(1).max(200).optional(),
-  description: z43.string().trim().max(5e3).nullable().optional(),
-  endDate: z43.coerce.date().nullable().optional(),
-  notes: z43.string().trim().max(5e3).nullable().optional(),
+var updateContractSchema = z44.object({
+  title: z44.string().trim().min(1).max(200).optional(),
+  description: z44.string().trim().max(5e3).nullable().optional(),
+  endDate: z44.coerce.date().nullable().optional(),
+  notes: z44.string().trim().max(5e3).nullable().optional(),
   expectedUpdatedAt: expectedUpdatedAtSchema2
 }).refine((v) => Object.keys(v).some((k) => k !== "expectedUpdatedAt"), { message: "At least one field must be provided." });
-var terminateContractSchema = z43.object({
-  reason: z43.string().trim().min(1).max(1e3)
+var terminateContractSchema = z44.object({
+  reason: z44.string().trim().min(1).max(1e3)
 });
-var createContractVariationSchema = z43.object({
+var createContractVariationSchema = z44.object({
   amount: signedMoneyAmountSchema,
-  effectiveDate: z43.coerce.date(),
-  reason: z43.string().trim().min(1).max(1e3)
+  effectiveDate: z44.coerce.date(),
+  reason: z44.string().trim().min(1).max(1e3)
 });
 
 // server/routes/v1/contractRoutes.ts
-var router40 = Router40();
+var router40 = Router41();
 router40.use(authenticateToken);
 function requestMeta28(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
@@ -23183,7 +23694,7 @@ router40.post(
 var contractRoutes_default = router40;
 
 // server/routes/v1/subscriptionRoutes.ts
-import { Router as Router41 } from "express";
+import { Router as Router42 } from "express";
 
 // server/services/subscriptionService.ts
 var ACTIVATABLE_FROM2 = ["DRAFT", "TRIALING", "PAUSED"];
@@ -23201,7 +23712,7 @@ var subscriptionService = {
   async getSubscription(organizationId, id) {
     return loadSubscriptionOrThrow(id, organizationId);
   },
-  async createSubscription(caller, input, meta4 = {}) {
+  async createSubscription(caller, input, meta5 = {}) {
     const organizationId = caller.organizationId;
     const client3 = await clientRepository.findByIdInOrg(input.clientId, organizationId);
     if (!client3) throw new ValidationError("The specified client does not exist in this organization.");
@@ -23244,12 +23755,12 @@ var subscriptionService = {
       resourceType: "subscription",
       resourceId: subscription.id,
       afterData: { subscriptionNumber, clientId: input.clientId, productId: input.productId, price: subscription.price.toString(), currency },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return subscription;
   },
-  async updateSubscription(caller, id, input, meta4 = {}) {
+  async updateSubscription(caller, id, input, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadSubscriptionOrThrow(id, organizationId);
     if (existing.status === "CANCELLED" || existing.status === "EXPIRED") {
@@ -23274,12 +23785,12 @@ var subscriptionService = {
       resourceId: id,
       beforeData: { quantity: existing.quantity, price: existing.price.toString() },
       afterData: patch,
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return loadSubscriptionOrThrow(id, organizationId);
   },
-  async activateSubscription(caller, id, meta4 = {}) {
+  async activateSubscription(caller, id, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadSubscriptionOrThrow(id, organizationId);
     const count = await subscriptionRepository.transitionStatus(id, ACTIVATABLE_FROM2, { status: "ACTIVE" });
@@ -23293,12 +23804,12 @@ var subscriptionService = {
       resourceId: id,
       beforeData: { status: existing.status },
       afterData: { status: "ACTIVE" },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return loadSubscriptionOrThrow(id, organizationId);
   },
-  async pauseSubscription(caller, id, meta4 = {}) {
+  async pauseSubscription(caller, id, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadSubscriptionOrThrow(id, organizationId);
     const count = await subscriptionRepository.transitionStatus(id, PAUSABLE_FROM, { status: "PAUSED" });
@@ -23312,12 +23823,12 @@ var subscriptionService = {
       resourceId: id,
       beforeData: { status: existing.status },
       afterData: { status: "PAUSED" },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return loadSubscriptionOrThrow(id, organizationId);
   },
-  async cancelSubscription(caller, id, input, meta4 = {}) {
+  async cancelSubscription(caller, id, input, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadSubscriptionOrThrow(id, organizationId);
     const now = /* @__PURE__ */ new Date();
@@ -23337,53 +23848,53 @@ var subscriptionService = {
       resourceId: id,
       beforeData: { status: existing.status },
       afterData: { status: "CANCELLED", reason: input.reason },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return loadSubscriptionOrThrow(id, organizationId);
   }
 };
 
 // server/schemas/subscriptionSchemas.ts
-import { z as z44 } from "zod";
-var subscriptionStatusSchema = z44.enum(["DRAFT", "TRIALING", "ACTIVE", "PAST_DUE", "PAUSED", "CANCELLED", "EXPIRED"]);
-var billingCycleSchema = z44.enum(["ONE_TIME", "MONTHLY", "QUARTERLY", "ANNUAL"]);
+import { z as z45 } from "zod";
+var subscriptionStatusSchema = z45.enum(["DRAFT", "TRIALING", "ACTIVE", "PAST_DUE", "PAUSED", "CANCELLED", "EXPIRED"]);
+var billingCycleSchema = z45.enum(["ONE_TIME", "MONTHLY", "QUARTERLY", "ANNUAL"]);
 var SORT_FIELDS7 = ["subscriptionNumber", "status", "startDate", "renewalDate", "createdAt", "updatedAt"];
-var listSubscriptionsQuerySchema = z44.object({
+var listSubscriptionsQuerySchema = z45.object({
   ...paginationQuerySchema(SORT_FIELDS7, "createdAt"),
   status: subscriptionStatusSchema.optional(),
-  clientId: z44.string().trim().uuid().optional(),
-  productId: z44.string().trim().uuid().optional()
+  clientId: z45.string().trim().uuid().optional(),
+  productId: z45.string().trim().uuid().optional()
 });
-var subscriptionItemInputSchema = z44.object({
-  productModuleId: z44.string().trim().uuid().optional(),
-  description: z44.string().trim().min(1).max(500),
-  quantity: z44.number().int().positive().default(1),
+var subscriptionItemInputSchema = z45.object({
+  productModuleId: z45.string().trim().uuid().optional(),
+  description: z45.string().trim().min(1).max(500),
+  quantity: z45.number().int().positive().default(1),
   unitPrice: moneyAmountSchema
 });
-var createSubscriptionSchema = z44.object({
-  clientId: z44.string().trim().uuid(),
-  productId: z44.string().trim().uuid(),
-  startDate: z44.coerce.date(),
+var createSubscriptionSchema = z45.object({
+  clientId: z45.string().trim().uuid(),
+  productId: z45.string().trim().uuid(),
+  startDate: z45.coerce.date(),
   billingCycle: billingCycleSchema,
-  quantity: z44.number().int().positive().default(1),
+  quantity: z45.number().int().positive().default(1),
   price: moneyAmountSchema,
   currency: currencyCodeSchema.optional(),
-  items: z44.array(subscriptionItemInputSchema).default([])
+  items: z45.array(subscriptionItemInputSchema).default([])
 });
-var updateSubscriptionSchema = z44.object({
-  renewalDate: z44.coerce.date().nullable().optional(),
-  endDate: z44.coerce.date().nullable().optional(),
-  quantity: z44.number().int().positive().optional(),
+var updateSubscriptionSchema = z45.object({
+  renewalDate: z45.coerce.date().nullable().optional(),
+  endDate: z45.coerce.date().nullable().optional(),
+  quantity: z45.number().int().positive().optional(),
   price: moneyAmountSchema.optional(),
   expectedUpdatedAt: expectedUpdatedAtSchema2
 }).refine((v) => Object.keys(v).some((k) => k !== "expectedUpdatedAt"), { message: "At least one field must be provided." });
-var cancelSubscriptionSchema = z44.object({
-  reason: z44.string().trim().min(1).max(1e3)
+var cancelSubscriptionSchema = z45.object({
+  reason: z45.string().trim().min(1).max(1e3)
 });
 
 // server/routes/v1/subscriptionRoutes.ts
-var router41 = Router41();
+var router41 = Router42();
 router41.use(authenticateToken);
 function requestMeta29(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
@@ -23458,7 +23969,7 @@ router41.post(
 var subscriptionRoutes_default = router41;
 
 // server/routes/v1/invoiceRoutes.ts
-import { Router as Router42 } from "express";
+import { Router as Router43 } from "express";
 
 // server/services/paymentService.ts
 function statusForBalance2(amountPaid, amountDue) {
@@ -23478,7 +23989,7 @@ var paymentService = {
   async getPayment(organizationId, id) {
     return loadPaymentOrThrow(id, organizationId);
   },
-  async reversePayment(caller, id, input, meta4 = {}) {
+  async reversePayment(caller, id, input, meta5 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadPaymentOrThrow(id, organizationId);
     if (existing.status !== "COMPLETED") {
@@ -23509,71 +24020,71 @@ var paymentService = {
       resourceId: id,
       beforeData: { status: "COMPLETED", amount: existing.amount.toString() },
       afterData: { status: "REVERSED", reason: input.reason },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return loadPaymentOrThrow(id, organizationId);
   }
 };
 
 // server/schemas/invoiceSchemas.ts
-import { z as z45 } from "zod";
-var invoiceStatusSchema = z45.enum(["DRAFT", "ISSUED", "PARTIALLY_PAID", "PAID", "OVERDUE", "VOID", "CANCELLED"]);
-var paymentMethodSchema = z45.enum(["BANK_TRANSFER", "CARD", "CASH", "CHEQUE", "ONLINE", "OTHER"]);
-var paymentStatusSchema = z45.enum(["PENDING", "COMPLETED", "FAILED", "REVERSED"]);
+import { z as z46 } from "zod";
+var invoiceStatusSchema = z46.enum(["DRAFT", "ISSUED", "PARTIALLY_PAID", "PAID", "OVERDUE", "VOID", "CANCELLED"]);
+var paymentMethodSchema = z46.enum(["BANK_TRANSFER", "CARD", "CASH", "CHEQUE", "ONLINE", "OTHER"]);
+var paymentStatusSchema = z46.enum(["PENDING", "COMPLETED", "FAILED", "REVERSED"]);
 var SORT_FIELDS8 = ["invoiceNumber", "status", "issueDate", "dueDate", "total", "amountDue", "createdAt", "updatedAt"];
-var listInvoicesQuerySchema = z45.object({
+var listInvoicesQuerySchema = z46.object({
   ...paginationQuerySchema(SORT_FIELDS8, "issueDate"),
   status: invoiceStatusSchema.optional(),
-  clientId: z45.string().trim().uuid().optional(),
-  contractId: z45.string().trim().uuid().optional(),
-  subscriptionId: z45.string().trim().uuid().optional(),
-  dateFrom: z45.coerce.date().optional(),
-  dateTo: z45.coerce.date().optional()
+  clientId: z46.string().trim().uuid().optional(),
+  contractId: z46.string().trim().uuid().optional(),
+  subscriptionId: z46.string().trim().uuid().optional(),
+  dateFrom: z46.coerce.date().optional(),
+  dateTo: z46.coerce.date().optional()
 });
-var invoiceItemInputSchema = z45.object({
-  productModuleId: z45.string().trim().uuid().optional(),
-  description: z45.string().trim().min(1).max(500),
-  quantity: z45.number().int().positive().default(1),
+var invoiceItemInputSchema = z46.object({
+  productModuleId: z46.string().trim().uuid().optional(),
+  description: z46.string().trim().min(1).max(500),
+  quantity: z46.number().int().positive().default(1),
   unitPrice: moneyAmountSchema,
   discount: moneyAmountSchema.default("0")
 });
-var createInvoiceSchema = z45.object({
-  clientId: z45.string().trim().uuid(),
-  contractId: z45.string().trim().uuid().optional(),
-  subscriptionId: z45.string().trim().uuid().optional(),
-  issueDate: z45.coerce.date(),
-  dueDate: z45.coerce.date(),
+var createInvoiceSchema = z46.object({
+  clientId: z46.string().trim().uuid(),
+  contractId: z46.string().trim().uuid().optional(),
+  subscriptionId: z46.string().trim().uuid().optional(),
+  issueDate: z46.coerce.date(),
+  dueDate: z46.coerce.date(),
   currency: currencyCodeSchema.optional(),
   discount: moneyAmountSchema.default("0"),
   tax: moneyAmountSchema.default("0"),
-  notes: z45.string().trim().max(5e3).optional(),
-  items: z45.array(invoiceItemInputSchema).min(1, "An invoice needs at least one line item.")
+  notes: z46.string().trim().max(5e3).optional(),
+  items: z46.array(invoiceItemInputSchema).min(1, "An invoice needs at least one line item.")
 });
-var updateInvoiceSchema = z45.object({
-  issueDate: z45.coerce.date().optional(),
-  dueDate: z45.coerce.date().optional(),
+var updateInvoiceSchema = z46.object({
+  issueDate: z46.coerce.date().optional(),
+  dueDate: z46.coerce.date().optional(),
   discount: moneyAmountSchema.optional(),
   tax: moneyAmountSchema.optional(),
-  notes: z45.string().trim().max(5e3).nullable().optional(),
-  items: z45.array(invoiceItemInputSchema).min(1).optional(),
+  notes: z46.string().trim().max(5e3).nullable().optional(),
+  items: z46.array(invoiceItemInputSchema).min(1).optional(),
   expectedUpdatedAt: expectedUpdatedAtSchema2
 }).refine((v) => Object.keys(v).some((k) => k !== "expectedUpdatedAt"), { message: "At least one field must be provided." });
-var issueInvoiceSchema = z45.object({ expectedUpdatedAt: expectedUpdatedAtSchema2 });
-var voidInvoiceSchema = z45.object({
-  reason: z45.string().trim().min(1).max(1e3)
+var issueInvoiceSchema = z46.object({ expectedUpdatedAt: expectedUpdatedAtSchema2 });
+var voidInvoiceSchema = z46.object({
+  reason: z46.string().trim().min(1).max(1e3)
 });
-var recordPaymentSchema = z45.object({
+var recordPaymentSchema = z46.object({
   amount: moneyAmountSchema,
   currency: currencyCodeSchema.optional(),
-  paymentDate: z45.coerce.date(),
+  paymentDate: z46.coerce.date(),
   method: paymentMethodSchema,
-  reference: z45.string().trim().max(200).optional(),
-  notes: z45.string().trim().max(2e3).optional()
+  reference: z46.string().trim().max(200).optional(),
+  notes: z46.string().trim().max(2e3).optional()
 });
 
 // server/routes/v1/invoiceRoutes.ts
-var router42 = Router42();
+var router42 = Router43();
 router42.use(authenticateToken);
 function requestMeta30(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
@@ -23666,26 +24177,26 @@ router42.post(
 var invoiceRoutes_default = router42;
 
 // server/routes/v1/paymentRoutes.ts
-import { Router as Router43 } from "express";
+import { Router as Router44 } from "express";
 
 // server/schemas/paymentSchemas.ts
-import { z as z46 } from "zod";
+import { z as z47 } from "zod";
 var SORT_FIELDS9 = ["paymentDate", "amount", "status", "createdAt"];
-var listPaymentsQuerySchema = z46.object({
+var listPaymentsQuerySchema = z47.object({
   ...paginationQuerySchema(SORT_FIELDS9, "paymentDate"),
   status: paymentStatusSchema.optional(),
   method: paymentMethodSchema.optional(),
-  invoiceId: z46.string().trim().uuid().optional(),
-  clientId: z46.string().trim().uuid().optional(),
-  dateFrom: z46.coerce.date().optional(),
-  dateTo: z46.coerce.date().optional()
+  invoiceId: z47.string().trim().uuid().optional(),
+  clientId: z47.string().trim().uuid().optional(),
+  dateFrom: z47.coerce.date().optional(),
+  dateTo: z47.coerce.date().optional()
 });
-var reversePaymentSchema = z46.object({
-  reason: z46.string().trim().min(1).max(1e3)
+var reversePaymentSchema = z47.object({
+  reason: z47.string().trim().min(1).max(1e3)
 });
 
 // server/routes/v1/paymentRoutes.ts
-var router43 = Router43();
+var router43 = Router44();
 router43.use(authenticateToken);
 function requestMeta31(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
@@ -23726,8 +24237,8 @@ router43.post(
 var paymentRoutes_default = router43;
 
 // server/routes/v1/portalRoutes.ts
-import { Router as Router44 } from "express";
-import { z as z47 } from "zod";
+import { Router as Router45 } from "express";
+import { z as z48 } from "zod";
 
 // server/services/clientPortalService.ts
 async function resolveClientForCaller(caller) {
@@ -23836,11 +24347,11 @@ var clientPortalService = {
 };
 
 // server/routes/v1/portalRoutes.ts
-var router44 = Router44();
+var router44 = Router45();
 router44.use(authenticateToken);
-var pageQuerySchema2 = z47.object({
-  page: z47.coerce.number().int().positive().default(1),
-  limit: z47.coerce.number().int().positive().max(100).default(20)
+var pageQuerySchema2 = z48.object({
+  page: z48.coerce.number().int().positive().default(1),
+  limit: z48.coerce.number().int().positive().max(100).default(20)
 });
 router44.get(
   "/dashboard",
@@ -23930,7 +24441,7 @@ router44.get(
 var portalRoutes_default = router44;
 
 // server/routes/v1/publicRoutes.ts
-import { Router as Router45 } from "express";
+import { Router as Router46 } from "express";
 
 // server/services/publicFormService.ts
 var DEFAULT_SUCCESS_MESSAGE = "Thank you \u2014 your submission has been received. We'll be in touch shortly.";
@@ -23987,7 +24498,7 @@ var publicFormService = {
    * successMessage (§8's "accepted-but-discarded" contract from
    * publicLeadService), but writes nothing.
    */
-  async submit(slug, input, meta4 = {}) {
+  async submit(slug, input, meta5 = {}) {
     const organizationId = config.publicWebsiteOrganizationId;
     if (!organizationId) {
       throw new InfrastructureError("Public form intake is not configured.");
@@ -24046,7 +24557,7 @@ var publicFormService = {
       utmTerm: input.utmTerm,
       utmContent: input.utmContent,
       landingPagePath: input.landingPagePath,
-      referrer: meta4.referrer,
+      referrer: meta5.referrer,
       consentGiven: consentGiven ?? void 0,
       formId: form.id,
       campaignId
@@ -24103,11 +24614,11 @@ ${notes}` : notes,
       utmTerm: input.utmTerm,
       utmContent: input.utmContent,
       leadId,
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent,
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent,
       consentGiven: consentGiven ?? void 0,
       landingPagePath: input.landingPagePath,
-      referrer: meta4.referrer,
+      referrer: meta5.referrer,
       campaignId
     });
     await auditLogRepository.record({
@@ -24118,8 +24629,8 @@ ${notes}` : notes,
       resourceType: "form_submission",
       resourceId: submission.id,
       afterData: { formId: form.id, formSlug: form.slug, leadId },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     try {
       await eventEngine.emit({
@@ -24145,7 +24656,7 @@ ${notes}` : notes,
       utmContent: input.utmContent,
       campaignId,
       path: input.landingPagePath,
-      referrer: meta4.referrer
+      referrer: meta5.referrer
     });
     const notifyUserIds = form.notifyUserIds ?? [];
     for (const userId of notifyUserIds) {
@@ -24647,7 +25158,7 @@ var publicLeadService = {
    * like a real submission from the caller's point of view, so a bot
    * learns nothing about which field gave it away.
    */
-  async createLead(input, meta4 = {}) {
+  async createLead(input, meta5 = {}) {
     if (input.website) {
       return null;
     }
@@ -24670,7 +25181,7 @@ var publicLeadService = {
       utmTerm: input.utmTerm,
       utmContent: input.utmContent,
       landingPagePath: input.landingPagePath,
-      referrer: meta4.referrer,
+      referrer: meta5.referrer,
       consentGiven: true,
       campaignId
     });
@@ -24682,8 +25193,8 @@ var publicLeadService = {
       resourceType: "lead",
       resourceId: lead.id,
       afterData: { companyName: lead.companyName, source: lead.source },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     try {
       await eventEngine.emit({
@@ -24709,93 +25220,93 @@ var publicLeadService = {
       utmContent: input.utmContent,
       campaignId,
       path: input.landingPagePath,
-      referrer: meta4.referrer
+      referrer: meta5.referrer
     });
     return lead;
   }
 };
 
 // server/schemas/publicSchemas.ts
-import { z as z48 } from "zod";
+import { z as z49 } from "zod";
 var SORT_FIELDS10 = ["publishedAt", "createdAt", "title"];
-var listPublicPostsQuerySchema = z48.object({
-  page: z48.coerce.number().int().positive().default(1),
-  limit: z48.coerce.number().int().positive().max(50).default(12),
-  search: z48.string().trim().max(200).optional(),
-  category: z48.string().trim().max(150).optional(),
-  tag: z48.string().trim().max(150).optional(),
-  sort: z48.enum(SORT_FIELDS10).default("publishedAt"),
-  order: z48.enum(["asc", "desc"]).default("desc")
+var listPublicPostsQuerySchema = z49.object({
+  page: z49.coerce.number().int().positive().default(1),
+  limit: z49.coerce.number().int().positive().max(50).default(12),
+  search: z49.string().trim().max(200).optional(),
+  category: z49.string().trim().max(150).optional(),
+  tag: z49.string().trim().max(150).optional(),
+  sort: z49.enum(SORT_FIELDS10).default("publishedAt"),
+  order: z49.enum(["asc", "desc"]).default("desc")
 });
-var listPublicProductsQuerySchema = z48.object({
-  page: z48.coerce.number().int().positive().default(1),
-  limit: z48.coerce.number().int().positive().max(50).default(20),
-  search: z48.string().trim().max(200).optional(),
-  type: z48.enum(["PRODUCT", "SERVICE", "SOLUTION"]).optional(),
+var listPublicProductsQuerySchema = z49.object({
+  page: z49.coerce.number().int().positive().default(1),
+  limit: z49.coerce.number().int().positive().max(50).default(20),
+  search: z49.string().trim().max(200).optional(),
+  type: z49.enum(["PRODUCT", "SERVICE", "SOLUTION"]).optional(),
   // Phase 10 — filter by the real category/industry taxonomy, by slug
   // (never an internal id crossing the public boundary).
-  categorySlug: z48.string().trim().max(100).optional(),
-  industrySlug: z48.string().trim().max(100).optional()
+  categorySlug: z49.string().trim().max(100).optional(),
+  industrySlug: z49.string().trim().max(100).optional()
 });
-var listPublicCaseStudiesQuerySchema = z48.object({
-  page: z48.coerce.number().int().positive().default(1),
-  limit: z48.coerce.number().int().positive().max(50).default(12),
-  search: z48.string().trim().max(200).optional(),
-  industrySlug: z48.string().trim().max(100).optional(),
-  productSlug: z48.string().trim().max(150).optional(),
-  sort: z48.enum(SORT_FIELDS10).default("publishedAt"),
-  order: z48.enum(["asc", "desc"]).default("desc")
+var listPublicCaseStudiesQuerySchema = z49.object({
+  page: z49.coerce.number().int().positive().default(1),
+  limit: z49.coerce.number().int().positive().max(50).default(12),
+  search: z49.string().trim().max(200).optional(),
+  industrySlug: z49.string().trim().max(100).optional(),
+  productSlug: z49.string().trim().max(150).optional(),
+  sort: z49.enum(SORT_FIELDS10).default("publishedAt"),
+  order: z49.enum(["asc", "desc"]).default("desc")
 });
-var publicNavigationMenuTypeSchema = z48.enum(["PRIMARY", "HEADER", "FOOTER", "MOBILE", "CUSTOM"]);
-var publicRedirectLookupQuerySchema = z48.object({
-  path: z48.string().trim().min(1).max(2048).refine((v) => v.startsWith("/") && !v.startsWith("//"), { message: "Must be a site-relative path starting with a single /." })
+var publicNavigationMenuTypeSchema = z49.enum(["PRIMARY", "HEADER", "FOOTER", "MOBILE", "CUSTOM"]);
+var publicRedirectLookupQuerySchema = z49.object({
+  path: z49.string().trim().min(1).max(2048).refine((v) => v.startsWith("/") && !v.startsWith("//"), { message: "Must be a site-relative path starting with a single /." })
 });
-var nonEmptyTrimmed = (max) => z48.string().trim().min(1).max(max);
-var createPublicLeadSchema = z48.object({
+var nonEmptyTrimmed = (max) => z49.string().trim().min(1).max(max);
+var createPublicLeadSchema = z49.object({
   name: nonEmptyTrimmed(200),
-  company: z48.string().trim().max(200).optional(),
-  email: z48.string().trim().email().max(320),
-  phone: z48.string().trim().max(50).optional(),
-  subject: z48.string().trim().max(200).optional(),
+  company: z49.string().trim().max(200).optional(),
+  email: z49.string().trim().email().max(320),
+  phone: z49.string().trim().max(50).optional(),
+  subject: z49.string().trim().max(200).optional(),
   message: nonEmptyTrimmed(5e3),
-  productInterest: z48.string().trim().max(200).optional(),
-  source: z48.enum(["contact_form", "product_inquiry", "project_brief", "other"]).default("contact_form"),
-  consent: z48.literal(true, { errorMap: () => ({ message: "Consent is required to submit this form." }) }),
-  website: z48.string().trim().max(200).optional(),
+  productInterest: z49.string().trim().max(200).optional(),
+  source: z49.enum(["contact_form", "product_inquiry", "project_brief", "other"]).default("contact_form"),
+  consent: z49.literal(true, { errorMap: () => ({ message: "Consent is required to submit this form." }) }),
+  website: z49.string().trim().max(200).optional(),
   // Phase 12 (CRM Integration) — same real attribution capture
   // publicFormSubmitSchema already has for Control-Center-authored
   // Forms, extended to this site's own hardcoded contact/brief form so
   // every lead-capture surface records real source data, not just free text.
-  utmSource: z48.string().trim().max(200).optional(),
-  utmMedium: z48.string().trim().max(200).optional(),
-  utmCampaign: z48.string().trim().max(200).optional(),
-  utmTerm: z48.string().trim().max(200).optional(),
-  utmContent: z48.string().trim().max(200).optional(),
-  landingPagePath: z48.string().trim().max(500).optional()
-});
-
-// server/schemas/analyticsSchemas.ts
-import { z as z49 } from "zod";
-var publicAnalyticsEventSchema = z49.object({
-  eventType: z49.enum(PUBLIC_EVENT_TYPES),
-  path: z49.string().trim().max(500).optional(),
-  referrer: z49.string().trim().max(2e3).optional(),
-  sessionId: z49.string().trim().max(100).optional(),
   utmSource: z49.string().trim().max(200).optional(),
   utmMedium: z49.string().trim().max(200).optional(),
   utmCampaign: z49.string().trim().max(200).optional(),
   utmTerm: z49.string().trim().max(200).optional(),
-  utmContent: z49.string().trim().max(200).optional()
+  utmContent: z49.string().trim().max(200).optional(),
+  landingPagePath: z49.string().trim().max(500).optional()
+});
+
+// server/schemas/analyticsSchemas.ts
+import { z as z50 } from "zod";
+var publicAnalyticsEventSchema = z50.object({
+  eventType: z50.enum(PUBLIC_EVENT_TYPES),
+  path: z50.string().trim().max(500).optional(),
+  referrer: z50.string().trim().max(2e3).optional(),
+  sessionId: z50.string().trim().max(100).optional(),
+  utmSource: z50.string().trim().max(200).optional(),
+  utmMedium: z50.string().trim().max(200).optional(),
+  utmCampaign: z50.string().trim().max(200).optional(),
+  utmTerm: z50.string().trim().max(200).optional(),
+  utmContent: z50.string().trim().max(200).optional()
 });
 var dateRangeShape = {
-  from: z49.coerce.date().optional(),
-  to: z49.coerce.date().optional(),
-  compare: z49.coerce.boolean().optional().default(false)
+  from: z50.coerce.date().optional(),
+  to: z50.coerce.date().optional(),
+  compare: z50.coerce.boolean().optional().default(false)
 };
-var analyticsOverviewQuerySchema = z49.object(dateRangeShape);
-var analyticsTopPagesQuerySchema = z49.object({
+var analyticsOverviewQuerySchema = z50.object(dateRangeShape);
+var analyticsTopPagesQuerySchema = z50.object({
   ...dateRangeShape,
-  limit: z49.coerce.number().int().positive().max(50).default(10)
+  limit: z50.coerce.number().int().positive().max(50).default(10)
 });
 var REPORT_TYPES = [
   "executive_summary",
@@ -24808,13 +25319,13 @@ var REPORT_TYPES = [
   "conversion_report",
   "client_acquisition"
 ];
-var reportQuerySchema = z49.object({
+var reportQuerySchema = z50.object({
   ...dateRangeShape,
-  format: z49.enum(["json", "csv"]).default("json")
+  format: z50.enum(["json", "csv"]).default("json")
 });
 
 // server/routes/v1/publicRoutes.ts
-var router45 = Router45();
+var router45 = Router46();
 router45.use((req, res, next) => {
   if (req.method === "GET" || req.method === "HEAD") {
     res.setHeader("Cache-Control", "public, s-maxage=60, stale-while-revalidate=300");
@@ -25012,7 +25523,7 @@ router45.post(
 var publicRoutes_default = router45;
 
 // server/routes/v1/aiProviderRoutes.ts
-import { Router as Router46 } from "express";
+import { Router as Router47 } from "express";
 
 // server/repositories/aiProviderRepository.ts
 var aiProviderRepository = {
@@ -25076,7 +25587,7 @@ var aiProviderService = {
     if (!provider) throw new NotFoundError("AI provider not found.");
     return provider;
   },
-  async createProvider(caller, input, meta4 = {}) {
+  async createProvider(caller, input, meta5 = {}) {
     const existing = await aiProviderRepository.findProviderByCode(input.code);
     if (existing) throw new ConflictError(`An AI provider with code "${input.code}" already exists.`);
     if (input.isDefault) await aiProviderRepository.clearDefaultProviders();
@@ -25089,12 +25600,12 @@ var aiProviderService = {
       resourceType: "ai_provider",
       resourceId: provider.id,
       afterData: { code: provider.code, status: provider.status },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return provider;
   },
-  async updateProvider(caller, id, input, meta4 = {}) {
+  async updateProvider(caller, id, input, meta5 = {}) {
     await this.getProvider(id);
     if (input.isDefault) await aiProviderRepository.clearDefaultProviders();
     const provider = await aiProviderRepository.updateProvider(id, input);
@@ -25106,15 +25617,15 @@ var aiProviderService = {
       resourceType: "ai_provider",
       resourceId: id,
       afterData: input,
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return provider;
   },
   async listModels(providerId) {
     return aiProviderRepository.listModels(providerId);
   },
-  async createModel(caller, input, meta4 = {}) {
+  async createModel(caller, input, meta5 = {}) {
     await this.getProvider(input.providerId);
     if (input.isDefault) await aiProviderRepository.clearDefaultModels(input.providerId);
     const model = await aiProviderRepository.createModel(input);
@@ -25126,12 +25637,12 @@ var aiProviderService = {
       resourceType: "ai_model",
       resourceId: model.id,
       afterData: { providerId: model.providerId, modelId: model.modelId },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return model;
   },
-  async updateModel(caller, id, input, meta4 = {}) {
+  async updateModel(caller, id, input, meta5 = {}) {
     const existing = await aiProviderRepository.getModel(id);
     if (!existing) throw new NotFoundError("AI model not found.");
     if (input.isDefault) await aiProviderRepository.clearDefaultModels(existing.providerId);
@@ -25144,119 +25655,119 @@ var aiProviderService = {
       resourceType: "ai_model",
       resourceId: id,
       afterData: input,
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return model;
   }
 };
 
 // server/schemas/aiSchemas.ts
-import { z as z50 } from "zod";
-var createAiProviderSchema = z50.object({
-  code: z50.string().trim().min(1).max(50),
-  name: z50.string().trim().min(1).max(200),
-  status: z50.enum(["ACTIVE", "INACTIVE"]).optional(),
-  isDefault: z50.boolean().optional()
+import { z as z51 } from "zod";
+var createAiProviderSchema = z51.object({
+  code: z51.string().trim().min(1).max(50),
+  name: z51.string().trim().min(1).max(200),
+  status: z51.enum(["ACTIVE", "INACTIVE"]).optional(),
+  isDefault: z51.boolean().optional()
 });
-var updateAiProviderSchema = z50.object({
-  name: z50.string().trim().min(1).max(200).optional(),
-  status: z50.enum(["ACTIVE", "INACTIVE"]).optional(),
-  isDefault: z50.boolean().optional()
+var updateAiProviderSchema = z51.object({
+  name: z51.string().trim().min(1).max(200).optional(),
+  status: z51.enum(["ACTIVE", "INACTIVE"]).optional(),
+  isDefault: z51.boolean().optional()
 });
-var createAiModelSchema = z50.object({
-  providerId: z50.string().uuid(),
-  modelId: z50.string().trim().min(1).max(100),
-  displayName: z50.string().trim().min(1).max(200),
-  contextWindow: z50.number().int().positive().optional(),
-  supportsStructuredOutput: z50.boolean().optional(),
-  supportsToolCalling: z50.boolean().optional(),
-  inputPricePerMillionTokens: z50.number().nonnegative().optional(),
-  outputPricePerMillionTokens: z50.number().nonnegative().optional(),
-  isActive: z50.boolean().optional(),
-  isDefault: z50.boolean().optional()
+var createAiModelSchema = z51.object({
+  providerId: z51.string().uuid(),
+  modelId: z51.string().trim().min(1).max(100),
+  displayName: z51.string().trim().min(1).max(200),
+  contextWindow: z51.number().int().positive().optional(),
+  supportsStructuredOutput: z51.boolean().optional(),
+  supportsToolCalling: z51.boolean().optional(),
+  inputPricePerMillionTokens: z51.number().nonnegative().optional(),
+  outputPricePerMillionTokens: z51.number().nonnegative().optional(),
+  isActive: z51.boolean().optional(),
+  isDefault: z51.boolean().optional()
 });
 var updateAiModelSchema = createAiModelSchema.partial().omit({ providerId: true, modelId: true });
-var updateAiOrgToolSettingSchema = z50.object({
-  enabled: z50.boolean().optional(),
-  requireApprovalOverride: z50.boolean().nullable().optional()
+var updateAiOrgToolSettingSchema = z51.object({
+  enabled: z51.boolean().optional(),
+  requireApprovalOverride: z51.boolean().nullable().optional()
 });
 var PROMPT_SORT_FIELDS = ["key", "name", "status", "createdAt", "updatedAt"];
-var listAiPromptsQuerySchema = z50.object(paginationQuerySchema(PROMPT_SORT_FIELDS, "createdAt", "desc"));
-var createAiPromptTemplateSchema = z50.object({
-  key: z50.string().trim().min(1).max(100).regex(/^[a-z0-9._-]+$/, "key must be lowercase, URL-safe (letters, numbers, dots, hyphens, underscores)"),
-  name: z50.string().trim().min(1).max(200),
-  purpose: z50.string().trim().max(1e3).optional(),
-  systemInstructions: z50.string().trim().min(1).max(2e4),
-  userTemplate: z50.string().trim().min(1).max(2e4),
-  variablesSchema: z50.record(z50.unknown()).optional()
+var listAiPromptsQuerySchema = z51.object(paginationQuerySchema(PROMPT_SORT_FIELDS, "createdAt", "desc"));
+var createAiPromptTemplateSchema = z51.object({
+  key: z51.string().trim().min(1).max(100).regex(/^[a-z0-9._-]+$/, "key must be lowercase, URL-safe (letters, numbers, dots, hyphens, underscores)"),
+  name: z51.string().trim().min(1).max(200),
+  purpose: z51.string().trim().max(1e3).optional(),
+  systemInstructions: z51.string().trim().min(1).max(2e4),
+  userTemplate: z51.string().trim().min(1).max(2e4),
+  variablesSchema: z51.record(z51.unknown()).optional()
 });
-var createAiPromptVersionSchema = z50.object({
-  systemInstructions: z50.string().trim().min(1).max(2e4),
-  userTemplate: z50.string().trim().min(1).max(2e4),
-  variablesSchema: z50.record(z50.unknown()).optional()
+var createAiPromptVersionSchema = z51.object({
+  systemInstructions: z51.string().trim().min(1).max(2e4),
+  userTemplate: z51.string().trim().min(1).max(2e4),
+  variablesSchema: z51.record(z51.unknown()).optional()
 });
-var updateAiPromptTemplateSchema = z50.object({
-  name: z50.string().trim().min(1).max(200).optional(),
-  purpose: z50.string().trim().max(1e3).nullable().optional(),
-  status: z50.enum(["DRAFT", "ACTIVE", "ARCHIVED"]).optional()
+var updateAiPromptTemplateSchema = z51.object({
+  name: z51.string().trim().min(1).max(200).optional(),
+  purpose: z51.string().trim().max(1e3).nullable().optional(),
+  status: z51.enum(["DRAFT", "ACTIVE", "ARCHIVED"]).optional()
 });
-var publishAiPromptVersionSchema = z50.object({
-  versionId: z50.string().uuid()
+var publishAiPromptVersionSchema = z51.object({
+  versionId: z51.string().uuid()
 });
 var WORKFLOW_SORT_FIELDS = ["key", "name", "status", "createdAt", "updatedAt"];
-var listAiWorkflowsQuerySchema = z50.object(paginationQuerySchema(WORKFLOW_SORT_FIELDS, "createdAt", "desc"));
-var workflowStepSchema = z50.object({
-  order: z50.number().int().nonnegative(),
-  toolCode: z50.string().trim().min(1).max(100),
-  description: z50.string().trim().max(500).optional()
+var listAiWorkflowsQuerySchema = z51.object(paginationQuerySchema(WORKFLOW_SORT_FIELDS, "createdAt", "desc"));
+var workflowStepSchema = z51.object({
+  order: z51.number().int().nonnegative(),
+  toolCode: z51.string().trim().min(1).max(100),
+  description: z51.string().trim().max(500).optional()
 });
-var createAiWorkflowSchema = z50.object({
-  key: z50.string().trim().min(1).max(100).regex(/^[a-z0-9._-]+$/, "key must be lowercase, URL-safe (letters, numbers, dots, hyphens, underscores)"),
-  name: z50.string().trim().min(1).max(200),
-  description: z50.string().trim().max(2e3).optional(),
-  steps: z50.array(workflowStepSchema).min(1).max(10),
-  maxSteps: z50.number().int().positive().max(10).optional(),
-  timeoutMs: z50.number().int().positive().max(12e4).optional()
+var createAiWorkflowSchema = z51.object({
+  key: z51.string().trim().min(1).max(100).regex(/^[a-z0-9._-]+$/, "key must be lowercase, URL-safe (letters, numbers, dots, hyphens, underscores)"),
+  name: z51.string().trim().min(1).max(200),
+  description: z51.string().trim().max(2e3).optional(),
+  steps: z51.array(workflowStepSchema).min(1).max(10),
+  maxSteps: z51.number().int().positive().max(10).optional(),
+  timeoutMs: z51.number().int().positive().max(12e4).optional()
 });
-var updateAiWorkflowSchema = z50.object({
-  name: z50.string().trim().min(1).max(200).optional(),
-  description: z50.string().trim().max(2e3).nullable().optional(),
-  steps: z50.array(workflowStepSchema).min(1).max(10).optional(),
-  maxSteps: z50.number().int().positive().max(10).optional(),
-  timeoutMs: z50.number().int().positive().max(12e4).optional(),
+var updateAiWorkflowSchema = z51.object({
+  name: z51.string().trim().min(1).max(200).optional(),
+  description: z51.string().trim().max(2e3).nullable().optional(),
+  steps: z51.array(workflowStepSchema).min(1).max(10).optional(),
+  maxSteps: z51.number().int().positive().max(10).optional(),
+  timeoutMs: z51.number().int().positive().max(12e4).optional(),
   expectedUpdatedAt: expectedUpdatedAtSchema2
 });
-var executeAiWorkflowSchema = z50.object({
+var executeAiWorkflowSchema = z51.object({
   /** Keyed by step order — each step's tool input, supplied by the caller (Phase 12 has no autonomous planning, see AIWorkflow's schema.prisma doc comment). */
-  stepInputs: z50.record(z50.string(), z50.record(z50.unknown())).default({})
+  stepInputs: z51.record(z51.string(), z51.record(z51.unknown())).default({})
 });
-var executeAiToolSchema = z50.object({
-  toolCode: z50.string().trim().min(1).max(100),
-  input: z50.record(z50.unknown()).default({})
+var executeAiToolSchema = z51.object({
+  toolCode: z51.string().trim().min(1).max(100),
+  input: z51.record(z51.unknown()).default({})
 });
 var EXECUTION_SORT_FIELDS = ["createdAt", "startedAt", "status"];
-var listAiExecutionsQuerySchema = z50.object({
+var listAiExecutionsQuerySchema = z51.object({
   ...paginationQuerySchema(EXECUTION_SORT_FIELDS, "createdAt", "desc"),
-  kind: z50.enum(["TOOL_CALL", "WORKFLOW"]).optional(),
-  status: z50.enum(["PENDING", "RUNNING", "AWAITING_APPROVAL", "COMPLETED", "FAILED", "CANCELLED"]).optional()
+  kind: z51.enum(["TOOL_CALL", "WORKFLOW"]).optional(),
+  status: z51.enum(["PENDING", "RUNNING", "AWAITING_APPROVAL", "COMPLETED", "FAILED", "CANCELLED"]).optional()
 });
-var usageSummaryQuerySchema = z50.object({
-  dateFrom: z50.coerce.date().optional(),
-  dateTo: z50.coerce.date().optional()
+var usageSummaryQuerySchema = z51.object({
+  dateFrom: z51.coerce.date().optional(),
+  dateTo: z51.coerce.date().optional()
 });
 var APPROVAL_SORT_FIELDS = ["createdAt", "expiresAt", "status"];
-var listAiApprovalsQuerySchema = z50.object({
+var listAiApprovalsQuerySchema = z51.object({
   ...paginationQuerySchema(APPROVAL_SORT_FIELDS, "createdAt", "desc"),
-  status: z50.enum(["PENDING", "APPROVED", "REJECTED", "EXPIRED"]).optional()
+  status: z51.enum(["PENDING", "APPROVED", "REJECTED", "EXPIRED"]).optional()
 });
-var decideAiApprovalSchema = z50.object({
-  decision: z50.enum(["APPROVE", "REJECT"]),
-  rejectionReason: z50.string().trim().max(2e3).optional()
+var decideAiApprovalSchema = z51.object({
+  decision: z51.enum(["APPROVE", "REJECT"]),
+  rejectionReason: z51.string().trim().max(2e3).optional()
 });
 
 // server/routes/v1/aiProviderRoutes.ts
-var router46 = Router46();
+var router46 = Router47();
 router46.use(authenticateToken);
 function requestMeta33(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"], requestId: req.requestId };
@@ -25317,7 +25828,7 @@ router46.patch(
 var aiProviderRoutes_default = router46;
 
 // server/routes/v1/aiToolRoutes.ts
-import { Router as Router47 } from "express";
+import { Router as Router48 } from "express";
 
 // server/repositories/aiToolRepository.ts
 var aiToolRepository = {
@@ -25358,7 +25869,7 @@ var aiToolService = {
       requireApprovalOverride: settingByCode.get(tool2.code)?.requireApprovalOverride ?? null
     }));
   },
-  async updateOrgSetting(caller, toolCode, input, meta4 = {}) {
+  async updateOrgSetting(caller, toolCode, input, meta5 = {}) {
     const tool2 = await aiToolRepository.getToolByCode(toolCode);
     if (!tool2) throw new NotFoundError(`AI tool "${toolCode}" not found.`);
     const setting = await aiToolRepository.upsertOrgSetting(caller.organizationId, toolCode, input);
@@ -25370,15 +25881,15 @@ var aiToolService = {
       resourceType: "ai_tool",
       resourceId: toolCode,
       afterData: { enabled: setting.enabled, requireApprovalOverride: setting.requireApprovalOverride },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return setting;
   }
 };
 
 // server/routes/v1/aiToolRoutes.ts
-var router47 = Router47();
+var router47 = Router48();
 router47.use(authenticateToken);
 function requestMeta34(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"], requestId: req.requestId };
@@ -25403,7 +25914,7 @@ router47.patch(
 var aiToolRoutes_default = router47;
 
 // server/routes/v1/aiPromptRoutes.ts
-import { Router as Router48 } from "express";
+import { Router as Router49 } from "express";
 
 // server/repositories/aiPromptRepository.ts
 var aiPromptRepository = {
@@ -25510,7 +26021,7 @@ var aiPromptService = {
   async getTemplate(organizationId, id) {
     return loadTemplateOrThrow2(id, organizationId);
   },
-  async createTemplate(caller, input, meta4 = {}) {
+  async createTemplate(caller, input, meta5 = {}) {
     const existing = await aiPromptRepository.findByKeyInOrg(input.key, caller.organizationId);
     if (existing) throw new ConflictError(`A prompt template with key "${input.key}" already exists in this organization.`);
     const template = await aiPromptRepository.create(caller.organizationId, caller.id, input);
@@ -25522,12 +26033,12 @@ var aiPromptService = {
       resourceType: "ai_prompt_template",
       resourceId: template.id,
       afterData: { key: template.key, name: template.name },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return template;
   },
-  async createVersion(caller, templateId, input, meta4 = {}) {
+  async createVersion(caller, templateId, input, meta5 = {}) {
     await loadTemplateOrThrow2(templateId, caller.organizationId);
     const version = await aiPromptRepository.createVersion(templateId, caller.id, input);
     await auditLogRepository.record({
@@ -25538,12 +26049,12 @@ var aiPromptService = {
       resourceType: "ai_prompt_version",
       resourceId: version.id,
       afterData: { templateId, version: version.version },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return version;
   },
-  async updateTemplate(caller, id, input, meta4 = {}) {
+  async updateTemplate(caller, id, input, meta5 = {}) {
     await loadTemplateOrThrow2(id, caller.organizationId);
     const template = await aiPromptRepository.update(id, caller.id, input);
     await auditLogRepository.record({
@@ -25554,12 +26065,12 @@ var aiPromptService = {
       resourceType: "ai_prompt_template",
       resourceId: id,
       afterData: input,
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return template;
   },
-  async publishVersion(caller, templateId, versionId, meta4 = {}) {
+  async publishVersion(caller, templateId, versionId, meta5 = {}) {
     await loadTemplateOrThrow2(templateId, caller.organizationId);
     const version = await aiPromptRepository.findVersionInTemplate(templateId, versionId);
     if (!version) throw new ValidationError("versionId does not refer to a version of this prompt template.");
@@ -25575,12 +26086,12 @@ var aiPromptService = {
       resourceType: "ai_prompt_template",
       resourceId: templateId,
       afterData: { versionId },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return aiPromptRepository.findByIdInOrg(templateId, caller.organizationId);
   },
-  async deleteTemplate(caller, id, meta4 = {}) {
+  async deleteTemplate(caller, id, meta5 = {}) {
     await loadTemplateOrThrow2(id, caller.organizationId);
     await aiPromptRepository.update(id, caller.id, { status: "ARCHIVED" });
     await auditLogRepository.record({
@@ -25590,14 +26101,14 @@ var aiPromptService = {
       action: "AI_PROMPT_TEMPLATE_ARCHIVED",
       resourceType: "ai_prompt_template",
       resourceId: id,
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
   }
 };
 
 // server/routes/v1/aiPromptRoutes.ts
-var router48 = Router48();
+var router48 = Router49();
 router48.use(authenticateToken);
 function requestMeta35(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"], requestId: req.requestId };
@@ -25673,7 +26184,7 @@ router48.delete(
 var aiPromptRoutes_default = router48;
 
 // server/routes/v1/aiWorkflowRoutes.ts
-import { Router as Router49 } from "express";
+import { Router as Router50 } from "express";
 
 // server/repositories/aiWorkflowRepository.ts
 var aiWorkflowRepository = {
@@ -25798,7 +26309,7 @@ var aiWorkflowService = {
   async getWorkflow(organizationId, id) {
     return loadWorkflowOrThrow(id, organizationId);
   },
-  async createWorkflow(caller, input, meta4 = {}) {
+  async createWorkflow(caller, input, meta5 = {}) {
     const existing = await aiWorkflowRepository.findByKeyInOrg(input.key, caller.organizationId);
     if (existing) throw new ConflictError(`A workflow with key "${input.key}" already exists in this organization.`);
     assertStepsValid(input.steps, input.maxSteps ?? 10);
@@ -25811,12 +26322,12 @@ var aiWorkflowService = {
       resourceType: "ai_workflow",
       resourceId: workflow.id,
       afterData: { key: workflow.key, name: workflow.name },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return workflow;
   },
-  async updateWorkflow(caller, id, input, meta4 = {}) {
+  async updateWorkflow(caller, id, input, meta5 = {}) {
     const existing = await loadWorkflowOrThrow(id, caller.organizationId);
     if (input.expectedUpdatedAt && existing.updatedAt.getTime() !== input.expectedUpdatedAt.getTime()) {
       throw new ConflictError("This workflow was modified by someone else since you loaded it.");
@@ -25834,12 +26345,12 @@ var aiWorkflowService = {
       resourceType: "ai_workflow",
       resourceId: id,
       afterData: patch,
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return workflow;
   },
-  async publishWorkflow(caller, id, meta4 = {}) {
+  async publishWorkflow(caller, id, meta5 = {}) {
     await loadWorkflowOrThrow(id, caller.organizationId);
     const workflow = await aiWorkflowRepository.setStatus(id, "ACTIVE", caller.id);
     await auditLogRepository.record({
@@ -25849,12 +26360,12 @@ var aiWorkflowService = {
       action: "AI_WORKFLOW_PUBLISHED",
       resourceType: "ai_workflow",
       resourceId: id,
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return workflow;
   },
-  async archiveWorkflow(caller, id, meta4 = {}) {
+  async archiveWorkflow(caller, id, meta5 = {}) {
     await loadWorkflowOrThrow(id, caller.organizationId);
     const workflow = await aiWorkflowRepository.setStatus(id, "ARCHIVED", caller.id);
     await auditLogRepository.record({
@@ -25864,8 +26375,8 @@ var aiWorkflowService = {
       action: "AI_WORKFLOW_ARCHIVED",
       resourceType: "ai_workflow",
       resourceId: id,
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return workflow;
   },
@@ -25876,7 +26387,7 @@ var aiWorkflowService = {
    * territory); a workflow left AWAITING_APPROVAL is a terminal state here,
    * re-run from scratch once the approval is resolved.
    */
-  async executeWorkflow(caller, id, input, meta4 = {}) {
+  async executeWorkflow(caller, id, input, meta5 = {}) {
     const workflow = await loadWorkflowOrThrow(id, caller.organizationId);
     if (workflow.status !== "ACTIVE") {
       throw new ValidationError("Only an ACTIVE workflow can be executed.");
@@ -25888,7 +26399,7 @@ var aiWorkflowService = {
       userId: caller.id,
       kind: "WORKFLOW",
       workflowId: workflow.id,
-      requestId: meta4.requestId,
+      requestId: meta5.requestId,
       input: input.stepInputs
     });
     await auditLogRepository.record({
@@ -25899,8 +26410,8 @@ var aiWorkflowService = {
       resourceType: "ai_execution",
       resourceId: execution.id,
       afterData: { workflowId: workflow.id, workflowKey: workflow.key },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     const stepResults = [];
     const deadline = Date.now() + workflow.timeoutMs;
@@ -25916,7 +26427,7 @@ var aiWorkflowService = {
         input: stepInput,
         executionId: execution.id,
         stepOrder: step.order,
-        meta: meta4
+        meta: meta5
       });
       stepResults.push({ order: step.order, toolCode: step.toolCode, ...result });
       if (result.status === "AWAITING_APPROVAL") {
@@ -25931,7 +26442,7 @@ var aiWorkflowService = {
 };
 
 // server/routes/v1/aiWorkflowRoutes.ts
-var router49 = Router49();
+var router49 = Router50();
 router49.use(authenticateToken);
 function requestMeta36(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"], requestId: req.requestId };
@@ -26007,7 +26518,7 @@ router49.post(
 var aiWorkflowRoutes_default = router49;
 
 // server/routes/v1/aiExecutionRoutes.ts
-import { Router as Router50 } from "express";
+import { Router as Router51 } from "express";
 
 // server/services/aiExecutionService.ts
 var aiExecutionService = {
@@ -26020,13 +26531,13 @@ var aiExecutionService = {
     return execution;
   },
   /** A single governed tool call, outside of any workflow — e.g. a human coworker's assistant panel invoking one action directly. */
-  async executeTool(caller, input, meta4 = {}) {
+  async executeTool(caller, input, meta5 = {}) {
     const execution = await aiExecutionRepository.create({
       organizationId: caller.organizationId,
       userId: caller.id,
       kind: "TOOL_CALL",
       toolCode: input.toolCode,
-      requestId: meta4.requestId,
+      requestId: meta5.requestId,
       input: input.input
     });
     const result = await executeGovernedTool({
@@ -26034,7 +26545,7 @@ var aiExecutionService = {
       toolCode: input.toolCode,
       input: input.input,
       executionId: execution.id,
-      meta: meta4
+      meta: meta5
     });
     if (result.status === "AWAITING_APPROVAL") {
       return aiExecutionRepository.complete(execution.id, "AWAITING_APPROVAL", result);
@@ -26047,7 +26558,7 @@ var aiExecutionService = {
 };
 
 // server/routes/v1/aiExecutionRoutes.ts
-var router50 = Router50();
+var router50 = Router51();
 router50.use(authenticateToken);
 function requestMeta37(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"], requestId: req.requestId };
@@ -26093,7 +26604,7 @@ router50.post(
 var aiExecutionRoutes_default = router50;
 
 // server/routes/v1/aiUsageRoutes.ts
-import { Router as Router51 } from "express";
+import { Router as Router52 } from "express";
 
 // server/repositories/aiUsageRepository.ts
 var aiUsageRepository = {
@@ -26154,7 +26665,7 @@ var aiUsageService = {
 };
 
 // server/routes/v1/aiUsageRoutes.ts
-var router51 = Router51();
+var router51 = Router52();
 router51.use(authenticateToken);
 router51.use(requirePermission("ai.usage.read"));
 router51.get(
@@ -26176,7 +26687,7 @@ router51.get(
 var aiUsageRoutes_default = router51;
 
 // server/routes/v1/aiHealthRoutes.ts
-import { Router as Router52 } from "express";
+import { Router as Router53 } from "express";
 
 // server/services/aiHealthService.ts
 var DAY = 24 * 60 * 60 * 1e3;
@@ -26301,7 +26812,7 @@ var aiHealthService = {
 };
 
 // server/routes/v1/aiHealthRoutes.ts
-var router52 = Router52();
+var router52 = Router53();
 router52.use(authenticateToken);
 router52.get(
   "/health",
@@ -26325,8 +26836,8 @@ router52.put(
 var aiHealthRoutes_default = router52;
 
 // server/routes/v1/portalRegistrationRoutes.ts
-import { Router as Router53 } from "express";
-import { z as z51 } from "zod";
+import { Router as Router54 } from "express";
+import { z as z52 } from "zod";
 
 // server/services/portalRegistrationService.ts
 function assertOperator(caller) {
@@ -26368,7 +26879,7 @@ var portalRegistrationService = {
       };
     });
   },
-  async link(caller, organizationId, clientId, meta4 = {}) {
+  async link(caller, organizationId, clientId, meta5 = {}) {
     assertOperator(caller);
     const org = await prisma.organization.findFirst({ where: { id: organizationId, ...pendingWhere }, select: { id: true } });
     if (!org) throw new NotFoundError("Pending registration not found.");
@@ -26388,11 +26899,11 @@ var portalRegistrationService = {
       resourceType: "organization",
       resourceId: organizationId,
       afterData: { clientId },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
   },
-  async reject(caller, organizationId, meta4 = {}) {
+  async reject(caller, organizationId, meta5 = {}) {
     assertOperator(caller);
     const org = await prisma.organization.findFirst({ where: { id: organizationId, ...pendingWhere }, select: { id: true } });
     if (!org) throw new NotFoundError("Pending registration not found.");
@@ -26406,16 +26917,16 @@ var portalRegistrationService = {
       action: "PORTAL_REGISTRATION_REJECTED",
       resourceType: "organization",
       resourceId: organizationId,
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
   }
 };
 
 // server/routes/v1/portalRegistrationRoutes.ts
-var router53 = Router53();
+var router53 = Router54();
 router53.use(authenticateToken);
-var meta2 = (req) => ({ ip: req.ip, userAgent: req.headers["user-agent"] });
+var meta3 = (req) => ({ ip: req.ip, userAgent: req.headers["user-agent"] });
 router53.get(
   "/",
   requirePermission("workspaces.read"),
@@ -26426,8 +26937,8 @@ router53.post(
   requirePermission("workspaces.update"),
   sensitiveActionLimiter,
   asyncHandler(async (req, res) => {
-    const { clientId } = z51.object({ clientId: z51.string().uuid() }).parse(req.body);
-    await portalRegistrationService.link(req.user, req.params.organizationId, clientId, meta2(req));
+    const { clientId } = z52.object({ clientId: z52.string().uuid() }).parse(req.body);
+    await portalRegistrationService.link(req.user, req.params.organizationId, clientId, meta3(req));
     sendSuccess(res, { linked: true });
   })
 );
@@ -26436,15 +26947,15 @@ router53.post(
   requirePermission("workspaces.suspend"),
   sensitiveActionLimiter,
   asyncHandler(async (req, res) => {
-    await portalRegistrationService.reject(req.user, req.params.organizationId, meta2(req));
+    await portalRegistrationService.reject(req.user, req.params.organizationId, meta3(req));
     sendSuccess(res, { rejected: true });
   })
 );
 var portalRegistrationRoutes_default = router53;
 
 // server/routes/v1/aiApprovalRoutes.ts
-import { Router as Router54 } from "express";
-var router54 = Router54();
+import { Router as Router55 } from "express";
+var router54 = Router55();
 router54.use(authenticateToken);
 function requestMeta38(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"], requestId: req.requestId };
@@ -26486,8 +26997,8 @@ var aiApprovalRoutes_default = router54;
 
 // server/routes/v1/automationRoutes.ts
 import { timingSafeEqual as timingSafeEqual2 } from "node:crypto";
-import { Router as Router55 } from "express";
-import { z as z52 } from "zod";
+import { Router as Router56 } from "express";
+import { z as z53 } from "zod";
 
 // server/services/contentSchedulingService.ts
 function hasPublishableContent(revision) {
@@ -26593,7 +27104,7 @@ function constantTimeEquals(a, b) {
   const bb = Buffer.from(b);
   return ab.length === bb.length && timingSafeEqual2(ab, bb);
 }
-var router55 = Router55();
+var router55 = Router56();
 router55.get(
   "/internal/tick",
   asyncHandler(async (req, res) => {
@@ -26603,91 +27114,93 @@ router55.get(
     if (!constantTimeEquals(req.headers.authorization ?? "", `Bearer ${config.cronSecret}`)) {
       throw new AuthenticationError("Invalid cron credentials.");
     }
-    const [automation, content, webhookRetries] = await Promise.all([
+    const [automation, content, webhookRetries, socialTokenHealth] = await Promise.all([
       automationService.runCronTick(),
       contentSchedulingService.publishDueScheduled(),
-      webhookEndpointService.processDueRetries()
+      webhookEndpointService.processDueRetries(),
+      // Daily social token check; a failure here must never break the other jobs sharing this cron entry.
+      socialAccountService.runTokenHealthJob().catch(() => ({ checked: 0, needsAttention: 0, errors: 1 }))
     ]);
-    sendSuccess(res, { automation, content, webhookRetries });
+    sendSuccess(res, { automation, content, webhookRetries, socialTokenHealth });
   })
 );
 router55.use(authenticateToken);
-var CreateWorkflowSchema = z52.object({
-  name: z52.string().min(1).max(200),
-  description: z52.string().optional(),
-  category: z52.string().default("GENERAL"),
-  triggerType: z52.enum(["EVENT", "SCHEDULE", "MANUAL", "API", "CONDITIONAL"]).default("EVENT"),
-  triggerConfig: z52.record(z52.unknown()).default({}),
-  conditions: z52.unknown().default([]),
-  steps: z52.array(z52.record(z52.unknown())).default([]),
-  retryPolicy: z52.object({
-    maxRetries: z52.number().int().min(0).max(5).default(2),
-    backoffMs: z52.number().int().min(100).max(6e4).default(1e3),
-    exponential: z52.boolean().default(true)
+var CreateWorkflowSchema = z53.object({
+  name: z53.string().min(1).max(200),
+  description: z53.string().optional(),
+  category: z53.string().default("GENERAL"),
+  triggerType: z53.enum(["EVENT", "SCHEDULE", "MANUAL", "API", "CONDITIONAL"]).default("EVENT"),
+  triggerConfig: z53.record(z53.unknown()).default({}),
+  conditions: z53.unknown().default([]),
+  steps: z53.array(z53.record(z53.unknown())).default([]),
+  retryPolicy: z53.object({
+    maxRetries: z53.number().int().min(0).max(5).default(2),
+    backoffMs: z53.number().int().min(100).max(6e4).default(1e3),
+    exponential: z53.boolean().default(true)
   }).optional(),
-  limits: z52.object({
-    maxSteps: z52.number().int().min(1).max(100).default(50),
-    maxDurationMs: z52.number().int().min(5e3).max(6e5).default(3e5),
-    maxAiCalls: z52.number().int().min(0).max(50).default(10),
-    maxToolCalls: z52.number().int().min(0).max(50).default(15),
-    maxLoopIterations: z52.number().int().min(1).max(50).default(10)
+  limits: z53.object({
+    maxSteps: z53.number().int().min(1).max(100).default(50),
+    maxDurationMs: z53.number().int().min(5e3).max(6e5).default(3e5),
+    maxAiCalls: z53.number().int().min(0).max(50).default(10),
+    maxToolCalls: z53.number().int().min(0).max(50).default(15),
+    maxLoopIterations: z53.number().int().min(1).max(50).default(10)
   }).optional()
 });
 var UpdateWorkflowSchema = CreateWorkflowSchema.partial().extend({
-  status: z52.enum(["DRAFT", "ACTIVE", "PAUSED", "ARCHIVED"]).optional()
+  status: z53.enum(["DRAFT", "ACTIVE", "PAUSED", "ARCHIVED"]).optional()
 });
-var TriggerWorkflowSchema = z52.object({
-  input: z52.record(z52.unknown()).default({}),
-  correlationId: z52.string().optional()
+var TriggerWorkflowSchema = z53.object({
+  input: z53.record(z53.unknown()).default({}),
+  correlationId: z53.string().optional()
 });
-var DecideApprovalSchema = z52.object({
-  decision: z52.enum(["APPROVED", "REJECTED"]),
-  reason: z52.string().optional()
+var DecideApprovalSchema = z53.object({
+  decision: z53.enum(["APPROVED", "REJECTED"]),
+  reason: z53.string().optional()
 });
-var CreateTaskSchema = z52.object({
-  title: z52.string().min(1),
-  description: z52.string().optional(),
-  assignedUserId: z52.string().optional(),
-  assignedRole: z52.string().optional(),
-  priority: z52.enum(["LOW", "MEDIUM", "HIGH", "URGENT"]).default("MEDIUM"),
-  dueDate: z52.string().optional(),
-  sourceWorkflowId: z52.string().optional(),
-  sourceExecutionId: z52.string().optional(),
-  sourceEntityType: z52.string().optional(),
-  sourceEntityId: z52.string().optional(),
-  isAiGenerated: z52.boolean().default(false),
-  metadata: z52.record(z52.unknown()).optional()
+var CreateTaskSchema = z53.object({
+  title: z53.string().min(1),
+  description: z53.string().optional(),
+  assignedUserId: z53.string().optional(),
+  assignedRole: z53.string().optional(),
+  priority: z53.enum(["LOW", "MEDIUM", "HIGH", "URGENT"]).default("MEDIUM"),
+  dueDate: z53.string().optional(),
+  sourceWorkflowId: z53.string().optional(),
+  sourceExecutionId: z53.string().optional(),
+  sourceEntityType: z53.string().optional(),
+  sourceEntityId: z53.string().optional(),
+  isAiGenerated: z53.boolean().default(false),
+  metadata: z53.record(z53.unknown()).optional()
 });
-var UpdateTaskSchema = z52.object({
-  status: z52.enum(["PENDING", "IN_PROGRESS", "COMPLETED", "CANCELLED"]).optional(),
-  assignedUserId: z52.string().optional(),
-  priority: z52.enum(["LOW", "MEDIUM", "HIGH", "URGENT"]).optional(),
-  dueDate: z52.string().optional()
+var UpdateTaskSchema = z53.object({
+  status: z53.enum(["PENDING", "IN_PROGRESS", "COMPLETED", "CANCELLED"]).optional(),
+  assignedUserId: z53.string().optional(),
+  priority: z53.enum(["LOW", "MEDIUM", "HIGH", "URGENT"]).optional(),
+  dueDate: z53.string().optional()
 });
-var AddTaskCommentSchema = z52.object({
-  text: z52.string().trim().min(1).max(4e3)
+var AddTaskCommentSchema = z53.object({
+  text: z53.string().trim().min(1).max(4e3)
 });
-var CreateScheduleSchema = z52.object({
-  workflowId: z52.string().uuid(),
-  name: z52.string().min(1),
-  description: z52.string().optional(),
-  scheduleType: z52.enum(["ONE_TIME", "RECURRING", "CRON"]).default("RECURRING"),
-  cronExpression: z52.string().optional(),
-  timezone: z52.string().default("UTC"),
-  intervalSeconds: z52.number().int().positive().optional(),
-  config: z52.record(z52.unknown()).optional()
+var CreateScheduleSchema = z53.object({
+  workflowId: z53.string().uuid(),
+  name: z53.string().min(1),
+  description: z53.string().optional(),
+  scheduleType: z53.enum(["ONE_TIME", "RECURRING", "CRON"]).default("RECURRING"),
+  cronExpression: z53.string().optional(),
+  timezone: z53.string().default("UTC"),
+  intervalSeconds: z53.number().int().positive().optional(),
+  config: z53.record(z53.unknown()).optional()
 });
-var EmitEventSchema = z52.object({
-  eventType: z52.string().min(1),
-  entityType: z52.string().min(1),
-  entityId: z52.string().min(1),
-  sourceModule: z52.string().optional(),
-  payload: z52.record(z52.unknown()).default({}),
-  correlationId: z52.string().optional()
+var EmitEventSchema = z53.object({
+  eventType: z53.string().min(1),
+  entityType: z53.string().min(1),
+  entityId: z53.string().min(1),
+  sourceModule: z53.string().optional(),
+  payload: z53.record(z53.unknown()).default({}),
+  correlationId: z53.string().optional()
 });
-var ExecuteActionSchema = z52.object({
-  actionId: z52.string().min(1),
-  input: z52.record(z52.unknown()).default({})
+var ExecuteActionSchema = z53.object({
+  actionId: z53.string().min(1),
+  input: z53.record(z53.unknown()).default({})
 });
 router55.get(
   "/dashboard",
@@ -26769,7 +27282,7 @@ router55.post(
   "/workflows/:id/publish",
   requirePermission("automation.publish"),
   asyncHandler(async (req, res) => {
-    const body = z52.object({ changeSummary: z52.string().optional() }).parse(req.body || {});
+    const body = z53.object({ changeSummary: z53.string().optional() }).parse(req.body || {});
     const published = await automationService.publishWorkflow({
       id: req.params.id,
       organizationId: req.user.organizationId,
@@ -26838,7 +27351,7 @@ router55.post(
   "/executions/:id/cancel",
   requirePermission("automation.manage"),
   asyncHandler(async (req, res) => {
-    const body = z52.object({ reason: z52.string().optional() }).parse(req.body || {});
+    const body = z53.object({ reason: z53.string().optional() }).parse(req.body || {});
     const result = await automationService.cancelExecution(req.params.id, req.user.organizationId, body.reason);
     sendSuccess(res, { execution: result });
   })
@@ -26968,7 +27481,7 @@ router55.patch(
   "/schedules/:id/toggle",
   requirePermission("automation.manage"),
   asyncHandler(async (req, res) => {
-    const body = z52.object({ isActive: z52.boolean().optional() }).parse(req.body || {});
+    const body = z53.object({ isActive: z53.boolean().optional() }).parse(req.body || {});
     const schedule = await automationService.toggleSchedule(req.params.id, req.user.organizationId, body.isActive);
     sendSuccess(res, { schedule });
   })
@@ -27043,13 +27556,13 @@ router55.post(
 var automationRoutes_default = router55;
 
 // server/routes/v1/knowledgeRoutes.ts
-import { Router as Router56 } from "express";
+import { Router as Router57 } from "express";
 import express3 from "express";
 
 // server/schemas/knowledgeSchemas.ts
-import { z as z53 } from "zod";
-var knowledgeAccessPolicySchema = z53.enum(["PUBLIC", "RESTRICTED", "ROLE_BASED", "OWNER_ONLY"]);
-var knowledgeSourceTypeSchema = z53.enum([
+import { z as z54 } from "zod";
+var knowledgeAccessPolicySchema = z54.enum(["PUBLIC", "RESTRICTED", "ROLE_BASED", "OWNER_ONLY"]);
+var knowledgeSourceTypeSchema = z54.enum([
   "UPLOADED_DOCUMENT",
   "MEDIA_ASSET",
   "CMS_CONTENT",
@@ -27061,51 +27574,51 @@ var knowledgeSourceTypeSchema = z53.enum([
   "MANUAL_ENTRY",
   "EXTERNAL_CONNECTOR"
 ]);
-var createCollectionSchema = z53.object({
-  name: z53.string().trim().min(1).max(200),
-  description: z53.string().trim().max(2e3).optional(),
+var createCollectionSchema = z54.object({
+  name: z54.string().trim().min(1).max(200),
+  description: z54.string().trim().max(2e3).optional(),
   accessPolicy: knowledgeAccessPolicySchema.optional(),
-  allowedRoles: z53.array(z53.string().trim().min(1)).max(50).optional(),
-  metadata: z53.record(z53.unknown()).optional()
+  allowedRoles: z54.array(z54.string().trim().min(1)).max(50).optional(),
+  metadata: z54.record(z54.unknown()).optional()
 });
-var registerSourceSchema = z53.object({
-  collectionId: z53.string().trim().uuid().optional(),
-  name: z53.string().trim().min(1).max(200),
+var registerSourceSchema = z54.object({
+  collectionId: z54.string().trim().uuid().optional(),
+  name: z54.string().trim().min(1).max(200),
   sourceType: knowledgeSourceTypeSchema,
-  entityType: z53.string().trim().max(100).optional(),
-  entityId: z53.string().trim().max(200).optional(),
-  config: z53.record(z53.unknown()).optional()
+  entityType: z54.string().trim().max(100).optional(),
+  entityId: z54.string().trim().max(200).optional(),
+  config: z54.record(z54.unknown()).optional()
 });
-var listDocumentsQuerySchema = z53.object({
-  collectionId: z53.string().trim().uuid().optional(),
-  sourceId: z53.string().trim().uuid().optional(),
-  status: z53.enum(["UPLOADED", "PROCESSING", "EXTRACTED", "CHUNKED", "INDEXING", "INDEXED", "FAILED", "ARCHIVED"]).optional()
+var listDocumentsQuerySchema = z54.object({
+  collectionId: z54.string().trim().uuid().optional(),
+  sourceId: z54.string().trim().uuid().optional(),
+  status: z54.enum(["UPLOADED", "PROCESSING", "EXTRACTED", "CHUNKED", "INDEXING", "INDEXED", "FAILED", "ARCHIVED"]).optional()
 });
-var uploadDocumentSchema = z53.object({
-  text: z53.string().max(2e6).optional(),
-  contentBase64: z53.string().max(4e7).optional(),
-  mimeType: z53.string().trim().max(100).optional(),
-  filename: z53.string().trim().max(300).optional(),
-  title: z53.string().trim().max(300).optional(),
-  description: z53.string().trim().max(2e3).optional(),
-  collectionId: z53.string().trim().uuid().optional(),
-  sourceId: z53.string().trim().uuid().optional(),
-  securityScope: z53.string().trim().max(100).optional(),
-  requiredRole: z53.string().trim().max(100).optional(),
-  metadata: z53.record(z53.unknown()).optional()
+var uploadDocumentSchema = z54.object({
+  text: z54.string().max(2e6).optional(),
+  contentBase64: z54.string().max(4e7).optional(),
+  mimeType: z54.string().trim().max(100).optional(),
+  filename: z54.string().trim().max(300).optional(),
+  title: z54.string().trim().max(300).optional(),
+  description: z54.string().trim().max(2e3).optional(),
+  collectionId: z54.string().trim().uuid().optional(),
+  sourceId: z54.string().trim().uuid().optional(),
+  securityScope: z54.string().trim().max(100).optional(),
+  requiredRole: z54.string().trim().max(100).optional(),
+  metadata: z54.record(z54.unknown()).optional()
 }).refine((v) => v.contentBase64 !== void 0 || v.text !== void 0, {
   message: "Either text or contentBase64 is required."
 });
-var searchKnowledgeSchema = z53.object({
-  query: z53.string().trim().min(1).max(2e3),
-  mode: z53.enum(["KEYWORD", "SEMANTIC", "HYBRID"]).optional(),
-  limit: z53.coerce.number().int().positive().max(50).optional(),
-  minScore: z53.coerce.number().min(0).max(1).optional(),
-  filter: z53.record(z53.unknown()).optional()
+var searchKnowledgeSchema = z54.object({
+  query: z54.string().trim().min(1).max(2e3),
+  mode: z54.enum(["KEYWORD", "SEMANTIC", "HYBRID"]).optional(),
+  limit: z54.coerce.number().int().positive().max(50).optional(),
+  minScore: z54.coerce.number().min(0).max(1).optional(),
+  filter: z54.record(z54.unknown()).optional()
 });
 
 // server/routes/v1/knowledgeRoutes.ts
-var router56 = Router56();
+var router56 = Router57();
 router56.use(authenticateToken);
 router56.get(
   "/collections",
@@ -27269,7 +27782,7 @@ router56.post(
 var knowledgeRoutes_default = router56;
 
 // server/routes/v1/copilotRoutes.ts
-import { Router as Router57 } from "express";
+import { Router as Router58 } from "express";
 
 // server/services/copilot/CopilotService.ts
 import crypto13 from "crypto";
@@ -28082,52 +28595,52 @@ ${JSON.stringify(executionResult, null, 2)}
 };
 
 // server/schemas/copilotSchemas.ts
-import { z as z54 } from "zod";
-var conversationModeSchema = z54.enum(["ANSWER", "EXPLAIN", "SUMMARIZE", "ANALYZE", "RECOMMEND", "DRAFT", "EXECUTE"]);
-var createWorkspaceSchema = z54.object({
-  name: z54.string().trim().min(1).max(200),
-  slug: z54.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)").optional(),
-  description: z54.string().trim().max(2e3).optional(),
-  icon: z54.string().trim().max(100).optional(),
-  allowedTools: z54.array(z54.string().trim().min(1)).max(100).optional(),
-  allowedModules: z54.array(z54.string().trim().min(1)).max(100).optional(),
-  requiredPermissions: z54.array(z54.string().trim().min(1)).max(100).optional(),
-  systemInstruction: z54.string().trim().max(1e4).optional(),
+import { z as z55 } from "zod";
+var conversationModeSchema = z55.enum(["ANSWER", "EXPLAIN", "SUMMARIZE", "ANALYZE", "RECOMMEND", "DRAFT", "EXECUTE"]);
+var createWorkspaceSchema = z55.object({
+  name: z55.string().trim().min(1).max(200),
+  slug: z55.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)").optional(),
+  description: z55.string().trim().max(2e3).optional(),
+  icon: z55.string().trim().max(100).optional(),
+  allowedTools: z55.array(z55.string().trim().min(1)).max(100).optional(),
+  allowedModules: z55.array(z55.string().trim().min(1)).max(100).optional(),
+  requiredPermissions: z55.array(z55.string().trim().min(1)).max(100).optional(),
+  systemInstruction: z55.string().trim().max(1e4).optional(),
   defaultMode: conversationModeSchema.optional(),
-  temperature: z54.coerce.number().min(0).max(2).optional(),
-  maxTokens: z54.coerce.number().int().positive().max(32e3).optional(),
-  requireCitations: z54.coerce.boolean().optional()
+  temperature: z55.coerce.number().min(0).max(2).optional(),
+  maxTokens: z55.coerce.number().int().positive().max(32e3).optional(),
+  requireCitations: z55.coerce.boolean().optional()
 });
-var createConversationSchema = z54.object({
-  workspaceId: z54.string().trim().uuid().optional(),
-  title: z54.string().trim().max(300).optional(),
-  contextMetadata: z54.record(z54.unknown()).optional()
+var createConversationSchema = z55.object({
+  workspaceId: z55.string().trim().uuid().optional(),
+  title: z55.string().trim().max(300).optional(),
+  contextMetadata: z55.record(z55.unknown()).optional()
 });
-var listConversationsQuerySchema = z54.object({
-  workspaceId: z54.string().trim().uuid().optional(),
-  status: z54.string().trim().max(50).optional(),
-  search: z54.string().trim().max(300).optional(),
-  limit: z54.coerce.number().int().positive().max(100).optional(),
-  offset: z54.coerce.number().int().nonnegative().optional()
+var listConversationsQuerySchema = z55.object({
+  workspaceId: z55.string().trim().uuid().optional(),
+  status: z55.string().trim().max(50).optional(),
+  search: z55.string().trim().max(300).optional(),
+  limit: z55.coerce.number().int().positive().max(100).optional(),
+  offset: z55.coerce.number().int().nonnegative().optional()
 });
-var contextMetadataSchema = z54.object({
-  currentModule: z54.string().trim().max(200).optional(),
-  currentPage: z54.string().trim().max(200).optional(),
-  selectedClientId: z54.string().trim().uuid().optional(),
-  selectedInvoiceId: z54.string().trim().uuid().optional(),
-  selectedDocumentId: z54.string().trim().uuid().optional(),
-  selectedWorkflowId: z54.string().trim().uuid().optional()
-}).catchall(z54.unknown()).optional();
-var sendMessageSchema = z54.object({
-  conversationId: z54.string().trim().uuid().optional(),
-  workspaceId: z54.string().trim().uuid().optional(),
-  content: z54.string().trim().min(1).max(2e4),
+var contextMetadataSchema = z55.object({
+  currentModule: z55.string().trim().max(200).optional(),
+  currentPage: z55.string().trim().max(200).optional(),
+  selectedClientId: z55.string().trim().uuid().optional(),
+  selectedInvoiceId: z55.string().trim().uuid().optional(),
+  selectedDocumentId: z55.string().trim().uuid().optional(),
+  selectedWorkflowId: z55.string().trim().uuid().optional()
+}).catchall(z55.unknown()).optional();
+var sendMessageSchema = z55.object({
+  conversationId: z55.string().trim().uuid().optional(),
+  workspaceId: z55.string().trim().uuid().optional(),
+  content: z55.string().trim().min(1).max(2e4),
   mode: conversationModeSchema.optional(),
   contextMetadata: contextMetadataSchema
 });
 
 // server/routes/v1/copilotRoutes.ts
-var router57 = Router57();
+var router57 = Router58();
 router57.use(authenticateToken);
 router57.get(
   "/workspaces",
@@ -28310,8 +28823,8 @@ router57.get(
 var copilotRoutes_default = router57;
 
 // server/routes/v1/adminRoutes.ts
-import { Router as Router58 } from "express";
-import { z as z55 } from "zod";
+import { Router as Router59 } from "express";
+import { z as z56 } from "zod";
 
 // server/services/admin/adminOverviewService.ts
 var SECURITY_EVENT_ACTIONS = [
@@ -28443,11 +28956,11 @@ var adminOverviewService = {
 };
 
 // server/routes/v1/adminRoutes.ts
-var router58 = Router58();
+var router58 = Router59();
 router58.use(authenticateToken);
 router58.get("/overview", requirePermission("security.read"), asyncHandler(async (req, res) => sendSuccess(res, { overview: await adminOverviewService.overview(req.user) })));
 router58.get("/security/policy", requirePermission("security.read"), (_req, res) => sendSuccess(res, { policy: adminOverviewService.policy() }));
-var pageQuery = z55.object({ page: z55.coerce.number().int().positive().default(1), limit: z55.coerce.number().int().positive().max(100).default(20) });
+var pageQuery = z56.object({ page: z56.coerce.number().int().positive().default(1), limit: z56.coerce.number().int().positive().max(100).default(20) });
 router58.get(
   "/security/events",
   requirePermission("security.read"),
@@ -28478,7 +28991,7 @@ router58.post(
 var adminRoutes_default = router58;
 
 // server/routes/v1/integrationRoutes.ts
-import { Router as Router59 } from "express";
+import { Router as Router60 } from "express";
 
 // server/services/admin/integrationService.ts
 var INTEGRATION_CATALOG = [
@@ -28660,7 +29173,7 @@ var integrationService = {
       encryption: { source: encryptionKeySource() }
     };
   },
-  async upsert(caller, provider, input, meta4 = {}) {
+  async upsert(caller, provider, input, meta5 = {}) {
     const entry = catalogEntry(provider);
     const existing = await prisma.integration.findUnique({ where: { organizationId_provider: { organizationId: caller.organizationId, provider } } });
     let cfg = existing?.config ?? {};
@@ -28694,12 +29207,12 @@ var integrationService = {
       resourceId: row.id,
       afterData: { provider, enabled: row.enabled, configKeys: Object.keys(cfg), credentialRotated: input.secret !== void 0 },
       // never the secret
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return projectIntegration(row);
   },
-  async test(caller, provider, meta4 = {}) {
+  async test(caller, provider, meta5 = {}) {
     catalogEntry(provider);
     const row = await prisma.integration.findUnique({ where: { organizationId_provider: { organizationId: caller.organizationId, provider } } });
     if (!row || deriveStatus(row) === "NOT_CONFIGURED") throw new ValidationError("Configure this integration before testing it.");
@@ -28718,12 +29231,12 @@ var integrationService = {
       resourceId: row.id,
       result: result.ok ? "SUCCESS" : "FAILURE",
       afterData: { provider, ok: result.ok },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return projectIntegration(updated);
   },
-  async clearSecret(caller, provider, meta4 = {}) {
+  async clearSecret(caller, provider, meta5 = {}) {
     catalogEntry(provider);
     const row = await prisma.integration.findUnique({ where: { organizationId_provider: { organizationId: caller.organizationId, provider } } });
     if (!row) throw new NotFoundError("Integration not configured.");
@@ -28739,21 +29252,21 @@ var integrationService = {
       resourceType: "integration",
       resourceId: row.id,
       afterData: { provider },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return projectIntegration(updated);
   }
 };
 
 // server/services/admin/apiKeyService.ts
-import { randomBytes as randomBytes4 } from "node:crypto";
+import { randomBytes as randomBytes7 } from "node:crypto";
 var KEY_PREFIX = "artify_ak_";
 var MAX_ACTIVE_KEYS = 25;
 var MAX_LIFETIME_DAYS = 365;
 var LAST_USED_THROTTLE_MS = 6e4;
 function generateApiKey() {
-  return `${KEY_PREFIX}${randomBytes4(32).toString("hex")}`;
+  return `${KEY_PREFIX}${randomBytes7(32).toString("hex")}`;
 }
 function projectApiKey(k) {
   const now = Date.now();
@@ -28787,7 +29300,7 @@ var apiKeyService = {
     const keys = await prisma.apiKey.findMany({ where: { organizationId }, orderBy: { createdAt: "desc" } });
     return keys.map(projectApiKey);
   },
-  async create(caller, input, meta4 = {}) {
+  async create(caller, input, meta5 = {}) {
     const active = await prisma.apiKey.count({ where: { organizationId: caller.organizationId, revokedAt: null } });
     if (active >= MAX_ACTIVE_KEYS) throw new ConflictError(`An organization can have at most ${MAX_ACTIVE_KEYS} active API keys.`);
     const scopes = validateScopes(caller, input.scopes);
@@ -28814,12 +29327,12 @@ var apiKeyService = {
       resourceType: "api_key",
       resourceId: record.id,
       afterData: { name: record.name, scopes, expiresAt: record.expiresAt?.toISOString() ?? null },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return { apiKey: projectApiKey(record), key: key2 };
   },
-  async revoke(caller, id, meta4 = {}) {
+  async revoke(caller, id, meta5 = {}) {
     const existing = await prisma.apiKey.findFirst({ where: { id, organizationId: caller.organizationId } });
     if (!existing) throw new NotFoundError("API key not found.");
     if (existing.revokedAt) return projectApiKey(existing);
@@ -28832,8 +29345,8 @@ var apiKeyService = {
       resourceType: "api_key",
       resourceId: id,
       beforeData: { name: existing.name },
-      ipAddress: meta4.ip,
-      userAgent: meta4.userAgent
+      ipAddress: meta5.ip,
+      userAgent: meta5.userAgent
     });
     return projectApiKey(updated);
   },
@@ -28851,9 +29364,9 @@ var apiKeyService = {
 };
 
 // server/routes/v1/integrationRoutes.ts
-var meta3 = (req) => ({ ip: req.ip, userAgent: req.headers["user-agent"] });
-var noStore = (res) => res.setHeader("Cache-Control", "no-store");
-var integrationsRouter = Router59();
+var meta4 = (req) => ({ ip: req.ip, userAgent: req.headers["user-agent"] });
+var noStore2 = (res) => res.setHeader("Cache-Control", "no-store");
+var integrationsRouter = Router60();
 integrationsRouter.use(authenticateToken);
 integrationsRouter.get("/", requirePermission("integrations.read"), asyncHandler(async (req, res) => sendSuccess(res, await integrationService.overview(req.user.organizationId))));
 integrationsRouter.put(
@@ -28862,22 +29375,22 @@ integrationsRouter.put(
   sensitiveActionLimiter,
   asyncHandler(async (req, res) => {
     const input = upsertIntegrationSchema.parse(req.body);
-    sendSuccess(res, { integration: await integrationService.upsert(req.user, req.params.provider, input, meta3(req)) });
+    sendSuccess(res, { integration: await integrationService.upsert(req.user, req.params.provider, input, meta4(req)) });
   })
 );
 integrationsRouter.post(
   "/:provider/test",
   requirePermission("integrations.manage"),
   sensitiveActionLimiter,
-  asyncHandler(async (req, res) => sendSuccess(res, { integration: await integrationService.test(req.user, req.params.provider, meta3(req)) }))
+  asyncHandler(async (req, res) => sendSuccess(res, { integration: await integrationService.test(req.user, req.params.provider, meta4(req)) }))
 );
 integrationsRouter.delete(
   "/:provider/secret",
   requirePermission("integrations.manage"),
   sensitiveActionLimiter,
-  asyncHandler(async (req, res) => sendSuccess(res, { integration: await integrationService.clearSecret(req.user, req.params.provider, meta3(req)) }))
+  asyncHandler(async (req, res) => sendSuccess(res, { integration: await integrationService.clearSecret(req.user, req.params.provider, meta4(req)) }))
 );
-var webhookEndpointsRouter = Router59();
+var webhookEndpointsRouter = Router60();
 webhookEndpointsRouter.use(authenticateToken);
 webhookEndpointsRouter.get("/events", requirePermission("webhooks.read"), (_req, res) => sendSuccess(res, { events: supportedEvents() }));
 webhookEndpointsRouter.get("/", requirePermission("webhooks.read"), asyncHandler(async (req, res) => sendSuccess(res, { endpoints: await webhookEndpointService.list(req.user.organizationId) })));
@@ -28887,22 +29400,22 @@ webhookEndpointsRouter.post(
   sensitiveActionLimiter,
   asyncHandler(async (req, res) => {
     const input = createWebhookEndpointSchema.parse(req.body);
-    noStore(res);
-    sendSuccess(res, await webhookEndpointService.create(req.user, input, meta3(req)), 201);
+    noStore2(res);
+    sendSuccess(res, await webhookEndpointService.create(req.user, input, meta4(req)), 201);
   })
 );
 webhookEndpointsRouter.patch(
   "/:id",
   requirePermission("webhooks.manage"),
-  asyncHandler(async (req, res) => sendSuccess(res, { endpoint: await webhookEndpointService.update(req.user, req.params.id, updateWebhookEndpointSchema.parse(req.body), meta3(req)) }))
+  asyncHandler(async (req, res) => sendSuccess(res, { endpoint: await webhookEndpointService.update(req.user, req.params.id, updateWebhookEndpointSchema.parse(req.body), meta4(req)) }))
 );
 webhookEndpointsRouter.post(
   "/:id/rotate-secret",
   requirePermission("webhooks.manage"),
   sensitiveActionLimiter,
   asyncHandler(async (req, res) => {
-    noStore(res);
-    sendSuccess(res, await webhookEndpointService.rotateSecret(req.user, req.params.id, meta3(req)));
+    noStore2(res);
+    sendSuccess(res, await webhookEndpointService.rotateSecret(req.user, req.params.id, meta4(req)));
   })
 );
 webhookEndpointsRouter.post(
@@ -28915,7 +29428,7 @@ webhookEndpointsRouter.delete(
   "/:id",
   requirePermission("webhooks.manage"),
   asyncHandler(async (req, res) => {
-    await webhookEndpointService.remove(req.user, req.params.id, meta3(req));
+    await webhookEndpointService.remove(req.user, req.params.id, meta4(req));
     sendSuccess(res, { message: "Webhook endpoint deleted." });
   })
 );
@@ -28934,7 +29447,7 @@ webhookEndpointsRouter.post(
   sensitiveActionLimiter,
   asyncHandler(async (req, res) => sendSuccess(res, { delivery: await webhookEndpointService.retryDelivery(req.user, req.params.deliveryId) }))
 );
-var apiKeysRouter = Router59();
+var apiKeysRouter = Router60();
 apiKeysRouter.use(authenticateToken);
 apiKeysRouter.get("/", requirePermission("api_keys.read"), asyncHandler(async (req, res) => sendSuccess(res, { apiKeys: await apiKeyService.list(req.user.organizationId) })));
 apiKeysRouter.post(
@@ -28943,19 +29456,19 @@ apiKeysRouter.post(
   sensitiveActionLimiter,
   asyncHandler(async (req, res) => {
     const input = createApiKeySchema.parse(req.body);
-    noStore(res);
-    sendSuccess(res, await apiKeyService.create(req.user, input, meta3(req)), 201);
+    noStore2(res);
+    sendSuccess(res, await apiKeyService.create(req.user, input, meta4(req)), 201);
   })
 );
 apiKeysRouter.post(
   "/:id/revoke",
   requirePermission("api_keys.manage"),
   sensitiveActionLimiter,
-  asyncHandler(async (req, res) => sendSuccess(res, { apiKey: await apiKeyService.revoke(req.user, req.params.id, meta3(req)) }))
+  asyncHandler(async (req, res) => sendSuccess(res, { apiKey: await apiKeyService.revoke(req.user, req.params.id, meta4(req)) }))
 );
 
 // server/routes/v1/externalRoutes.ts
-import { Router as Router60 } from "express";
+import { Router as Router61 } from "express";
 
 // server/middleware/apiKeyAuth.ts
 var authenticateApiKey = asyncHandler(async (req, _res, next) => {
@@ -28968,7 +29481,7 @@ var authenticateApiKey = asyncHandler(async (req, _res, next) => {
 });
 
 // server/routes/v1/externalRoutes.ts
-var router59 = Router60();
+var router59 = Router61();
 router59.use(generalApiLimiter, authenticateApiKey);
 router59.get(
   "/whoami",
@@ -28980,7 +29493,7 @@ router59.get(
 var externalRoutes_default = router59;
 
 // server/routes/v1/analyticsRoutes.ts
-import { Router as Router61 } from "express";
+import { Router as Router62 } from "express";
 
 // server/services/analyticsReportingService.ts
 var DEFAULT_RANGE_DAYS = 30;
@@ -29165,7 +29678,7 @@ var analyticsReportingService = {
 };
 
 // server/routes/v1/analyticsRoutes.ts
-var router60 = Router61();
+var router60 = Router62();
 router60.use(authenticateToken);
 router60.get(
   "/overview",
@@ -29188,7 +29701,7 @@ router60.get(
 var analyticsRoutes_default = router60;
 
 // server/routes/v1/reportsRoutes.ts
-import { Router as Router62 } from "express";
+import { Router as Router63 } from "express";
 
 // server/utils/csv.ts
 function escapeCsvCell(value) {
@@ -29208,7 +29721,7 @@ function sendCsv(res, filename, csv) {
 }
 
 // server/routes/v1/reportsRoutes.ts
-var router61 = Router62();
+var router61 = Router63();
 router61.use(authenticateToken);
 function assertReportType(value) {
   if (REPORT_TYPES.includes(value)) return value;
@@ -29254,17 +29767,17 @@ router61.get(
 var reportsRoutes_default = router61;
 
 // server/routes/v1/contentApprovalRoutes.ts
-import { Router as Router63 } from "express";
-import { z as z56 } from "zod";
-var router62 = Router63();
+import { Router as Router64 } from "express";
+import { z as z57 } from "zod";
+var router62 = Router64();
 router62.use(authenticateToken);
-var SubmitSchema = z56.object({
-  contentType: z56.enum(["page", "post"]),
-  contentId: z56.string().min(1)
+var SubmitSchema = z57.object({
+  contentType: z57.enum(["page", "post"]),
+  contentId: z57.string().min(1)
 });
-var DecideSchema = z56.object({
-  decision: z56.enum(["APPROVED", "REJECTED", "CHANGES_REQUESTED"]),
-  reason: z56.string().max(2e3).optional()
+var DecideSchema = z57.object({
+  decision: z57.enum(["APPROVED", "REJECTED", "CHANGES_REQUESTED"]),
+  reason: z57.string().max(2e3).optional()
 });
 router62.get(
   "/",
@@ -29300,7 +29813,7 @@ router62.post(
 var contentApprovalRoutes_default = router62;
 
 // server/routes/v1/index.ts
-var v1Router = Router64();
+var v1Router = Router65();
 v1Router.use("/auth", authRoutes_default);
 v1Router.use("/webhooks", webhookRoutes_default);
 v1Router.use("/system", systemRoutes_default);
@@ -29318,6 +29831,7 @@ v1Router.use("/opportunities", opportunityRoutes_default);
 v1Router.use("/notifications", notificationRoutes_default);
 v1Router.use("/approvals", approvalCenterRoutes_default);
 v1Router.use("/nav", navRoutes_default);
+v1Router.use("/social/accounts", socialAccountsRouter);
 v1Router.use("/forms", formRoutes_default);
 v1Router.use("/crm", crmRoutes_default);
 v1Router.use("/campaigns", campaignRoutes_default);

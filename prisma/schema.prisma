@@ -142,6 +142,8 @@ model Organization {
   webhookEndpoints           WebhookEndpoint[]
   webhookDeliveries          WebhookDelivery[]
   apiKeys                    ApiKey[]
+  socialAccounts             SocialAccount[]
+  socialOAuthStates          SocialOAuthState[]
 
   @@map("organizations")
 }
@@ -190,6 +192,8 @@ model User {
   authHandoffCodes               AuthHandoffCode[]
   navPreference                  UserNavPreference?
   navPins                        UserNavPin[]
+  socialAccountsConnected        SocialAccount[]             @relation("SocialAccountConnectedBy")
+  socialOAuthStates              SocialOAuthState[]
   author                         Author?
   assignedLeads                  Lead[]                      @relation("LeadAssignee")
   managedClients                 Client[]                    @relation("ClientAccountManager")
@@ -414,6 +418,75 @@ model EmailVerificationToken {
   @@index([userId])
   @@index([expiresAt])
   @@map("email_verification_tokens")
+}
+
+// ---- Social Media foundation (Step 4) ----
+enum SocialAccountStatus {
+  CONNECTED
+  NEEDS_REAUTH
+  DISCONNECTED
+  ERROR
+}
+
+// A connected social profile/page, scoped to a workspace (organization). Credentials live in a SEPARATE table so a
+// default query can never pull token material.
+model SocialAccount {
+  id                String              @id @default(uuid())
+  organizationId    String              @map("organization_id")
+  provider          String
+  externalAccountId String              @map("external_account_id")
+  displayName       String              @map("display_name")
+  handle            String?
+  avatarUrl         String?             @map("avatar_url")
+  accountType       String              @default("PROFILE") @map("account_type")
+  status            SocialAccountStatus @default(CONNECTED)
+  scopes            String[]            @default([])
+  tokenExpiresAt    DateTime?           @map("token_expires_at")
+  lastSyncAt        DateTime?           @map("last_sync_at")
+  lastError         String?             @map("last_error")
+  connectedByUserId String?             @map("connected_by_user_id")
+  createdAt         DateTime            @default(now()) @map("created_at")
+  updatedAt         DateTime            @updatedAt @map("updated_at")
+
+  organization Organization             @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  connectedBy  User?                    @relation("SocialAccountConnectedBy", fields: [connectedByUserId], references: [id], onDelete: SetNull)
+  credentials  SocialAccountCredential?
+
+  @@unique([organizationId, provider, externalAccountId])
+  @@index([organizationId, status])
+  @@map("social_accounts")
+}
+
+// Encrypted token blob (AES-256-GCM, bound to the account id). NEVER selected by default; never returned by any API.
+model SocialAccountCredential {
+  id              String   @id @default(uuid())
+  socialAccountId String   @unique @map("social_account_id")
+  ciphertext      String
+  keyVersion      Int      @map("key_version")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  account SocialAccount @relation(fields: [socialAccountId], references: [id], onDelete: Cascade)
+
+  @@map("social_account_credentials")
+}
+
+// Single-use OAuth `state` (CSRF protection), stored hashed, bound to user + workspace + provider.
+model SocialOAuthState {
+  id                 String    @id @default(uuid())
+  stateHash          String    @unique @map("state_hash")
+  organizationId     String    @map("organization_id")
+  userId             String    @map("user_id")
+  provider           String
+  reconnectAccountId String?   @map("reconnect_account_id")
+  expiresAt          DateTime  @map("expires_at")
+  usedAt             DateTime? @map("used_at")
+  createdAt          DateTime  @default(now()) @map("created_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([expiresAt])
+  @@map("social_oauth_states")
 }
 
 // Per-user sidebar preferences (Step 3): rail collapse is per user; pins are per user AND per workspace (organization).

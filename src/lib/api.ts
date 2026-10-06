@@ -2920,3 +2920,40 @@ export const navPreferencesApi = {
   get: () => apiClient.get<{ preferences: NavPreferences }>("/nav/preferences").then((r) => r.preferences),
   update: (patch: Partial<NavPreferences>) => apiClient.put<{ preferences: NavPreferences }>("/nav/preferences", patch).then((r) => r.preferences),
 };
+
+// ---- Social Media: connected accounts (Step 4). Tokens never reach the browser; these shapes contain none. ----
+export type SocialAccountStatus = "CONNECTED" | "NEEDS_REAUTH" | "DISCONNECTED" | "ERROR";
+
+export interface SocialAccountSummary {
+  id: string;
+  provider: string;
+  externalAccountId: string;
+  displayName: string;
+  handle: string | null;
+  avatarUrl: string | null;
+  accountType: string;
+  status: SocialAccountStatus;
+  scopes: string[];
+  tokenExpiresAt: string | null;
+  lastSyncAt: string | null;
+  lastError: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SocialProviderInfo {
+  key: string;
+  label: string;
+  configured: boolean;
+  available: boolean;
+}
+
+export const socialApi = {
+  list: () => apiClient.get<{ accounts: SocialAccountSummary[]; providers: SocialProviderInfo[] }>("/social/accounts"),
+  startConnect: (provider: string) => apiClient.post<{ authUrl: string }>("/social/accounts/connect/start", { provider }),
+  completeConnect: (payload: { state: string; code?: string; error?: string }) =>
+    apiClient.post<{ account: SocialAccountSummary }>("/social/accounts/callback", payload),
+  reconnect: (id: string) => apiClient.post<{ authUrl: string }>(`/social/accounts/${id}/reconnect`),
+  disconnect: (id: string) => apiClient.post<{ account: SocialAccountSummary }>(`/social/accounts/${id}/disconnect`),
+  checkHealth: (id: string) => apiClient.post<{ account: SocialAccountSummary }>(`/social/accounts/${id}/health`),
+};

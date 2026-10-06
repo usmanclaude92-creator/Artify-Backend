@@ -156,6 +156,21 @@ const envSchema = z
     // works but ties stored secrets to that value — set this to rotate the
     // two independently. Min 32 chars when set.
     INTEGRATIONS_ENCRYPTION_KEY: z.string().optional().default(""),
+
+    // Step 4 — Social Media foundation. Token vault key ring: "1:<secret>,2:<secret>" (each secret >= 32 chars);
+    // new credentials use SOCIAL_VAULT_ACTIVE_KEY_VERSION. Unset = a key derived from INTEGRATIONS_ENCRYPTION_KEY /
+    // SESSION_SECRET (version 1), which works but ties stored tokens to that value.
+    SOCIAL_VAULT_KEYS: z.string().optional().default(""),
+    SOCIAL_VAULT_ACTIVE_KEY_VERSION: z.coerce.number().int().positive().optional(),
+    // The mock connector exists for dev/tests; it is disabled in production unless this flag is "true".
+    SOCIAL_MOCK_PROVIDER_ENABLED: z.enum(["true", "false"]).optional(),
+    // Public origin of the Control Center, used to build OAuth redirect URIs.
+    CONTROL_CENTER_BASE_URL: z.string().optional().default(""),
+    // Network app credentials (names only; connectors stay "not configured" until set AND implemented).
+    META_APP_ID: z.string().optional().default(""),
+    META_APP_SECRET: z.string().optional().default(""),
+    LINKEDIN_CLIENT_ID: z.string().optional().default(""),
+    LINKEDIN_CLIENT_SECRET: z.string().optional().default(""),
   })
   .superRefine((val, ctx) => {
     const isProdLike = val.NODE_ENV === "production" || val.NODE_ENV === "staging";
@@ -318,6 +333,14 @@ export type AppConfig = Readonly<{
   cronSecret: string;
   redisUrl: string;
   integrationsEncryptionKey: string;
+  socialVaultKeys: string;
+  socialVaultActiveKeyVersion: number | undefined;
+  socialMockProviderEnabled: boolean;
+  controlCenterBaseUrl: string;
+  metaAppId: string;
+  metaAppSecret: string;
+  linkedinClientId: string;
+  linkedinClientSecret: string;
 }>;
 
 export type EnvValidationResult =
@@ -389,6 +412,14 @@ export function validateEnv(raw: NodeJS.ProcessEnv | Record<string, string | und
       cronSecret: env.CRON_SECRET,
       redisUrl: env.REDIS_URL,
       integrationsEncryptionKey: env.INTEGRATIONS_ENCRYPTION_KEY,
+      socialVaultKeys: env.SOCIAL_VAULT_KEYS,
+      socialVaultActiveKeyVersion: env.SOCIAL_VAULT_ACTIVE_KEY_VERSION,
+      socialMockProviderEnabled: env.SOCIAL_MOCK_PROVIDER_ENABLED ? env.SOCIAL_MOCK_PROVIDER_ENABLED === "true" : env.NODE_ENV !== "production",
+      controlCenterBaseUrl: (env.CONTROL_CENTER_BASE_URL || (env.NODE_ENV === "production" ? "https://cc.artifysols.com" : "http://localhost:3000")).replace(/\/+$/, ""),
+      metaAppId: env.META_APP_ID,
+      metaAppSecret: env.META_APP_SECRET,
+      linkedinClientId: env.LINKEDIN_CLIENT_ID,
+      linkedinClientSecret: env.LINKEDIN_CLIENT_SECRET,
     }),
   };
 }

@@ -98,6 +98,11 @@ const ROLE_PERMISSION_SETS: Record<RoleKey, readonly string[] | "*"> = {
     "reports.export",
     "analytics.read",
     "social.read",
+    "social.accounts.manage",
+    "social.publish",
+    "social.approve",
+    "social.reply",
+    "social.analytics.read",
     "settings.read",
     "settings.manage",
     "audit.read",
@@ -347,6 +352,7 @@ const ROLE_PERMISSION_SETS: Record<RoleKey, readonly string[] | "*"> = {
     "campaigns.update",
     "campaigns.publish",
     "approvals.read",
+    "social.read",
   ],
   USER: [
     "clients.read",
@@ -485,6 +491,7 @@ const ROLE_PERMISSION_SETS: Record<RoleKey, readonly string[] | "*"> = {
     // Phase 14 — VIEWER is read-only for campaigns, same convention.
     "campaigns.read",
     "approvals.read",
+    "social.read",
   ],
   CLIENT_PORTAL: [
     "portal.dashboard.read",
