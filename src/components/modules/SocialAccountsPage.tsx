@@ -11,6 +11,7 @@ import { Card, Button, Badge, LoadingState, ErrorState, EmptyState, ConfirmDialo
 import { ProviderAvatar, StatusBadge, expiresSoon, timeAgo } from "./socialShared";
 import { ConnectPagePicker } from "./ConnectPagePicker";
 import { FacebookSetupPanel } from "./FacebookSetupPanel";
+import { takeOAuthReturn } from "../../lib/oauthReturn";
 
 const SOCIAL_ACCOUNTS_PATH = "/social/accounts";
 
@@ -51,12 +52,10 @@ export const SocialAccountsPage: React.FC = () => {
   // OAuth return: the provider sends the browser back here with ?state=&code= — finish the connection once, then clean the URL.
   useEffect(() => {
     if (handledCallback.current || !canManage) return;
-    const params = new URLSearchParams(window.location.search);
-    const state = params.get("state");
-    if (!state) return;
+    const ret = takeOAuthReturn();
+    if (!ret) return;
     handledCallback.current = true;
-    const code = params.get("code") ?? undefined;
-    const providerError = params.get("error") ?? undefined;
+    const { state, code, error: providerError } = ret;
     window.history.replaceState({}, "", SOCIAL_ACCOUNTS_PATH);
     socialApi
       .completeConnect({ state, code, error: providerError })

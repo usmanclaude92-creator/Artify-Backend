@@ -16,6 +16,7 @@ import { ResetPasswordPage } from "./components/auth/ResetPasswordPage";
 import { AcceptInvitationPage } from "./components/auth/AcceptInvitationPage";
 import { HandoffCallbackPage } from "./components/auth/HandoffCallbackPage";
 import { Spinner } from "./components/ui/ui";
+import { hasPendingOAuthReturn } from "./lib/oauthReturn";
 
 const AUTH_PATHS = ["/login", "/forgot-password", "/reset-password"];
 // Reachable regardless of auth status (Phase 6 §21/§30) — an invitee
@@ -34,7 +35,7 @@ const AppContent: React.FC = () => {
       navigate("/login");
     }
     if (status === "authenticated" && AUTH_PATHS.includes(path)) {
-      navigate("/dashboard");
+      navigate(hasPendingOAuthReturn() ? "/social/accounts" : "/dashboard"); // resume a provider connection interrupted by sign-in
     }
   }, [status, path, navigate]);
 
