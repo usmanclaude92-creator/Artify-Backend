@@ -23,13 +23,15 @@ Manual login flow, long-lived tokens, debug_token, Pages API getting started, Pa
 ## Verify on the first live test (hand-authored fixtures, not recordings)
 Comment webhook payload fields (`comment_id`, `parent_id`), ratings payload, `subscribed_fields` names (`mention`, `ratings`), JSON bodies on every POST edge, `appsecret_proof`, `/me/permissions`, the `tasks` values (`CREATE_CONTENT`, `MODERATE`, `MESSAGING`), polling edge fields, Messenger text limit (2000), error codes.
 
-## Scheduled publishing needs an external trigger
+## Scheduled publishing needs a reliable external trigger
 
-Vercel's own cron entry for this project runs once a day (`0 0 * * *`), and the in-process scheduler only runs while a
-serverless instance is warm. Scheduled posts therefore publish late unless something calls the tick regularly:
+Vercel's own cron entry for this project runs once a day (`0 0 * * *`), the in-process scheduler only runs while a
+serverless instance is warm, and GitHub Actions `schedule` is throttled in practice (the existing `automation-tick.yml`
+ran every ~4-7 hours, not every 5 minutes). Scheduled posts therefore publish late unless something calls the tick
+regularly:
 
 - `POST /api/v1/social/internal/publish-tick` with `Authorization: Bearer <CRON_SECRET>` (404 if `CRON_SECRET` is unset).
-- It is subject to the same gate as every publish: global/workspace enabled, kill switch, dry-run.
-- Options: the bundled GitHub Actions workflow `.github/workflows/social-publish-tick.yml` (every 5 minutes; add repo secret
-  `CRON_SECRET`; it only runs once it is on the default branch), or any external pinger (for example cron-job.org at 1-minute
-  intervals) sending the request above. Manual **Retry now** never depends on this.
+  `GET /api/v1/automation/internal/tick` with the same header also runs the publish catch-up plus the other jobs.
+- Both are subject to the same gate as every publish: global/workspace enabled, kill switch, dry-run.
+- Use an external pinger at 1-minute intervals (for example cron-job.org, or a Vercel Pro cron). Manual **Retry now** never
+  depends on this.
