@@ -146,3 +146,21 @@ describe("validateEnv", () => {
     }
   });
 });
+
+describe("Meta secrets are cleaned of paste artefacts", () => {
+  it("strips surrounding whitespace, newlines and wrapping quotes", () => {
+    const r = validateEnv({ ...VALID_BASE, META_APP_ID: " 123 ", META_APP_SECRET: "  abcdef0123456789\n", META_WEBHOOK_VERIFY_TOKEN: '"tok"' });
+    expect(r.success).toBe(true);
+    if (r.success) {
+      expect(r.config.metaAppId).toBe("123");
+      expect(r.config.metaAppSecret).toBe("abcdef0123456789");
+      expect(r.config.metaWebhookVerifyToken).toBe("tok");
+    }
+  });
+  it("leaves a clean value untouched and keeps empty as empty", () => {
+    const a = validateEnv({ ...VALID_BASE, META_APP_SECRET: "abc123" });
+    const b = validateEnv({ ...VALID_BASE });
+    expect(a.success && a.config.metaAppSecret).toBe("abc123");
+    expect(b.success && b.config.metaAppSecret).toBe("");
+  });
+});

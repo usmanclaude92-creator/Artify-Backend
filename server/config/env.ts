@@ -18,6 +18,9 @@ dotenv.config();
 
 const KNOWN_COMPROMISED_WEBHOOK_SECRET = "artify_whsec_prod_2026_soc2";
 
+/** Secrets pasted into a dashboard often carry a trailing space/newline or wrapping quotes; strip both so they cannot break signatures. */
+const cleanSecret = (v: string): string => v.trim().replace(/^(["'])(.*)\1$/s, "$2").trim();
+
 const envSchema = z
   .object({
     NODE_ENV: z.enum(["development", "test", "staging", "production"]).default("development"),
@@ -167,12 +170,12 @@ const envSchema = z
     // Public origin of the Control Center, used to build OAuth redirect URIs.
     CONTROL_CENTER_BASE_URL: z.string().optional().default(""),
     // Network app credentials (names only; connectors stay "not configured" until set AND implemented).
-    META_APP_ID: z.string().optional().default(""),
-    META_APP_SECRET: z.string().optional().default(""),
+    META_APP_ID: z.string().transform(cleanSecret).optional().default(""),
+    META_APP_SECRET: z.string().transform(cleanSecret).optional().default(""),
     LINKEDIN_CLIENT_ID: z.string().optional().default(""),
     LINKEDIN_CLIENT_SECRET: z.string().optional().default(""),
     // Meta (Facebook Pages). The webhook verify token is a shared secret between us and the Meta app dashboard.
-    META_WEBHOOK_VERIFY_TOKEN: z.string().optional().default(""),
+    META_WEBHOOK_VERIFY_TOKEN: z.string().transform(cleanSecret).optional().default(""),
     META_API_VERSION: z.string().regex(/^v\d{1,2}\.\d$/, "META_API_VERSION must look like v25.0").optional().default("v25.0"),
     // Informational only (shown on the setup panel): the Graph API does not tell us whether the app is in Development or Live mode.
     // Optional override of the permissions requested at login (comma separated). Default = the set this app is known to have.
