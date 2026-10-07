@@ -12,7 +12,7 @@ vi.mock("../../server/config/env", async (importOriginal) => {
 });
 import { config } from "../../server/config/env";
 import { appSecretProof, buildUrl, classifyGraphError, errorFromGraph, errorFromNetwork, metaHttp, verifySignature, webhookChallenge } from "../../server/services/social/connectors/metaGraph";
-import { facebookPageProvider, messengerReplyWindow, parseWebhookPayload, postUrl } from "../../server/services/social/connectors/facebookPageProvider";
+import { facebookPageProvider, facebookScopes, messengerReplyWindow, parseWebhookPayload, postUrl } from "../../server/services/social/connectors/facebookPageProvider";
 import { providerSetup } from "../../server/services/social/connectors/setupInfo";
 import { SocialPublishError } from "../../server/services/social/publishing/publishErrors";
 
@@ -165,7 +165,13 @@ describe("requests", () => {
     const url = new URL(facebookPageProvider.getAuthUrl({ state: "st", redirectUri: "https://cc.example/social/accounts" }));
     expect(`${url.origin}${url.pathname}`).toBe("https://www.facebook.com/v25.0/dialog/oauth");
     expect(Object.fromEntries(url.searchParams)).toMatchObject({ client_id: "APPID", redirect_uri: "https://cc.example/social/accounts", state: "st", response_type: "code" });
-    expect(url.searchParams.get("scope")!.split(",")).toEqual(["pages_show_list", "pages_manage_metadata", "pages_manage_posts", "pages_manage_engagement", "pages_read_engagement", "pages_read_user_engagement", "pages_messaging"]);
+    // pages_read_user_engagement is NOT requested: Facebook rejects the whole login if the app lacks any requested permission.
+    expect(url.searchParams.get("scope")!.split(",")).toEqual(["pages_show_list", "pages_manage_metadata", "pages_manage_posts", "pages_manage_engagement", "pages_read_engagement", "pages_messaging"]);
+    expect(url.searchParams.get("scope")).not.toContain("pages_read_user_engagement");
+    expect(facebookPageProvider.defaultScopes).toEqual(facebookScopes());
+    (config as unknown as Record<string, unknown>).metaLoginScopes = "pages_show_list,pages_read_user_content";
+    expect(new URL(facebookPageProvider.getAuthUrl({ state: "st", redirectUri: "https://cc.example/x" })).searchParams.get("scope")).toBe("pages_show_list,pages_read_user_content");
+    (config as unknown as Record<string, unknown>).metaLoginScopes = "";
   });
 
   it("OAuth: exchanges the code, upgrades to a long-lived token, lists Pages; returns only Page tokens (never the user token)", async () => {

@@ -5,7 +5,7 @@ Code: `server/services/social/connectors/{metaGraph,facebookPageProvider,setupIn
 ## Meta app dashboard settings
 - **Facebook Login → Valid OAuth Redirect URIs:** `<CONTROL_CENTER_BASE_URL>/social/accounts`
 - **Webhooks → Page object:** callback URL `<CONTROL_CENTER_BASE_URL>/api/v1/social/webhooks/meta_facebook`, verify token = value of `META_WEBHOOK_VERIFY_TOKEN`; subscribe to `feed`, `messages` (and `mention`, `ratings` if offered).
-- **Permissions:** `pages_show_list`, `pages_manage_metadata`, `pages_manage_posts`, `pages_manage_engagement`, `pages_read_engagement`, `pages_read_user_engagement`, `pages_messaging`.
+- **Permissions:** `pages_show_list`, `pages_manage_metadata`, `pages_manage_posts`, `pages_manage_engagement`, `pages_read_engagement`, `pages_messaging` (the default login set; `pages_read_user_engagement` is NOT available to this app and makes Facebook reject the login). Optional: add `pages_read_user_content` in the dashboard, then list it in `META_LOGIN_SCOPES`.
 - Webhook subscription per Page is done by the connector right after the Page is connected (`POST /{page-id}/subscribed_apps`), using that Page's token.
 
 ## Env vars (names only)

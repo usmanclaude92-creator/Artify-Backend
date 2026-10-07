@@ -295,6 +295,8 @@ var envSchema = z.object({
   META_WEBHOOK_VERIFY_TOKEN: z.string().optional().default(""),
   META_API_VERSION: z.string().regex(/^v\d{1,2}\.\d$/, "META_API_VERSION must look like v25.0").optional().default("v25.0"),
   // Informational only (shown on the setup panel): the Graph API does not tell us whether the app is in Development or Live mode.
+  // Optional override of the permissions requested at login (comma separated). Default = the set this app is known to have.
+  META_LOGIN_SCOPES: z.string().regex(/^([a-z_]+)(,[a-z_]+)*$/, "META_LOGIN_SCOPES must be comma-separated permission names").optional().or(z.literal("")).default(""),
   META_APP_MODE: z.enum(["development", "live", "unknown"]).optional().default("unknown"),
   META_INBOX_POLLING: z.enum(["true", "false"]).optional().default("false"),
   LINKEDIN_API_VERSION: z.string().regex(/^\d{6}$/, "LINKEDIN_API_VERSION must look like YYYYMM").optional().default("202504"),
@@ -456,6 +458,7 @@ function validateEnv(raw) {
       metaAppSecret: env.META_APP_SECRET,
       metaWebhookVerifyToken: env.META_WEBHOOK_VERIFY_TOKEN,
       metaApiVersion: env.META_API_VERSION,
+      metaLoginScopes: env.META_LOGIN_SCOPES ?? "",
       metaAppMode: env.META_APP_MODE,
       metaInboxPolling: env.META_INBOX_POLLING === "true",
       linkedinClientId: env.LINKEDIN_CLIENT_ID,
@@ -17494,7 +17497,8 @@ async function graph(req) {
 }
 
 // server/services/social/connectors/facebookPageProvider.ts
-var FACEBOOK_SCOPES = ["pages_show_list", "pages_manage_metadata", "pages_manage_posts", "pages_manage_engagement", "pages_read_engagement", "pages_read_user_engagement", "pages_messaging"];
+var DEFAULT_FACEBOOK_SCOPES = ["pages_show_list", "pages_manage_metadata", "pages_manage_posts", "pages_manage_engagement", "pages_read_engagement", "pages_messaging"];
+var facebookScopes = () => config.metaLoginScopes ? config.metaLoginScopes.split(",") : [...DEFAULT_FACEBOOK_SCOPES];
 var REQUIRED_SCOPES = ["pages_manage_posts", "pages_manage_engagement", "pages_read_engagement"];
 var SUBSCRIBED_FIELDS_FULL = "feed,messages,mention,ratings";
 var SUBSCRIBED_FIELDS_CORE = "feed,messages";
@@ -17571,14 +17575,16 @@ var facebookPageProvider = {
   key: "meta_facebook",
   label: "Facebook Pages",
   implemented: true,
-  defaultScopes: [...FACEBOOK_SCOPES],
+  get defaultScopes() {
+    return facebookScopes();
+  },
   isConfigured: () => !!config.metaAppId && !!config.metaAppSecret,
   get pollsInbox() {
     return config.metaInboxPolling;
   },
   getConstraints: () => ({ ...DEFAULT_CONSTRAINTS, maxChars: 63206, maxHashtags: 30, maxMedia: 1, allowedMediaTypes: ["image/jpeg", "image/png", "image/gif"], supportsLink: true }),
   getAuthUrl({ state, redirectUri: redirectUri2, scopes }) {
-    const q = new URLSearchParams({ client_id: config.metaAppId, redirect_uri: redirectUri2, state, response_type: "code", scope: (scopes?.length ? scopes : [...FACEBOOK_SCOPES]).join(",") });
+    const q = new URLSearchParams({ client_id: config.metaAppId, redirect_uri: redirectUri2, state, response_type: "code", scope: (scopes?.length ? scopes : facebookScopes()).join(",") });
     return `${dialogUrl()}?${q.toString()}`;
   },
   async handleCallback({ code, redirectUri: redirectUri2 }) {
@@ -20968,18 +20974,20 @@ function providerSetup(provider) {
     webhookCallbackUrl: `${base}/api/v1/social/webhooks/meta_facebook`,
     verifyTokenConfigured: !!config.metaWebhookVerifyToken,
     verifyTokenEnvVar: "META_WEBHOOK_VERIFY_TOKEN",
-    permissions: FACEBOOK_SCOPES.map((name) => ({ name, required: REQUIRED_SCOPES.includes(name) })),
+    permissions: facebookScopes().map((name) => ({ name, required: REQUIRED_SCOPES.includes(name) })),
     webhookFields: SUBSCRIBED_FIELDS_FULL.split(","),
     envVars: [
       { name: "META_APP_ID", set: !!config.metaAppId },
       { name: "META_APP_SECRET", set: !!config.metaAppSecret },
       { name: "META_WEBHOOK_VERIFY_TOKEN", set: !!config.metaWebhookVerifyToken },
-      { name: "META_API_VERSION", set: true }
+      { name: "META_API_VERSION", set: true },
+      { name: "META_LOGIN_SCOPES (optional override)", set: !!config.metaLoginScopes }
     ],
     notes: [
       "In the Meta app dashboard add the Facebook Login product and put the redirect URI above under Valid OAuth Redirect URIs.",
       "Add the Webhooks product, choose the Page object, set the callback URL above and the verify token (the value of META_WEBHOOK_VERIFY_TOKEN), then subscribe to the listed fields.",
       "While the app is in Development mode only people with a role on the app (administrator, developer, tester) can connect Pages and receive events.",
+      "Login asks only for the permissions listed above. Facebook rejects the whole login if one is not enabled for the app; add a permission under Use cases first, then list it in META_LOGIN_SCOPES (e.g. add pages_read_user_content to read other people's comments).",
       "Going Live for other people requires App Review for the permissions above. This panel cannot detect the app mode; set META_APP_MODE to show it here."
     ]
   };

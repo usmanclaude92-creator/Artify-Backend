@@ -22,7 +22,13 @@ import {
   type SendReplyInput, type SendReplyResult, type SocialConnector, type SocialProfile,
 } from "./types";
 
-export const FACEBOOK_SCOPES = ["pages_show_list", "pages_manage_metadata", "pages_manage_posts", "pages_manage_engagement", "pages_read_engagement", "pages_read_user_engagement", "pages_messaging"] as const;
+/**
+ * Permissions requested at login. Facebook refuses the WHOLE login ("Invalid Scope") if any requested permission is not enabled for the app,
+ * so the default is limited to what the app has under Use cases (verified on the first live attempt: pages_read_user_engagement is NOT available).
+ * `pages_read_user_content` (read other people's comments) is useful but only works once added in the dashboard: opt in with META_LOGIN_SCOPES.
+ */
+export const DEFAULT_FACEBOOK_SCOPES = ["pages_show_list", "pages_manage_metadata", "pages_manage_posts", "pages_manage_engagement", "pages_read_engagement", "pages_messaging"] as const;
+export const facebookScopes = (): string[] => (config.metaLoginScopes ? config.metaLoginScopes.split(",") : [...DEFAULT_FACEBOOK_SCOPES]);
 /** Without these the connector cannot do its core job (publish + moderate). pages_messaging is optional (Messenger only). */
 export const REQUIRED_SCOPES = ["pages_manage_posts", "pages_manage_engagement", "pages_read_engagement"] as const;
 export const SUBSCRIBED_FIELDS_FULL = "feed,messages,mention,ratings";
@@ -124,13 +130,13 @@ export const facebookPageProvider: SocialConnector = {
   key: "meta_facebook",
   label: "Facebook Pages",
   implemented: true,
-  defaultScopes: [...FACEBOOK_SCOPES],
+  get defaultScopes() { return facebookScopes(); },
   isConfigured: () => !!config.metaAppId && !!config.metaAppSecret,
   get pollsInbox() { return config.metaInboxPolling; },
   getConstraints: () => ({ ...DEFAULT_CONSTRAINTS, maxChars: 63206, maxHashtags: 30, maxMedia: 1, allowedMediaTypes: ["image/jpeg", "image/png", "image/gif"], supportsLink: true }),
 
   getAuthUrl({ state, redirectUri, scopes }) {
-    const q = new URLSearchParams({ client_id: config.metaAppId, redirect_uri: redirectUri, state, response_type: "code", scope: (scopes?.length ? scopes : [...FACEBOOK_SCOPES]).join(",") });
+    const q = new URLSearchParams({ client_id: config.metaAppId, redirect_uri: redirectUri, state, response_type: "code", scope: (scopes?.length ? scopes : facebookScopes()).join(",") });
     return `${dialogUrl()}?${q.toString()}`;
   },
 

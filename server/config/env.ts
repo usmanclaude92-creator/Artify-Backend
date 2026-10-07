@@ -175,6 +175,8 @@ const envSchema = z
     META_WEBHOOK_VERIFY_TOKEN: z.string().optional().default(""),
     META_API_VERSION: z.string().regex(/^v\d{1,2}\.\d$/, "META_API_VERSION must look like v25.0").optional().default("v25.0"),
     // Informational only (shown on the setup panel): the Graph API does not tell us whether the app is in Development or Live mode.
+    // Optional override of the permissions requested at login (comma separated). Default = the set this app is known to have.
+    META_LOGIN_SCOPES: z.string().regex(/^([a-z_]+)(,[a-z_]+)*$/, "META_LOGIN_SCOPES must be comma-separated permission names").optional().or(z.literal("")).default(""),
     META_APP_MODE: z.enum(["development", "live", "unknown"]).optional().default("unknown"),
     META_INBOX_POLLING: z.enum(["true", "false"]).optional().default("false"),
     LINKEDIN_API_VERSION: z.string().regex(/^\d{6}$/, "LINKEDIN_API_VERSION must look like YYYYMM").optional().default("202504"),
@@ -355,6 +357,7 @@ export type AppConfig = Readonly<{
   metaAppSecret: string;
   metaWebhookVerifyToken: string;
   metaApiVersion: string;
+  metaLoginScopes: string;
   metaAppMode: "development" | "live" | "unknown";
   metaInboxPolling: boolean;
   linkedinClientId: string;
@@ -445,6 +448,7 @@ export function validateEnv(raw: NodeJS.ProcessEnv | Record<string, string | und
       metaAppSecret: env.META_APP_SECRET,
       metaWebhookVerifyToken: env.META_WEBHOOK_VERIFY_TOKEN,
       metaApiVersion: env.META_API_VERSION,
+      metaLoginScopes: env.META_LOGIN_SCOPES ?? "",
       metaAppMode: env.META_APP_MODE,
       metaInboxPolling: env.META_INBOX_POLLING === "true",
       linkedinClientId: env.LINKEDIN_CLIENT_ID,
