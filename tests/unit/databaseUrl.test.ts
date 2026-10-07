@@ -6,7 +6,7 @@ describe("tuneDatabaseUrl", () => {
   it("fills missing pooler params for serverless", () => {
     const u = new URL(tuneDatabaseUrl(pooled, { serverless: true }));
     expect(u.searchParams.get("pgbouncer")).toBe("true");
-    expect(u.searchParams.get("connection_limit")).toBe("3");
+    expect(u.searchParams.get("connection_limit")).toBe("6");
     expect(u.searchParams.get("pool_timeout")).toBe("20");
   });
   it("never overrides explicit values", () => {

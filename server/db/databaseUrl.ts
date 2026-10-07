@@ -14,7 +14,9 @@ export function tuneDatabaseUrl(raw: string, opts: { serverless: boolean }): str
   if (url.port !== "6543") return raw;
   const p = url.searchParams;
   if (!p.has("pgbouncer")) p.set("pgbouncer", "true"); // transaction pooling cannot use prepared statements
-  if (!p.has("connection_limit")) p.set("connection_limit", opts.serverless ? "3" : "10");
+  // Serverless instances serve several requests at once (the Inbox page alone fires ~5), so 3 starved them
+  // ("Timed out fetching a new connection from the pool"). The pooler multiplexes these onto few real connections.
+  if (!p.has("connection_limit")) p.set("connection_limit", opts.serverless ? "6" : "10");
   if (!p.has("pool_timeout")) p.set("pool_timeout", "20");
   if (!p.has("connect_timeout")) p.set("connect_timeout", "15");
   return url.toString();
