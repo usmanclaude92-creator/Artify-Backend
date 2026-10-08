@@ -3654,8 +3654,7 @@ var ROLE_PERMISSION_SETS = {
     "campaigns.update",
     "campaigns.publish",
     "approvals.read",
-    "social.read",
-    "social.analytics.read"
+    "social.read"
   ],
   USER: [
     "clients.read",
@@ -3794,8 +3793,7 @@ var ROLE_PERMISSION_SETS = {
     // Phase 14 — VIEWER is read-only for campaigns, same convention.
     "campaigns.read",
     "approvals.read",
-    "social.read",
-    "social.analytics.read"
+    "social.read"
   ],
   CLIENT_PORTAL: [
     "portal.dashboard.read",
