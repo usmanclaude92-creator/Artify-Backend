@@ -638,6 +638,8 @@ model SocialPostTarget {
   nextAttemptAt    DateTime?             @map("next_attempt_at")
   externalUrl      String?               @map("external_url")
   manualResolution Boolean               @default(false) @map("manual_resolution")
+  // Provider progress between attempts of this target (e.g. an Instagram container id while the media processes). Never holds secrets.
+  providerState    Json?                 @map("provider_state")
   resolvedById     String?               @map("resolved_by")
   createdAt       DateTime               @default(now()) @map("created_at")
   updatedAt       DateTime               @updatedAt @map("updated_at")

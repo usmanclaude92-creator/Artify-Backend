@@ -298,6 +298,10 @@ var envSchema = z.object({
   // Informational only (shown on the setup panel): the Graph API does not tell us whether the app is in Development or Live mode.
   // Optional override of the permissions requested at login (comma separated). Default = the set this app is known to have.
   META_LOGIN_SCOPES: z.string().regex(/^([a-z_]+)(,[a-z_]+)*$/, "META_LOGIN_SCOPES must be comma-separated permission names").optional().or(z.literal("")).default(""),
+  // Instagram (Step 9a): optional override of the login permissions, and the platform's own daily publish cap per account.
+  // Meta's docs disagree (100 vs 50 API-published posts per 24 h), so the default is the lower number; the connector also reads the live quota from Meta.
+  META_INSTAGRAM_LOGIN_SCOPES: z.string().regex(/^([a-z_]+)(,[a-z_]+)*$/, "META_INSTAGRAM_LOGIN_SCOPES must be comma-separated permission names").optional().or(z.literal("")).default(""),
+  INSTAGRAM_DAILY_PUBLISH_LIMIT: z.coerce.number().int().min(1).max(100).optional().default(50),
   META_APP_MODE: z.enum(["development", "live", "unknown"]).optional().default("unknown"),
   META_INBOX_POLLING: z.enum(["true", "false"]).optional().default("false"),
   LINKEDIN_API_VERSION: z.string().regex(/^\d{6}$/, "LINKEDIN_API_VERSION must look like YYYYMM").optional().default("202504"),
@@ -460,6 +464,8 @@ function validateEnv(raw) {
       metaWebhookVerifyToken: env.META_WEBHOOK_VERIFY_TOKEN,
       metaApiVersion: env.META_API_VERSION,
       metaLoginScopes: env.META_LOGIN_SCOPES ?? "",
+      metaInstagramLoginScopes: env.META_INSTAGRAM_LOGIN_SCOPES ?? "",
+      instagramDailyPublishLimit: env.INSTAGRAM_DAILY_PUBLISH_LIMIT,
       metaAppMode: env.META_APP_MODE,
       metaInboxPolling: env.META_INBOX_POLLING === "true",
       linkedinClientId: env.LINKEDIN_CLIENT_ID,
@@ -5930,6 +5936,10 @@ function getClient2() {
   }
   return client2;
 }
+function absoluteUploadUrl(baseUrl, signedUrl) {
+  if (/^https?:\/\//i.test(signedUrl)) return signedUrl;
+  return `${baseUrl}/storage/v1${signedUrl.startsWith("/") ? "" : "/"}${signedUrl}`;
+}
 var SupabaseStorageProvider = class {
   constructor() {
     this.name = "supabase";
@@ -5938,7 +5948,7 @@ var SupabaseStorageProvider = class {
     const { data, error } = await getClient2().storage.from(config.objectStorageBucket).createSignedUploadUrl(params.key);
     if (error || !data) throw new Error(`Supabase Storage: failed to create a signed upload URL (${error?.message ?? "unknown error"})`);
     return {
-      url: `${config.supabaseStorageUrl}/storage/v1${data.signedUrl.startsWith("/") ? "" : "/"}${data.signedUrl}`,
+      url: absoluteUploadUrl(config.supabaseStorageUrl, data.signedUrl),
       method: "PUT",
       headers: { "Content-Type": params.contentType },
       expiresAt: new Date(Date.now() + config.mediaSignedUrlTtlSeconds * 1e3)
@@ -17006,6 +17016,7 @@ var SocialPublishError = class extends Error {
     this.kind = kind;
     this.httpStatus = opts.httpStatus;
     this.retryAfterMs = opts.retryAfterMs;
+    this.pending = opts.pending ?? false;
   }
 };
 function classifyHttpStatus(status) {
@@ -17026,6 +17037,12 @@ var DEFAULT_CONSTRAINTS = {
   supportsLink: true,
   hashtagPrefix: "#",
   mentionPrefix: "@"
+};
+var ConnectorUserError = class extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "ConnectorUserError";
+  }
 };
 var ConnectorNotImplementedError = class extends Error {
   constructor(provider, capability) {
@@ -17453,7 +17470,7 @@ function classifyGraphError(status, body) {
 }
 function errorFromGraph(status, body, secrets = []) {
   const { kind, code, window } = classifyGraphError(status, body);
-  const raw = body?.error?.message ?? "";
+  const raw = body?.error?.error_user_msg ?? body?.error?.message ?? "";
   const trace = body?.error?.fbtrace_id ? ` [trace ${body.error.fbtrace_id}]` : "";
   const msg = window ? "Meta only allows replying within 24 hours of the person's last message (messaging window closed)." : kind === "auth" ? "Meta rejected the Page credentials or permissions. Reconnect the Page and grant the requested permissions." : kind === "transient" ? "Meta is temporarily unavailable or rate limiting this Page." : `Meta rejected the request${code !== void 0 ? ` (code ${code})` : ""}.`;
   const detail = kind === "permanent" || window ? ` ${redactSecrets(raw, secrets).replace(/\s+/g, " ").slice(0, 160)}` : "";
@@ -17736,8 +17753,389 @@ ${input.linkUrl}`.trim() : input.text;
   }
 };
 
+// server/services/social/connectors/instagramProvider.ts
+var DEFAULT_INSTAGRAM_SCOPES = ["instagram_basic", "instagram_content_publish", "instagram_manage_comments", "instagram_manage_messages", "pages_show_list", "pages_read_engagement", "business_management"];
+var instagramScopes = () => config.metaInstagramLoginScopes ? config.metaInstagramLoginScopes.split(",") : [...DEFAULT_INSTAGRAM_SCOPES];
+var REQUIRED_SCOPES2 = ["instagram_basic", "instagram_content_publish", "instagram_manage_comments"];
+var WEBHOOK_OBJECT = "instagram";
+var WEBHOOK_FIELDS = ["comments", "messages"];
+var CAPTION_LIMIT = 2200;
+var DM_BYTE_LIMIT = 1e3;
+var IMAGE_MAX_BYTES = 8 * 1024 * 1024;
+var CAROUSEL_MAX = 10;
+var POLL_INTERVAL_MS = 6e4;
+var IMAGE_PROCESSING_DEADLINE_MS = 10 * 6e4;
+var VIDEO_PROCESSING_DEADLINE_MS = 30 * 6e4;
+var instagramConstraints = () => ({
+  ...DEFAULT_CONSTRAINTS,
+  maxChars: CAPTION_LIMIT,
+  maxHashtags: 30,
+  maxMedia: CAROUSEL_MAX,
+  requiresMedia: true,
+  supportsLink: false,
+  // JPEG only: the API documents JPEG for feed images. Reels (video) need a video library that does not exist yet, so they are not offered.
+  allowedMediaTypes: ["image/jpeg"],
+  mediaLimits: { imageMaxBytes: IMAGE_MAX_BYTES, imageMinWidth: 320, imageMinRatio: 0.8, imageMaxRatio: 1.91 },
+  notes: [
+    "Instagram needs at least one image: text-only posts are rejected.",
+    "JPEG only, up to 8 MB each. Aspect ratio between 4:5 and 1.91:1, at least 320 px wide.",
+    "Up to 10 images make a carousel (swipe post). The caption can be up to 2,200 characters and 30 hashtags.",
+    "Links in captions are not clickable. Reels (video) are not supported yet."
+  ]
+});
+var pageIdOf2 = (tokens2) => String(tokens2.pageId ?? "");
+var epochToIso2 = (v) => typeof v === "number" ? new Date(v * (v < 1e12 ? 1e3 : 1)).toISOString() : typeof v === "string" ? v : void 0;
+var instagramReplyWindow = (lastInboundAt, now) => {
+  if (!lastInboundAt) return { open: false, closesAt: null, reason: "There is no message from this person to reply to." };
+  const closesAt = new Date(lastInboundAt.getTime() + MESSAGING_WINDOW_MS);
+  return now.getTime() <= closesAt.getTime() ? { open: true, closesAt } : { open: false, closesAt, reason: "Instagram only allows replying to a message within 24 hours of the person's last message. The window closed, so this reply can't be sent from here." };
+};
+function parseWebhookPayload2(payload) {
+  if (payload.object !== WEBHOOK_OBJECT) return [];
+  const out = [];
+  for (const entry of payload.entry ?? []) {
+    const igId = entry.id;
+    if (!igId) continue;
+    for (const change of entry.changes ?? []) {
+      const v = change.value ?? {};
+      if (change.field !== "comments") continue;
+      const commentId = v.id;
+      const from = v.from;
+      const media = v.media;
+      const text = typeof v.text === "string" ? v.text : "";
+      if (!commentId || !from?.id || from.id === igId) continue;
+      const parent = v.parent_id;
+      out.push({
+        type: "COMMENT",
+        accountExternalId: igId,
+        providerThreadId: `c:${parent ?? commentId}`,
+        providerMessageId: commentId,
+        participant: { externalId: from.id, handle: from.username, name: from.username },
+        text: text || "[comment without text]",
+        subjectRef: media?.id,
+        createdAt: epochToIso2(entry.time)
+      });
+    }
+    for (const m of entry.messaging ?? []) {
+      const igsid = m.sender?.id;
+      if (!m.message?.mid || !igsid || igsid === igId || m.message.is_echo) continue;
+      const text = m.message.text ?? (m.message.attachments?.length ? "[attachment]" : "");
+      if (!text) continue;
+      out.push({ type: "DM", accountExternalId: igId, providerThreadId: `dm:${igsid}`, providerMessageId: m.message.mid, participant: { externalId: igsid }, text, createdAt: epochToIso2(m.timestamp) });
+    }
+  }
+  return out;
+}
+var readState = (raw) => {
+  if (!raw || typeof raw.containerId !== "string" || raw.phase !== "container" && raw.phase !== "publishing") return null;
+  return { phase: raw.phase, containerId: raw.containerId, kind: raw.kind ?? "image", createdAt: Number(raw.createdAt) || Date.now() };
+};
+var asSafeRetry = (err) => {
+  if (err instanceof SocialPublishError && err.kind === "uncertain") throw new SocialPublishError("transient", "No answer from Instagram while preparing the media; will try again.");
+  throw err;
+};
+async function mediaUrl(m) {
+  if (!m.signedUrl) throw new SocialPublishError("permanent", "This media file cannot be shared by URL.");
+  return m.signedUrl().catch(() => {
+    throw new SocialPublishError("transient", "Could not prepare the media file for Instagram.");
+  });
+}
+function validateMedia(input) {
+  if (input.media.length === 0) throw new SocialPublishError("permanent", "Instagram requires an image: a text-only post can't be published.");
+  if (input.text.length > CAPTION_LIMIT) throw new SocialPublishError("permanent", `Instagram captions are limited to ${CAPTION_LIMIT} characters.`);
+  const videos = input.media.filter((m) => m.mimeType.startsWith("video/"));
+  if (videos.length > 0) {
+    if (input.media.length > 1) throw new SocialPublishError("permanent", "A reel is a single video; it can't be combined with other media.");
+    return "reel";
+  }
+  if (input.media.length > CAROUSEL_MAX) throw new SocialPublishError("permanent", `A carousel has at most ${CAROUSEL_MAX} images.`);
+  for (const m of input.media) {
+    if (m.mimeType !== "image/jpeg") throw new SocialPublishError("permanent", "Instagram feed images must be JPEG.");
+    if (m.sizeBytes && m.sizeBytes > IMAGE_MAX_BYTES) throw new SocialPublishError("permanent", "Instagram images must be 8 MB or smaller.");
+  }
+  return input.media.length > 1 ? "carousel" : "image";
+}
+async function createContainer(token, ig, input, kind) {
+  const caption = input.text;
+  try {
+    if (kind === "image") {
+      const m = input.media[0];
+      const r = await graph({ method: "POST", path: `/${ig}/media`, token, phase: "write", body: { image_url: await mediaUrl(m), caption, ...m.altText ? { alt_text: m.altText.slice(0, 1e3) } : {} } });
+      if (!r.json.id) throw new SocialPublishError("transient", "Instagram did not return a container id.");
+      return r.json.id;
+    }
+    if (kind === "reel") {
+      const m = input.media[0];
+      const r = await graph({ method: "POST", path: `/${ig}/media`, token, phase: "write", body: { media_type: "REELS", video_url: await mediaUrl(m), caption, share_to_feed: true } });
+      if (!r.json.id) throw new SocialPublishError("transient", "Instagram did not return a container id.");
+      return r.json.id;
+    }
+    const children = [];
+    for (const m of input.media) {
+      const c = await graph({ method: "POST", path: `/${ig}/media`, token, phase: "write", body: { image_url: await mediaUrl(m), is_carousel_item: true, ...m.altText ? { alt_text: m.altText.slice(0, 1e3) } : {} } });
+      if (!c.json.id) throw new SocialPublishError("transient", "Instagram did not return a container id.");
+      children.push(c.json.id);
+    }
+    const parent = await graph({ method: "POST", path: `/${ig}/media`, token, phase: "write", body: { media_type: "CAROUSEL", children: children.join(","), caption } });
+    if (!parent.json.id) throw new SocialPublishError("transient", "Instagram did not return a container id.");
+    return parent.json.id;
+  } catch (err) {
+    return asSafeRetry(err);
+  }
+}
+async function liveQuotaExhausted(token, ig) {
+  try {
+    const r = await graph({ method: "GET", path: `/${ig}/content_publishing_limit`, token, phase: "read", query: { fields: "quota_usage,config" } });
+    const row = r.json.data?.[0];
+    const used = row?.quota_usage;
+    const total = row?.config?.quota_total;
+    if (typeof used === "number" && typeof total === "number" && total > 0 && used >= total) return { used, total };
+  } catch {
+  }
+  return null;
+}
+async function listPagesWithInstagram(userToken) {
+  const pages = [];
+  let after;
+  for (let i = 0; i < 5; i++) {
+    const r = await graph({
+      method: "GET",
+      path: "/me/accounts",
+      token: userToken,
+      phase: "read",
+      query: { fields: "id,name,access_token,tasks,instagram_business_account{id,username,name,profile_picture_url},connected_instagram_account{id,username,name,profile_picture_url}", limit: "100", after }
+    });
+    pages.push(...r.json.data ?? []);
+    after = r.json.paging?.next ? r.json.paging.cursors?.after : void 0;
+    if (!after) break;
+  }
+  return pages;
+}
+var instagramProvider = {
+  key: "meta_instagram",
+  label: "Instagram",
+  implemented: true,
+  get defaultScopes() {
+    return instagramScopes();
+  },
+  get dailyPublishCap() {
+    return config.instagramDailyPublishLimit;
+  },
+  isConfigured: () => !!config.metaAppId && !!config.metaAppSecret,
+  get pollsInbox() {
+    return config.metaInboxPolling;
+  },
+  getConstraints: () => instagramConstraints(),
+  getAuthUrl({ state, redirectUri: redirectUri2, scopes }) {
+    const q = new URLSearchParams({ client_id: config.metaAppId, redirect_uri: redirectUri2, state, response_type: "code", scope: (scopes?.length ? scopes : instagramScopes()).join(",") });
+    return `${dialogUrl()}?${q.toString()}`;
+  },
+  async handleCallback({ code, redirectUri: redirectUri2 }) {
+    const short = await graph({ method: "GET", path: "/oauth/access_token", phase: "read", query: { client_id: config.metaAppId, redirect_uri: redirectUri2, client_secret: config.metaAppSecret, code } });
+    if (!short.json.access_token) throw new Error("Meta did not return an access token.");
+    const long = await graph({ method: "GET", path: "/oauth/access_token", phase: "read", query: { grant_type: "fb_exchange_token", client_id: config.metaAppId, client_secret: config.metaAppSecret, fb_exchange_token: short.json.access_token } });
+    const userToken = long.json.access_token;
+    if (!userToken) throw new Error("Meta did not return a long-lived token.");
+    const [me, perms, pages] = await Promise.all([
+      graph({ method: "GET", path: "/me", token: userToken, phase: "read", query: { fields: "id,name" } }),
+      graph({ method: "GET", path: "/me/permissions", token: userToken, phase: "read" }),
+      listPagesWithInstagram(userToken)
+    ]);
+    const scopes = (perms.json.data ?? []).filter((p) => p.status === "granted").map((p) => p.permission);
+    if (pages.length === 0) throw new ConnectorUserError("This Facebook account does not manage any Pages. Instagram connects through a Facebook Page: link your Instagram professional account to a Page you manage, then try again.");
+    const selectable = [];
+    for (const p of pages) {
+      const ig = p.instagram_business_account ?? p.connected_instagram_account;
+      if (!ig?.id || !p.access_token) continue;
+      const warnings = [];
+      const missing = REQUIRED_SCOPES2.filter((s) => !scopes.includes(s));
+      if (missing.length) warnings.push(`Permissions not granted: ${missing.join(", ")}. Reconnect and approve them.`);
+      if (!scopes.includes("instagram_manage_messages")) warnings.push("Direct messages are unavailable (instagram_manage_messages was not granted).");
+      if (p.tasks?.length && !p.tasks.includes("CREATE_CONTENT")) warnings.push("You can't publish for this Page's Instagram account (needs the Create content task on the linked Page).");
+      selectable.push({
+        profile: { externalAccountId: ig.id, displayName: ig.name ? `${ig.name} (@${ig.username ?? ig.id})` : `@${ig.username ?? ig.id}`, handle: ig.username ?? null, avatarUrl: ig.profile_picture_url ?? null, accountType: "BUSINESS" },
+        tokens: { accessToken: p.access_token, pageId: p.id, igId: ig.id, scopes },
+        tasks: p.tasks,
+        warnings: [...warnings, `Linked Facebook Page: ${p.name ?? p.id}.`]
+      });
+    }
+    if (selectable.length === 0) {
+      const seen = pages.map((p) => p.name ?? p.id).slice(0, 5).join(", ");
+      const missingScopes = ["instagram_basic", "pages_show_list"].filter((x) => !scopes.includes(x));
+      throw new ConnectorUserError(`Facebook shared ${pages.length} Page${pages.length === 1 ? "" : "s"} (${seen}) but no linked Instagram account.${missingScopes.length ? ` Permissions missing: ${missingScopes.join(", ")}.` : ""} Check that the Instagram account is a Business or Creator account linked to one of these Pages, and that on the Facebook screen you tapped "Edit settings" and selected both the Page and the Instagram account. Then try again.`);
+    }
+    return { profile: { externalAccountId: me.json.id ?? "user", displayName: me.json.name ?? "Facebook user", accountType: "USER" }, tokens: { accessToken: "" }, selectable };
+  },
+  async refreshToken() {
+    throw new Error("The Page access token used for Instagram cannot be refreshed automatically; reconnect the account to renew access.");
+  },
+  async getProfile(tokens2) {
+    const id3 = String(tokens2.igId ?? "");
+    const target = id3 || "me";
+    const r = await graph({ method: "GET", path: `/${target}`, token: tokens2.accessToken, phase: "read", query: { fields: "id,username,name,profile_picture_url" } });
+    return { externalAccountId: r.json.id, displayName: r.json.name ? `${r.json.name} (@${r.json.username ?? r.json.id})` : `@${r.json.username ?? r.json.id}`, handle: r.json.username ?? null, avatarUrl: r.json.profile_picture_url ?? null, accountType: "BUSINESS" };
+  },
+  async healthCheck(tokens2) {
+    const r = await graph({
+      method: "GET",
+      path: "/debug_token",
+      token: `${config.metaAppId}|${config.metaAppSecret}`,
+      phase: "read",
+      query: { input_token: tokens2.accessToken }
+    });
+    const d = r.json.data;
+    if (!d?.is_valid) return { ok: false, error: redactSecrets(d?.error?.message ?? "The access token is no longer valid; reconnect the account.", [tokens2.accessToken]).slice(0, 200) };
+    const granted = new Set(d.scopes ?? []);
+    const missing = REQUIRED_SCOPES2.filter((s) => d.scopes && !granted.has(s));
+    if (missing.length) return { ok: false, error: `Missing permissions: ${missing.join(", ")}. Reconnect the account and approve them.` };
+    const times = [d.expires_at, d.data_access_expires_at].filter((t) => typeof t === "number" && t > 0);
+    return { ok: true, expiresAt: times.length ? new Date(Math.min(...times) * 1e3).toISOString() : null };
+  },
+  async publish(tokens2, input) {
+    const ig = input.accountExternalId;
+    const token = tokens2.accessToken;
+    const saved = readState(input.state);
+    if (saved?.phase === "publishing") throw new SocialPublishError("uncertain", "A previous attempt sent the publish request to Instagram but never recorded the answer; the post may be live.");
+    const kind = saved?.kind ?? validateMedia(input);
+    let state = saved;
+    if (!state) {
+      const quota = await liveQuotaExhausted(token, ig);
+      if (quota) throw new SocialPublishError("permanent", `Instagram's publishing limit is reached for this account (${quota.used}/${quota.total} in the last 24 hours). Reschedule for later.`);
+      const containerId = await createContainer(token, ig, input, kind);
+      state = { phase: "container", containerId, kind, createdAt: Date.now() };
+      await input.saveState?.({ ...state });
+    }
+    const st = await graph({ method: "GET", path: `/${state.containerId}`, token, phase: "read", query: { fields: "status_code,status" } });
+    const code = st.json.status_code;
+    if (code === "ERROR" || code === "EXPIRED") {
+      await input.saveState?.(null);
+      const detail = redactSecrets(st.json.status ?? "", [token]).replace(/\s+/g, " ").slice(0, 160);
+      throw new SocialPublishError("permanent", code === "EXPIRED" ? "The Instagram media container expired before it was published (they last 24 hours). Retry to create a new one." : `Instagram could not process the media${detail ? `: ${detail}` : "."}`);
+    }
+    if (code !== "FINISHED" && code !== "PUBLISHED") {
+      const deadline = state.kind === "reel" ? VIDEO_PROCESSING_DEADLINE_MS : IMAGE_PROCESSING_DEADLINE_MS;
+      if (Date.now() - state.createdAt > deadline) {
+        await input.saveState?.(null);
+        throw new SocialPublishError("permanent", "Instagram is taking too long to process the media. Retry later.");
+      }
+      throw new SocialPublishError("transient", "Instagram is still processing the media.", { pending: true, retryAfterMs: POLL_INTERVAL_MS });
+    }
+    if (code === "PUBLISHED") throw new SocialPublishError("uncertain", "Instagram reports this container as already published; check the account.");
+    await input.saveState?.({ ...state, phase: "publishing" });
+    let published;
+    try {
+      published = (await graph({ method: "POST", path: `/${ig}/media_publish`, token, phase: "write", body: { creation_id: state.containerId } })).json;
+    } catch (err) {
+      if (err instanceof SocialPublishError && err.kind === "transient" && (err.httpStatus ?? 0) < 500 && err.retryAfterMs) {
+        await input.saveState?.({ ...state, phase: "container" });
+        throw err;
+      }
+      if (err instanceof SocialPublishError && (err.kind === "permanent" || err.kind === "auth")) {
+        await input.saveState?.(null);
+        throw err;
+      }
+      throw err instanceof SocialPublishError && err.kind === "uncertain" ? err : new SocialPublishError("uncertain", "Instagram did not give a clear answer to the publish request; the post may be live.");
+    }
+    if (!published.id) throw new SocialPublishError("uncertain", "Instagram answered without a media id; the post may have been published.");
+    await input.saveState?.(null).catch(() => void 0);
+    let permalink = null;
+    try {
+      const m = await graph({ method: "GET", path: `/${published.id}`, token, phase: "read", query: { fields: "permalink" } });
+      permalink = m.json.permalink ?? null;
+    } catch {
+    }
+    return { externalPostId: published.id, externalUrl: permalink };
+  },
+  // ---------------- inbox ----------------
+  verifyWebhook: ({ rawBody, headers }) => verifySignature(rawBody, headers["x-hub-signature-256"], config.metaAppSecret),
+  handleWebhookChallenge: ({ query }) => webhookChallenge(query, config.metaWebhookVerifyToken),
+  parseWebhook({ rawBody }) {
+    try {
+      return parseWebhookPayload2(JSON.parse(rawBody.toString("utf8")));
+    } catch {
+      return [];
+    }
+  },
+  replyWindow: ({ type, lastInboundAt, now }) => type === "DM" ? instagramReplyWindow(lastInboundAt, now) : { open: true, closesAt: null },
+  async onConnected(tokens2) {
+    const page = pageIdOf2(tokens2);
+    if (!page) return { warnings: ["The linked Facebook Page is unknown, so direct-message webhooks could not be enabled."] };
+    try {
+      const cur = await graph({ method: "GET", path: `/${page}/subscribed_apps`, token: tokens2.accessToken, phase: "read" });
+      const existing = (cur.json.data ?? []).find((a) => a.id === config.metaAppId)?.subscribed_fields ?? (cur.json.data?.length === 1 ? cur.json.data[0].subscribed_fields ?? [] : []);
+      const merged = [.../* @__PURE__ */ new Set([...existing, "messages"])];
+      if (merged.length !== existing.length) await graph({ method: "POST", path: `/${page}/subscribed_apps`, token: tokens2.accessToken, phase: "write", body: { subscribed_fields: merged.join(",") } });
+      return {};
+    } catch {
+      return { warnings: ["Could not subscribe the linked Page to message webhooks, so new Instagram DMs will not arrive in real time. Comments use the app-level Instagram webhook. Check the Meta app's Webhooks settings, then reconnect."] };
+    }
+  },
+  async onDisconnect() {
+  },
+  async fetchInbox(tokens2, { accountExternalId, cursor }) {
+    const ig = accountExternalId;
+    const page = pageIdOf2(tokens2);
+    const now = Date.now();
+    const since = cursor ? Number(cursor) : now - 6 * 36e5;
+    const events = [];
+    if (page) {
+      const convs = await graph({
+        method: "GET",
+        path: `/${page}/conversations`,
+        token: tokens2.accessToken,
+        phase: "read",
+        query: { platform: "instagram", fields: "updated_time,messages.limit(10){id,message,from,created_time}", limit: "25" }
+      }).catch(() => ({ json: { data: [] } }));
+      for (const c of convs.json.data ?? []) {
+        if (c.updated_time && Date.parse(c.updated_time) <= since) continue;
+        for (const m of c.messages?.data ?? []) {
+          if (!m.from?.id || m.from.id === ig || m.from.id === page || !m.message || !m.created_time || Date.parse(m.created_time) <= since) continue;
+          events.push({ type: "DM", accountExternalId: ig, providerThreadId: `dm:${m.from.id}`, providerMessageId: m.id, participant: { externalId: m.from.id, handle: m.from.username, name: m.from.username }, text: m.message, createdAt: m.created_time });
+        }
+      }
+    }
+    const media = await graph({
+      method: "GET",
+      path: `/${ig}/media`,
+      token: tokens2.accessToken,
+      phase: "read",
+      query: { fields: "id,comments.limit(25){id,text,username,from,timestamp,parent_id}", limit: "10" }
+    });
+    for (const post of media.json.data ?? []) {
+      for (const c of post.comments?.data ?? []) {
+        if (!c.timestamp || Date.parse(c.timestamp) <= since || c.from?.id === ig) continue;
+        events.push({ type: "COMMENT", accountExternalId: ig, providerThreadId: `c:${c.parent_id ?? c.id}`, providerMessageId: c.id, participant: { externalId: c.from?.id, handle: c.username, name: c.username }, text: c.text ?? "[comment without text]", subjectRef: post.id, createdAt: c.timestamp });
+      }
+    }
+    return { events, nextCursor: String(now - 6e4) };
+  },
+  async sendReply(tokens2, input) {
+    if (input.conversationType === "COMMENT") {
+      if (!input.inReplyToProviderMessageId) throw new SocialPublishError("permanent", "There is no comment to reply to.");
+      const r = await graph({ method: "POST", path: `/${input.inReplyToProviderMessageId}/replies`, token: tokens2.accessToken, phase: "write", body: { message: input.text } });
+      if (!r.json.id) throw new SocialPublishError("uncertain", "Instagram answered without a comment id; the reply may have been posted.");
+      return { providerMessageId: r.json.id };
+    }
+    if (input.conversationType === "DM") {
+      const page = pageIdOf2(tokens2);
+      if (!input.participantExternalId) throw new SocialPublishError("permanent", "The recipient is unknown.");
+      if (!page) throw new SocialPublishError("permanent", "The linked Facebook Page is unknown. Reconnect the account.");
+      if (Buffer.byteLength(input.text, "utf8") > DM_BYTE_LIMIT) throw new SocialPublishError("permanent", `Instagram messages are limited to ${DM_BYTE_LIMIT} bytes of text (about ${DM_BYTE_LIMIT / 2}\u2013${DM_BYTE_LIMIT} characters). Shorten the reply.`);
+      const r = await graph({ method: "POST", path: `/${page}/messages`, token: tokens2.accessToken, phase: "write", body: { recipient: { id: input.participantExternalId }, messaging_type: "RESPONSE", message: { text: input.text } } });
+      if (!r.json.message_id) throw new SocialPublishError("uncertain", "Instagram answered without a message id; the message may have been sent.");
+      return { providerMessageId: r.json.message_id };
+    }
+    throw new SocialPublishError("permanent", "Replying to this kind of item is not supported yet.");
+  },
+  async hideComment(tokens2, { providerMessageId, hidden }) {
+    await graph({ method: "POST", path: `/${providerMessageId}`, token: tokens2.accessToken, phase: "write", body: { hide: hidden } });
+  },
+  async markRead() {
+  }
+};
+
 // server/services/social/connectors/registry.ts
-var CONNECTORS = [facebookPageProvider, linkedinProvider, mockProvider];
+var CONNECTORS = [facebookPageProvider, instagramProvider, linkedinProvider, mockProvider];
 var connectorRegistry = {
   get(key2) {
     return CONNECTORS.find((c) => c.key === key2);
@@ -17804,6 +18202,23 @@ function runGuardrails(input) {
     if (tags > c.maxHashtags) add({ rule: "too_many_hashtags", severity: "warn", message: `${where}: ${tags} hashtags (recommended maximum ${c.maxHashtags}).`, ...base });
     if (c.requiresMedia && input.mediaCount === 0) add({ rule: "media_required", severity: "block", message: `${where}: this network requires an image or video.`, ...base });
     if (input.mediaCount > c.maxMedia) add({ rule: "too_much_media", severity: "block", message: `${where}: ${input.mediaCount} media attached, maximum ${c.maxMedia}.`, ...base });
+    if (input.linkUrl && !c.supportsLink) add({ rule: "invalid_link", severity: "warn", message: `${where}: links in captions are not clickable on this network.`, ...base });
+    for (const m of input.media ?? []) {
+      if (c.allowedMediaTypes.length > 0 && !c.allowedMediaTypes.includes(m.mimeType)) {
+        add({ rule: "media_type_unsupported", severity: "block", message: `${where}: ${m.mimeType} files are not accepted here (allowed: ${c.allowedMediaTypes.join(", ")}).`, ...base });
+        continue;
+      }
+      const lim = c.mediaLimits;
+      if (!lim || !m.mimeType.startsWith("image/")) continue;
+      if (lim.imageMaxBytes && m.sizeBytes && m.sizeBytes > lim.imageMaxBytes) add({ rule: "media_too_large", severity: "block", message: `${where}: an image is ${(m.sizeBytes / 1048576).toFixed(1)} MB; the maximum is ${(lim.imageMaxBytes / 1048576).toFixed(0)} MB.`, ...base });
+      if (m.width && m.height) {
+        const ratio = m.width / m.height;
+        if (lim.imageMinWidth && m.width < lim.imageMinWidth) add({ rule: "media_dimensions", severity: "block", message: `${where}: an image is ${m.width}px wide; the minimum is ${lim.imageMinWidth}px.`, ...base });
+        if (lim.imageMinRatio && ratio < lim.imageMinRatio - 5e-3 || lim.imageMaxRatio && ratio > lim.imageMaxRatio + 5e-3) {
+          add({ rule: "media_dimensions", severity: "block", message: `${where}: an image's aspect ratio (${ratio.toFixed(2)}:1) is outside the allowed ${lim.imageMinRatio?.toFixed(2)}\u2013${lim.imageMaxRatio?.toFixed(2)}:1 range.`, ...base });
+        }
+      }
+    }
     for (const word of input.brandVoice.bannedWords) {
       if (containsWord(target.text, word)) add({ rule: "banned_word", severity: "block", message: `${where}: contains the banned word \u201C${word}\u201D.`, ...base });
     }
@@ -17901,7 +18316,7 @@ async function getBrandVoiceRow(organizationId) {
   return await prisma.socialBrandVoice.findUnique({ where: { organizationId } }) ?? { ...EMPTY_VOICE };
 }
 async function evaluate(organizationId, post, targets) {
-  const [voice, accounts, recent] = await Promise.all([
+  const [voice, accounts, recent, mediaRows] = await Promise.all([
     getBrandVoiceRow(organizationId),
     accountsInOrg(organizationId, targets.map((t) => t.socialAccountId)),
     prisma.socialPost.findMany({
@@ -17909,7 +18324,8 @@ async function evaluate(organizationId, post, targets) {
       select: { body: true },
       orderBy: { createdAt: "desc" },
       take: 200
-    })
+    }),
+    post.mediaIds.length ? prisma.mediaAsset.findMany({ where: { organizationId, id: { in: post.mediaIds } }, select: { id: true, mimeType: true, sizeBytes: true, width: true, height: true } }) : Promise.resolve([])
   ]);
   return runGuardrails({
     targets: targets.map((t) => {
@@ -17925,6 +18341,7 @@ async function evaluate(organizationId, post, targets) {
     fallbackText: post.body,
     linkUrl: post.linkUrl,
     mediaCount: post.mediaIds.length,
+    media: post.mediaIds.map((id3) => mediaRows.find((m) => m.id === id3)).filter((m) => !!m).map((m) => ({ mimeType: m.mimeType, sizeBytes: Number(m.sizeBytes), width: m.width, height: m.height })),
     hasSourceContent: !!post.sourceContentId,
     brandVoice: { bannedWords: voice.bannedWords, requiredDisclaimers: voice.requiredDisclaimers },
     recentBodies: recent.map((r) => r.body)
@@ -18490,6 +18907,7 @@ var approvalSourceParamSchema = z21.enum(APPROVAL_SOURCES);
 
 // server/services/social/publishing/publisher.ts
 import { randomUUID as randomUUID4 } from "node:crypto";
+import { Prisma as Prisma6 } from "@prisma/client";
 init_errors();
 
 // server/services/social/socialAccountService.ts
@@ -18669,6 +19087,7 @@ var socialAccountService = {
         ipAddress: meta8.ip,
         userAgent: meta8.userAgent
       });
+      if (err instanceof ConnectorUserError) throw new ValidationError(err.message);
       throw new ValidationError("Could not connect the account. Please try again.");
     }
     const { profile, tokens: tokens2 } = result;
@@ -18993,6 +19412,10 @@ async function buildMedia(organizationId, mediaIds) {
       mediaId: a.id,
       mimeType: a.mimeType,
       altText: a.altText,
+      sizeBytes: Number(a.sizeBytes),
+      width: a.width ?? void 0,
+      height: a.height ?? void 0,
+      durationSeconds: a.durationSeconds ?? void 0,
       signedUrl: () => storage.createSignedReadUrl({ key: a.storageKey, expiresInSeconds: 600 }),
       load: async () => {
         if (Number(a.sizeBytes) > 10 * 1024 * 1024) throw new SocialPublishError("permanent", "Media file is larger than the 10 MB publishing limit.");
@@ -19071,6 +19494,15 @@ var publisher = {
       }
       const connector = connectorRegistry.getAvailable(account.provider);
       if (!connector?.publish) return await failTerminal("PERMANENT_FAILURE", "unsupported", `${account.provider} publishing is not available in this environment.`);
+      if (connector.dailyPublishCap) {
+        const since = new Date(now.getTime() - 24 * 36e5);
+        const used = await prisma.socialPostTarget.count({
+          where: { id: { not: targetId }, socialAccountId: account.id, OR: [{ status: "PUBLISHED", publishedAt: { gte: since } }, { status: "UNCERTAIN", updatedAt: { gte: since } }] }
+        });
+        if (used >= connector.dailyPublishCap) {
+          return await failTerminal("PERMANENT_FAILURE", "daily_limit", `${account.displayName} already has ${used} posts in the last 24 hours; the network allows ${connector.dailyPublishCap}. Reschedule for later.`);
+        }
+      }
       if (dryRun) {
         const text = target.bodyOverride ?? post.body;
         await finish({ outcome: "DRY_RUN", category: "dry_run", message: `Dry run: would publish ${text.length} characters${post.mediaIds.length ? ` and ${post.mediaIds.length} media` : ""} to ${account.displayName}. Nothing was sent.` });
@@ -19099,12 +19531,20 @@ var publisher = {
           linkUrl: post.linkUrl,
           media,
           idempotencyKey: (await prisma.socialPostTarget.findUniqueOrThrow({ where: { id: targetId }, select: { idempotencyKey: true } })).idempotencyKey,
-          attempt: attemptNumber
+          attempt: attemptNumber,
+          state: target.providerState ?? null,
+          saveState: async (s) => {
+            await prisma.socialPostTarget.update({ where: { id: targetId }, data: { providerState: s ?? Prisma6.JsonNull } });
+          }
         }), PUBLISH_CALL_TIMEOUT_MS);
       } catch (err) {
         const kind = err instanceof SocialPublishError ? err.kind : "uncertain";
         const message = safe(err instanceof SocialPublishError ? err.message : `Unexpected error: ${err?.message ?? err}`, [tokens2.accessToken, tokens2.refreshToken]);
         const httpStatus = err instanceof SocialPublishError ? err.httpStatus : void 0;
+        if (err instanceof SocialPublishError && err.pending) {
+          await release("SCHEDULED", message, "pending", { nextAttemptAt: new Date(now.getTime() + (err.retryAfterMs ?? 6e4)) });
+          return { outcome: "retry_scheduled", detail: "pending" };
+        }
         const decision = decideFailure(kind, target.attempts, settings.maxAttempts, err instanceof SocialPublishError ? err.retryAfterMs : void 0, opts.backoff);
         if (decision.action === "retry") {
           await finish({ outcome: "TRANSIENT_FAILURE", category: "transient", message, httpStatus });
@@ -19242,7 +19682,7 @@ var publishingActions = {
     const t = await loadActionable(caller, targetId, ["FAILED", "MISSED", "UNCERTAIN"]);
     if (t.status === "UNCERTAIN" && !input.confirmNotPosted) throw new ValidationError("Confirm that the post is NOT on the network before retrying an uncertain publish (otherwise it may be duplicated).");
     const now = /* @__PURE__ */ new Date();
-    const moved = await prisma.socialPostTarget.updateMany({ where: { id: targetId, status: t.status }, data: { status: "SCHEDULED", scheduledAt: now, nextAttemptAt: null, attempts: 0, publishError: null } });
+    const moved = await prisma.socialPostTarget.updateMany({ where: { id: targetId, status: t.status }, data: { status: "SCHEDULED", scheduledAt: now, nextAttemptAt: null, attempts: 0, publishError: null, providerState: Prisma6.JsonNull } });
     if (moved.count !== 1) throw new ConflictError("This target changed; refresh and try again.");
     await prisma.socialPost.updateMany({ where: { id: t.postId, status: { in: ["FAILED", "SCHEDULED"] } }, data: { status: "SCHEDULED", scheduledAt: now } });
     await audit(caller.organizationId, "SOCIAL_PUBLISH_RETRY_REQUESTED", targetId, "SUCCESS", { from: t.status, confirmNotPosted: !!input.confirmNotPosted, postId: t.postId }, caller, meta8);
@@ -19253,7 +19693,7 @@ var publishingActions = {
     const t = await loadActionable(caller, targetId);
     if (t.status === "UNCERTAIN" && !input.confirmNotPosted) throw new ValidationError("Confirm that the post is NOT on the network before rescheduling an uncertain publish.");
     if (input.scheduledAt.getTime() <= Date.now()) throw new ValidationError("Choose a future date and time.");
-    const moved = await prisma.socialPostTarget.updateMany({ where: { id: targetId, status: t.status }, data: { status: "SCHEDULED", scheduledAt: input.scheduledAt, nextAttemptAt: null, attempts: 0, publishError: null } });
+    const moved = await prisma.socialPostTarget.updateMany({ where: { id: targetId, status: t.status }, data: { status: "SCHEDULED", scheduledAt: input.scheduledAt, nextAttemptAt: null, attempts: 0, publishError: null, providerState: Prisma6.JsonNull } });
     if (moved.count !== 1) throw new ConflictError("This target changed; refresh and try again.");
     await prisma.socialPost.updateMany({ where: { id: t.postId, status: { in: ["FAILED", "SCHEDULED"] } }, data: { status: "SCHEDULED", scheduledAt: input.scheduledAt } });
     await audit(caller.organizationId, "SOCIAL_PUBLISH_RESCHEDULED", targetId, "SUCCESS", { from: t.status, scheduledAt: input.scheduledAt, postId: t.postId }, caller, meta8);
@@ -19370,7 +19810,7 @@ var publishingQueries = {
 init_errors();
 
 // server/services/social/inbox/inboxPipeline.ts
-import { Prisma as Prisma6 } from "@prisma/client";
+import { Prisma as Prisma7 } from "@prisma/client";
 init_errors();
 
 // server/services/social/inbox/inboxAi.ts
@@ -20335,7 +20775,7 @@ async function ingestEvent(account, ev, settings) {
       return { duplicate: false, conversationId: conv.id, messageId: message.id };
     });
   } catch (err) {
-    if (err instanceof Prisma6.PrismaClientKnownRequestError && err.code === "P2002") {
+    if (err instanceof Prisma7.PrismaClientKnownRequestError && err.code === "P2002") {
       const again = await prisma.socialMessage.findUnique({ where: { socialAccountId_providerMessageId: { socialAccountId: account.id, providerMessageId: ev.providerMessageId } }, select: { id: true, conversationId: true } });
       if (again) return { duplicate: true, conversationId: again.conversationId, messageId: again.id };
     }
@@ -20963,6 +21403,7 @@ var connectSelectSchema = z26.object({ selectionId: z26.string().uuid(), externa
 
 // server/services/social/connectors/setupInfo.ts
 function providerSetup(provider) {
+  if (provider === "meta_instagram") return instagramSetup();
   if (provider !== "meta_facebook") return null;
   const base = config.controlCenterBaseUrl.replace(/\/+$/, "");
   return {
@@ -20976,6 +21417,8 @@ function providerSetup(provider) {
     verifyTokenConfigured: !!config.metaWebhookVerifyToken,
     verifyTokenEnvVar: "META_WEBHOOK_VERIFY_TOKEN",
     permissions: facebookScopes().map((name) => ({ name, required: REQUIRED_SCOPES.includes(name) })),
+    webhookObject: "page",
+    prerequisites: [],
     webhookFields: SUBSCRIBED_FIELDS_FULL.split(","),
     envVars: [
       { name: "META_APP_ID", set: !!config.metaAppId },
@@ -20989,6 +21432,45 @@ function providerSetup(provider) {
       "Add the Webhooks product, choose the Page object, set the callback URL above and the verify token (the value of META_WEBHOOK_VERIFY_TOKEN), then subscribe to the listed fields.",
       "While the app is in Development mode only people with a role on the app (administrator, developer, tester) can connect Pages and receive events.",
       "Login asks only for the permissions listed above. Facebook rejects the whole login if one is not enabled for the app; add a permission under Use cases first, then list it in META_LOGIN_SCOPES (e.g. add pages_read_user_content to read other people's comments).",
+      "Going Live for other people requires App Review for the permissions above. This panel cannot detect the app mode; set META_APP_MODE to show it here."
+    ]
+  };
+}
+function instagramSetup() {
+  const base = config.controlCenterBaseUrl.replace(/\/+$/, "");
+  return {
+    provider: "meta_instagram",
+    label: "Instagram",
+    configured: !!config.metaAppId && !!config.metaAppSecret,
+    appMode: config.metaAppMode,
+    apiVersion: config.metaApiVersion,
+    redirectUri: `${base}/social/accounts`,
+    webhookCallbackUrl: `${base}/api/v1/social/webhooks/meta_instagram`,
+    verifyTokenConfigured: !!config.metaWebhookVerifyToken,
+    verifyTokenEnvVar: "META_WEBHOOK_VERIFY_TOKEN",
+    permissions: instagramScopes().map((name) => ({ name, required: REQUIRED_SCOPES2.includes(name) })),
+    webhookObject: WEBHOOK_OBJECT,
+    webhookFields: [...WEBHOOK_FIELDS],
+    dailyPublishLimit: config.instagramDailyPublishLimit,
+    prerequisites: [
+      "The Instagram account is a Business or Creator (professional) account, not a personal one.",
+      "It is linked to a Facebook Page, and you manage that Page (Facebook role with the Create content, Moderate and Messages tasks).",
+      "In Instagram, Settings \u2192 Messages and story replies \u2192 Message controls, turn on \u201CAllow access to messages\u201D so DMs can reach the Inbox.",
+      "While the Meta app is in Development mode, your Facebook user must have a role on the app (administrator, developer or tester)."
+    ],
+    envVars: [
+      { name: "META_APP_ID", set: !!config.metaAppId },
+      { name: "META_APP_SECRET", set: !!config.metaAppSecret },
+      { name: "META_WEBHOOK_VERIFY_TOKEN", set: !!config.metaWebhookVerifyToken },
+      { name: "META_INSTAGRAM_LOGIN_SCOPES (optional override)", set: !!config.metaInstagramLoginScopes },
+      { name: "INSTAGRAM_DAILY_PUBLISH_LIMIT (optional, default 50)", set: true }
+    ],
+    notes: [
+      "Instagram reuses the Facebook Login redirect URI above (Facebook Login \u2192 Valid OAuth Redirect URIs) and the same app secret.",
+      "In the Meta app dashboard add the Instagram use case with instagram_basic, instagram_content_publish, instagram_manage_comments and instagram_manage_messages. Facebook rejects the whole login if one is not enabled; list only the enabled ones in META_INSTAGRAM_LOGIN_SCOPES.",
+      "Add the Webhooks product, choose the Instagram object, set the callback URL above and the verify token, then subscribe to comments and messages.",
+      "Publishing needs a JPEG image (up to 8 MB; ratio 4:5 to 1.91:1). Text-only posts and links in captions are not supported. Reels need a video library and are not available yet.",
+      "Replies to direct messages are only possible within 24 hours of the person's last message. No message tags are used and auto-reply stays off.",
       "Going Live for other people requires App Review for the permissions above. This panel cannot detect the app mode; set META_APP_MODE to show it here."
     ]
   };
@@ -22702,7 +23184,7 @@ var workspaceInvitationRepository = {
 
 // server/services/invitationService.ts
 init_errors();
-import { Prisma as Prisma7 } from "@prisma/client";
+import { Prisma as Prisma8 } from "@prisma/client";
 var CLIENT_ADMIN_ROLE_KEY = "ADMIN";
 function computeInvitationStatus(invite) {
   if (invite.acceptedAt) return "ACCEPTED";
@@ -22854,7 +23336,7 @@ var invitationService = {
         return user;
       });
     } catch (err) {
-      if (err instanceof Prisma7.PrismaClientKnownRequestError && err.code === "P2002") {
+      if (err instanceof Prisma8.PrismaClientKnownRequestError && err.code === "P2002") {
         throw new ConflictError("This invitation has already been accepted.");
       }
       throw err;
@@ -25854,10 +26336,10 @@ import { Router as Router37 } from "express";
 
 // server/services/caseStudyService.ts
 init_errors();
-import { Prisma as Prisma8 } from "@prisma/client";
+import { Prisma as Prisma9 } from "@prisma/client";
 var CONTENT_EDIT_BLOCKED_STATUSES3 = /* @__PURE__ */ new Set(["ARCHIVED"]);
 function resolveEditorBlocksInput2(value) {
-  return value === null || value === void 0 ? Prisma8.DbNull : value;
+  return value === null || value === void 0 ? Prisma9.DbNull : value;
 }
 function isUniqueConstraintError11(err) {
   return !!err && typeof err === "object" && "code" in err && err.code === "P2002";

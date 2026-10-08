@@ -20,7 +20,7 @@ const PickerBody: React.FC<{ selection: ConnectSelection; onClose: () => void; o
     setBusy(true);
     try {
       const res = await socialApi.selectPages(selection.id, [...chosen]);
-      notify(`${res.accounts.length} Page${res.accounts.length === 1 ? "" : "s"} connected.`, "success");
+      notify(`${res.accounts.length} ${isIg ? "Instagram account" : "Page"}${res.accounts.length === 1 ? "" : "s"} connected.`, "success");
       res.warnings.forEach((w) => notify(w, "error"));
       onConnected();
       onClose();
@@ -31,11 +31,12 @@ const PickerBody: React.FC<{ selection: ConnectSelection; onClose: () => void; o
     }
   };
 
+  const isIg = selection.provider === "meta_instagram";
   return (
-    <Modal open onClose={onClose} title="Choose Pages to connect">
+    <Modal open onClose={onClose} title={isIg ? "Choose Instagram accounts to connect" : "Choose Pages to connect"}>
       <div className="space-y-3">
-        <p className="text-xs" style={{ color: "var(--text-secondary)" }}>Pick the Facebook Pages this workspace may publish to and read messages from. You can connect more later.</p>
-        <ul className="space-y-2 max-h-[50vh] overflow-y-auto" aria-label="Pages you manage">
+        <p className="text-xs" style={{ color: "var(--text-secondary)" }}>{isIg ? "Pick the Instagram professional accounts (each linked to a Facebook Page you manage) this workspace may publish to and read comments and messages from. You can connect more later." : "Pick the Facebook Pages this workspace may publish to and read messages from. You can connect more later."}</p>
+        <ul className="space-y-2 max-h-[50vh] overflow-y-auto" aria-label={isIg ? "Instagram accounts you can connect" : "Pages you manage"}>
           {selection.pages.map((p) => (
             <li key={p.externalId}>
               <label className="flex items-start gap-3 rounded-xl p-2 cursor-pointer" style={{ background: "var(--bg-hover)" }}>

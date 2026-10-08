@@ -180,6 +180,10 @@ const envSchema = z
     // Informational only (shown on the setup panel): the Graph API does not tell us whether the app is in Development or Live mode.
     // Optional override of the permissions requested at login (comma separated). Default = the set this app is known to have.
     META_LOGIN_SCOPES: z.string().regex(/^([a-z_]+)(,[a-z_]+)*$/, "META_LOGIN_SCOPES must be comma-separated permission names").optional().or(z.literal("")).default(""),
+    // Instagram (Step 9a): optional override of the login permissions, and the platform's own daily publish cap per account.
+    // Meta's docs disagree (100 vs 50 API-published posts per 24 h), so the default is the lower number; the connector also reads the live quota from Meta.
+    META_INSTAGRAM_LOGIN_SCOPES: z.string().regex(/^([a-z_]+)(,[a-z_]+)*$/, "META_INSTAGRAM_LOGIN_SCOPES must be comma-separated permission names").optional().or(z.literal("")).default(""),
+    INSTAGRAM_DAILY_PUBLISH_LIMIT: z.coerce.number().int().min(1).max(100).optional().default(50),
     META_APP_MODE: z.enum(["development", "live", "unknown"]).optional().default("unknown"),
     META_INBOX_POLLING: z.enum(["true", "false"]).optional().default("false"),
     LINKEDIN_API_VERSION: z.string().regex(/^\d{6}$/, "LINKEDIN_API_VERSION must look like YYYYMM").optional().default("202504"),
@@ -361,6 +365,8 @@ export type AppConfig = Readonly<{
   metaWebhookVerifyToken: string;
   metaApiVersion: string;
   metaLoginScopes: string;
+  metaInstagramLoginScopes: string;
+  instagramDailyPublishLimit: number;
   metaAppMode: "development" | "live" | "unknown";
   metaInboxPolling: boolean;
   linkedinClientId: string;
@@ -452,6 +458,8 @@ export function validateEnv(raw: NodeJS.ProcessEnv | Record<string, string | und
       metaWebhookVerifyToken: env.META_WEBHOOK_VERIFY_TOKEN,
       metaApiVersion: env.META_API_VERSION,
       metaLoginScopes: env.META_LOGIN_SCOPES ?? "",
+      metaInstagramLoginScopes: env.META_INSTAGRAM_LOGIN_SCOPES ?? "",
+      instagramDailyPublishLimit: env.INSTAGRAM_DAILY_PUBLISH_LIMIT,
       metaAppMode: env.META_APP_MODE,
       metaInboxPolling: env.META_INBOX_POLLING === "true",
       linkedinClientId: env.LINKEDIN_CLIENT_ID,

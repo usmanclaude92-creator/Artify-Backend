@@ -1,0 +1,13 @@
+{
+  "commentAdd": { "object": "instagram", "entry": [{ "id": "IG1", "time": 1760000000, "changes": [{ "field": "comments", "value": { "from": { "id": "U100", "username": "ada" }, "media": { "id": "MEDIA1", "media_product_type": "FEED" }, "id": "C1", "text": "Love this! Where can I buy it?" } }] }] },
+  "commentReply": { "object": "instagram", "entry": [{ "id": "IG1", "time": 1760000100, "changes": [{ "field": "comments", "value": { "from": { "id": "U101", "username": "alan" }, "media": { "id": "MEDIA1" }, "id": "C2", "parent_id": "C1", "text": "Same question" } }] }] },
+  "ownComment": { "object": "instagram", "entry": [{ "id": "IG1", "time": 1760000200, "changes": [{ "field": "comments", "value": { "from": { "id": "IG1", "username": "artify" }, "media": { "id": "MEDIA1" }, "id": "C3", "text": "Thanks!" } }] }] },
+  "otherFieldAndObject": { "object": "instagram", "entry": [{ "id": "IG1", "time": 1760000300, "changes": [{ "field": "mentions", "value": { "media_id": "M9", "comment_id": "C9" } }] }] },
+  "notInstagram": { "object": "page", "entry": [{ "id": "IG1", "changes": [{ "field": "comments", "value": { "from": { "id": "U1" }, "id": "C1", "text": "x" } }] }] },
+  "messageText": { "object": "instagram", "entry": [{ "id": "IG1", "time": 1760000400000, "messaging": [{ "sender": { "id": "IGSID1" }, "recipient": { "id": "IG1" }, "timestamp": 1760000400000, "message": { "mid": "mid_abc", "text": "hello, is this in stock?" } }] }] },
+  "messageEchoAndAttachment": { "object": "instagram", "entry": [{ "id": "IG1", "time": 1760000500000, "messaging": [
+    { "sender": { "id": "IG1" }, "recipient": { "id": "IGSID1" }, "timestamp": 1760000500000, "message": { "mid": "mid_echo", "text": "our reply", "is_echo": true } },
+    { "sender": { "id": "IGSID2" }, "recipient": { "id": "IG1" }, "timestamp": 1760000510000, "message": { "mid": "mid_att", "attachments": [{ "type": "image", "payload": { "url": "https://example.invalid/a.jpg" } }] } },
+    { "sender": { "id": "IGSID3" }, "recipient": { "id": "IG1" }, "timestamp": 1760000520000, "read": { "mid": "mid_read" } }
+  ] }] }
+}

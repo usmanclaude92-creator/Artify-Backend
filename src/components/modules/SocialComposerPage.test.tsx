@@ -47,6 +47,21 @@ const open = async () => {
 const pick = (name: string) => fireEvent.click(screen.getByRole("checkbox", { name: new RegExp(name) }));
 
 describe("SocialComposerPage", () => {
+  it("shows Instagram's media requirements and warns when media is missing", async () => {
+    h.socialContentApi.constraints.mockResolvedValue({ a1: { ...cons, maxChars: 2200, requiresMedia: true, allowedMediaTypes: ["image/jpeg"], supportsLink: false, mediaLimits: { imageMaxBytes: 8 * 1048576 }, notes: ["Instagram needs at least one image: text-only posts are rejected.", "JPEG only, up to 8 MB each."] }, a2: cons });
+    await open();
+    pick("^Acme$");
+    const hint = await screen.findByLabelText("Acme media requirements");
+    expect(within(hint).getByText(/text-only posts are rejected/)).toBeInTheDocument();
+    expect(within(hint).getByText(/JPEG only/)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Post text"), { target: { value: "Caption" } });
+    expect(within(screen.getByLabelText("Guardrails")).getByText(/Acme: needs an image or video/)).toBeInTheDocument();
+    cleanup();
+    await open();
+    pick("Acme Two");
+    expect(screen.queryByLabelText(/media requirements/)).toBeNull(); // networks without notes show nothing extra
+  });
+
   it("shows per-account tabs, live counters against the network limit and a preview", async () => {
     await open();
     pick("^Acme$");

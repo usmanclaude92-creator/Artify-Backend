@@ -13,12 +13,18 @@ export class SocialPublishError extends Error {
   readonly kind: PublishErrorKind;
   readonly httpStatus?: number;
   readonly retryAfterMs?: number;
-  constructor(kind: PublishErrorKind, message: string, opts: { httpStatus?: number; retryAfterMs?: number } = {}) {
+  /**
+   * Not a failure: the network is still processing the media (e.g. an Instagram container). The publisher puts the target back to SCHEDULED for
+   * `retryAfterMs` WITHOUT counting an attempt. The connector keeps its own time limit and fails permanently when it is exceeded.
+   */
+  readonly pending: boolean;
+  constructor(kind: PublishErrorKind, message: string, opts: { httpStatus?: number; retryAfterMs?: number; pending?: boolean } = {}) {
     super(message);
     this.name = "SocialPublishError";
     this.kind = kind;
     this.httpStatus = opts.httpStatus;
     this.retryAfterMs = opts.retryAfterMs;
+    this.pending = opts.pending ?? false;
   }
 }
 

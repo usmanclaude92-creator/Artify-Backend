@@ -77,7 +77,7 @@ async function getBrandVoiceRow(organizationId: string) {
 
 /** Runs the deterministic guardrails for a post's current content. */
 async function evaluate(organizationId: string, post: { id?: string; body: string; linkUrl: string | null; mediaIds: string[]; sourceContentId: string | null }, targets: Array<{ socialAccountId: string; bodyOverride: string | null }>): Promise<GuardrailResult> {
-  const [voice, accounts, recent] = await Promise.all([
+  const [voice, accounts, recent, mediaRows] = await Promise.all([
     getBrandVoiceRow(organizationId),
     accountsInOrg(organizationId, targets.map((t) => t.socialAccountId)),
     prisma.socialPost.findMany({
@@ -86,6 +86,7 @@ async function evaluate(organizationId: string, post: { id?: string; body: strin
       orderBy: { createdAt: "desc" },
       take: 200,
     }),
+    post.mediaIds.length ? prisma.mediaAsset.findMany({ where: { organizationId, id: { in: post.mediaIds } }, select: { id: true, mimeType: true, sizeBytes: true, width: true, height: true } }) : Promise.resolve([]),
   ]);
   return runGuardrails({
     targets: targets.map((t) => {
@@ -101,6 +102,7 @@ async function evaluate(organizationId: string, post: { id?: string; body: strin
     fallbackText: post.body,
     linkUrl: post.linkUrl,
     mediaCount: post.mediaIds.length,
+    media: post.mediaIds.map((id) => mediaRows.find((m) => m.id === id)).filter((m): m is NonNullable<typeof m> => !!m).map((m) => ({ mimeType: m.mimeType, sizeBytes: Number(m.sizeBytes), width: m.width, height: m.height })),
     hasSourceContent: !!post.sourceContentId,
     brandVoice: { bannedWords: voice.bannedWords, requiredDisclaimers: voice.requiredDisclaimers },
     recentBodies: recent.map((r) => r.body),

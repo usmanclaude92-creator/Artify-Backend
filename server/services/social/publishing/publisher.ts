@@ -11,7 +11,7 @@
  *  - Errors are redacted before storage/logging; tokens never leave this module except into the connector call.
  */
 import { randomUUID } from "node:crypto";
-import type { Prisma, SocialPostTargetStatus } from "@prisma/client";
+import { Prisma, type SocialPostTargetStatus } from "@prisma/client";
 import { prisma } from "../../../db/prisma";
 import { config } from "../../../config/env";
 import { logger } from "../../../core/logger";
@@ -93,6 +93,7 @@ async function buildMedia(organizationId: string, mediaIds: string[]): Promise<P
     const a = assets.find((x) => x.id === id)!;
     return {
       mediaId: a.id, mimeType: a.mimeType, altText: a.altText,
+      sizeBytes: Number(a.sizeBytes), width: a.width ?? undefined, height: a.height ?? undefined, durationSeconds: a.durationSeconds ?? undefined,
       signedUrl: () => storage.createSignedReadUrl({ key: a.storageKey, expiresInSeconds: 600 }),
       load: async () => {
         if (Number(a.sizeBytes) > 10 * 1024 * 1024) throw new SocialPublishError("permanent", "Media file is larger than the 10 MB publishing limit.");
@@ -195,6 +196,17 @@ export const publisher = {
       const connector: SocialConnector | undefined = connectorRegistry.getAvailable(account.provider);
       if (!connector?.publish) return await failTerminal("PERMANENT_FAILURE", "unsupported", `${account.provider} publishing is not available in this environment.`);
 
+      // Networks with a documented daily publishing quota: count what this workspace's account already published (or may have) in 24 h.
+      if (connector.dailyPublishCap) {
+        const since = new Date(now.getTime() - 24 * 3600_000);
+        const used = await prisma.socialPostTarget.count({
+          where: { id: { not: targetId }, socialAccountId: account.id, OR: [{ status: "PUBLISHED", publishedAt: { gte: since } }, { status: "UNCERTAIN", updatedAt: { gte: since } }] },
+        });
+        if (used >= connector.dailyPublishCap) {
+          return await failTerminal("PERMANENT_FAILURE", "daily_limit", `${account.displayName} already has ${used} posts in the last 24 hours; the network allows ${connector.dailyPublishCap}. Reschedule for later.`);
+        }
+      }
+
       if (dryRun) {
         const text = target.bodyOverride ?? post.body;
         await finish({ outcome: "DRY_RUN", category: "dry_run", message: `Dry run: would publish ${text.length} characters${post.mediaIds.length ? ` and ${post.mediaIds.length} media` : ""} to ${account.displayName}. Nothing was sent.` });
@@ -222,11 +234,19 @@ export const publisher = {
         result = await withTimeout(connector.publish(tokens, {
           accountExternalId: account.externalAccountId, accountType: account.accountType, text: target.bodyOverride ?? post.body, linkUrl: post.linkUrl, media,
           idempotencyKey: (await prisma.socialPostTarget.findUniqueOrThrow({ where: { id: targetId }, select: { idempotencyKey: true } })).idempotencyKey!, attempt: attemptNumber,
+          state: (target.providerState as Record<string, unknown> | null) ?? null,
+          saveState: async (s) => { await prisma.socialPostTarget.update({ where: { id: targetId }, data: { providerState: (s as Prisma.InputJsonObject | null) ?? Prisma.JsonNull } }); },
         }), PUBLISH_CALL_TIMEOUT_MS);
       } catch (err) {
         const kind = err instanceof SocialPublishError ? err.kind : "uncertain";
         const message = safe(err instanceof SocialPublishError ? err.message : `Unexpected error: ${(err as Error)?.message ?? err}`, [tokens.accessToken, tokens.refreshToken]);
         const httpStatus = err instanceof SocialPublishError ? err.httpStatus : undefined;
+
+        // Still processing on the network's side (e.g. an Instagram media container): not a failure, not an attempt. Check again later.
+        if (err instanceof SocialPublishError && err.pending) {
+          await release("SCHEDULED", message, "pending", { nextAttemptAt: new Date(now.getTime() + (err.retryAfterMs ?? 60_000)) });
+          return { outcome: "retry_scheduled", detail: "pending" };
+        }
         const decision = decideFailure(kind, target.attempts, settings.maxAttempts, err instanceof SocialPublishError ? err.retryAfterMs : undefined, opts.backoff);
 
         if (decision.action === "retry") {
@@ -373,7 +393,7 @@ export const publishingActions = {
     const t = await loadActionable(caller, targetId, ["FAILED", "MISSED", "UNCERTAIN"]);
     if (t.status === "UNCERTAIN" && !input.confirmNotPosted) throw new ValidationError("Confirm that the post is NOT on the network before retrying an uncertain publish (otherwise it may be duplicated).");
     const now = new Date();
-    const moved = await prisma.socialPostTarget.updateMany({ where: { id: targetId, status: t.status }, data: { status: "SCHEDULED", scheduledAt: now, nextAttemptAt: null, attempts: 0, publishError: null } });
+    const moved = await prisma.socialPostTarget.updateMany({ where: { id: targetId, status: t.status }, data: { status: "SCHEDULED", scheduledAt: now, nextAttemptAt: null, attempts: 0, publishError: null, providerState: Prisma.JsonNull } });
     if (moved.count !== 1) throw new ConflictError("This target changed; refresh and try again.");
     await prisma.socialPost.updateMany({ where: { id: t.postId, status: { in: ["FAILED", "SCHEDULED"] } }, data: { status: "SCHEDULED", scheduledAt: now } });
     await audit(caller.organizationId, "SOCIAL_PUBLISH_RETRY_REQUESTED", targetId, "SUCCESS", { from: t.status, confirmNotPosted: !!input.confirmNotPosted, postId: t.postId }, caller, meta);
@@ -385,7 +405,7 @@ export const publishingActions = {
     const t = await loadActionable(caller, targetId);
     if (t.status === "UNCERTAIN" && !input.confirmNotPosted) throw new ValidationError("Confirm that the post is NOT on the network before rescheduling an uncertain publish.");
     if (input.scheduledAt.getTime() <= Date.now()) throw new ValidationError("Choose a future date and time.");
-    const moved = await prisma.socialPostTarget.updateMany({ where: { id: targetId, status: t.status }, data: { status: "SCHEDULED", scheduledAt: input.scheduledAt, nextAttemptAt: null, attempts: 0, publishError: null } });
+    const moved = await prisma.socialPostTarget.updateMany({ where: { id: targetId, status: t.status }, data: { status: "SCHEDULED", scheduledAt: input.scheduledAt, nextAttemptAt: null, attempts: 0, publishError: null, providerState: Prisma.JsonNull } });
     if (moved.count !== 1) throw new ConflictError("This target changed; refresh and try again.");
     await prisma.socialPost.updateMany({ where: { id: t.postId, status: { in: ["FAILED", "SCHEDULED"] } }, data: { status: "SCHEDULED", scheduledAt: input.scheduledAt } });
     await audit(caller.organizationId, "SOCIAL_PUBLISH_RESCHEDULED", targetId, "SUCCESS", { from: t.status, scheduledAt: input.scheduledAt, postId: t.postId }, caller, meta);

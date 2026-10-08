@@ -2978,7 +2978,10 @@ export interface ProviderSetupView {
   verifyTokenConfigured: boolean;
   verifyTokenEnvVar: string;
   permissions: Array<{ name: string; required: boolean }>;
+  webhookObject?: string;
   webhookFields: string[];
+  prerequisites?: string[];
+  dailyPublishLimit?: number;
   envVars: Array<{ name: string; set: boolean }>;
   notes: string[];
 }
@@ -3020,6 +3023,8 @@ export interface SocialConstraints {
   supportsLink: boolean;
   hashtagPrefix: string;
   mentionPrefix: string;
+  mediaLimits?: { imageMaxBytes?: number; imageMinWidth?: number; imageMinRatio?: number; imageMaxRatio?: number };
+  notes?: string[];
 }
 export interface SocialPostTarget {
   id: string;
