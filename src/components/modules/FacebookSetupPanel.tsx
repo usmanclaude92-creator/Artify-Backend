@@ -14,7 +14,7 @@ const Row: React.FC<{ label: string; children: React.ReactNode }> = ({ label, ch
 
 const MODE_LABEL = { development: "Development mode", live: "Live mode", unknown: "Mode unknown" } as const;
 
-export const FacebookSetupPanel: React.FC<{ provider: string }> = ({ provider }) => {
+export const FacebookSetupPanel: React.FC<{ provider: string; label?: string }> = ({ provider, label = "Facebook Page" }) => {
   const { notify } = useToast();
   const [open, setOpen] = useState(false);
   const [setup, setSetup] = useState<ProviderSetupView | null>(null);
@@ -32,9 +32,9 @@ export const FacebookSetupPanel: React.FC<{ provider: string }> = ({ provider })
   );
 
   return (
-    <Card className="p-4 space-y-2" aria-label="Facebook Page setup">
+    <Card className="p-4 space-y-2" aria-label={`${label} setup`}>
       <button type="button" onClick={toggle} aria-expanded={open} className="flex items-center gap-2 text-sm font-bold w-full text-left" style={{ color: "var(--text-primary)" }}>
-        {open ? <ChevronDown className="w-4 h-4" aria-hidden="true" /> : <ChevronRight className="w-4 h-4" aria-hidden="true" />} Facebook Page setup
+        {open ? <ChevronDown className="w-4 h-4" aria-hidden="true" /> : <ChevronRight className="w-4 h-4" aria-hidden="true" />} {label} setup
       </button>
       {open && (error ? <ErrorState message={error} /> : !setup ? <LoadingState /> : (
         <dl className="divide-y" style={{ borderColor: "var(--border)" }}>
@@ -42,7 +42,9 @@ export const FacebookSetupPanel: React.FC<{ provider: string }> = ({ provider })
           <Row label="Valid OAuth redirect URI"><Copyable value={setup.redirectUri} what="Redirect URI" /></Row>
           <Row label="Webhook callback URL"><Copyable value={setup.webhookCallbackUrl} what="Callback URL" /></Row>
           <Row label="Webhook verify token">{setup.verifyTokenConfigured ? <span><CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 inline mr-1 align-text-bottom" aria-hidden="true" />Set. Paste the value of <code>{setup.verifyTokenEnvVar}</code> into the Verify Token field.</span> : <span><XCircle className="w-3.5 h-3.5 text-rose-500 inline mr-1 align-text-bottom" aria-hidden="true" />Not set. Set <code>{setup.verifyTokenEnvVar}</code> first; the handshake is refused without it.</span>}</Row>
-          <Row label="Webhook fields (Page object)">{setup.webhookFields.join(", ")}</Row>
+          {setup.prerequisites && setup.prerequisites.length > 0 && <Row label="Before you connect"><ul className="list-disc pl-4 space-y-1">{setup.prerequisites.map((n) => <li key={n}>{n}</li>)}</ul></Row>}
+          <Row label={`Webhook fields (${setup.webhookObject ?? "page"} object)`}>{setup.webhookFields.join(", ")}</Row>
+          {setup.dailyPublishLimit && <Row label="Daily publish limit">{setup.dailyPublishLimit} posts per 24 hours per account</Row>}
           <Row label="Permissions">
             <ul className="flex gap-1.5 flex-wrap">{setup.permissions.map((p) => <li key={p.name}><Badge tone={p.required ? "info" : "neutral"}>{p.name}{p.required ? " · required" : ""}</Badge></li>)}</ul>
           </Row>

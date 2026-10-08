@@ -13,7 +13,7 @@ import { auditLogRepository } from "../../repositories/auditLogRepository";
 import { notificationService } from "../notificationService";
 import { hashToken } from "../../utils/crypto";
 import { connectorRegistry } from "./connectors/registry";
-import type { SelectableAccount, SocialConnector, SocialProfile } from "./connectors/types";
+import { ConnectorUserError, type SelectableAccount, type SocialConnector, type SocialProfile } from "./connectors/types";
 import { redactSecrets, tokenVault, type SocialTokenSet } from "./tokenVault";
 import type { SanitizedUser } from "../../types/domain";
 import type { RequestMeta } from "../authService";
@@ -188,6 +188,7 @@ export const socialAccountService = {
         organizationId: user.organizationId, actorUserId: user.id, actorType: "USER", action: "SOCIAL_ACCOUNT_CONNECT_FAILED",
         resourceType: "social_account", result: "FAILURE", metadata: { provider: row.provider, reason: safeError(err, [input.code]) }, ipAddress: meta.ip, userAgent: meta.userAgent,
       });
+      if (err instanceof ConnectorUserError) throw new ValidationError(err.message);
       throw new ValidationError("Could not connect the account. Please try again.");
     }
 

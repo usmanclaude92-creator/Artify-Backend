@@ -174,6 +174,7 @@ export const SocialAccountsPage: React.FC = () => {
           </Card>
 
           {canManage && providers.some((p) => p.key === "meta_facebook") && <FacebookSetupPanel provider="meta_facebook" />}
+          {canManage && providers.some((p) => p.key === "meta_instagram") && <FacebookSetupPanel provider="meta_instagram" label="Instagram" />}
 
           {accounts.length === 0 ? (
             <Card>

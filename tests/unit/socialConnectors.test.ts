@@ -8,8 +8,8 @@ vi.mock("../../server/config/env", async (importOriginal) => {
 import { config } from "../../server/config/env";
 import { connectorRegistry } from "../../server/services/social/connectors/registry";
 import { mockProvider } from "../../server/services/social/connectors/mockProvider";
-import { ConnectorNotImplementedError } from "../../server/services/social/connectors/types";
-import { instagramProvider } from "../../server/services/social/connectors/stubProviders";
+import { ConnectorNotImplementedError, DEFAULT_CONSTRAINTS } from "../../server/services/social/connectors/types";
+import { stub } from "../../server/services/social/connectors/stubProviders";
 import { linkedinProvider } from "../../server/services/social/connectors/linkedinProvider";
 
 const mutable = config as unknown as Record<string, unknown>;
@@ -20,10 +20,11 @@ afterEach(() => {
 });
 
 describe("connector registry", () => {
-  it("registers Facebook Pages, linkedin and (in dev/test) mock; Facebook/linkedin are 'not configured' without credentials", () => {
+  it("registers Facebook Pages, Instagram, linkedin and (in dev/test) mock; the Meta connectors/linkedin are 'not configured' without credentials", () => {
     const list = connectorRegistry.list();
-    expect(list.map((p) => p.key).sort()).toEqual(["linkedin", "meta_facebook", "mock"]);
+    expect(list.map((p) => p.key).sort()).toEqual(["linkedin", "meta_facebook", "meta_instagram", "mock"]);
     expect(list.find((p) => p.key === "meta_facebook")).toMatchObject({ label: "Facebook Pages", configured: false, available: false });
+    expect(list.find((p) => p.key === "meta_instagram")).toMatchObject({ label: "Instagram", configured: false, available: false });
     expect(list.find((p) => p.key === "mock")).toMatchObject({ configured: true, available: true });
     expect(connectorRegistry.getAvailable("meta_facebook")).toBeUndefined();
     expect(connectorRegistry.getAvailable("nope")).toBeUndefined();
@@ -44,7 +45,8 @@ describe("connector registry", () => {
     expect(connectorRegistry.list().find((p) => p.key === "meta_facebook")).toMatchObject({ configured: false, available: false });
   });
 
-  it("a provider with credentials but no connector code stays unavailable (the Instagram placeholder)", () => {
+  it("a provider with credentials but no connector code stays unavailable (a stub)", () => {
+    const instagramProvider = stub("placeholder", "Placeholder", () => !!config.metaAppId && !!config.metaAppSecret, [], () => ({ ...DEFAULT_CONSTRAINTS }));
     mutable.metaAppId = "id";
     mutable.metaAppSecret = "secret";
     expect(instagramProvider.isConfigured()).toBe(true);

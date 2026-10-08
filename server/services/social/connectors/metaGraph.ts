@@ -51,7 +51,7 @@ export function webhookChallenge(query: Record<string, string | undefined>, veri
 }
 
 export interface GraphErrorBody {
-  error?: { message?: string; type?: string; code?: number; error_subcode?: number; is_transient?: boolean; fbtrace_id?: string };
+  error?: { message?: string; type?: string; code?: number; error_subcode?: number; error_user_title?: string; error_user_msg?: string; is_transient?: boolean; fbtrace_id?: string };
 }
 
 export type ErrorKind = "auth" | "transient" | "permanent";
@@ -71,7 +71,7 @@ export function classifyGraphError(status: number, body: GraphErrorBody | undefi
 
 export function errorFromGraph(status: number, body: GraphErrorBody | undefined, secrets: Array<string | undefined> = []): SocialPublishError {
   const { kind, code, window } = classifyGraphError(status, body);
-  const raw = body?.error?.message ?? "";
+  const raw = body?.error?.error_user_msg ?? body?.error?.message ?? ""; // Instagram's error_user_msg is the most specific text
   const trace = body?.error?.fbtrace_id ? ` [trace ${body.error.fbtrace_id}]` : "";
   const msg = window
     ? "Meta only allows replying within 24 hours of the person's last message (messaging window closed)."

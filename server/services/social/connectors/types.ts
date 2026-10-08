@@ -44,6 +44,10 @@ export interface SocialConstraints {
   supportsLink: boolean;
   hashtagPrefix: string;
   mentionPrefix: string;
+  /** Image rules the guardrails can check from the media library's metadata (all optional; unknown dimensions are never blocked). */
+  mediaLimits?: { imageMaxBytes?: number; imageMinWidth?: number; imageMinRatio?: number; imageMaxRatio?: number };
+  /** Short, human-readable requirements shown next to the Composer's media picker. */
+  notes?: string[];
 }
 
 export const DEFAULT_CONSTRAINTS: SocialConstraints = {
@@ -65,6 +69,10 @@ export interface PublishMedia {
   load: () => Promise<Buffer>;
   /** Short-lived signed URL for networks that fetch the image themselves (e.g. Facebook `url=`). */
   signedUrl?: () => Promise<string>;
+  sizeBytes?: number;
+  width?: number | null;
+  height?: number | null;
+  durationSeconds?: number | null;
 }
 
 export interface PublishInput {
@@ -77,6 +85,12 @@ export interface PublishInput {
   /** Stable per target; sent to networks that support idempotent creates. */
   idempotencyKey: string;
   attempt: number;
+  /**
+   * Provider progress that must survive between attempts of the SAME target (e.g. an Instagram container id while the media is processing).
+   * Loaded by the publisher; `saveState(null)` clears it. Never holds secrets. Cleared on manual retry/reschedule.
+   */
+  state?: Record<string, unknown> | null;
+  saveState?: (state: Record<string, unknown> | null) => Promise<void>;
 }
 
 export interface PublishResult {
@@ -122,6 +136,14 @@ export interface SendReplyResult {
   providerMessageId: string;
 }
 
+/** An error whose message is safe and useful to show to the person connecting an account (never contains secrets or provider internals). */
+export class ConnectorUserError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ConnectorUserError";
+  }
+}
+
 export class ConnectorNotImplementedError extends Error {
   constructor(provider: string, capability: string) {
     super(`${provider} does not support "${capability}" yet.`);
@@ -137,6 +159,8 @@ export interface SocialConnector {
   /** Real network code exists for this provider. Configured but unimplemented providers are not offered for connection. */
   readonly implemented: boolean;
   readonly defaultScopes: string[];
+  /** Max successful publishes per rolling 24 hours per account that THIS platform allows itself (the publisher enforces it before any network call). */
+  readonly dailyPublishCap?: number;
   /** Publishing rules for this network (optionally specialised by account type). Static: needs no credentials. */
   getConstraints(account?: { accountType?: string | null }): SocialConstraints;
 

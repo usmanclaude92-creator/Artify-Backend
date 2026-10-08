@@ -139,10 +139,16 @@ export const SocialComposerPage: React.FC = () => {
       if (countHashtags(text, c.hashtagPrefix) > c.maxHashtags) out.push(`${a.displayName}: more than ${c.maxHashtags} hashtags`);
       if (c.requiresMedia && mediaIds.length === 0) out.push(`${a.displayName}: needs an image or video`);
       if (mediaIds.length > c.maxMedia) out.push(`${a.displayName}: at most ${c.maxMedia} media`);
+      for (const id of mediaIds) {
+        const m = mediaCache[id];
+        if (!m) continue;
+        if (c.allowedMediaTypes.length && !c.allowedMediaTypes.includes(m.mimeType)) out.push(`${a.displayName}: ${m.originalFilename} is ${m.mimeType}; allowed: ${c.allowedMediaTypes.join(", ")}`);
+        if (c.mediaLimits?.imageMaxBytes && m.mimeType.startsWith("image/") && Number(m.sizeBytes) > c.mediaLimits.imageMaxBytes) out.push(`${a.displayName}: ${m.originalFilename} is over ${Math.round(c.mediaLimits.imageMaxBytes / 1048576)} MB`);
+      }
     }
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedAccounts, constraints, body, overrides, mediaIds]);
+  }, [selectedAccounts, constraints, body, overrides, mediaIds, mediaCache]);
 
   const touch = () => setDirty(true);
   const setActiveText = (v: string) => {
@@ -380,6 +386,12 @@ export const SocialComposerPage: React.FC = () => {
                   <Link2 className="w-3.5 h-3.5" /> Share a blog post / case study
                 </Button>
               </div>
+              {selectedAccounts.filter((a) => constraints[a.id]?.notes?.length).map((a) => (
+                <div key={a.id} className="text-[11px] rounded-lg p-2" style={{ background: "var(--bg-hover)", color: "var(--text-secondary)" }} aria-label={`${a.displayName} media requirements`}>
+                  <p className="font-bold" style={{ color: "var(--text-primary)" }}>{a.displayName}: media requirements</p>
+                  <ul className="list-disc pl-4 space-y-0.5">{constraints[a.id]!.notes!.map((n) => <li key={n}>{n}</li>)}</ul>
+                </div>
+              ))}
               {mediaIds.length > 0 && (
                 <ul className="flex flex-wrap gap-2">
                   {mediaIds.map((id) => (

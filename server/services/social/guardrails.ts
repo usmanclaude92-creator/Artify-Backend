@@ -23,6 +23,8 @@ export interface GuardrailInput {
   fallbackText: string;
   linkUrl?: string | null;
   mediaCount: number;
+  /** Library metadata for the attached media (optional; unknown values are never blocked). */
+  media?: Array<{ mimeType: string; sizeBytes?: number | null; width?: number | null; height?: number | null }>;
   hasSourceContent: boolean;
   brandVoice: GuardrailBrandVoice;
   /** Bodies of recent (non-cancelled) posts in the same workspace, excluding this one. */
@@ -38,6 +40,9 @@ export type GuardrailRule =
   | "too_many_hashtags"
   | "media_required"
   | "too_much_media"
+  | "media_type_unsupported"
+  | "media_too_large"
+  | "media_dimensions"
   | "invalid_link"
   | "missing_link"
   | "duplicate_content"
@@ -106,6 +111,24 @@ export function runGuardrails(input: GuardrailInput): GuardrailResult {
     if (tags > c.maxHashtags) add({ rule: "too_many_hashtags", severity: "warn", message: `${where}: ${tags} hashtags (recommended maximum ${c.maxHashtags}).`, ...base });
     if (c.requiresMedia && input.mediaCount === 0) add({ rule: "media_required", severity: "block", message: `${where}: this network requires an image or video.`, ...base });
     if (input.mediaCount > c.maxMedia) add({ rule: "too_much_media", severity: "block", message: `${where}: ${input.mediaCount} media attached, maximum ${c.maxMedia}.`, ...base });
+
+    if (input.linkUrl && !c.supportsLink) add({ rule: "invalid_link", severity: "warn", message: `${where}: links in captions are not clickable on this network.`, ...base });
+    for (const m of input.media ?? []) {
+      if (c.allowedMediaTypes.length > 0 && !c.allowedMediaTypes.includes(m.mimeType)) {
+        add({ rule: "media_type_unsupported", severity: "block", message: `${where}: ${m.mimeType} files are not accepted here (allowed: ${c.allowedMediaTypes.join(", ")}).`, ...base });
+        continue;
+      }
+      const lim = c.mediaLimits;
+      if (!lim || !m.mimeType.startsWith("image/")) continue;
+      if (lim.imageMaxBytes && m.sizeBytes && m.sizeBytes > lim.imageMaxBytes) add({ rule: "media_too_large", severity: "block", message: `${where}: an image is ${(m.sizeBytes / 1048576).toFixed(1)} MB; the maximum is ${(lim.imageMaxBytes / 1048576).toFixed(0)} MB.`, ...base });
+      if (m.width && m.height) {
+        const ratio = m.width / m.height;
+        if (lim.imageMinWidth && m.width < lim.imageMinWidth) add({ rule: "media_dimensions", severity: "block", message: `${where}: an image is ${m.width}px wide; the minimum is ${lim.imageMinWidth}px.`, ...base });
+        if ((lim.imageMinRatio && ratio < lim.imageMinRatio - 0.005) || (lim.imageMaxRatio && ratio > lim.imageMaxRatio + 0.005)) {
+          add({ rule: "media_dimensions", severity: "block", message: `${where}: an image's aspect ratio (${ratio.toFixed(2)}:1) is outside the allowed ${lim.imageMinRatio?.toFixed(2)}–${lim.imageMaxRatio?.toFixed(2)}:1 range.`, ...base });
+        }
+      }
+    }
 
     for (const word of input.brandVoice.bannedWords) {
       if (containsWord(target.text, word)) add({ rule: "banned_word", severity: "block", message: `${where}: contains the banned word “${word}”.`, ...base });
