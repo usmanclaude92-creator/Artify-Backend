@@ -253,6 +253,25 @@ describe("social analytics", () => {
     expect(d.kpis.find((k: { metric: string }) => k.metric === "reach").unavailableReason).toMatch(/Insights permission/);
     expect(d.account.sync.lastError).toMatch(/Insights permission/);
   });
+  it("re-checks metrics cached as unavailable right after the account is reconnected, not only weekly", async () => {
+    await clear();
+    const asked: string[] = [];
+    await prisma.$executeRaw`UPDATE social_accounts SET updated_at = ${new Date("2026-10-01T00:00:00Z")} WHERE id = ${igId}`; // the test clock is fixed in the past
+    const base = handler;
+    handler = (c) => { if (c.path === "/QA_IG_1/insights" && c.query.get("metric") === "views") asked.push("views"); return base(c); };
+    await run();
+    const firstRound = asked.length;
+    expect(firstRound).toBeGreaterThan(0);
+    asked.length = 0;
+    await run(); // same day, nothing changed: the refused metric is not asked again
+    expect(asked.length).toBe(0);
+    const same = await prisma.socialAccount.findUniqueOrThrow({ where: { id: igId }, select: { displayName: true } });
+    await prisma.socialAccount.update({ where: { id: igId }, data: { displayName: same.displayName } }); // bumps updated_at like a reconnect
+    asked.length = 0;
+    await run();
+    expect(asked.length).toBeGreaterThan(0);
+    handler = base;
+  });
   it("a rate limit stops the run with an error and a 3-hour back-off (no partial zeros)", async () => {
     await clear();
     handler = (c) => (c.path === "/QA_IG_1/insights" ? { status: 400, body: errors.rateLimit } : igDefault(c));

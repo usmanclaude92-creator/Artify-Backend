@@ -208,7 +208,7 @@ export const analyticsIngest = {
         for (const metric of analytics.dailyMetrics) {
           if (timeLeft() < 2_000) { complete = false; break; }
           const known = caps.daily[metric];
-          if (known?.status === "UNAVAILABLE" && Date.now() - Date.parse(known.checkedAt) < RECHECK_UNAVAILABLE_MS) continue; // refused recently: re-check weekly
+          if (known?.status === "UNAVAILABLE" && Date.now() - Date.parse(known.checkedAt) < RECHECK_UNAVAILABLE_MS && Date.parse(known.checkedAt) >= account.updatedAt.getTime()) continue; // refused recently: re-check weekly, or at once when the account was reconnected since
           // Only ask for days not requested before: the whole window the first time, then just the days since the last request.
           const askedBack = !!known?.from && known.from <= windowFromStr;
           const wantFrom = askedBack && known?.through ? dayString(addDays(parseDay(known.through), 1)) : windowFromStr;

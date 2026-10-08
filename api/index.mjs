@@ -22857,7 +22857,7 @@ var analyticsIngest = {
             break;
           }
           const known = caps.daily[metric];
-          if (known?.status === "UNAVAILABLE" && Date.now() - Date.parse(known.checkedAt) < RECHECK_UNAVAILABLE_MS) continue;
+          if (known?.status === "UNAVAILABLE" && Date.now() - Date.parse(known.checkedAt) < RECHECK_UNAVAILABLE_MS && Date.parse(known.checkedAt) >= account.updatedAt.getTime()) continue;
           const askedBack = !!known?.from && known.from <= windowFromStr;
           const wantFrom = askedBack && known?.through ? dayString(addDays(parseDay(known.through), 1)) : windowFromStr;
           if (wantFrom > lastFinalStr) continue;
