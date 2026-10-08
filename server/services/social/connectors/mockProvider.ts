@@ -7,7 +7,7 @@ import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { config } from "../../../config/env";
 import type { SocialTokenSet } from "../tokenVault";
 import { SocialPublishError } from "../publishing/publishErrors";
-import { DEFAULT_CONSTRAINTS, type InboundEvent, type SendReplyInput, type SendReplyResult, type ConnectResult, type HealthResult, type PublishInput, type PublishResult, type SocialConnector, type SocialProfile } from "./types";
+import { DEFAULT_CONSTRAINTS, type InboundEvent, type ReviewSummary, type SendReplyInput, type SendReplyResult, type ConnectResult, type HealthResult, type PublishInput, type PublishResult, type SocialConnector, type SocialProfile } from "./types";
 
 /** Calls recorded by the mock (id -> count) so tests can prove "never published twice". Test/dev only. */
 export const mockPublishLog: Array<{ idempotencyKey: string; attempt: number; text: string }> = [];
@@ -17,6 +17,10 @@ const onceSeen = new Set<string>();
 export const mockInboxLog: { replies: SendReplyInput[]; hidden: Array<{ providerMessageId: string; hidden: boolean }>; read: Array<{ providerThreadId: string }> } = { replies: [], hidden: [], read: [] };
 /** Events the mock "polling" endpoint will return once (per account external id). */
 export const mockPollQueue = new Map<string, InboundEvent[]>();
+/** Test hooks for listening: mentions the poller will list, review summaries (or an Error to throw), and id → content for id-only webhooks. */
+export const mockMentionQueue = new Map<string, InboundEvent[]>();
+export const mockReviewSummaries = new Map<string, ReviewSummary | Error>();
+export const mockMentionContent = new Map<string, { text: string; participant: InboundEvent["participant"]; permalink?: string }>();
 
 export const MOCK_SIGNATURE_HEADER = "x-mock-signature";
 /** Signature the mock provider expects: hex HMAC-SHA256 of the raw body with WEBHOOK_SECRET. */
@@ -108,8 +112,27 @@ export const mockProvider: SocialConnector = {
     return (json.events ?? []).flatMap((e) => {
       const type = String(e.type ?? "").toUpperCase();
       if (!types.includes(type) || !e.accountExternalId || !e.providerThreadId || !e.providerMessageId || typeof e.text !== "string") return [];
-      return [{ type: type as InboundEvent["type"], accountExternalId: e.accountExternalId, providerThreadId: e.providerThreadId, providerMessageId: e.providerMessageId, participant: e.participant ?? {}, text: e.text, subjectRef: e.subjectRef, createdAt: e.createdAt }];
+      return [{ type: type as InboundEvent["type"], accountExternalId: e.accountExternalId, providerThreadId: e.providerThreadId, providerMessageId: e.providerMessageId, participant: e.participant ?? {}, text: e.text, subjectRef: e.subjectRef, createdAt: e.createdAt, permalink: e.permalink }];
     });
+  },
+
+  replyCapability: ({ providerThreadId }) => (providerThreadId.startsWith("platform:") ? { mode: "platform", reason: "Mock: the network does not let apps reply here. Reply on the platform." } : { mode: "api" }),
+
+  async resolveMention(_tokens, { lookup }) {
+    const c = mockMentionContent.get(lookup.id);
+    return c ? { text: c.text, participant: c.participant, permalink: c.permalink } : null;
+  },
+
+  async fetchMentions(_tokens, { accountExternalId }) {
+    const events = mockMentionQueue.get(accountExternalId) ?? [];
+    mockMentionQueue.delete(accountExternalId);
+    return { events, nextCursor: undefined };
+  },
+
+  async fetchReviewSummary(_tokens, { accountExternalId }) {
+    const r = mockReviewSummaries.get(accountExternalId);
+    if (r instanceof Error) throw r;
+    return r ?? { averageRating: null, reviewCount: null, note: "Mock: no rating." };
   },
 
   async fetchInbox(_tokens, { accountExternalId }) {

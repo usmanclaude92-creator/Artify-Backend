@@ -141,6 +141,8 @@ export async function sendReply(organizationId: string, conversationId: string, 
   const conv = await prisma.socialConversation.findFirst({ where: { id: conversationId, organizationId }, include: { account: true } });
   if (!conv) throw new NotFoundError("Conversation not found.");
   if (conv.status === "SPAM") throw new ConflictError("This conversation is marked as spam. Reopen it before replying.");
+  // Public mentions and reviews always need a person: auto-reply can never send them.
+  if (o.autoSent && (conv.type === "MENTION" || conv.type === "REVIEW")) throw new ConflictError("Mentions and reviews are never answered automatically.");
 
   const kill = await publishingSettingsService.killed(organizationId);
   if (kill.killed) throw new ConflictError(`Sending is paused (${kill.reason.replace(/_/g, " ")}).`);
@@ -152,6 +154,10 @@ export async function sendReply(organizationId: string, conversationId: string, 
   const connector = connectorRegistry.getAvailable(conv.account.provider);
   if (!connector?.sendReply) throw new ConflictError(`Replies are not supported for ${conv.account.provider} yet.`);
   // Network messaging policy (e.g. Messenger's 24-hour window): checked BEFORE anything is created or claimed.
+  if (conv.type === "MENTION" || conv.type === "REVIEW") {
+    const cap = connector.replyCapability?.({ type: conv.type, providerThreadId: conv.providerThreadId });
+    if (!cap || cap.mode === "platform") throw new ConflictError(cap?.reason ?? "This network does not let apps reply here. Reply on the platform.");
+  }
   const win = connector.replyWindow?.({ type: conv.type, lastInboundAt: conv.lastInboundAt, now: new Date() });
   if (win && !win.open) throw new ConflictError(win.reason ?? "This reply is outside the network's messaging window.");
 
@@ -196,7 +202,7 @@ export async function sendReply(organizationId: string, conversationId: string, 
   if (!tokens) return fail("FAILED", "No stored credentials. Reconnect the account.", "auth");
 
   try {
-    const result = await withTimeout(connector.sendReply(tokens, { accountExternalId: conv.account.externalAccountId, conversationType: conv.type, providerThreadId: conv.providerThreadId, inReplyToProviderMessageId: inReplyTo, participantExternalId: conv.participantExternalId ?? undefined, text, idempotencyKey: key }), 25_000);
+    const result = await withTimeout(connector.sendReply(tokens, { accountExternalId: conv.account.externalAccountId, conversationType: conv.type, providerThreadId: conv.providerThreadId, inReplyToProviderMessageId: inReplyTo, participantExternalId: conv.participantExternalId ?? undefined, subjectRef: conv.subjectRef ?? undefined, text, idempotencyKey: key }), 25_000);
     const now = new Date();
     const sent = await prisma.socialMessage.update({ where: { id: msg.id }, data: { sendStatus: "SENT", providerMessageId: result.providerMessageId, sentAt: now, authorKind: "PAGE", sendError: null } });
     await prisma.socialConversation.update({ where: { id: conversationId }, data: { status: o.resolve ? "RESOLVED" : "PENDING", isRead: true, lastMessageAt: now, slaDueAt: null, needsHuman: false, ...(conv.firstResponseAt ? {} : { firstResponseAt: now }) } });

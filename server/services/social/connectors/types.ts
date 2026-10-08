@@ -119,6 +119,24 @@ export interface InboundEvent {
   /** What the comment/mention is about (e.g. a post id or URL). */
   subjectRef?: string;
   createdAt?: string;
+  /** Link to the item on the network (used for "reply on the platform" and "open on …"). */
+  permalink?: string;
+  /** Webhooks that only carry ids (Instagram mentions): the pipeline calls `resolveMention` to fetch the content before storing. */
+  lookup?: { kind: "ig_comment" | "ig_media"; id: string };
+}
+
+/** Whether a reply to a mention/review can be sent through the API, or must be written on the network. */
+export interface ReplyCapability {
+  mode: "api" | "platform";
+  /** Why the API cannot be used (shown to the user). */
+  reason?: string;
+}
+
+/** Average rating and review count as the network reports them. null = the network gave no value (never 0). */
+export interface ReviewSummary {
+  averageRating: number | null;
+  reviewCount: number | null;
+  note?: string;
 }
 
 export interface SendReplyInput {
@@ -128,6 +146,8 @@ export interface SendReplyInput {
   /** The inbound message being answered (comments reply to a specific comment). */
   inReplyToProviderMessageId?: string;
   participantExternalId?: string;
+  /** What the conversation is about (for Instagram mentions: the media id the mention is on). */
+  subjectRef?: string;
   text: string;
   idempotencyKey: string;
 }
@@ -243,6 +263,16 @@ export interface SocialConnector {
   sendReply?(tokens: SocialTokenSet, input: SendReplyInput): Promise<SendReplyResult>;
   hideComment?(tokens: SocialTokenSet, input: { providerMessageId: string; hidden: boolean }): Promise<void>;
   markRead?(tokens: SocialTokenSet, input: { providerThreadId: string; providerMessageId?: string }): Promise<void>;
+
+  // ---- Listening & reviews (Step 10). Read-only, except `sendReply` for mentions/reviews which the inbox calls after human approval. ----
+  /** Fetches the content behind a webhook that only carried ids (e.g. an Instagram @mention). Returns null when the content cannot be read. */
+  resolveMention?(tokens: SocialTokenSet, input: { accountExternalId: string; lookup: NonNullable<InboundEvent["lookup"]> }): Promise<Pick<InboundEvent, "text" | "participant" | "createdAt" | "permalink" | "subjectRef"> | null>;
+  /** Polling fallback for mentions/tags (behind SOCIAL_LISTENING_POLLING). Only lists what the network lists: no search. */
+  fetchMentions?(tokens: SocialTokenSet, input: { accountExternalId: string; cursor?: string }): Promise<{ events: InboundEvent[]; nextCursor?: string }>;
+  /** Can a reply to this mention/review be sent through the API? */
+  replyCapability?(input: { type: InboundEventType; providerThreadId: string }): ReplyCapability;
+  /** Average rating + count of reviews. Absent when the network offers no reviews API (or approval is missing). */
+  fetchReviewSummary?(tokens: SocialTokenSet, input: { accountExternalId: string }): Promise<ReviewSummary>;
 
   fetchMetrics?(tokens: SocialTokenSet, range: { from: Date; to: Date }): Promise<unknown>;
   /** Read-only insights (Step 9b). Absent for providers that expose none (LinkedIn without Community Management API access). */

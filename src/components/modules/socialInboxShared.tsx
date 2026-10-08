@@ -34,6 +34,7 @@ export const ConversationBadges: React.FC<{ c: InboxConversation }> = ({ c }) =>
     <Badge tone="neutral">{TYPE_LABEL[c.type]}</Badge>
     {c.overdue && <Badge tone="danger">Overdue</Badge>}
     {(c.priority === "HIGH" || c.priority === "URGENT") && <Badge tone="warning">{PRIORITY_LABEL[c.priority]}</Badge>}
+    {c.tags?.includes("crisis") && <Badge tone="danger">Crisis words</Badge>}
     {c.sentiment === "negative" && <Badge tone="danger">Negative</Badge>}
     {c.needsHuman && <Badge tone="warning">Needs a human</Badge>}
     {c.failedSend && <Badge tone="danger">Send failed</Badge>}

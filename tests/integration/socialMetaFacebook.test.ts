@@ -212,7 +212,7 @@ describe("meta facebook", () => {
     // the app was subscribed to each Page's webhooks using that Page's own token
     const subs = callsTo("/subscribed_apps");
     expect(subs.map((c) => c.url.pathname)).toEqual(["/v25.0/QA_PAGE_1/subscribed_apps", "/v25.0/QA_PAGE_2/subscribed_apps"]);
-    expect(subs[0]!.body).toMatchObject({ subscribed_fields: "feed,messages,mention,ratings", access_token: PAGE_TOKEN });
+    expect(subs[0]!.body).toMatchObject({ subscribed_fields: "feed,messages,mention", access_token: PAGE_TOKEN });
     expect(subs[0]!.url.search).not.toContain("access_token"); // never in a POST URL
     expect(await prisma.auditLog.count({ where: { organizationId: orgId, action: "SOCIAL_ACCOUNT_CONNECTED", resourceId: { in: [page1, page2] } } })).toBe(2);
   });

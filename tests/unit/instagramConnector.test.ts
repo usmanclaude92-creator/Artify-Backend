@@ -65,7 +65,7 @@ describe("constraints (from the documentation)", () => {
   });
   it("has setup guidance without secrets", () => {
     const s = providerSetup("meta_instagram")!;
-    expect(s).toMatchObject({ provider: "meta_instagram", webhookObject: "instagram", webhookFields: ["comments", "messages"], dailyPublishLimit: 50 });
+    expect(s).toMatchObject({ provider: "meta_instagram", webhookObject: "instagram", webhookFields: ["comments", "messages", "mentions"], dailyPublishLimit: 50 });
     expect(s.webhookCallbackUrl).toMatch(/\/api\/v1\/social\/webhooks\/meta_instagram$/);
     expect(s.prerequisites.join(" ")).toMatch(/Business or Creator/);
     expect(JSON.stringify(s)).not.toContain("app-secret-0123456789abcdef");

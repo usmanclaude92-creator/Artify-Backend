@@ -31,7 +31,7 @@ export const instagramScopes = (): string[] => {
 /** Without these the connector cannot publish or moderate. instagram_manage_messages is optional (DMs only). */
 export const REQUIRED_SCOPES = ["instagram_basic", "instagram_content_publish", "instagram_manage_comments"] as const;
 export const WEBHOOK_OBJECT = "instagram";
-export const WEBHOOK_FIELDS = ["comments", "messages"] as const;
+export const WEBHOOK_FIELDS = ["comments", "messages", "mentions"] as const;
 
 const CAPTION_LIMIT = 2200;
 const DM_BYTE_LIMIT = 1000;
@@ -86,6 +86,18 @@ export function parseWebhookPayload(payload: IgWebhookPayload): InboundEvent[] {
     if (!igId) continue;
     for (const change of entry.changes ?? []) {
       const v = change.value ?? {};
+      if (change.field === "mentions") {
+        // The payload only carries ids; the pipeline fetches the content through `resolveMention`.
+        const mediaId = typeof v.media_id === "string" ? v.media_id : undefined;
+        const mentionCommentId = typeof v.comment_id === "string" ? v.comment_id : undefined;
+        if (!mediaId && !mentionCommentId) continue;
+        const id = (mentionCommentId ?? mediaId)!;
+        out.push({
+          type: "MENTION", accountExternalId: igId, providerThreadId: mentionCommentId ? `mc:${mentionCommentId}` : `mm:${mediaId}`, providerMessageId: id,
+          participant: {}, text: "", subjectRef: mediaId, createdAt: epochToIso(entry.time), lookup: { kind: mentionCommentId ? "ig_comment" : "ig_media", id },
+        });
+        continue;
+      }
       if (change.field !== "comments") continue;
       const commentId = v.id as string | undefined;
       const from = v.from as { id?: string; username?: string } | undefined;
@@ -402,7 +414,65 @@ export const instagramProvider: SocialConnector = {
     return { events, nextCursor: String(now - 60_000) };
   },
 
+  // ---------------- listening (Step 10) ----------------
+  async resolveMention(tokens, { accountExternalId, lookup }) {
+    if (!/^\d{5,30}$/.test(lookup.id)) return null; // ids come from a verified webhook, but never build a field expression from anything else
+    const attempts = lookup.kind === "ig_comment"
+      ? [`mentioned_comment.comment_id(${lookup.id}){id,text,timestamp,username}`, `mentioned_comment.comment_id(${lookup.id}){id,text,timestamp}`]
+      : [`mentioned_media.media_id(${lookup.id}){id,caption,media_type,timestamp,username,permalink}`, `mentioned_media.media_id(${lookup.id}){id,caption,media_type,timestamp,username}`];
+    for (const fields of attempts) {
+      try {
+        const r = await graph<{ mentioned_comment?: { text?: string; timestamp?: string; username?: string }; mentioned_media?: { caption?: string; media_type?: string; timestamp?: string; username?: string; permalink?: string } }>({
+          method: "GET", path: `/${accountExternalId}`, token: tokens.accessToken, phase: "read", query: { fields },
+        });
+        const c = r.json.mentioned_comment;
+        const m = r.json.mentioned_media;
+        const item = c ?? m;
+        if (!item) return null;
+        const text = c?.text ?? m?.caption ?? (m ? `[${(m.media_type ?? "post").toLowerCase()} that mentions you]` : "");
+        return { text, participant: { handle: item.username, name: item.username }, createdAt: item.timestamp, permalink: m?.permalink };
+      } catch (err) {
+        if (!(err instanceof SocialPublishError && err.kind === "permanent")) throw err; // permanent = a field was refused: try the smaller list
+      }
+    }
+    return null;
+  },
+
+  /** Polling fallback: only what Instagram LISTS. Caption and comment @mentions have no list endpoint (webhook only); photo tags do. */
+  async fetchMentions(tokens, { accountExternalId, cursor }) {
+    const since = cursor ? Number(cursor) : Date.now() - 24 * 3600_000;
+    const now = Date.now();
+    const r = await graph<{ data?: Array<{ id: string; caption?: string; media_type?: string; permalink?: string; timestamp?: string; username?: string }> }>({
+      method: "GET", path: `/${accountExternalId}/tags`, token: tokens.accessToken, phase: "read", query: { fields: "id,caption,media_type,permalink,timestamp,username", limit: "25" },
+    });
+    const events: InboundEvent[] = [];
+    for (const m of r.json.data ?? []) {
+      if (!m.timestamp || Date.parse(m.timestamp) <= since) continue;
+      events.push({
+        type: "MENTION", accountExternalId, providerThreadId: `tag:${m.id}`, providerMessageId: `tag:${m.id}`, participant: { handle: m.username, name: m.username },
+        text: m.caption || `[${(m.media_type ?? "post").toLowerCase()} that tags you]`, subjectRef: m.id, createdAt: m.timestamp, permalink: m.permalink,
+      });
+    }
+    return { events, nextCursor: String(now - 60_000) };
+  },
+
+  replyCapability: ({ type, providerThreadId }) => {
+    if (type === "MENTION" && (providerThreadId.startsWith("mc:") || providerThreadId.startsWith("mm:"))) return { mode: "api" };
+    if (type === "MENTION") return { mode: "platform", reason: "Instagram does not let apps reply to a photo you were tagged in. Reply on Instagram." };
+    return { mode: "platform", reason: "Instagram has no reviews." };
+  },
+
   async sendReply(tokens: SocialTokenSet, input: SendReplyInput): Promise<SendReplyResult> {
+    if (input.conversationType === "MENTION") {
+      const fromComment = input.providerThreadId.startsWith("mc:");
+      if (!fromComment && !input.providerThreadId.startsWith("mm:")) throw new SocialPublishError("permanent", "Instagram does not let apps reply to a photo you were tagged in. Reply on Instagram.");
+      if (!input.subjectRef) throw new SocialPublishError("permanent", "The media this mention is on is unknown, so it cannot be answered from here. Reply on Instagram.");
+      const body: Record<string, unknown> = { message: input.text, media_id: input.subjectRef };
+      if (fromComment) body.comment_id = input.inReplyToProviderMessageId ?? input.providerThreadId.slice(3);
+      const r = await graph<{ id?: string }>({ method: "POST", path: `/${input.accountExternalId}/mentions`, token: tokens.accessToken, phase: "write", body });
+      if (!r.json.id) throw new SocialPublishError("uncertain", "Instagram answered without a comment id; the reply may have been posted.");
+      return { providerMessageId: r.json.id };
+    }
     if (input.conversationType === "COMMENT") {
       if (!input.inReplyToProviderMessageId) throw new SocialPublishError("permanent", "There is no comment to reply to.");
       const r = await graph<{ id?: string }>({ method: "POST", path: `/${input.inReplyToProviderMessageId}/replies`, token: tokens.accessToken, phase: "write", body: { message: input.text } });

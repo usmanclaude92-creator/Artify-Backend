@@ -3431,9 +3431,36 @@ export interface InboxReplyWindow {
   reason: string | null;
 }
 
+// ---- Social Listening & Reviews (Step 10) ----
+export interface ListeningItem {
+  id: string; type: InboxType; status: InboxStatus; priority: InboxPriority; sentiment: string | null; intent: string | null; topic: string | null; crisis: boolean; needsHuman: boolean;
+  tags: string[]; isRead: boolean; assigneeId: string | null; leadId: string | null; contactId: string | null;
+  participant: { handle: string | null; name: string | null }; account: { id: string; provider: string; displayName: string; handle: string | null };
+  subjectRef: string | null; preview: string | null; permalink: string | null; replyMode: "api" | "platform"; lastMessageAt: string; triaged: boolean;
+}
+export interface ListeningParams { status?: InboxStatus; sentiment?: string; topic?: string; assignee?: string; crisis?: boolean; accountId?: string; search?: string; page?: number; limit?: number }
+export interface ListeningSummary { mentionsOpen: number; negativeOpen: number; crisisOpen: number; unassigned: number; mentionsLast7d: number; reviewsOpen: number }
+export interface ReviewSnapshotPoint { date: string; averageRating: number | null; reviewCount: number | null; status: string; note: string | null }
+export interface ReviewOverview {
+  days: number;
+  accounts: Array<{ id: string; provider: string; displayName: string; handle: string | null; reviewsAvailable: boolean; reviewsReason: string; series: ReviewSnapshotPoint[]; latest: ReviewSnapshotPoint | null }>;
+  google: { connected: boolean; reason: string };
+}
+export const socialListeningApi = {
+  list: (params: ListeningParams = {}) => apiClient.get<{ items: ListeningItem[]; total: number; page: number; limit: number }>(`/social/listening${toQuery(params as Record<string, string | number | boolean | undefined>)}`),
+  topics: () => apiClient.get<{ topics: Array<{ topic: string; count: number }> }>("/social/listening/topics").then((r) => r.topics),
+  summary: () => apiClient.get<{ summary: ListeningSummary }>("/social/listening/summary").then((r) => r.summary),
+};
+export const socialReviewsApi = {
+  list: (params: ListeningParams = {}) => apiClient.get<{ items: ListeningItem[]; total: number; page: number; limit: number }>(`/social/reviews${toQuery(params as Record<string, string | number | boolean | undefined>)}`),
+  overview: (days = 90) => apiClient.get<ReviewOverview>(`/social/reviews/overview?days=${days}`),
+  draft: (id: string) => apiClient.post<{ draft: { messageId: string; body: string; confidence: number | null; guardrail: GuardrailResult } }>(`/social/reviews/${id}/draft`).then((r) => r.draft),
+  reply: (id: string, input: { messageId?: string; body?: string; resolve?: boolean; confirmNotSent?: boolean }) => apiClient.post<{ message: { id: string; sendStatus: string; sendError: string | null } }>(`/social/reviews/${id}/reply`, input).then((r) => r.message),
+};
+
 export const socialInboxApi = {
   list: (params: InboxListParams) => apiClient.get<{ conversations: InboxConversation[]; total: number; page: number; limit: number }>(`/social/inbox/conversations${toQuery(params as Record<string, string | number | boolean | undefined>)}`),
-  get: (id: string) => apiClient.get<{ conversation: InboxConversation; messages: InboxMessage[]; triage: InboxTriage | null; replyWindow?: InboxReplyWindow }>(`/social/inbox/conversations/${id}`),
+  get: (id: string) => apiClient.get<{ conversation: InboxConversation; messages: InboxMessage[]; triage: InboxTriage | null; replyWindow?: InboxReplyWindow; permalink?: string | null; reply?: { mode: "api" | "platform"; reason: string | null } }>(`/social/inbox/conversations/${id}`),
   metrics: () => apiClient.get<{ metrics: InboxMetrics }>("/social/inbox/metrics").then((r) => r.metrics),
   assignees: () => apiClient.get<{ assignees: Array<{ id: string; name: string }> }>("/social/inbox/assignees").then((r) => r.assignees),
   draft: (id: string) => apiClient.post<{ draft: { messageId: string; body: string; confidence: number | null; guardrail: GuardrailResult } }>(`/social/inbox/conversations/${id}/draft`).then((r) => r.draft),
