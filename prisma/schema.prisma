@@ -912,6 +912,9 @@ model Lead {
   // null when no campaign matches or none was tagged. Also settable
   // directly by staff as a manual attribution override.
   campaignId      String?  @map("campaign_id")
+  // Step 12 — first-touch attribution (set once, never overwritten by a later submission). The utm_*
+  // and referrer columns above remain the most recent (last) touch.
+  firstTouch      Json?    @map("first_touch")
 
   organization    Organization     @relation(fields: [organizationId], references: [id], onDelete: Restrict)
   assignee        User?            @relation("LeadAssignee", fields: [assignedTo], references: [id], onDelete: SetNull)
@@ -1046,6 +1049,9 @@ model Form {
   // `fields` itself already uses. Never claims email delivery — this
   // codebase has no mail transport (see notificationService.ts).
   notifyUserIds  Json       @default("[]") @map("notify_user_ids")
+  // Step 12 — set only on the system-managed form generated from a landing page's lead-form block
+  // (one per page). Null for every form people create themselves; managed forms are hidden from the Forms list.
+  landingPageId  String?    @unique @map("landing_page_id")
   createdById    String?    @map("created_by")
   createdAt      DateTime   @default(now()) @map("created_at")
   updatedAt      DateTime   @updatedAt @map("updated_at")
@@ -1053,6 +1059,7 @@ model Form {
 
   organization    Organization     @relation(fields: [organizationId], references: [id], onDelete: Restrict)
   createdBy       User?            @relation("FormCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  landingPage     Page?            @relation("PageLandingForm", fields: [landingPageId], references: [id], onDelete: Cascade)
   submissions     FormSubmission[]
   originatedLeads Lead[]           @relation("LeadOriginatingForm")
   campaigns       Campaign[]       @relation("CampaignForm")
@@ -1097,6 +1104,9 @@ model FormSubmission {
   referrer        String?
   // Phase 14 — same campaignAttributionService resolution as Lead.campaignId.
   campaignId      String?  @map("campaign_id")
+  // Step 12 — first touch (utm_*, referrer, landing path, timestamp) as reported by the landing page's
+  // script; the utm_* columns above stay the LAST touch. Null when the visitor had no earlier visit stored.
+  firstTouch      Json?    @map("first_touch")
   createdAt       DateTime @default(now()) @map("created_at")
 
   form         Form         @relation(fields: [formId], references: [id], onDelete: Cascade)
@@ -2194,9 +2204,22 @@ model Page {
   // deleting or orphaning its children's own content.
   parentId String? @map("parent_id")
 
+  // Step 12 (Marketing: Landing Pages, docs/MARKETING_LANDING_PAGES.md) — additive, defaulted.
+  // `landingBuilder` marks pages made in Marketing -> Landing Pages (served at /lp/<slug>); every
+  // existing row is false, so legacy pages (including the legacy LANDING page) are unaffected.
+  // `landingLiveRevisionId` is the revision served publicly; `currentRevisionId` stays the working
+  // draft, so a live page can be edited and only changes after approval. `landingUnpublishedAt`
+  // is what turns a 404 into a 410 for a page that was live and then taken down.
+  landingBuilder        Boolean   @default(false) @map("landing_builder")
+  landingLiveRevisionId String?   @map("landing_live_revision_id")
+  landingUnpublishedAt  DateTime? @map("landing_unpublished_at")
+  landingTemplateKey    String?   @map("landing_template_key")
+
   organization    Organization           @relation(fields: [organizationId], references: [id], onDelete: Restrict)
   createdBy       User?                  @relation("PageCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
   currentRevision ContentRevision?       @relation("PageCurrentRevision", fields: [currentRevisionId], references: [id], onDelete: SetNull)
+  landingForm     Form?                  @relation("PageLandingForm")
+  landingPreviews LandingPreviewToken[]
   revisions       ContentRevision[]      @relation("PageRevisions")
   featuredMedia   MediaAsset?            @relation("PageFeaturedMedia", fields: [featuredMediaId], references: [id], onDelete: SetNull)
   template        Template?              @relation("PageTemplate", fields: [templateId], references: [id], onDelete: SetNull)
@@ -2208,6 +2231,7 @@ model Page {
 
   @@unique([organizationId, slug])
   @@index([organizationId, status])
+  @@index([organizationId, landingBuilder, status])
   @@index([templateId])
   @@index([parentId])
   @@map("pages")
@@ -4443,4 +4467,21 @@ model SocialReviewSnapshot {
   @@unique([socialAccountId, capturedOn])
   @@index([organizationId, capturedOn])
   @@map("social_review_snapshots")
+}
+
+// Step 12 — private preview of a landing page's working draft. Only the SHA-256 hash of the token is stored; the raw
+// token is shown once, expires, and can be revoked. A preview never changes anything public.
+model LandingPreviewToken {
+  id          String    @id @default(uuid())
+  pageId      String    @map("page_id")
+  tokenHash   String    @unique @map("token_hash")
+  expiresAt   DateTime  @map("expires_at")
+  revokedAt   DateTime? @map("revoked_at")
+  createdById String?   @map("created_by")
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  page Page @relation(fields: [pageId], references: [id], onDelete: Cascade)
+
+  @@index([pageId])
+  @@map("landing_preview_tokens")
 }

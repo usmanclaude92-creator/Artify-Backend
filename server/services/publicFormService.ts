@@ -19,7 +19,7 @@ import { config } from "../config/env";
 import { InfrastructureError, NotFoundError, ValidationError } from "../core/errors";
 import type { PublicFormSubmitInput, FormField } from "../schemas/formSchemas";
 import type { RequestMeta } from "./authService";
-import type { Form } from "@prisma/client";
+import type { Form, Prisma } from "@prisma/client";
 
 const DEFAULT_SUCCESS_MESSAGE = "Thank you — your submission has been received. We'll be in touch shortly.";
 
@@ -34,7 +34,21 @@ function valueToDisplay(value: string | string[] | undefined): string {
   return value ?? "";
 }
 
-function buildNotes(form: Form, fields: FormField[], data: Record<string, string | string[]>, utm: Partial<PublicFormSubmitInput>, consentGiven: boolean | null): string {
+/** Step 12 — landing pages pass extra, server-trusted context into the same pipeline; generic forms pass none and behave exactly as before. */
+export interface FormSubmitContext {
+  /** Replaces the default `form:<slug>[:utm_source]` lead source (landing pages use `landing:<slug>[:utm_source]`). */
+  sourceTag?: string;
+  /** Server-set path of the page the form is on (never trusted from the request body). */
+  landingPagePath?: string;
+  /** Referrer of the visit (the server-to-server Referer header is not the visitor's). */
+  referrer?: string;
+  /** First-touch attribution; stored once on the lead (never overwritten by a later submission). */
+  firstTouch?: Record<string, string | undefined> | null;
+  /** A required consent checkbox must actually be ticked ("true"), not merely present. */
+  requireConsent?: boolean;
+}
+
+function buildNotes(form: Form, fields: FormField[], data: Record<string, string | string[]>, utm: Partial<PublicFormSubmitInput>, consentGiven: boolean | null, firstTouch?: Record<string, string | undefined> | null): string {
   const lines: string[] = [`Submitted via form: ${form.name}`, ""];
   for (const field of fields) {
     const value = data[field.key];
@@ -49,6 +63,17 @@ function buildNotes(form: Form, fields: FormField[], data: Record<string, string
     utm.utmContent && `content=${utm.utmContent}`,
   ].filter(Boolean);
   if (utmParts.length > 0) lines.push("", `UTM: ${utmParts.join(", ")}`);
+  if (firstTouch) {
+    const ft = [
+      firstTouch.utmSource && `source=${firstTouch.utmSource}`,
+      firstTouch.utmMedium && `medium=${firstTouch.utmMedium}`,
+      firstTouch.utmCampaign && `campaign=${firstTouch.utmCampaign}`,
+      firstTouch.utmTerm && `term=${firstTouch.utmTerm}`,
+      firstTouch.utmContent && `content=${firstTouch.utmContent}`,
+      firstTouch.referrer && `referrer=${firstTouch.referrer}`,
+    ].filter(Boolean);
+    if (ft.length > 0) lines.push("", `First touch: ${ft.join(", ")}`);
+  }
   return lines.join("\n");
 }
 
@@ -84,7 +109,7 @@ export const publicFormService = {
    * successMessage (§8's "accepted-but-discarded" contract from
    * publicLeadService), but writes nothing.
    */
-  async submit(slug: string, input: PublicFormSubmitInput, meta: RequestMeta = {}): Promise<{ successMessage: string }> {
+  async submit(slug: string, input: PublicFormSubmitInput, meta: RequestMeta = {}, ctx: FormSubmitContext = {}): Promise<{ successMessage: string; submissionId?: string }> {
     const organizationId = config.publicWebsiteOrganizationId;
     if (!organizationId) {
       throw new InfrastructureError("Public form intake is not configured.");
@@ -134,6 +159,7 @@ export const publicFormService = {
       }
       if (field.type === "checkbox" && field.key === "consent") {
         consentGiven = typeof value === "string" && (value === "true" || value === "on" || value === "yes");
+        if (ctx.requireConsent && field.required && !consentGiven) throw new ValidationError("Please tick the consent box to continue.");
       }
     }
 
@@ -141,8 +167,11 @@ export const publicFormService = {
     const nameValue = typeof data.name === "string" ? data.name.trim() || undefined : undefined;
     const companyValue = typeof data.company === "string" ? data.company.trim() || undefined : undefined;
     const phoneValue = typeof data.phone === "string" ? data.phone.trim() || undefined : undefined;
-    const sourceTag = `form:${form.slug}${input.utmSource ? `:${input.utmSource}` : ""}`;
-    const notes = buildNotes(form, fields, data, input, consentGiven);
+    const sourceTag = ctx.sourceTag ?? `form:${form.slug}${input.utmSource ? `:${input.utmSource}` : ""}`;
+    const firstTouch = ctx.firstTouch && Object.values(ctx.firstTouch).some(Boolean) ? (ctx.firstTouch as Prisma.InputJsonValue) : undefined;
+    const landingPagePath = ctx.landingPagePath ?? input.landingPagePath;
+    const referrer = ctx.referrer ?? meta.referrer;
+    const notes = buildNotes(form, fields, data, input, consentGiven, ctx.firstTouch);
 
     // Duplicate handling: an open (not yet CONVERTED/LOST) Lead with the
     // same email in this org gets this submission folded into it rather
@@ -155,8 +184,8 @@ export const publicFormService = {
       utmCampaign: input.utmCampaign,
       utmTerm: input.utmTerm,
       utmContent: input.utmContent,
-      landingPagePath: input.landingPagePath,
-      referrer: meta.referrer,
+      landingPagePath,
+      referrer,
       consentGiven: consentGiven ?? undefined,
       formId: form.id,
       campaignId,
@@ -173,6 +202,8 @@ export const publicFormService = {
           source: sourceTag,
           notes: existing.notes ? `${existing.notes}\n\n---\n\n${notes}` : notes,
           ...attribution,
+          // First touch is kept from the lead's first contact; a later submission never replaces it.
+          ...(existing.firstTouch ? {} : firstTouch ? { firstTouch } : {}),
         });
         leadId = updated.id;
       } else {
@@ -185,6 +216,7 @@ export const publicFormService = {
           source: sourceTag,
           notes,
           ...attribution,
+          firstTouch,
         });
         leadId = lead.id;
       }
@@ -197,6 +229,7 @@ export const publicFormService = {
         source: sourceTag,
         notes,
         ...attribution,
+        firstTouch,
       });
       leadId = lead.id;
     }
@@ -214,9 +247,10 @@ export const publicFormService = {
       ipAddress: meta.ip,
       userAgent: meta.userAgent,
       consentGiven: consentGiven ?? undefined,
-      landingPagePath: input.landingPagePath,
-      referrer: meta.referrer,
+      landingPagePath,
+      referrer,
       campaignId,
+      firstTouch,
     });
 
     await auditLogRepository.record({
@@ -263,8 +297,8 @@ export const publicFormService = {
       utmTerm: input.utmTerm,
       utmContent: input.utmContent,
       campaignId,
-      path: input.landingPagePath,
-      referrer: meta.referrer,
+      path: landingPagePath,
+      referrer,
     });
 
     // Best-effort in-app notification to whoever this Form is configured
@@ -282,6 +316,6 @@ export const publicFormService = {
       });
     }
 
-    return { successMessage };
+    return { successMessage, submissionId: submission.id };
   },
 };

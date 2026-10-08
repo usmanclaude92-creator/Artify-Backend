@@ -20,7 +20,8 @@ function slugify(input: string): string {
 }
 
 function buildWhere(organizationId: string, filters: FormFilters): Prisma.FormWhereInput {
-  const where: Prisma.FormWhereInput = { organizationId, deletedAt: null };
+  // System-managed landing-page forms (landingPageId set) are never listed with the forms people create and edit themselves.
+  const where: Prisma.FormWhereInput = { organizationId, deletedAt: null, landingPageId: null };
   if (filters.status) where.status = filters.status as Prisma.EnumFormStatusFilter["equals"];
   if (filters.search) where.name = { contains: filters.search, mode: "insensitive" };
   return where;
@@ -105,6 +106,7 @@ export const formRepository = {
     landingPagePath?: string;
     referrer?: string;
     campaignId?: string;
+    firstTouch?: Prisma.InputJsonValue;
   }): Promise<FormSubmission> {
     return prisma.formSubmission.create({ data });
   },

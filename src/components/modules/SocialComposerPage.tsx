@@ -12,6 +12,7 @@ import { useRouter } from "../../lib/router";
 import { hasPermission } from "../../lib/permissions";
 import { Card, Button, Input, Select, Badge, LoadingState, ErrorState, Modal, ReasonConfirmDialog } from "../ui/ui";
 import { LiveLink } from "./SocialFailuresPage";
+import { LandingUtmLinkHelper } from "./LandingUtmLinkHelper";
 import { CONTENT_EDITABLE, PostStatusBadge, SCHEDULE_EDITABLE, countHashtags, timezoneOptions, utcToZonedLocal, zonedLocalToUtc } from "./socialPostShared";
 
 const SHARED = "__shared__";
@@ -410,6 +411,14 @@ export const SocialComposerPage: React.FC = () => {
                 Link (optional)
               </label>
               <Input id="post-link" value={linkUrl} disabled={!editable} onChange={(e) => { setLinkUrl(e.target.value); touch(); }} placeholder="https://" />
+              {hasPermission(perms, "marketing.landing.read") && (
+                <LandingUtmLinkHelper
+                  disabled={!editable}
+                  defaultSource={(selectedAccounts[0]?.provider ?? "social").toLowerCase()}
+                  notify={notify}
+                  onLink={(url) => { setLinkUrl(url); touch(); }}
+                />
+              )}
             </div>
           </Card>
 

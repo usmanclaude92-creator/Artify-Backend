@@ -28,7 +28,8 @@ const withPublicRelations = { include: { currentRevision: true, featuredMedia: t
 export type PageWithPublicRelations = Prisma.PageGetPayload<typeof withPublicRelations>;
 
 function buildWhere(organizationId: string, filters: PageFilters): Prisma.PageWhereInput {
-  const where: Prisma.PageWhereInput = { organizationId, deletedAt: null };
+  // landingBuilder pages belong to landingPageService; the generic CMS never lists or touches them.
+  const where: Prisma.PageWhereInput = { organizationId, deletedAt: null, landingBuilder: false };
   if (filters.status) where.status = filters.status as Prisma.EnumContentStatusFilter["equals"];
   if (filters.fromDate || filters.toDate) {
     where.createdAt = { ...(filters.fromDate ? { gte: filters.fromDate } : {}), ...(filters.toDate ? { lte: filters.toDate } : {}) };
@@ -50,7 +51,7 @@ export const pageRepository = {
   },
 
   async findByIdInOrg(id: string, organizationId: string): Promise<PageWithRevision | null> {
-    return prisma.page.findFirst({ where: { id, organizationId, deletedAt: null }, ...withCurrentRevision });
+    return prisma.page.findFirst({ where: { id, organizationId, deletedAt: null, landingBuilder: false }, ...withCurrentRevision });
   },
 
   async findBySlugInOrg(organizationId: string, slug: string): Promise<Page | null> {
@@ -65,17 +66,17 @@ export const pageRepository = {
 
   /** Phase 11 public projection — PUBLISHED only, with the revision content and featured media needed to render the page (docs/PUBLIC_API_ARCHITECTURE.md). Never returns DRAFT/IN_REVIEW/SCHEDULED/ARCHIVED. */
   async findPublishedBySlugWithMedia(organizationId: string, slug: string): Promise<PageWithPublicRelations | null> {
-    return prisma.page.findFirst({ where: { organizationId, slug, status: "PUBLISHED", deletedAt: null }, ...withPublicRelations });
+    return prisma.page.findFirst({ where: { organizationId, slug, status: "PUBLISHED", deletedAt: null, landingBuilder: false }, ...withPublicRelations });
   },
 
   /** Phase 5 — the org's designated homepage, PUBLISHED only (same safety as findPublishedBySlugWithMedia). */
   async findPublishedHomepageWithMedia(organizationId: string): Promise<PageWithPublicRelations | null> {
-    return prisma.page.findFirst({ where: { organizationId, isHomepage: true, status: "PUBLISHED", deletedAt: null }, ...withPublicRelations });
+    return prisma.page.findFirst({ where: { organizationId, isHomepage: true, status: "PUBLISHED", deletedAt: null, landingBuilder: false }, ...withPublicRelations });
   },
 
   /** Phase 5 — resolves a navigation-menu "page" link target to its slug, PUBLISHED only (never leaks a draft page's existence/slug). */
   async findPublishedByIdInOrg(id: string, organizationId: string): Promise<Pick<Page, "slug"> | null> {
-    return prisma.page.findFirst({ where: { id, organizationId, status: "PUBLISHED", deletedAt: null }, select: { slug: true } });
+    return prisma.page.findFirst({ where: { id, organizationId, status: "PUBLISHED", deletedAt: null, landingBuilder: false }, select: { slug: true } });
   },
 
   /**
@@ -94,7 +95,7 @@ export const pageRepository = {
   /** Phase 5 SEO audit — every live-or-about-to-be-live page (not ARCHIVED, not soft-deleted), with exactly the fields the rule-based checks need. */
   async listForSeoAudit(organizationId: string) {
     return prisma.page.findMany({
-      where: { organizationId, deletedAt: null, status: { not: "ARCHIVED" } },
+      where: { organizationId, deletedAt: null, landingBuilder: false, status: { not: "ARCHIVED" } },
       select: {
         id: true,
         slug: true,
@@ -143,7 +144,7 @@ export const pageRepository = {
 
   /** Phase 7 — Trash view: pages soft-deleted but not yet permanently gone, newest-deleted first. */
   async listTrash(organizationId: string, page: number, limit: number): Promise<{ rows: Page[]; total: number }> {
-    const where: Prisma.PageWhereInput = { organizationId, deletedAt: { not: null } };
+    const where: Prisma.PageWhereInput = { organizationId, deletedAt: { not: null }, landingBuilder: false };
     const [rows, total] = await Promise.all([
       prisma.page.findMany({ where, orderBy: { deletedAt: "desc" }, skip: (page - 1) * limit, take: limit }),
       prisma.page.count({ where }),

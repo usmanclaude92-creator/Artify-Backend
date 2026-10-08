@@ -12,7 +12,7 @@ const TABS: Array<{ id: ApprovalStatusFilter; label: string }> = [
   { id: "approved", label: "Approved" },
   { id: "rejected", label: "Rejected" },
 ];
-const SOURCE_LABEL: Record<ApprovalSourceKey, string> = { ai: "AI", automation: "Automation", content: "Content", social: "Social" };
+const SOURCE_LABEL: Record<ApprovalSourceKey, string> = { ai: "AI", automation: "Automation", content: "Content", social: "Social", landing: "Landing page" };
 
 export function timeAgo(iso: string): string {
   const mins = Math.floor((Date.now() - new Date(iso).getTime()) / 60000);
@@ -219,7 +219,7 @@ export const ApprovalsPage: React.FC = () => {
         <div className="flex flex-wrap gap-2">
           <Select aria-label="Source" value={source} onChange={(e) => setSource(e.target.value as ApprovalSourceKey | "")}>
             <option value="">All sources</option>
-            {(["ai", "automation", "content", "social"] as const)
+            {(["ai", "automation", "content", "social", "landing"] as const)
               .filter((s) => sources.includes(s))
               .map((s) => (
                 <option key={s} value={s}>

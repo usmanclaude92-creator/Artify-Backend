@@ -90,6 +90,7 @@ export const leadRepository = {
     consentGiven?: boolean;
     formId?: string;
     campaignId?: string;
+    firstTouch?: Prisma.InputJsonValue;
   }): Promise<Lead> {
     return prisma.lead.create({
       data: {
@@ -112,6 +113,7 @@ export const leadRepository = {
         consentGiven: data.consentGiven,
         formId: data.formId,
         campaignId: data.campaignId,
+        firstTouch: data.firstTouch,
       },
     });
   },

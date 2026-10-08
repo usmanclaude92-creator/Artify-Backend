@@ -105,6 +105,10 @@ export class ApprovalEngine {
     if (approval.status !== "PENDING") {
       throw new ValidationError(`Approval request is already resolved with status ${approval.status}.`);
     }
+    // Landing page publishing is decided only by landingApprovalService (needs marketing.landing.publish and promotes the revision).
+    if (approval.entityType === "landing_page") {
+      throw new ValidationError("Landing page approvals are decided in the Approvals center (Landing pages).");
+    }
 
     // Verify role if a specific role is required
     if (approval.requiredRole && params.userRole !== approval.requiredRole && params.userRole !== "SUPER_ADMIN" && params.userRole !== "ADMIN") {

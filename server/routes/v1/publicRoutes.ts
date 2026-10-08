@@ -13,6 +13,9 @@ import { publicSiteService } from "../../services/publicSiteService";
 import { publicProductService } from "../../services/publicProductService";
 import { publicLeadService } from "../../services/publicLeadService";
 import { publicFormService } from "../../services/publicFormService";
+import { publicLandingService } from "../../services/landing/publicLandingService";
+import { publicLandingSubmitSchema } from "../../schemas/landingSchemas";
+import { NotFoundError } from "../../core/errors";
 import { analyticsEventService } from "../../services/analyticsEventService";
 import { publicLeadLimiter, publicAnalyticsLimiter } from "../../middleware/rateLimiter";
 import { asyncHandler } from "../../utils/asyncHandler";
@@ -253,6 +256,28 @@ router.post(
     sendSuccess(res, { message: successMessage }, 201);
   })
 );
+
+// Step 12 — landing pages. Only LIVE revisions (or a valid preview token) are ever returned; 410 once a page was taken offline.
+router.get("/landing", asyncHandler(async (_req, res) => {
+  sendSuccess(res, { pages: await publicLandingService.listIndexable() });
+}));
+router.get("/landing-preview/:token", asyncHandler(async (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("X-Robots-Tag", "noindex, nofollow");
+  sendSuccess(res, { page: await publicLandingService.getPreview(req.params.token!) });
+}));
+router.get("/landing/:slug", asyncHandler(async (req, res) => {
+  const found = await publicLandingService.getBySlug(req.params.slug!);
+  if (found.kind === "ok") { sendSuccess(res, { page: found.page }); return; }
+  if (found.kind === "gone") { res.status(410).json({ success: false, error: { code: "GONE", message: "This landing page is no longer available." } }); return; }
+  if (found.kind === "redirect") { sendSuccess(res, { redirect: { toPath: found.toPath } }); return; }
+  throw new NotFoundError("Landing page not found.");
+}));
+router.post("/landing/:slug/submit", publicLeadLimiter, asyncHandler(async (req, res) => {
+  const input = publicLandingSubmitSchema.parse(req.body);
+  const out = await publicLandingService.submit(req.params.slug!, input, requestMeta(req));
+  sendSuccess(res, out, 201);
+}));
 
 // Phase 15 (Analytics + Reporting, docs/ANALYTICS_ARCHITECTURE.md §3) — the
 // public site's page-view/CTA beacon. Fire-and-forget from the caller's

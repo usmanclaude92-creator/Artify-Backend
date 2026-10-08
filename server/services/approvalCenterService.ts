@@ -10,6 +10,7 @@ import { prisma } from "../db/prisma";
 import { aiApprovalService } from "./aiApprovalService";
 import { automationService } from "./automation/AutomationService";
 import { contentApprovalService } from "./automation/ContentApprovalService";
+import { landingApprovalService } from "./landing/landingApprovalService";
 import { socialPostService } from "./social/socialPostService";
 import { auditLogRepository } from "../repositories/auditLogRepository";
 import { AuthorizationError, NotFoundError, ValidationError } from "../core/errors";
@@ -42,14 +43,17 @@ const SOURCE_READ_PERMISSION: Record<ApprovalSource, string> = {
   automation: "automation.read",
   content: "content.update",
   social: "social.read",
+  landing: "marketing.landing.read",
 };
 const SOURCE_DECIDE_PERMISSION: Record<ApprovalSource, string> = {
   ai: "ai.approvals.decide",
   automation: "automation.approve",
   content: "content.publish",
   social: "social.approve",
+  landing: "marketing.landing.publish",
 };
 const CONTENT_ENTITY_TYPES = ["page", "post"];
+const LANDING_ENTITY_TYPE = "landing_page";
 
 const has = (caller: SanitizedUser, key: string) => caller.role.permissions.includes(key);
 const isUniversalApprover = (caller: SanitizedUser) => caller.role.key === "ADMIN" || caller.role.key === "SUPER_ADMIN";
@@ -83,7 +87,7 @@ function aiWhere(caller: SanitizedUser, q: ListApprovalsQuery): Prisma.AIApprova
   };
 }
 
-function automationBaseWhere(caller: SanitizedUser, q: ListApprovalsQuery, content: boolean): Prisma.AutomationApprovalWhereInput {
+function automationBaseWhere(caller: SanitizedUser, q: ListApprovalsQuery, content: boolean, landing = false): Prisma.AutomationApprovalWhereInput {
   const status =
     q.status === "pending"
       ? { status: "PENDING" as const }
@@ -93,7 +97,7 @@ function automationBaseWhere(caller: SanitizedUser, q: ListApprovalsQuery, conte
   const and: Prisma.AutomationApprovalWhereInput[] = [];
   if (q.assignee === "me") {
     if (q.status === "pending") {
-      if (!content && !isUniversalApprover(caller)) and.push({ requiredRole: caller.role.key });
+      if (!content && !landing && !isUniversalApprover(caller)) and.push({ requiredRole: caller.role.key });
     } else {
       and.push({ OR: [{ requesterId: caller.id }, { approverId: caller.id }] });
     }
@@ -102,7 +106,7 @@ function automationBaseWhere(caller: SanitizedUser, q: ListApprovalsQuery, conte
   return {
     organizationId: caller.organizationId,
     ...status,
-    ...(content ? { entityType: { in: CONTENT_ENTITY_TYPES } } : { OR: [{ entityType: null }, { entityType: { notIn: CONTENT_ENTITY_TYPES } }] }),
+    ...(landing ? { entityType: LANDING_ENTITY_TYPE } : content ? { entityType: { in: CONTENT_ENTITY_TYPES } } : { OR: [{ entityType: null }, { entityType: { notIn: [...CONTENT_ENTITY_TYPES, LANDING_ENTITY_TYPE] } }] }),
     ...(and.length ? { AND: and } : {}),
     ...dateRange(q, "requestedAt"),
   };
@@ -161,9 +165,11 @@ async function fetchAi(caller: SanitizedUser, q: ListApprovalsQuery, take: numbe
   return { items, total };
 }
 
-async function fetchAutomation(caller: SanitizedUser, q: ListApprovalsQuery, take: number, content: boolean) {
-  const where = automationBaseWhere(caller, q, content);
-  const source: "automation" | "content" = content ? "content" : "automation";
+async function fetchAutomation(caller: SanitizedUser, q: ListApprovalsQuery, take: number, kind: "automation" | "content" | "landing") {
+  const landing = kind === "landing";
+  const content = kind === "content" || landing;
+  const where = automationBaseWhere(caller, q, kind === "content", landing);
+  const source = kind;
   const [rows, total] = await Promise.all([
     prisma.automationApproval.findMany({
       where,
@@ -182,12 +188,12 @@ async function fetchAutomation(caller: SanitizedUser, q: ListApprovalsQuery, tak
       id: r.id,
       source,
       title,
-      summary: content ? `${r.entityType === "post" ? "Blog post" : "Page"} awaiting publish approval` : `Workflow "${r.workflow.name}" · ${r.action}${r.requiredRole ? ` · needs ${r.requiredRole}` : ""}`,
+      summary: landing ? "Landing page awaiting publish approval" : content ? `${r.entityType === "post" ? "Blog post" : "Page"} awaiting publish approval` : `Workflow "${r.workflow.name}" · ${r.action}${r.requiredRole ? ` · needs ${r.requiredRole}` : ""}`,
       requestedBy: person(r.requesterId ? users.get(r.requesterId) : null),
       requestedAt: r.requestedAt,
       status: normStatus(r.status),
       dueAt: r.expiresAt,
-      link: content ? (r.entityType === "post" ? `/cms/posts?q=${encodeURIComponent(title)}` : `/cms/pages?q=${encodeURIComponent(title)}`) : "/automation",
+      link: landing ? `/marketing/landing-pages?id=${r.entityId}` : content ? (r.entityType === "post" ? `/cms/posts?q=${encodeURIComponent(title)}` : `/cms/pages?q=${encodeURIComponent(title)}`) : "/automation",
       decidedBy: person(r.approverId ? users.get(r.approverId) : null),
       decidedAt: r.decidedAt,
       decisionComment: r.decisionReason,
@@ -234,11 +240,11 @@ async function fetchSocial(caller: SanitizedUser, q: ListApprovalsQuery, take: n
 export const approvalCenterService = {
   async list(caller: SanitizedUser, q: ListApprovalsQuery) {
     const allowed = visibleSources(caller);
-    const wanted = (q.source ? [q.source] : ["ai", "automation", "content", "social"]).filter((s): s is "ai" | "automation" | "content" | "social" => allowed.includes(s as never));
+    const wanted = (q.source ? [q.source] : ["ai", "automation", "content", "social", "landing"]).filter((s): s is ApprovalSource => allowed.includes(s as never));
     const take = Math.min(q.page * q.limit, 500);
 
     const parts = await Promise.all(
-      wanted.map((s) => (s === "ai" ? fetchAi(caller, q, take) : s === "social" ? fetchSocial(caller, q, take) : fetchAutomation(caller, q, take, s === "content")))
+      wanted.map((s) => (s === "ai" ? fetchAi(caller, q, take) : s === "social" ? fetchSocial(caller, q, take) : fetchAutomation(caller, q, take, s as "automation" | "content" | "landing")))
     );
     const merged = parts.flatMap((p) => p.items).sort((a, b) => b.requestedAt.getTime() - a.requestedAt.getTime());
     const total = parts.reduce((n, p) => n + p.total, 0);
@@ -249,7 +255,7 @@ export const approvalCenterService = {
   /** Pending counts per source for the caller — role-matched for automation, exactly what they could act on. */
   async summary(caller: SanitizedUser): Promise<{ total: number; counts: Record<ApprovalSource, number>; sources: string[] }> {
     const allowed = visibleSources(caller);
-    const counts: Record<ApprovalSource, number> = { ai: 0, automation: 0, content: 0, social: 0 };
+    const counts: Record<ApprovalSource, number> = { ai: 0, automation: 0, content: 0, social: 0, landing: 0 };
     const orgId = caller.organizationId;
     await Promise.all([
       allowed.includes("ai") ? prisma.aIApprovalRequest.count({ where: { organizationId: orgId, status: "PENDING", expiresAt: { gt: new Date() } } }).then((n) => (counts.ai = n)) : null,
@@ -263,9 +269,14 @@ export const approvalCenterService = {
             .count({ where: automationBaseWhere(caller, { status: "pending", assignee: "me", page: 1, limit: 1 }, true) })
             .then((n) => (counts.content = n))
         : null,
+      allowed.includes("landing")
+        ? prisma.automationApproval
+            .count({ where: automationBaseWhere(caller, { status: "pending", assignee: "me", page: 1, limit: 1 }, false, true) })
+            .then((n) => (counts.landing = n))
+        : null,
       allowed.includes("social") ? prisma.socialPost.count({ where: { organizationId: orgId, deletedAt: null, status: "PENDING_APPROVAL" } }).then((n) => (counts.social = n)) : null,
     ]);
-    return { total: counts.ai + counts.automation + counts.content + counts.social, counts, sources: allowed };
+    return { total: counts.ai + counts.automation + counts.content + counts.social + counts.landing, counts, sources: allowed };
   },
 
   async decide(caller: SanitizedUser, source: ApprovalSource, id: string, input: ApprovalDecisionInput, meta: RequestMeta = {}) {
@@ -279,6 +290,11 @@ export const approvalCenterService = {
       result = await socialPostService.decide(caller, id, approve, input.comment, meta);
     } else if (source === "ai") {
       result = await aiApprovalService.decide(caller, id, { decision: approve ? "APPROVE" : "REJECT", rejectionReason: input.comment }, meta);
+    } else if (source === "landing") {
+      const row = await prisma.automationApproval.findFirst({ where: { id, organizationId: caller.organizationId }, select: { entityType: true } });
+      if (!row) throw new NotFoundError("Approval request not found.");
+      if (row.entityType !== LANDING_ENTITY_TYPE) throw new ValidationError('This approval does not belong to the "landing" source.');
+      result = await landingApprovalService.decide(caller, id, approve ? "APPROVED" : "REJECTED", input.comment, meta);
     } else {
       const row = await prisma.automationApproval.findFirst({ where: { id, organizationId: caller.organizationId }, select: { entityType: true } });
       if (!row) throw new NotFoundError("Approval request not found.");

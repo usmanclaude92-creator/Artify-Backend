@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const APPROVAL_SOURCES = ["ai", "automation", "content", "social"] as const;
+export const APPROVAL_SOURCES = ["ai", "automation", "content", "social", "landing"] as const;
 export type ApprovalSource = (typeof APPROVAL_SOURCES)[number];
 
 export const listApprovalsQuerySchema = z.object({

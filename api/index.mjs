@@ -942,8 +942,8 @@ function validateEvents(events) {
   if (unknown.length) throw new ValidationError(`Unsupported event type(s): ${unknown.join(", ")}`);
   return unique;
 }
-async function loadInOrg(id4, organizationId) {
-  const endpoint = await prisma.webhookEndpoint.findFirst({ where: { id: id4, organizationId, deletedAt: null } });
+async function loadInOrg(id6, organizationId) {
+  const endpoint = await prisma.webhookEndpoint.findFirst({ where: { id: id6, organizationId, deletedAt: null } });
   if (!endpoint) throw new NotFoundError("Webhook endpoint not found.");
   return endpoint;
 }
@@ -1024,7 +1024,7 @@ var webhookEndpointService = {
       }
     }));
   },
-  async create(caller, input, meta10 = {}) {
+  async create(caller, input, meta11 = {}) {
     const count = await prisma.webhookEndpoint.count({ where: { organizationId: caller.organizationId, deletedAt: null } });
     if (count >= MAX_ENDPOINTS_PER_ORG) throw new ConflictError(`An organization can have at most ${MAX_ENDPOINTS_PER_ORG} webhook endpoints.`);
     await assertSafeOutboundUrl(input.url);
@@ -1049,13 +1049,13 @@ var webhookEndpointService = {
       resourceType: "webhook_endpoint",
       resourceId: endpoint.id,
       afterData: { name: endpoint.name, url: endpoint.url, events },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return { endpoint: projectEndpoint(endpoint), secret };
   },
-  async update(caller, id4, input, meta10 = {}) {
-    const existing = await loadInOrg(id4, caller.organizationId);
+  async update(caller, id6, input, meta11 = {}) {
+    const existing = await loadInOrg(id6, caller.organizationId);
     if (input.url !== void 0) await assertSafeOutboundUrl(input.url);
     const endpoint = await prisma.webhookEndpoint.update({
       where: { id: existing.id },
@@ -1072,16 +1072,16 @@ var webhookEndpointService = {
       actorType: "USER",
       action: "WEBHOOK_ENDPOINT_UPDATED",
       resourceType: "webhook_endpoint",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { url: existing.url, events: existing.events, enabled: existing.enabled },
       afterData: { url: endpoint.url, events: endpoint.events, enabled: endpoint.enabled },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return projectEndpoint(endpoint);
   },
-  async rotateSecret(caller, id4, meta10 = {}) {
-    const existing = await loadInOrg(id4, caller.organizationId);
+  async rotateSecret(caller, id6, meta11 = {}) {
+    const existing = await loadInOrg(id6, caller.organizationId);
     const secret = newSigningSecret();
     const endpoint = await prisma.webhookEndpoint.update({ where: { id: existing.id }, data: { secretCiphertext: encryptSecret(secret), secretLast4: last4(secret) } });
     await auditLogRepository.record({
@@ -1090,14 +1090,14 @@ var webhookEndpointService = {
       actorType: "USER",
       action: "WEBHOOK_SECRET_ROTATED",
       resourceType: "webhook_endpoint",
-      resourceId: id4,
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      resourceId: id6,
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return { endpoint: projectEndpoint(endpoint), secret };
   },
-  async remove(caller, id4, meta10 = {}) {
-    const existing = await loadInOrg(id4, caller.organizationId);
+  async remove(caller, id6, meta11 = {}) {
+    const existing = await loadInOrg(id6, caller.organizationId);
     await prisma.webhookEndpoint.update({ where: { id: existing.id }, data: { deletedAt: /* @__PURE__ */ new Date(), enabled: false } });
     await auditLogRepository.record({
       organizationId: caller.organizationId,
@@ -1105,14 +1105,14 @@ var webhookEndpointService = {
       actorType: "USER",
       action: "WEBHOOK_ENDPOINT_DELETED",
       resourceType: "webhook_endpoint",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { name: existing.name, url: existing.url },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
   },
-  async test(caller, id4) {
-    const endpoint = await loadInOrg(id4, caller.organizationId);
+  async test(caller, id6) {
+    const endpoint = await loadInOrg(id6, caller.organizationId);
     const eventId = `test_${randomBytes3(8).toString("hex")}`;
     const delivery = await createAndAttempt(endpoint, eventId, TEST_EVENT, { message: "Test delivery from Artify Control Center." });
     if (!delivery) throw new ConflictError("Test delivery could not be created.");
@@ -1464,7 +1464,7 @@ var aiExecutionLimiter = rateLimit({
 });
 
 // server/routes/v1/index.ts
-import { Router as Router70 } from "express";
+import { Router as Router71 } from "express";
 
 // server/routes/v1/authRoutes.ts
 import { Router } from "express";
@@ -1478,8 +1478,8 @@ var userRepository = {
     if (ids.length === 0) return [];
     return prisma.user.findMany({ where: { id: { in: ids } } });
   },
-  async findById(id4) {
-    return prisma.user.findUnique({ where: { id: id4 } });
+  async findById(id6) {
+    return prisma.user.findUnique({ where: { id: id6 } });
   },
   async create(data) {
     return prisma.user.create({
@@ -1567,8 +1567,8 @@ var sessionRepository = {
     if (session.expiresAt.getTime() <= Date.now()) return null;
     return session;
   },
-  async touchLastUsed(id4) {
-    await prisma.session.update({ where: { id: id4 }, data: { lastUsedAt: /* @__PURE__ */ new Date() } }).catch(() => {
+  async touchLastUsed(id6) {
+    await prisma.session.update({ where: { id: id6 }, data: { lastUsedAt: /* @__PURE__ */ new Date() } }).catch(() => {
     });
   },
   async revoke(token) {
@@ -1596,9 +1596,9 @@ var sessionRepository = {
     });
   },
   /** Revokes a session only if it belongs to `userId` — returns true if a row was actually revoked, so the route can 404 rather than leak whether a foreign session id exists. */
-  async revokeByIdForUser(id4, userId) {
+  async revokeByIdForUser(id6, userId) {
     const result = await prisma.session.updateMany({
-      where: { id: id4, userId, revokedAt: null },
+      where: { id: id6, userId, revokedAt: null },
       data: { revokedAt: /* @__PURE__ */ new Date() }
     });
     return result.count > 0;
@@ -1613,8 +1613,8 @@ var roleRepository = {
   async findByKey(key2) {
     return prisma.role.findUnique({ where: { key: key2 } });
   },
-  async findById(id4) {
-    return prisma.role.findUnique({ where: { id: id4 } });
+  async findById(id6) {
+    return prisma.role.findUnique({ where: { id: id6 } });
   },
   /** All roles with their resolved permission sets — GET /api/v1/roles. */
   async listAllResolved() {
@@ -1661,8 +1661,8 @@ var organizationMembershipRepository = {
     }
     return membership;
   },
-  async findById(id4) {
-    return prisma.organizationMembership.findUnique({ where: { id: id4 }, include: { organization: true, role: true } });
+  async findById(id6) {
+    return prisma.organizationMembership.findUnique({ where: { id: id6 }, include: { organization: true, role: true } });
   },
   async findByUserAndOrg(userId, organizationId) {
     return prisma.organizationMembership.findUnique({
@@ -1703,14 +1703,14 @@ var organizationMembershipRepository = {
       }
     });
   },
-  async updateRole(id4, roleId) {
-    return prisma.organizationMembership.update({ where: { id: id4 }, data: { roleId } });
+  async updateRole(id6, roleId) {
+    return prisma.organizationMembership.update({ where: { id: id6 }, data: { roleId } });
   },
-  async updateStatus(id4, status) {
-    return prisma.organizationMembership.update({ where: { id: id4 }, data: { status } });
+  async updateStatus(id6, status) {
+    return prisma.organizationMembership.update({ where: { id: id6 }, data: { status } });
   },
-  async remove(id4) {
-    await prisma.organizationMembership.delete({ where: { id: id4 } });
+  async remove(id6) {
+    await prisma.organizationMembership.delete({ where: { id: id6 } });
   }
 };
 
@@ -1735,8 +1735,8 @@ var passwordResetRepository = {
     if (row.expiresAt.getTime() <= Date.now()) return null;
     return row;
   },
-  async markUsed(id4) {
-    await prisma.passwordResetToken.update({ where: { id: id4 }, data: { usedAt: /* @__PURE__ */ new Date() } });
+  async markUsed(id6) {
+    await prisma.passwordResetToken.update({ where: { id: id6 }, data: { usedAt: /* @__PURE__ */ new Date() } });
   },
   /** A fresh reset request invalidates any prior outstanding token for the same user — at most one usable reset credential at a time. */
   async invalidateAllForUser(userId) {
@@ -1816,8 +1816,8 @@ var emailVerificationRepository = {
     if (!row || row.usedAt || row.expiresAt.getTime() <= Date.now()) return null;
     return row;
   },
-  async markUsed(id4) {
-    await prisma.emailVerificationToken.update({ where: { id: id4 }, data: { usedAt: /* @__PURE__ */ new Date() } });
+  async markUsed(id6) {
+    await prisma.emailVerificationToken.update({ where: { id: id6 }, data: { usedAt: /* @__PURE__ */ new Date() } });
   },
   async invalidateAllForUser(userId) {
     await prisma.emailVerificationToken.updateMany({ where: { userId, usedAt: null }, data: { usedAt: /* @__PURE__ */ new Date() } });
@@ -1830,18 +1830,18 @@ function esc(value) {
   return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 function siteUrl(path) {
-  const base2 = (config.publicSiteBaseUrl || "https://artifysols.com").replace(/\/+$/, "");
-  return `${base2}${path}`;
+  const base3 = (config.publicSiteBaseUrl || "https://artifysols.com").replace(/\/+$/, "");
+  return `${base3}${path}`;
 }
 function layout(heading, bodyHtml, ctaLabel, ctaUrl) {
-  const cta = ctaLabel && ctaUrl ? `<p style="margin:28px 0"><a href="${esc(ctaUrl)}" style="background:#6d28d9;color:#fff;text-decoration:none;padding:12px 22px;border-radius:10px;font-weight:600;display:inline-block">${esc(ctaLabel)}</a></p>
+  const cta3 = ctaLabel && ctaUrl ? `<p style="margin:28px 0"><a href="${esc(ctaUrl)}" style="background:#6d28d9;color:#fff;text-decoration:none;padding:12px 22px;border-radius:10px;font-weight:600;display:inline-block">${esc(ctaLabel)}</a></p>
        <p style="font-size:12px;color:#64748b">If the button does not work, copy this link into your browser:<br>${esc(ctaUrl)}</p>` : "";
   return `<!doctype html><html><body style="margin:0;background:#f8fafc;font-family:Arial,Helvetica,sans-serif;color:#0f172a">
   <div style="max-width:520px;margin:0 auto;padding:32px 20px">
     <p style="font-weight:700;font-size:18px;margin:0 0 20px">Artify Solutions</p>
     <div style="background:#fff;border:1px solid #e2e8f0;border-radius:14px;padding:28px">
       <h1 style="font-size:20px;margin:0 0 12px">${esc(heading)}</h1>
-      ${bodyHtml}${cta}
+      ${bodyHtml}${cta3}
     </div>
     <p style="font-size:12px;color:#94a3b8;margin-top:18px">You received this because of activity on your Artify account. If this was not you, you can ignore this email.</p>
   </div></body></html>`;
@@ -1928,14 +1928,14 @@ var notificationRepository = {
   async unreadCount(userId, organizationId) {
     return prisma.notification.count({ where: { userId, organizationId, status: "UNREAD" } });
   },
-  async findByIdForUser(id4, userId) {
-    return prisma.notification.findFirst({ where: { id: id4, userId } });
+  async findByIdForUser(id6, userId) {
+    return prisma.notification.findFirst({ where: { id: id6, userId } });
   },
   async create(data) {
     return prisma.notification.create({ data });
   },
-  async markRead(id4) {
-    return prisma.notification.update({ where: { id: id4 }, data: { status: "READ", readAt: /* @__PURE__ */ new Date() } });
+  async markRead(id6) {
+    return prisma.notification.update({ where: { id: id6 }, data: { status: "READ", readAt: /* @__PURE__ */ new Date() } });
   },
   async markAllRead(userId, organizationId) {
     const result = await prisma.notification.updateMany({
@@ -1955,11 +1955,11 @@ var notificationService = {
   async unreadCount(userId, organizationId) {
     return notificationRepository.unreadCount(userId, organizationId);
   },
-  async markRead(userId, id4) {
-    const existing = await notificationRepository.findByIdForUser(id4, userId);
+  async markRead(userId, id6) {
+    const existing = await notificationRepository.findByIdForUser(id6, userId);
     if (!existing) throw new NotFoundError("Notification not found.");
     if (existing.status === "READ") return existing;
-    return notificationRepository.markRead(id4);
+    return notificationRepository.markRead(id6);
   },
   async markAllRead(userId, organizationId) {
     return notificationRepository.markAllRead(userId, organizationId);
@@ -2127,6 +2127,10 @@ var PERMISSION_KEYS = [
   "social.analytics.read",
   "social.listening.read",
   "social.reviews.respond",
+  // Step 12 — Marketing landing pages (publish is ADMIN/SUPER_ADMIN only).
+  "marketing.landing.read",
+  "marketing.landing.edit",
+  "marketing.landing.publish",
   // Step 2 redesign — global Approvals center front door (each source still needs its own permission).
   "approvals.read",
   "settings.read",
@@ -2305,7 +2309,7 @@ var authService = {
    * Issues a single-use code that lets the caller's CURRENT, already-authenticated session continue
    * on the Control Center origin. Client-portal accounts never get one — they have nothing to open there.
    */
-  async issueHandoffCode(user, meta10 = {}) {
+  async issueHandoffCode(user, meta11 = {}) {
     if (user.role.key === PORTAL_REGISTRATION_ROLE_KEY) {
       throw new AuthorizationError("This account does not have Control Center access.");
     }
@@ -2319,13 +2323,13 @@ var authService = {
       action: "AUTH_HANDOFF_ISSUED",
       resourceType: "session",
       resourceId: user.id,
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return { code, expiresAt };
   },
   /** Exchanges a handoff code for a brand-new session (the originating session/token is never shared). */
-  async exchangeHandoffCode(code, meta10 = {}) {
+  async exchangeHandoffCode(code, meta11 = {}) {
     const claimed = await authHandoffRepository.consume(code);
     const failure = () => new AuthenticationError("This sign-in link is invalid or has expired. Please sign in again.");
     if (!claimed) throw failure();
@@ -2340,8 +2344,8 @@ var authService = {
       userId: user.id,
       organizationId: claimed.organizationId,
       expiresAt,
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     await auditLogRepository.record({
       organizationId: claimed.organizationId,
@@ -2351,12 +2355,12 @@ var authService = {
       action: "AUTH_HANDOFF_EXCHANGED",
       resourceType: "session",
       resourceId: user.id,
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return { session: { token, expiresAt }, user: sanitized };
   },
-  async login(email, password, meta10 = {}, targetOrganizationId) {
+  async login(email, password, meta11 = {}, targetOrganizationId) {
     const user = await userRepository.findByEmail(email);
     const genericFailure = () => new AuthenticationError("Invalid email or password credentials.");
     if (!user) throw genericFailure();
@@ -2376,8 +2380,8 @@ var authService = {
         resourceType: "session",
         resourceId: user.id,
         result: "FAILURE",
-        ipAddress: meta10.ip,
-        userAgent: meta10.userAgent
+        ipAddress: meta11.ip,
+        userAgent: meta11.userAgent
       });
       if (nowLocked) {
         logger.warn({ event: "account_locked", userId: user.id }, "Account locked after repeated failed logins");
@@ -2389,8 +2393,8 @@ var authService = {
           resourceType: "user",
           resourceId: user.id,
           result: "FAILURE",
-          ipAddress: meta10.ip,
-          userAgent: meta10.userAgent
+          ipAddress: meta11.ip,
+          userAgent: meta11.userAgent
         });
       }
       throw genericFailure();
@@ -2414,8 +2418,8 @@ var authService = {
       userId: user.id,
       organizationId,
       expiresAt,
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     await auditLogRepository.record({
       organizationId,
@@ -2425,8 +2429,8 @@ var authService = {
       action: "AUTH_LOGIN",
       resourceType: "session",
       resourceId: user.id,
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return { session: { token, expiresAt }, user: sanitized };
   },
@@ -2492,7 +2496,7 @@ var authService = {
    * link it to a CRM client. Without email delivery it falls back to the
    * degraded mode: immediate sign-in, and a duplicate address returns 409.
    */
-  async registerPortalAccount(payload, meta10 = {}) {
+  async registerPortalAccount(payload, meta11 = {}) {
     const emailOn = emailService.isEnabled();
     const email = payload.email.trim().toLowerCase();
     const existing = await userRepository.findByEmail(email);
@@ -2536,8 +2540,8 @@ var authService = {
       action: "AUTH_PORTAL_REGISTERED",
       resourceType: "user",
       resourceId: created.user.id,
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     void this.notifyOperatorsOfRegistration(created.organization.id, created.organization.name, `${payload.firstName} ${payload.lastName}`.trim());
     if (emailOn) {
@@ -2546,7 +2550,7 @@ var authService = {
       );
       return { status: "verification_required" };
     }
-    const login = await this.login(email, payload.password, meta10);
+    const login = await this.login(email, payload.password, meta11);
     return { status: "registered", ...login };
   },
   /** Tells the agency's own admins (the public website organization) that a new client account is waiting to be linked. Best-effort. */
@@ -2582,7 +2586,7 @@ var authService = {
     await emailVerificationRepository.create({ token, userId, expiresAt: new Date(Date.now() + config.emailVerificationTtlHours * 60 * 60 * 1e3) });
     await emailService.sendVerification(email, firstName, token);
   },
-  async verifyEmail(token, meta10 = {}) {
+  async verifyEmail(token, meta11 = {}) {
     const row = await emailVerificationRepository.findValidByToken(token);
     if (!row) throw new AuthenticationError("This verification link is invalid or has expired.");
     const user = await userRepository.findById(row.userId);
@@ -2597,8 +2601,8 @@ var authService = {
       action: "AUTH_EMAIL_VERIFIED",
       resourceType: "user",
       resourceId: user.id,
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
   },
   /** Always resolves silently — never reveals whether the address exists or is already verified. */
@@ -2620,7 +2624,7 @@ var authService = {
     void sessionRepository.touchLastUsed(session.id);
     return sanitized;
   },
-  async logout(token, actor, meta10 = {}) {
+  async logout(token, actor, meta11 = {}) {
     await sessionRepository.revoke(token);
     if (actor) {
       await auditLogRepository.record({
@@ -2629,13 +2633,13 @@ var authService = {
         actorType: "USER",
         action: "AUTH_LOGOUT",
         resourceType: "session",
-        ipAddress: meta10.ip,
-        userAgent: meta10.userAgent
+        ipAddress: meta11.ip,
+        userAgent: meta11.userAgent
       });
     }
   },
   /** Revokes every active session for the user (all devices/tabs) — a broader action than logout(), which only revokes the caller's current session. */
-  async logoutAll(user, meta10 = {}) {
+  async logoutAll(user, meta11 = {}) {
     await sessionRepository.revokeAllForUser(user.id);
     await auditLogRepository.record({
       organizationId: user.organizationId,
@@ -2644,11 +2648,11 @@ var authService = {
       action: "AUTH_LOGOUT_ALL",
       resourceType: "user",
       resourceId: user.id,
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
   },
-  async changePassword(user, currentSessionToken, currentPassword, newPassword, meta10 = {}) {
+  async changePassword(user, currentSessionToken, currentPassword, newPassword, meta11 = {}) {
     const fullUser = await userRepository.findById(user.id);
     if (!fullUser) throw new InternalError("User record could not be loaded.");
     const validCurrent = await verifyPassword(currentPassword, fullUser.passwordHash);
@@ -2665,8 +2669,8 @@ var authService = {
       action: "AUTH_PASSWORD_CHANGE",
       resourceType: "user",
       resourceId: user.id,
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
   },
   /**
@@ -2677,7 +2681,7 @@ var authService = {
    * undefined; the raw token is never logged, never included in a
    * production response, and never persisted anywhere but as a hash.
    */
-  async requestPasswordReset(email, meta10 = {}) {
+  async requestPasswordReset(email, meta11 = {}) {
     const user = await userRepository.findByEmail(email);
     if (!user || user.status !== "ACTIVE") {
       return {};
@@ -2689,8 +2693,8 @@ var authService = {
       token,
       userId: user.id,
       expiresAt,
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     await auditLogRepository.record({
       organizationId: user.organizationId,
@@ -2699,8 +2703,8 @@ var authService = {
       action: "AUTH_PASSWORD_RESET_REQUESTED",
       resourceType: "user",
       resourceId: user.id,
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     if (emailService.isEnabled()) {
       await emailService.sendPasswordReset(user.email, user.firstName, token).catch(
@@ -2710,7 +2714,7 @@ var authService = {
     }
     return config.isProduction ? {} : { devToken: token };
   },
-  async confirmPasswordReset(token, newPassword, meta10 = {}) {
+  async confirmPasswordReset(token, newPassword, meta11 = {}) {
     const resetRow = await passwordResetRepository.findValidByToken(token);
     if (!resetRow) {
       throw new AuthenticationError("This password reset link is invalid or has expired.");
@@ -2732,8 +2736,8 @@ var authService = {
       action: "AUTH_PASSWORD_RESET_COMPLETED",
       resourceType: "user",
       resourceId: user.id,
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
   },
   /**
@@ -2744,7 +2748,7 @@ var authService = {
    * rotation (new token issued, old one revoked) rather than mutating the
    * existing session row in place.
    */
-  async switchOrganization(user, currentSessionToken, targetOrganizationId, meta10 = {}) {
+  async switchOrganization(user, currentSessionToken, targetOrganizationId, meta11 = {}) {
     const fullUser = await userRepository.findById(user.id);
     if (!fullUser) throw new InternalError("User record could not be loaded.");
     const sanitized = await resolveSanitizedUserForOrganization(fullUser, targetOrganizationId);
@@ -2758,8 +2762,8 @@ var authService = {
       userId: user.id,
       organizationId: targetOrganizationId,
       expiresAt,
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     await sessionRepository.revoke(currentSessionToken);
     await auditLogRepository.record({
@@ -2771,8 +2775,8 @@ var authService = {
       resourceId: user.id,
       beforeData: { organizationId: user.organizationId },
       afterData: { organizationId: targetOrganizationId },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return { session: { token, expiresAt }, user: sanitized };
   },
@@ -3372,8 +3376,11 @@ var ROLE_PERMISSION_SETS = {
     "industries.read",
     "industries.manage",
     "content.read",
+    "marketing.landing.read",
     "content.create",
     "content.update",
+    "marketing.landing.edit",
+    "marketing.landing.publish",
     "content.publish",
     "content.delete",
     // Phase 1 (Website module) — ADMIN gets full template/template-part
@@ -3557,8 +3564,10 @@ var ROLE_PERMISSION_SETS = {
     "industries.read",
     "industries.manage",
     "content.read",
+    "marketing.landing.read",
     "content.create",
     "content.update",
+    "marketing.landing.edit",
     // Phase 1 (Website module) — MANAGER can author but not publish/delete
     // templates/template-parts, same tiering as content.* above.
     "templates.read",
@@ -3679,6 +3688,7 @@ var ROLE_PERMISSION_SETS = {
     "product_categories.read",
     "industries.read",
     "content.read",
+    "marketing.landing.read",
     "content.create",
     // Phase 1 (Website module) — USER can read/create but not
     // publish/update/delete templates/template-parts, same tiering as content.* above.
@@ -3751,6 +3761,7 @@ var ROLE_PERMISSION_SETS = {
     "product_categories.read",
     "industries.read",
     "content.read",
+    "marketing.landing.read",
     // Phase 1 (Website module) — VIEWER is read-only, same convention as everywhere else.
     "templates.read",
     "template_parts.read",
@@ -4370,7 +4381,7 @@ var userService = {
   async getUser(organizationId, userId) {
     return loadUserInOrgOrThrow(userId, organizationId);
   },
-  async createUser(caller, input, meta10 = {}) {
+  async createUser(caller, input, meta11 = {}) {
     const existing = await userRepository.findByEmail(input.email);
     if (existing) throw new ConflictError("An account with this email address already exists.");
     const role = await resolveRoleOrThrow(input.roleKey);
@@ -4399,12 +4410,12 @@ var userService = {
       resourceType: "user",
       resourceId: user.id,
       afterData: { email: user.email, roleKey: role.key },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return sanitizeUser({ ...user, organizationId: caller.organizationId }, { id: role.id, key: role.key, name: role.name, permissions: [] });
   },
-  async updateUser(caller, targetUserId, input, callerPermissions, meta10 = {}) {
+  async updateUser(caller, targetUserId, input, callerPermissions, meta11 = {}) {
     const membership = await organizationMembershipRepository.findByUserAndOrg(targetUserId, caller.organizationId);
     if (!membership) throw new NotFoundError("User not found.");
     const beforeRoleKey = membership.role.key;
@@ -4431,8 +4442,8 @@ var userService = {
         resourceId: targetUserId,
         beforeData: { roleKey: beforeRoleKey },
         afterData: { roleKey: newRole.key },
-        ipAddress: meta10.ip,
-        userAgent: meta10.userAgent
+        ipAddress: meta11.ip,
+        userAgent: meta11.userAgent
       });
     }
     const profilePatch = {};
@@ -4452,8 +4463,8 @@ var userService = {
           resourceType: "user",
           resourceId: targetUserId,
           afterData: { status: input.status },
-          ipAddress: meta10.ip,
-          userAgent: meta10.userAgent
+          ipAddress: meta11.ip,
+          userAgent: meta11.userAgent
         });
         if (input.status === "DISABLED") {
           await sessionRepository.revokeAllForUser(targetUserId);
@@ -4467,8 +4478,8 @@ var userService = {
           resourceType: "user",
           resourceId: targetUserId,
           afterData: profilePatch,
-          ipAddress: meta10.ip,
-          userAgent: meta10.userAgent
+          ipAddress: meta11.ip,
+          userAgent: meta11.userAgent
         });
       }
     }
@@ -4496,7 +4507,7 @@ var userSecurityService = {
       orderBy: { createdAt: "desc" }
     });
   },
-  async revokeAllForUser(caller, userId, meta10 = {}) {
+  async revokeAllForUser(caller, userId, meta11 = {}) {
     const membership = await loadMember(caller, userId);
     assertCallerMayManageTarget(caller, membership.role.key);
     const result = await prisma.session.updateMany({ where: { userId, revokedAt: null }, data: { revokedAt: /* @__PURE__ */ new Date() } });
@@ -4508,13 +4519,13 @@ var userSecurityService = {
       resourceType: "user",
       resourceId: userId,
       afterData: { revoked: result.count },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return { revoked: result.count };
   },
   /** Clears a lockout caused by repeated failed sign-ins. */
-  async unlock(caller, userId, meta10 = {}) {
+  async unlock(caller, userId, meta11 = {}) {
     const membership = await loadMember(caller, userId);
     assertCallerMayManageTarget(caller, membership.role.key);
     await prisma.user.update({ where: { id: userId }, data: { failedLoginAttempts: 0, lockedUntil: null } });
@@ -4525,8 +4536,8 @@ var userSecurityService = {
       action: "USER_UNLOCKED",
       resourceType: "user",
       resourceId: userId,
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
   },
   /** Active sessions across the caller's organization (security.read). */
@@ -4544,7 +4555,7 @@ var userSecurityService = {
     ]);
     return { sessions: rows, total };
   },
-  async revokeOrganizationSession(caller, sessionId, meta10 = {}) {
+  async revokeOrganizationSession(caller, sessionId, meta11 = {}) {
     const session = await prisma.session.findFirst({ where: { id: sessionId, organizationId: caller.organizationId, revokedAt: null } });
     if (!session) throw new NotFoundError("Session not found.");
     if (session.userId !== caller.id) {
@@ -4560,8 +4571,8 @@ var userSecurityService = {
       resourceType: "session",
       resourceId: sessionId,
       afterData: { userId: session.userId },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
   }
 };
@@ -4695,8 +4706,8 @@ var CRITICAL_PERMISSIONS = [
 function requireSuperAdmin(caller) {
   if (caller.role.key !== "SUPER_ADMIN") throw new AuthorizationError("Only a Super Administrator can manage platform roles.");
 }
-async function loadCustomRole(id4) {
-  const role = await prisma.role.findUnique({ where: { id: id4 }, include: { rolePermissions: { include: { permission: true } } } });
+async function loadCustomRole(id6) {
+  const role = await prisma.role.findUnique({ where: { id: id6 }, include: { rolePermissions: { include: { permission: true } } } });
   if (!role) throw new NotFoundError("Role not found.");
   if (role.isSystem) throw new AuthorizationError("System roles are protected and cannot be modified.");
   return role;
@@ -4731,7 +4742,7 @@ var roleAdminService = {
       permissions: r.rolePermissions.map((rp) => rp.permission.key).sort()
     }));
   },
-  async create(caller, input, meta10 = {}) {
+  async create(caller, input, meta11 = {}) {
     requireSuperAdmin(caller);
     const key2 = slugKey(input.name);
     if (key2 === "CUSTOM_") throw new ValidationError("Role name must contain letters or digits.");
@@ -4754,38 +4765,38 @@ var roleAdminService = {
       resourceType: "role",
       resourceId: role.id,
       afterData: { key: key2, permissions: perms.map((p) => p.key).sort() },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return role;
   },
-  async update(caller, id4, input, meta10 = {}) {
+  async update(caller, id6, input, meta11 = {}) {
     requireSuperAdmin(caller);
-    const role = await loadCustomRole(id4);
-    const updated = await prisma.role.update({ where: { id: id4 }, data: { name: input.name, description: input.description } });
+    const role = await loadCustomRole(id6);
+    const updated = await prisma.role.update({ where: { id: id6 }, data: { name: input.name, description: input.description } });
     await auditLogRepository.record({
       organizationId: caller.organizationId,
       actorUserId: caller.id,
       actorType: "USER",
       action: "ROLE_UPDATED",
       resourceType: "role",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { name: role.name, description: role.description },
       afterData: { name: updated.name, description: updated.description },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return updated;
   },
-  async setPermissions(caller, id4, permissionKeys2, confirmCritical, meta10 = {}) {
+  async setPermissions(caller, id6, permissionKeys2, confirmCritical, meta11 = {}) {
     requireSuperAdmin(caller);
-    const role = await loadCustomRole(id4);
+    const role = await loadCustomRole(id6);
     const perms = await resolvePermissionIds(permissionKeys2, confirmCritical);
     const before = role.rolePermissions.map((rp) => rp.permission.key).sort();
     const after = perms.map((p) => p.key).sort();
     await prisma.$transaction([
-      prisma.rolePermission.deleteMany({ where: { roleId: id4 } }),
-      prisma.rolePermission.createMany({ data: perms.map((p) => ({ roleId: id4, permissionId: p.id })) })
+      prisma.rolePermission.deleteMany({ where: { roleId: id6 } }),
+      prisma.rolePermission.createMany({ data: perms.map((p) => ({ roleId: id6, permissionId: p.id })) })
     ]);
     await auditLogRepository.record({
       organizationId: caller.organizationId,
@@ -4793,30 +4804,30 @@ var roleAdminService = {
       actorType: "USER",
       action: "ROLE_PERMISSIONS_CHANGED",
       resourceType: "role",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { permissions: before },
       afterData: { permissions: after, added: after.filter((k) => !before.includes(k)), removed: before.filter((k) => !after.includes(k)) },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
-    return { id: id4, key: role.key, permissions: after };
+    return { id: id6, key: role.key, permissions: after };
   },
-  async remove(caller, id4, meta10 = {}) {
+  async remove(caller, id6, meta11 = {}) {
     requireSuperAdmin(caller);
-    const role = await loadCustomRole(id4);
+    const role = await loadCustomRole(id6);
     const [memberships, invitations] = await Promise.all([
-      prisma.organizationMembership.count({ where: { roleId: id4 } }),
-      prisma.workspaceInvitation.count({ where: { roleId: id4 } })
+      prisma.organizationMembership.count({ where: { roleId: id6 } }),
+      prisma.workspaceInvitation.count({ where: { roleId: id6 } })
     ]);
     if (memberships + invitations > 0) throw new ConflictError("This role is still assigned to users or invitations. Reassign them first.");
     await prisma.$transaction(async (tx) => {
-      const stale = await tx.user.findMany({ where: { roleId: id4 }, select: { id: true } });
+      const stale = await tx.user.findMany({ where: { roleId: id6 }, select: { id: true } });
       for (const u of stale) {
         const m = await tx.organizationMembership.findFirst({ where: { userId: u.id }, orderBy: [{ isPrimary: "desc" }, { createdAt: "asc" }], select: { roleId: true } });
         const fallback = m?.roleId ?? (await tx.role.findUniqueOrThrow({ where: { key: "VIEWER" } })).id;
         await tx.user.update({ where: { id: u.id }, data: { roleId: fallback } });
       }
-      await tx.role.delete({ where: { id: id4 } });
+      await tx.role.delete({ where: { id: id6 } });
     });
     await auditLogRepository.record({
       organizationId: caller.organizationId,
@@ -4824,10 +4835,10 @@ var roleAdminService = {
       actorType: "USER",
       action: "ROLE_DELETED",
       resourceType: "role",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { key: role.key, name: role.name },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
   }
 };
@@ -4929,8 +4940,8 @@ function slugify(name) {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 80);
 }
 var organizationRepository = {
-  async findById(id4) {
-    return prisma.organization.findUnique({ where: { id: id4 } });
+  async findById(id6) {
+    return prisma.organization.findUnique({ where: { id: id6 } });
   },
   async findBySlug(slug) {
     return prisma.organization.findUnique({ where: { slug } });
@@ -4984,7 +4995,7 @@ var organizationService = {
     if (!org) throw new NotFoundError("Organization not found.");
     return org;
   },
-  async addMember(caller, organizationId, input, meta10 = {}) {
+  async addMember(caller, organizationId, input, meta11 = {}) {
     if (caller.role.key !== "SUPER_ADMIN" && organizationId !== caller.organizationId) {
       throw new AuthorizationError("Access denied: resource belongs to a different organization");
     }
@@ -5007,12 +5018,12 @@ var organizationService = {
       resourceType: "organization_membership",
       resourceId: membership.id,
       afterData: { userId: input.userId, roleKey: role.key },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return membership;
   },
-  async updateMember(caller, organizationId, targetUserId, input, callerPermissions, meta10 = {}) {
+  async updateMember(caller, organizationId, targetUserId, input, callerPermissions, meta11 = {}) {
     if (caller.role.key !== "SUPER_ADMIN" && organizationId !== caller.organizationId) {
       throw new AuthorizationError("Access denied: resource belongs to a different organization");
     }
@@ -5037,8 +5048,8 @@ var organizationService = {
         resourceId: membership.id,
         beforeData: { roleKey: membership.role.key },
         afterData: { roleKey: role.key },
-        ipAddress: meta10.ip,
-        userAgent: meta10.userAgent
+        ipAddress: meta11.ip,
+        userAgent: meta11.userAgent
       });
     }
     if (input.status !== void 0) {
@@ -5051,13 +5062,13 @@ var organizationService = {
         resourceType: "organization_membership",
         resourceId: membership.id,
         afterData: { status: input.status },
-        ipAddress: meta10.ip,
-        userAgent: meta10.userAgent
+        ipAddress: meta11.ip,
+        userAgent: meta11.userAgent
       });
     }
     return organizationMembershipRepository.findById(membership.id);
   },
-  async removeMember(caller, organizationId, targetUserId, meta10 = {}) {
+  async removeMember(caller, organizationId, targetUserId, meta11 = {}) {
     if (caller.role.key !== "SUPER_ADMIN" && organizationId !== caller.organizationId) {
       throw new AuthorizationError("Access denied: resource belongs to a different organization");
     }
@@ -5075,8 +5086,8 @@ var organizationService = {
       resourceType: "organization_membership",
       resourceId: targetUserId,
       beforeData: { roleKey: membership.role.key },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
   }
 };
@@ -5255,8 +5266,8 @@ var auditLogQueryRepository = {
     return { rows, total };
   },
   /** Single event, scoped to an organization unless `organizationId` is undefined (SUPER_ADMIN). */
-  async findById(id4, organizationId) {
-    return prisma.auditLog.findFirst({ where: { id: id4, ...organizationId ? { organizationId } : {} } });
+  async findById(id6, organizationId) {
+    return prisma.auditLog.findFirst({ where: { id: id6, ...organizationId ? { organizationId } : {} } });
   },
   /** Distinct action names seen in the organization — powers the action filter. */
   async distinctActions(organizationId) {
@@ -5457,16 +5468,16 @@ var mediaRepository = {
     return { rows: rows.map(toApiMedia), total };
   },
   /** The only lookup-by-id this module exposes — always organization-scoped (§11). */
-  async findByIdInOrg(id4, organizationId) {
-    return prisma.mediaAsset.findFirst({ where: { id: id4, organizationId, deletedAt: null } });
+  async findByIdInOrg(id6, organizationId) {
+    return prisma.mediaAsset.findFirst({ where: { id: id6, organizationId, deletedAt: null } });
   },
   async create(data) {
     return prisma.mediaAsset.create({
       data: { ...data, sizeBytes: BigInt(data.sizeBytes), status: "PENDING" }
     });
   },
-  async update(id4, data) {
-    return prisma.mediaAsset.update({ where: { id: id4 }, data });
+  async update(id6, data) {
+    return prisma.mediaAsset.update({ where: { id: id6 }, data });
   },
   /**
    * Race-safe conditional update — `WHERE id = ? AND status IN (...)`, the
@@ -5477,12 +5488,12 @@ var mediaRepository = {
    * from success (1 row), never trusting a prior JS-level status check
    * alone against a concurrent request.
    */
-  async updateWhereStatus(id4, fromStatuses, data) {
-    const result = await prisma.mediaAsset.updateMany({ where: { id: id4, status: { in: fromStatuses } }, data });
+  async updateWhereStatus(id6, fromStatuses, data) {
+    const result = await prisma.mediaAsset.updateMany({ where: { id: id6, status: { in: fromStatuses } }, data });
     return result.count;
   },
-  async markActive(id4, data) {
-    return this.updateWhereStatus(id4, ["PENDING"], {
+  async markActive(id6, data) {
+    return this.updateWhereStatus(id6, ["PENDING"], {
       status: "ACTIVE",
       sizeBytes: BigInt(data.sizeBytes),
       mimeType: data.mimeType,
@@ -5491,17 +5502,17 @@ var mediaRepository = {
       height: data.height
     });
   },
-  async markFailed(id4) {
-    await prisma.mediaAsset.updateMany({ where: { id: id4, status: { in: ["PENDING", "FAILED"] } }, data: { status: "FAILED" } });
+  async markFailed(id6) {
+    await prisma.mediaAsset.updateMany({ where: { id: id6, status: { in: ["PENDING", "FAILED"] } }, data: { status: "FAILED" } });
   },
-  async softDelete(id4) {
-    await prisma.mediaAsset.update({ where: { id: id4 }, data: { deletedAt: /* @__PURE__ */ new Date() } });
+  async softDelete(id6) {
+    await prisma.mediaAsset.update({ where: { id: id6 }, data: { deletedAt: /* @__PURE__ */ new Date() } });
   },
   /** How many non-deleted Page/Post rows currently use this media as their featured image — used to block a hard delete of referenced media (§19). */
-  async countContentReferences(id4) {
+  async countContentReferences(id6) {
     const [pages, posts] = await Promise.all([
-      prisma.page.count({ where: { featuredMediaId: id4, deletedAt: null } }),
-      prisma.post.count({ where: { featuredMediaId: id4, deletedAt: null } })
+      prisma.page.count({ where: { featuredMediaId: id6, deletedAt: null } }),
+      prisma.post.count({ where: { featuredMediaId: id6, deletedAt: null } })
     ]);
     return pages + posts;
   }
@@ -5520,8 +5531,8 @@ var mediaUploadSessionRepository = {
     return prisma.mediaUploadSession.findFirst({ where: { mediaId, tokenHash } });
   },
   /** Race-safe conditional completion — `WHERE id = ? AND completed_at IS NULL`. Returns the affected row count so a concurrent double-completion is visible as 0, never silently re-applied. */
-  async markCompleted(id4) {
-    const result = await prisma.mediaUploadSession.updateMany({ where: { id: id4, completedAt: null }, data: { completedAt: /* @__PURE__ */ new Date() } });
+  async markCompleted(id6) {
+    const result = await prisma.mediaUploadSession.updateMany({ where: { id: id6, completedAt: null }, data: { completedAt: /* @__PURE__ */ new Date() } });
     return result.count;
   }
 };
@@ -5557,8 +5568,8 @@ var clientRepository = {
     ]);
     return { rows, total };
   },
-  async findByIdInOrg(id4, organizationId) {
-    return prisma.client.findFirst({ where: { id: id4, organizationId, deletedAt: null }, ...clientWithWorkspace });
+  async findByIdInOrg(id6, organizationId) {
+    return prisma.client.findFirst({ where: { id: id6, organizationId, deletedAt: null }, ...clientWithWorkspace });
   },
   /**
    * The Client Portal boundary (Phase 10 §25/§26 —
@@ -5604,11 +5615,11 @@ var clientRepository = {
       }
     });
   },
-  async update(id4, data) {
-    return prisma.client.update({ where: { id: id4 }, data });
+  async update(id6, data) {
+    return prisma.client.update({ where: { id: id6 }, data });
   },
-  async softDelete(id4) {
-    await prisma.client.update({ where: { id: id4 }, data: { deletedAt: /* @__PURE__ */ new Date() } });
+  async softDelete(id6) {
+    await prisma.client.update({ where: { id: id6 }, data: { deletedAt: /* @__PURE__ */ new Date() } });
   },
   async countByStatus(organizationId) {
     const rows = await prisma.client.groupBy({
@@ -5741,9 +5752,9 @@ var clientOnboardingRepository = {
     ]);
     return { rows, total };
   },
-  async findByIdInOrg(id4, organizationId) {
+  async findByIdInOrg(id6, organizationId) {
     return prisma.clientOnboarding.findFirst({
-      where: { id: id4, organizationId },
+      where: { id: id6, organizationId },
       include: { client: { include: { workspaceOrganization: true } } }
     });
   },
@@ -5766,8 +5777,8 @@ var clientOnboardingRepository = {
       }
     });
   },
-  async update(id4, data) {
-    return prisma.clientOnboarding.update({ where: { id: id4 }, data });
+  async update(id6, data) {
+    return prisma.clientOnboarding.update({ where: { id: id6 }, data });
   },
   /** Phase 13 dashboard — real counts only, computed server-side (never fabricated). */
   async dashboardStats(organizationId, callerId) {
@@ -6079,8 +6090,8 @@ function getStorageProvider() {
 
 // server/utils/storageKey.ts
 function sanitizeFilename(original) {
-  const base2 = original.split(/[/\\]/).pop() ?? "file";
-  let safe3 = base2.normalize("NFKD").replace(/[^a-zA-Z0-9.\-_]/g, "-").replace(/-{2,}/g, "-").replace(/^[.\-]+/, "").slice(0, 150);
+  const base3 = original.split(/[/\\]/).pop() ?? "file";
+  let safe3 = base3.normalize("NFKD").replace(/[^a-zA-Z0-9.\-_]/g, "-").replace(/-{2,}/g, "-").replace(/^[.\-]+/, "").slice(0, 150);
   if (!safe3 || safe3 === "." || safe3 === "..") safe3 = "file";
   return safe3;
 }
@@ -6140,8 +6151,8 @@ init_errors();
 function maxSizeFor(mimeType) {
   return isImageMimeType(mimeType) ? config.mediaMaxImageSizeBytes : config.mediaMaxDocumentSizeBytes;
 }
-async function loadMediaOrThrow(id4, organizationId) {
-  const media = await mediaRepository.findByIdInOrg(id4, organizationId);
+async function loadMediaOrThrow(id6, organizationId) {
+  const media = await mediaRepository.findByIdInOrg(id6, organizationId);
   if (!media) throw new NotFoundError("Media not found.");
   return media;
 }
@@ -6168,10 +6179,10 @@ var mediaService = {
   async listMedia(organizationId, filters, page, limit, sort, order) {
     return mediaRepository.list(organizationId, filters, page, limit, sort, order);
   },
-  async getMedia(organizationId, id4) {
-    return toApiMedia(await loadMediaOrThrow(id4, organizationId));
+  async getMedia(organizationId, id6) {
+    return toApiMedia(await loadMediaOrThrow(id6, organizationId));
   },
-  async createUploadSession(caller, input, meta10 = {}) {
+  async createUploadSession(caller, input, meta11 = {}) {
     const organizationId = caller.organizationId;
     if (!extensionMatchesMimeType(input.filename, input.mimeType)) {
       throw new ValidationError(`The file extension does not match the declared type (${input.mimeType}).`);
@@ -6228,56 +6239,56 @@ var mediaService = {
       resourceType: "media",
       resourceId: mediaId,
       afterData: { originalFilename: input.filename, mimeType: input.mimeType, sizeBytes: input.sizeBytes },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return { media: toApiMedia(media), upload, uploadToken: rawToken };
   },
-  async completeUpload(caller, id4, token, meta10 = {}) {
+  async completeUpload(caller, id6, token, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const media = await loadMediaOrThrow(id4, organizationId);
+    const media = await loadMediaOrThrow(id6, organizationId);
     if (media.status !== "PENDING") {
       throw new ConflictError(`This upload cannot be completed \u2014 media status is ${media.status}, not PENDING.`);
     }
-    const session = await mediaUploadSessionRepository.findByMediaIdAndTokenHash(id4, hashToken(token));
+    const session = await mediaUploadSessionRepository.findByMediaIdAndTokenHash(id6, hashToken(token));
     if (!session) throw new ValidationError("Invalid upload token for this media.");
     if (session.completedAt) throw new ConflictError("This upload session has already been completed.");
     if (session.expiresAt.getTime() < Date.now()) {
-      await mediaRepository.markFailed(id4);
+      await mediaRepository.markFailed(id6);
       throw new ConflictError("This upload session has expired. Start a new upload.");
     }
     const provider = getStorageProvider();
     const head = await provider.headObject(media.storageKey);
     if (!head.exists) {
-      await mediaRepository.markFailed(id4);
+      await mediaRepository.markFailed(id6);
       throw new ConflictError("No object was found at the expected storage location \u2014 the upload did not complete.");
     }
     const headBytes = await provider.readHeadBytes(media.storageKey, 32);
     if (headBytes.length > 0 && !verifyFileSignature(media.mimeType, headBytes)) {
-      await mediaRepository.markFailed(id4);
+      await mediaRepository.markFailed(id6);
       throw new ValidationError("The uploaded file's content does not match its declared type.");
     }
     const maxSize = maxSizeFor(media.mimeType);
     const verifiedSize = head.sizeBytes ?? Number(media.sizeBytes);
     if (verifiedSize > maxSize) {
-      await mediaRepository.markFailed(id4);
+      await mediaRepository.markFailed(id6);
       throw new ValidationError(`The uploaded file exceeds the maximum allowed size (${maxSize} bytes).`);
     }
     const claimed = await mediaUploadSessionRepository.markCompleted(session.id);
     if (claimed === 0) throw new ConflictError("This upload session has already been completed.");
-    const activatedCount = await mediaRepository.markActive(id4, { sizeBytes: verifiedSize, mimeType: head.contentType ?? media.mimeType });
+    const activatedCount = await mediaRepository.markActive(id6, { sizeBytes: verifiedSize, mimeType: head.contentType ?? media.mimeType });
     if (activatedCount === 0) throw new ConflictError(`This upload cannot be completed \u2014 media status is no longer PENDING.`);
-    const activated = await loadMediaOrThrow(id4, organizationId);
+    const activated = await loadMediaOrThrow(id6, organizationId);
     await auditLogRepository.record({
       organizationId,
       actorUserId: caller.id,
       actorType: "USER",
       action: "MEDIA_UPLOAD_COMPLETED",
       resourceType: "media",
-      resourceId: id4,
+      resourceId: id6,
       afterData: { sizeBytes: verifiedSize },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return toApiMedia(activated);
   },
@@ -6292,33 +6303,33 @@ var mediaService = {
    * caller with media.update can choose to make this specific image
    * public by embedding it, audited like any other visibility change.
    */
-  async getEmbedUrl(caller, id4, meta10 = {}) {
+  async getEmbedUrl(caller, id6, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const media = await loadMediaOrThrow(id4, organizationId);
+    const media = await loadMediaOrThrow(id6, organizationId);
     if (media.status !== "ACTIVE") throw new ConflictError("This media has no readable object yet.");
     if (!isImageMimeType(media.mimeType)) throw new ValidationError("Only images can be embedded in content.");
     if (media.visibility !== "PUBLIC") {
-      await mediaRepository.update(id4, { visibility: "PUBLIC" });
+      await mediaRepository.update(id6, { visibility: "PUBLIC" });
       await auditLogRepository.record({
         organizationId,
         actorUserId: caller.id,
         actorType: "USER",
         action: "MEDIA_METADATA_UPDATED",
         resourceType: "media",
-        resourceId: id4,
+        resourceId: id6,
         beforeData: { visibility: media.visibility },
         afterData: { visibility: "PUBLIC" },
-        ipAddress: meta10.ip,
-        userAgent: meta10.userAgent
+        ipAddress: meta11.ip,
+        userAgent: meta11.userAgent
       });
     }
     const provider = getStorageProvider();
     const url = provider.getPublicUrl(media.storageKey) ?? await provider.createSignedReadUrl({ key: media.storageKey, expiresInSeconds: config.mediaPublicSignedUrlTtlSeconds });
     return { url };
   },
-  async getReadUrl(caller, id4, meta10 = {}) {
+  async getReadUrl(caller, id6, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const media = await loadMediaOrThrow(id4, organizationId);
+    const media = await loadMediaOrThrow(id6, organizationId);
     if (media.status !== "ACTIVE" && media.status !== "ARCHIVED") {
       throw new ConflictError("This media has no readable object yet.");
     }
@@ -6331,16 +6342,16 @@ var mediaService = {
       actorType: "USER",
       action: "MEDIA_SIGNED_URL_ISSUED",
       resourceType: "media",
-      resourceId: id4,
+      resourceId: id6,
       afterData: { expiresAt: expiresAt.toISOString() },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return { url, expiresAt: expiresAt.toISOString() };
   },
-  async updateMedia(caller, id4, input, meta10 = {}) {
+  async updateMedia(caller, id6, input, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const existing = await loadMediaOrThrow(id4, organizationId);
+    const existing = await loadMediaOrThrow(id6, organizationId);
     const patch = {};
     if (input.displayName !== void 0) patch.displayName = input.displayName;
     if (input.altText !== void 0) patch.altText = input.altText;
@@ -6353,61 +6364,61 @@ var mediaService = {
       }
       patch.isClientVisible = input.isClientVisible;
     }
-    const updated = await mediaRepository.update(id4, patch);
+    const updated = await mediaRepository.update(id6, patch);
     await auditLogRepository.record({
       organizationId,
       actorUserId: caller.id,
       actorType: "USER",
       action: "MEDIA_METADATA_UPDATED",
       resourceType: "media",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { displayName: existing.displayName, altText: existing.altText, caption: existing.caption, visibility: existing.visibility },
       afterData: patch,
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return toApiMedia(updated);
   },
-  async archiveMedia(caller, id4, meta10 = {}) {
+  async archiveMedia(caller, id6, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const existing = await loadMediaOrThrow(id4, organizationId);
+    const existing = await loadMediaOrThrow(id6, organizationId);
     if (existing.status === "ARCHIVED") throw new ConflictError("This media is already archived.");
-    const archivedCount = await mediaRepository.updateWhereStatus(id4, ["PENDING", "ACTIVE", "FAILED"], { status: "ARCHIVED" });
+    const archivedCount = await mediaRepository.updateWhereStatus(id6, ["PENDING", "ACTIVE", "FAILED"], { status: "ARCHIVED" });
     if (archivedCount === 0) throw new ConflictError("This media is already archived.");
-    const updated = await loadMediaOrThrow(id4, organizationId);
+    const updated = await loadMediaOrThrow(id6, organizationId);
     await auditLogRepository.record({
       organizationId,
       actorUserId: caller.id,
       actorType: "USER",
       action: "MEDIA_ARCHIVED",
       resourceType: "media",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { status: existing.status },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return toApiMedia(updated);
   },
-  async deleteMedia(caller, id4, meta10 = {}) {
+  async deleteMedia(caller, id6, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const existing = await loadMediaOrThrow(id4, organizationId);
-    const referenceCount = await mediaRepository.countContentReferences(id4);
+    const existing = await loadMediaOrThrow(id6, organizationId);
+    const referenceCount = await mediaRepository.countContentReferences(id6);
     if (referenceCount > 0) {
       throw new ConflictError(
         `This media is currently used as a featured image by ${referenceCount} page/post \u2014 detach it from that content before deleting.`
       );
     }
-    await mediaRepository.softDelete(id4);
+    await mediaRepository.softDelete(id6);
     await auditLogRepository.record({
       organizationId,
       actorUserId: caller.id,
       actorType: "USER",
       action: "MEDIA_DELETED",
       resourceType: "media",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { status: existing.status, originalFilename: existing.originalFilename },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
   }
 };
@@ -6568,7 +6579,7 @@ async function assertSiteIdentityMediaUsable(input, organizationId) {
     if (mediaId) await assertFeaturedMediaUsable(mediaId, organizationId);
   }
 }
-async function publishGroup(caller, publishedKey, draftKey, schema, revalidate, auditResourceType, meta10) {
+async function publishGroup(caller, publishedKey, draftKey, schema, revalidate, auditResourceType, meta11) {
   const organizationId = caller.organizationId;
   const draftRow = await systemSettingRepository.findByKey(organizationId, draftKey);
   const value = schema.parse(draftRow?.value ?? {});
@@ -6584,12 +6595,12 @@ async function publishGroup(caller, publishedKey, draftKey, schema, revalidate, 
     action: "SETTINGS_PUBLISHED",
     resourceType: auditResourceType,
     resourceId: publishedKey,
-    ipAddress: meta10.ip,
-    userAgent: meta10.userAgent
+    ipAddress: meta11.ip,
+    userAgent: meta11.userAgent
   });
   return value;
 }
-async function revertGroup(caller, publishedKey, draftKey, schema, auditResourceType, meta10) {
+async function revertGroup(caller, publishedKey, draftKey, schema, auditResourceType, meta11) {
   const organizationId = caller.organizationId;
   const publishedRow = await systemSettingRepository.findByKey(organizationId, publishedKey);
   const value = schema.parse(publishedRow?.value ?? {});
@@ -6601,8 +6612,8 @@ async function revertGroup(caller, publishedKey, draftKey, schema, auditResource
     action: "SETTINGS_REVERTED",
     resourceType: auditResourceType,
     resourceId: draftKey,
-    ipAddress: meta10.ip,
-    userAgent: meta10.userAgent
+    ipAddress: meta11.ip,
+    userAgent: meta11.userAgent
   });
   return value;
 }
@@ -6622,7 +6633,7 @@ var siteSettingsService = {
     const row = await systemSettingRepository.findByKey(organizationId, GLOBAL_STYLES_KEY);
     return globalStylesSchema.parse(row?.value ?? {});
   },
-  async saveSiteIdentityDraft(caller, input, meta10 = {}) {
+  async saveSiteIdentityDraft(caller, input, meta11 = {}) {
     const organizationId = caller.organizationId;
     await assertSiteIdentityMediaUsable(input, organizationId);
     await saveDraft(organizationId, SITE_IDENTITY_DRAFT_KEY, input, caller.id);
@@ -6633,12 +6644,12 @@ var siteSettingsService = {
       action: "SETTINGS_UPDATED",
       resourceType: "site_identity",
       resourceId: SITE_IDENTITY_DRAFT_KEY,
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return input;
   },
-  async saveGlobalStylesDraft(caller, input, meta10 = {}) {
+  async saveGlobalStylesDraft(caller, input, meta11 = {}) {
     const organizationId = caller.organizationId;
     await saveDraft(organizationId, GLOBAL_STYLES_DRAFT_KEY, input, caller.id);
     await auditLogRepository.record({
@@ -6648,12 +6659,12 @@ var siteSettingsService = {
       action: "SETTINGS_UPDATED",
       resourceType: "global_styles",
       resourceId: GLOBAL_STYLES_DRAFT_KEY,
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return input;
   },
-  async publishSiteIdentity(caller, meta10 = {}) {
+  async publishSiteIdentity(caller, meta11 = {}) {
     return publishGroup(
       caller,
       SITE_IDENTITY_KEY,
@@ -6661,17 +6672,17 @@ var siteSettingsService = {
       siteIdentitySchema,
       (value) => assertSiteIdentityMediaUsable(value, caller.organizationId),
       "site_identity",
-      meta10
+      meta11
     );
   },
-  async publishGlobalStyles(caller, meta10 = {}) {
-    return publishGroup(caller, GLOBAL_STYLES_KEY, GLOBAL_STYLES_DRAFT_KEY, globalStylesSchema, async () => void 0, "global_styles", meta10);
+  async publishGlobalStyles(caller, meta11 = {}) {
+    return publishGroup(caller, GLOBAL_STYLES_KEY, GLOBAL_STYLES_DRAFT_KEY, globalStylesSchema, async () => void 0, "global_styles", meta11);
   },
-  async revertSiteIdentityDraft(caller, meta10 = {}) {
-    return revertGroup(caller, SITE_IDENTITY_KEY, SITE_IDENTITY_DRAFT_KEY, siteIdentitySchema, "site_identity", meta10);
+  async revertSiteIdentityDraft(caller, meta11 = {}) {
+    return revertGroup(caller, SITE_IDENTITY_KEY, SITE_IDENTITY_DRAFT_KEY, siteIdentitySchema, "site_identity", meta11);
   },
-  async revertGlobalStylesDraft(caller, meta10 = {}) {
-    return revertGroup(caller, GLOBAL_STYLES_KEY, GLOBAL_STYLES_DRAFT_KEY, globalStylesSchema, "global_styles", meta10);
+  async revertGlobalStylesDraft(caller, meta11 = {}) {
+    return revertGroup(caller, GLOBAL_STYLES_KEY, GLOBAL_STYLES_DRAFT_KEY, globalStylesSchema, "global_styles", meta11);
   }
 };
 
@@ -6790,8 +6801,8 @@ var leadRepository = {
     return { rows, total };
   },
   /** The only lookup-by-id this module exposes — always organization-scoped, so a cross-tenant id guess returns null, never another org's row (§4). */
-  async findByIdInOrg(id4, organizationId) {
-    return prisma.lead.findFirst({ where: { id: id4, organizationId, deletedAt: null } });
+  async findByIdInOrg(id6, organizationId) {
+    return prisma.lead.findFirst({ where: { id: id6, organizationId, deletedAt: null } });
   },
   async findByEmailInOrg(organizationId, email) {
     return prisma.lead.findMany({
@@ -6819,15 +6830,16 @@ var leadRepository = {
         referrer: data.referrer,
         consentGiven: data.consentGiven,
         formId: data.formId,
-        campaignId: data.campaignId
+        campaignId: data.campaignId,
+        firstTouch: data.firstTouch
       }
     });
   },
-  async update(id4, data) {
-    return prisma.lead.update({ where: { id: id4 }, data });
+  async update(id6, data) {
+    return prisma.lead.update({ where: { id: id6 }, data });
   },
-  async softDelete(id4) {
-    await prisma.lead.update({ where: { id: id4 }, data: { deletedAt: /* @__PURE__ */ new Date() } });
+  async softDelete(id6) {
+    await prisma.lead.update({ where: { id: id6 }, data: { deletedAt: /* @__PURE__ */ new Date() } });
   },
   async countByStatus(organizationId) {
     const rows = await prisma.lead.groupBy({
@@ -6902,8 +6914,8 @@ var industryRepository = {
       orderBy: [{ displayOrder: "asc" }, { name: "asc" }]
     });
   },
-  async findById(id4) {
-    return prisma.industry.findUnique({ where: { id: id4 } });
+  async findById(id6) {
+    return prisma.industry.findUnique({ where: { id: id6 } });
   },
   async findBySlug(slug) {
     return prisma.industry.findUnique({ where: { slug } });
@@ -6912,8 +6924,8 @@ var industryRepository = {
     if (ids.length === 0) return [];
     return prisma.industry.findMany({ where: { id: { in: ids } } });
   },
-  async findUniqueSlug(base2) {
-    const baseSlug = slugify2(base2) || "industry";
+  async findUniqueSlug(base3) {
+    const baseSlug = slugify2(base3) || "industry";
     let slug = baseSlug;
     let attempt2 = 1;
     while (await this.findBySlug(slug)) {
@@ -6926,14 +6938,14 @@ var industryRepository = {
   async create(data) {
     return prisma.industry.create({ data });
   },
-  async update(id4, data) {
-    return prisma.industry.update({ where: { id: id4 }, data });
+  async update(id6, data) {
+    return prisma.industry.update({ where: { id: id6 }, data });
   },
-  async countProducts(id4) {
-    return prisma.productIndustry.count({ where: { industryId: id4 } });
+  async countProducts(id6) {
+    return prisma.productIndustry.count({ where: { industryId: id6 } });
   },
-  async delete(id4) {
-    await prisma.industry.delete({ where: { id: id4 } });
+  async delete(id6) {
+    await prisma.industry.delete({ where: { id: id6 } });
   }
 };
 
@@ -7076,8 +7088,8 @@ var campaignRepository = {
     ]);
     return { rows, total };
   },
-  async findByIdInOrg(id4, organizationId) {
-    return prisma.campaign.findFirst({ where: { id: id4, organizationId, deletedAt: null }, ...withRelations });
+  async findByIdInOrg(id6, organizationId) {
+    return prisma.campaign.findFirst({ where: { id: id6, organizationId, deletedAt: null }, ...withRelations });
   },
   /** Case-insensitive match against this org's own Campaign.utmCampaign — the attribution-resolution lookup (campaignAttributionService). Never ARCHIVED/soft-deleted: an archived campaign no longer attributes new activity. */
   async findActiveByUtmCampaignInOrg(organizationId, utmCampaign) {
@@ -7089,11 +7101,11 @@ var campaignRepository = {
   async create(data) {
     return prisma.campaign.create({ data });
   },
-  async update(id4, data) {
-    return prisma.campaign.update({ where: { id: id4 }, data });
+  async update(id6, data) {
+    return prisma.campaign.update({ where: { id: id6 }, data });
   },
-  async softDelete(id4) {
-    await prisma.campaign.update({ where: { id: id4 }, data: { deletedAt: /* @__PURE__ */ new Date() } });
+  async softDelete(id6) {
+    await prisma.campaign.update({ where: { id: id6 }, data: { deletedAt: /* @__PURE__ */ new Date() } });
   },
   async setProducts(campaignId, productIds) {
     await prisma.$transaction([
@@ -7245,8 +7257,8 @@ function assertValidTransition(current, next) {
     throw new ValidationError('Use POST /leads/:id/convert to mark a lead as converted \u2014 status cannot be set to "CONVERTED" directly.');
   }
 }
-async function loadLeadInOrgOrThrow(id4, organizationId) {
-  const lead = await leadRepository.findByIdInOrg(id4, organizationId);
+async function loadLeadInOrgOrThrow(id6, organizationId) {
+  const lead = await leadRepository.findByIdInOrg(id6, organizationId);
   if (!lead) throw new NotFoundError("Lead not found.");
   return lead;
 }
@@ -7259,10 +7271,10 @@ var leadService = {
   async listLeads(organizationId, filters, page, limit, sort, order) {
     return leadRepository.list(organizationId, filters, page, limit, sort, order);
   },
-  async getLead(organizationId, id4) {
-    return loadLeadInOrgOrThrow(id4, organizationId);
+  async getLead(organizationId, id6) {
+    return loadLeadInOrgOrThrow(id6, organizationId);
   },
-  async createLead(caller, input, meta10 = {}) {
+  async createLead(caller, input, meta11 = {}) {
     const email = input.email || void 0;
     if (email) {
       const duplicates = await leadRepository.findByEmailInOrg(caller.organizationId, email);
@@ -7291,8 +7303,8 @@ var leadService = {
       resourceType: "lead",
       resourceId: lead.id,
       afterData: { companyName: lead.companyName, status: lead.status },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     if (lead.assignedTo && lead.assignedTo !== caller.id) {
       await notificationService.notify({
@@ -7318,8 +7330,8 @@ var leadService = {
     }
     return lead;
   },
-  async updateLead(caller, id4, input, meta10 = {}) {
-    const existing = await loadLeadInOrgOrThrow(id4, caller.organizationId);
+  async updateLead(caller, id6, input, meta11 = {}) {
+    const existing = await loadLeadInOrgOrThrow(id6, caller.organizationId);
     if (input.status !== void 0) {
       assertValidTransition(existing.status, input.status);
     } else if (TERMINAL_STATUSES.has(existing.status)) {
@@ -7334,25 +7346,25 @@ var leadService = {
     if (input.status !== void 0) patch.status = input.status;
     if (input.notes !== void 0) patch.notes = input.notes;
     if (input.assignedTo !== void 0) patch.assignedTo = input.assignedTo;
-    const updated = await leadRepository.update(id4, patch);
+    const updated = await leadRepository.update(id6, patch);
     await auditLogRepository.record({
       organizationId: caller.organizationId,
       actorUserId: caller.id,
       actorType: "USER",
       action: "LEAD_UPDATED",
       resourceType: "lead",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { status: existing.status },
       afterData: patch,
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     if (input.status !== void 0 && input.status !== existing.status) {
       try {
         await eventEngine.emit({
           eventType: "lead.status_changed",
           entityType: "lead",
-          entityId: id4,
+          entityId: id6,
           organizationId: caller.organizationId,
           actorId: caller.id,
           actorType: "USER",
@@ -7373,18 +7385,18 @@ var leadService = {
     }
     return updated;
   },
-  async deleteLead(caller, id4, meta10 = {}) {
-    await loadLeadInOrgOrThrow(id4, caller.organizationId);
-    await leadRepository.softDelete(id4);
+  async deleteLead(caller, id6, meta11 = {}) {
+    await loadLeadInOrgOrThrow(id6, caller.organizationId);
+    await leadRepository.softDelete(id6);
     await auditLogRepository.record({
       organizationId: caller.organizationId,
       actorUserId: caller.id,
       actorType: "USER",
       action: "LEAD_ARCHIVED",
       resourceType: "lead",
-      resourceId: id4,
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      resourceId: id6,
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
   },
   /**
@@ -7395,8 +7407,8 @@ var leadService = {
    * rolls back the whole transaction (including the client/contact rows
    * already created in it), rather than racing on a read-then-write.
    */
-  async convertLead(caller, id4, input, meta10 = {}) {
-    const lead = await loadLeadInOrgOrThrow(id4, caller.organizationId);
+  async convertLead(caller, id6, input, meta11 = {}) {
+    const lead = await loadLeadInOrgOrThrow(id6, caller.organizationId);
     if (lead.status === "CONVERTED") {
       throw new ConflictError("This lead has already been converted.", { convertedClientId: lead.convertedClientId });
     }
@@ -7452,7 +7464,7 @@ var leadService = {
         contactId = contact.id;
       }
       const conversion = await tx.lead.updateMany({
-        where: { id: id4, organizationId: caller.organizationId, status: { not: "CONVERTED" } },
+        where: { id: id6, organizationId: caller.organizationId, status: { not: "CONVERTED" } },
         data: { status: "CONVERTED", convertedClientId: client3.id, convertedAt: /* @__PURE__ */ new Date() }
       });
       if (conversion.count !== 1) {
@@ -7467,9 +7479,9 @@ var leadService = {
       action: "CLIENT_CREATED",
       resourceType: "client",
       resourceId: result.client.id,
-      afterData: { clientCode: result.client.clientCode, name: result.client.name, convertedFromLeadId: id4 },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      afterData: { clientCode: result.client.clientCode, name: result.client.name, convertedFromLeadId: id6 },
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     await auditLogRepository.record({
       organizationId: caller.organizationId,
@@ -7477,10 +7489,10 @@ var leadService = {
       actorType: "USER",
       action: "LEAD_CONVERTED",
       resourceType: "lead",
-      resourceId: id4,
+      resourceId: id6,
       afterData: { clientId: result.client.id, clientCode: result.client.clientCode },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     await analyticsEventService.recordBusinessEvent({
       organizationId: caller.organizationId,
@@ -7488,7 +7500,7 @@ var leadService = {
       entityType: "client",
       entityId: result.client.id,
       campaignId: lead.campaignId ?? void 0,
-      metadata: { convertedFromLeadId: id4 }
+      metadata: { convertedFromLeadId: id6 }
     });
     return result;
   },
@@ -7498,9 +7510,9 @@ var leadService = {
   async recent(organizationId, limit) {
     return leadRepository.recentForOrg(organizationId, limit);
   },
-  async getActivity(organizationId, id4) {
-    await loadLeadInOrgOrThrow(id4, organizationId);
-    const { rows } = await auditLogQueryRepository.list({ organizationId, resourceType: "lead", resourceId: id4 }, 1, 100);
+  async getActivity(organizationId, id6) {
+    await loadLeadInOrgOrThrow(id6, organizationId);
+    const { rows } = await auditLogQueryRepository.list({ organizationId, resourceType: "lead", resourceId: id6 }, 1, 100);
     return rows;
   }
 };
@@ -7638,8 +7650,8 @@ import { Router as Router11 } from "express";
 
 // server/services/clientService.ts
 init_errors();
-async function loadClientInOrgOrThrow(id4, organizationId) {
-  const client3 = await clientRepository.findByIdInOrg(id4, organizationId);
+async function loadClientInOrgOrThrow(id6, organizationId) {
+  const client3 = await clientRepository.findByIdInOrg(id6, organizationId);
   if (!client3) throw new NotFoundError("Client not found.");
   return client3;
 }
@@ -7657,11 +7669,11 @@ var clientService = {
     const { rows, total } = await clientRepository.list(organizationId, filters, page, limit, sort, order);
     return { rows: rows.map(withProvisioningStatus), total };
   },
-  async getClient(organizationId, id4) {
-    const client3 = await loadClientInOrgOrThrow(id4, organizationId);
+  async getClient(organizationId, id6) {
+    const client3 = await loadClientInOrgOrThrow(id6, organizationId);
     return withProvisioningStatus(client3);
   },
-  async createClient(caller, input, meta10 = {}) {
+  async createClient(caller, input, meta11 = {}) {
     const [byCode, byName] = await Promise.all([
       clientRepository.findByCodeInOrg(caller.organizationId, input.clientCode),
       clientRepository.findByNameInOrg(caller.organizationId, input.name)
@@ -7696,8 +7708,8 @@ var clientService = {
       resourceType: "client",
       resourceId: client3.id,
       afterData: { clientCode: client3.clientCode, name: client3.name, status: client3.status },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     try {
       await eventEngine.emit({
@@ -7714,11 +7726,11 @@ var clientService = {
     }
     return client3;
   },
-  async updateClient(caller, id4, input, meta10 = {}) {
-    const existing = await loadClientInOrgOrThrow(id4, caller.organizationId);
+  async updateClient(caller, id6, input, meta11 = {}) {
+    const existing = await loadClientInOrgOrThrow(id6, caller.organizationId);
     if (input.name !== void 0 && input.name.toLowerCase() !== existing.name.toLowerCase()) {
       const dup = await clientRepository.findByNameInOrg(caller.organizationId, input.name);
-      if (dup && dup.id !== id4) {
+      if (dup && dup.id !== id6) {
         throw new ConflictError(`A client named "${input.name}" already exists in this organization.`);
       }
     }
@@ -7737,33 +7749,33 @@ var clientService = {
     if (input.notes !== void 0) patch.notes = input.notes;
     if (input.source !== void 0) patch.source = input.source;
     if (input.industryId !== void 0) patch.industryId = input.industryId;
-    const updated = await clientRepository.update(id4, patch);
+    const updated = await clientRepository.update(id6, patch);
     await auditLogRepository.record({
       organizationId: caller.organizationId,
       actorUserId: caller.id,
       actorType: "USER",
       action: "CLIENT_UPDATED",
       resourceType: "client",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { status: existing.status },
       afterData: patch,
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return updated;
   },
-  async deleteClient(caller, id4, meta10 = {}) {
-    await loadClientInOrgOrThrow(id4, caller.organizationId);
-    await clientRepository.softDelete(id4);
+  async deleteClient(caller, id6, meta11 = {}) {
+    await loadClientInOrgOrThrow(id6, caller.organizationId);
+    await clientRepository.softDelete(id6);
     await auditLogRepository.record({
       organizationId: caller.organizationId,
       actorUserId: caller.id,
       actorType: "USER",
       action: "CLIENT_ARCHIVED",
       resourceType: "client",
-      resourceId: id4,
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      resourceId: id6,
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
   },
   async dashboardCounts(organizationId) {
@@ -7772,9 +7784,9 @@ var clientService = {
   async recent(organizationId, limit) {
     return clientRepository.recentForOrg(organizationId, limit);
   },
-  async getActivity(organizationId, id4) {
-    await loadClientInOrgOrThrow(id4, organizationId);
-    const { rows } = await auditLogQueryRepository.list({ organizationId, resourceType: "client", resourceId: id4 }, 1, 100);
+  async getActivity(organizationId, id6) {
+    await loadClientInOrgOrThrow(id6, organizationId);
+    const { rows } = await auditLogQueryRepository.list({ organizationId, resourceType: "client", resourceId: id6 }, 1, 100);
     return rows;
   }
 };
@@ -7818,8 +7830,8 @@ var contactRepository = {
     ]);
     return { rows, total };
   },
-  async findByIdInOrg(id4, organizationId) {
-    return prisma.contact.findFirst({ where: { id: id4, organizationId, deletedAt: null } });
+  async findByIdInOrg(id6, organizationId) {
+    return prisma.contact.findFirst({ where: { id: id6, organizationId, deletedAt: null } });
   },
   async findByEmailForClient(clientId, organizationId, email) {
     return prisma.contact.findFirst({
@@ -7840,8 +7852,8 @@ var contactRepository = {
       }
     });
   },
-  async update(id4, data) {
-    return prisma.contact.update({ where: { id: id4 }, data });
+  async update(id6, data) {
+    return prisma.contact.update({ where: { id: id6 }, data });
   },
   /** Unsets isPrimary on every OTHER contact for this client — called before setting a new primary, since the partial unique index (schema.prisma) allows at most one. */
   async clearPrimaryForClient(clientId, exceptContactId) {
@@ -7850,15 +7862,15 @@ var contactRepository = {
       data: { isPrimary: false }
     });
   },
-  async softDelete(id4) {
-    await prisma.contact.update({ where: { id: id4 }, data: { deletedAt: /* @__PURE__ */ new Date() } });
+  async softDelete(id6) {
+    await prisma.contact.update({ where: { id: id6 }, data: { deletedAt: /* @__PURE__ */ new Date() } });
   }
 };
 
 // server/services/contactService.ts
 init_errors();
-async function loadContactInOrgOrThrow(id4, organizationId) {
-  const contact = await contactRepository.findByIdInOrg(id4, organizationId);
+async function loadContactInOrgOrThrow(id6, organizationId) {
+  const contact = await contactRepository.findByIdInOrg(id6, organizationId);
   if (!contact) throw new NotFoundError("Contact not found.");
   return contact;
 }
@@ -7875,10 +7887,10 @@ var contactService = {
     await assertClientInOrg(clientId, organizationId);
     return contactRepository.listForClient(clientId, organizationId, page, limit);
   },
-  async getContact(organizationId, id4) {
-    return loadContactInOrgOrThrow(id4, organizationId);
+  async getContact(organizationId, id6) {
+    return loadContactInOrgOrThrow(id6, organizationId);
   },
-  async createForClient(caller, clientId, input, meta10 = {}) {
+  async createForClient(caller, clientId, input, meta11 = {}) {
     await assertClientInOrg(clientId, caller.organizationId);
     const email = input.email || void 0;
     if (email) {
@@ -7910,16 +7922,16 @@ var contactService = {
       resourceType: "contact",
       resourceId: contact.id,
       afterData: { clientId, firstName: contact.firstName, lastName: contact.lastName },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return contact;
   },
-  async updateContact(caller, id4, input, meta10 = {}) {
-    const existing = await loadContactInOrgOrThrow(id4, caller.organizationId);
+  async updateContact(caller, id6, input, meta11 = {}) {
+    const existing = await loadContactInOrgOrThrow(id6, caller.organizationId);
     if (input.email) {
       const dup = existing.clientId ? await contactRepository.findByEmailForClient(existing.clientId, caller.organizationId, input.email) : null;
-      if (dup && dup.id !== id4) throw new ConflictError("A contact with this email already exists for this client.");
+      if (dup && dup.id !== id6) throw new ConflictError("A contact with this email already exists for this client.");
     }
     const patch = {};
     if (input.firstName !== void 0) patch.firstName = input.firstName;
@@ -7932,13 +7944,13 @@ var contactService = {
       if (input.isPrimary !== void 0) {
         if (input.isPrimary && existing.clientId) {
           await tx.contact.updateMany({
-            where: { clientId: existing.clientId, isPrimary: true, deletedAt: null, id: { not: id4 } },
+            where: { clientId: existing.clientId, isPrimary: true, deletedAt: null, id: { not: id6 } },
             data: { isPrimary: false }
           });
         }
         patch.isPrimary = input.isPrimary;
       }
-      return tx.contact.update({ where: { id: id4 }, data: patch });
+      return tx.contact.update({ where: { id: id6 }, data: patch });
     });
     await auditLogRepository.record({
       organizationId: caller.organizationId,
@@ -7946,25 +7958,25 @@ var contactService = {
       actorType: "USER",
       action: "CONTACT_UPDATED",
       resourceType: "contact",
-      resourceId: id4,
+      resourceId: id6,
       afterData: patch,
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return updated;
   },
-  async deleteContact(caller, id4, meta10 = {}) {
-    await loadContactInOrgOrThrow(id4, caller.organizationId);
-    await contactRepository.softDelete(id4);
+  async deleteContact(caller, id6, meta11 = {}) {
+    await loadContactInOrgOrThrow(id6, caller.organizationId);
+    await contactRepository.softDelete(id6);
     await auditLogRepository.record({
       organizationId: caller.organizationId,
       actorUserId: caller.id,
       actorType: "USER",
       action: "CONTACT_DELETED",
       resourceType: "contact",
-      resourceId: id4,
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      resourceId: id6,
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
   }
 };
@@ -7978,8 +7990,8 @@ async function loadClientInOrgOrThrow2(clientId, organizationId) {
   if (!client3) throw new NotFoundError("Client not found.");
   return client3;
 }
-async function loadOnboardingInOrgOrThrow(id4, organizationId) {
-  const record2 = await clientOnboardingRepository.findByIdInOrg(id4, organizationId);
+async function loadOnboardingInOrgOrThrow(id6, organizationId) {
+  const record2 = await clientOnboardingRepository.findByIdInOrg(id6, organizationId);
   if (!record2) throw new NotFoundError("Onboarding record not found.");
   return record2;
 }
@@ -7993,8 +8005,8 @@ var onboardingService = {
   async listOnboarding(organizationId, filters, page, limit) {
     return clientOnboardingRepository.list(organizationId, filters, page, limit);
   },
-  async getOnboarding(organizationId, id4) {
-    return loadOnboardingInOrgOrThrow(id4, organizationId);
+  async getOnboarding(organizationId, id6) {
+    return loadOnboardingInOrgOrThrow(id6, organizationId);
   },
   async getOnboardingForClient(organizationId, clientId) {
     await loadClientInOrgOrThrow2(clientId, organizationId);
@@ -8005,7 +8017,7 @@ var onboardingService = {
     const steps = await getCustomTemplateSteps(organizationId);
     return { steps: steps ?? defaultOnboardingTemplateSteps(), isCustom: !!steps };
   },
-  async updateTemplate(caller, steps, meta10 = {}) {
+  async updateTemplate(caller, steps, meta11 = {}) {
     await systemSettingRepository.upsert({
       organizationId: caller.organizationId,
       key: TEMPLATE_SETTING_KEY,
@@ -8022,12 +8034,12 @@ var onboardingService = {
       resourceType: "system_setting",
       resourceId: TEMPLATE_SETTING_KEY,
       afterData: { stepCount: steps.length },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return { steps, isCustom: true };
   },
-  async startOnboarding(caller, clientId, input = {}, meta10 = {}) {
+  async startOnboarding(caller, clientId, input = {}, meta11 = {}) {
     await loadClientInOrgOrThrow2(clientId, caller.organizationId);
     const existing = await clientOnboardingRepository.findByClientId(clientId);
     if (existing) {
@@ -8050,8 +8062,8 @@ var onboardingService = {
       resourceType: "client_onboarding",
       resourceId: record2.id,
       afterData: { clientId, status: record2.status },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     if (record2.ownerId && record2.ownerId !== caller.id) {
       await notificationService.notify({
@@ -8077,45 +8089,45 @@ var onboardingService = {
     }
     return record2;
   },
-  async updateOnboarding(caller, id4, input, meta10 = {}) {
-    const existing = await loadOnboardingInOrgOrThrow(id4, caller.organizationId);
+  async updateOnboarding(caller, id6, input, meta11 = {}) {
+    const existing = await loadOnboardingInOrgOrThrow(id6, caller.organizationId);
     if (TERMINAL_STATUSES2.has(existing.status)) {
       throw new ConflictError(`This onboarding is already ${existing.status.toLowerCase()} and can no longer be changed.`);
     }
     if (input.status === "CANCELLED") {
-      const updated = await clientOnboardingRepository.update(id4, { status: "CANCELLED", cancelledAt: /* @__PURE__ */ new Date() });
+      const updated = await clientOnboardingRepository.update(id6, { status: "CANCELLED", cancelledAt: /* @__PURE__ */ new Date() });
       await auditLogRepository.record({
         organizationId: caller.organizationId,
         actorUserId: caller.id,
         actorType: "USER",
         action: "CLIENT_ONBOARDING_CANCELLED",
         resourceType: "client_onboarding",
-        resourceId: id4,
+        resourceId: id6,
         beforeData: { status: existing.status },
         afterData: { status: "CANCELLED" },
-        ipAddress: meta10.ip,
-        userAgent: meta10.userAgent
+        ipAddress: meta11.ip,
+        userAgent: meta11.userAgent
       });
       return updated;
     }
     if (input.completeStep) {
-      return this.completeStep(caller, id4, input.completeStep, meta10);
+      return this.completeStep(caller, id6, input.completeStep, meta11);
     }
     if (input.ownerId !== void 0 || input.dueDate !== void 0) {
       const patch = {};
       if (input.ownerId !== void 0) patch.ownerId = input.ownerId;
       if (input.dueDate !== void 0) patch.dueDate = input.dueDate;
-      const updated = await clientOnboardingRepository.update(id4, patch);
+      const updated = await clientOnboardingRepository.update(id6, patch);
       await auditLogRepository.record({
         organizationId: caller.organizationId,
         actorUserId: caller.id,
         actorType: "USER",
         action: "CLIENT_ONBOARDING_UPDATED",
         resourceType: "client_onboarding",
-        resourceId: id4,
+        resourceId: id6,
         afterData: patch,
-        ipAddress: meta10.ip,
-        userAgent: meta10.userAgent
+        ipAddress: meta11.ip,
+        userAgent: meta11.userAgent
       });
       if (input.ownerId && input.ownerId !== existing.ownerId && input.ownerId !== caller.id) {
         await notificationService.notify({
@@ -8137,7 +8149,7 @@ var onboardingService = {
    * ignored, since this is an explicit staff action (unlike
    * completeStepForClient's system-triggered no-op).
    */
-  async updateStep(caller, onboardingId, step, input, meta10 = {}) {
+  async updateStep(caller, onboardingId, step, input, meta11 = {}) {
     const record2 = await loadOnboardingInOrgOrThrow(onboardingId, caller.organizationId);
     if (TERMINAL_STATUSES2.has(record2.status)) {
       throw new ConflictError(`This onboarding is already ${record2.status.toLowerCase()} and can no longer be changed.`);
@@ -8162,8 +8174,8 @@ var onboardingService = {
       resourceType: "client_onboarding",
       resourceId: record2.id,
       afterData: { step, ...input, dueDate: input.dueDate ? input.dueDate.toISOString() : input.dueDate },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     if (input.assignedTo && input.assignedTo !== caller.id) {
       await notificationService.notify({
@@ -8184,7 +8196,7 @@ var onboardingService = {
    * READY once every step is done — completion itself is a separate,
    * explicit action (completeOnboarding), never inferred (§7).
    */
-  async completeStep(caller, onboardingId, step, meta10 = {}) {
+  async completeStep(caller, onboardingId, step, meta11 = {}) {
     const record2 = await loadOnboardingInOrgOrThrow(onboardingId, caller.organizationId);
     if (TERMINAL_STATUSES2.has(record2.status)) return record2;
     const checklist = record2.checklist ?? freshChecklist();
@@ -8208,8 +8220,8 @@ var onboardingService = {
       resourceType: "client_onboarding",
       resourceId: record2.id,
       afterData: { step, status: updated.status },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     if (record2.ownerId && record2.ownerId !== caller.id) {
       await notificationService.notify({
@@ -8248,15 +8260,15 @@ var onboardingService = {
       afterData: { step }
     });
   },
-  async completeOnboarding(caller, id4, meta10 = {}) {
-    const existing = await loadOnboardingInOrgOrThrow(id4, caller.organizationId);
+  async completeOnboarding(caller, id6, meta11 = {}) {
+    const existing = await loadOnboardingInOrgOrThrow(id6, caller.organizationId);
     if (existing.status === "COMPLETED") {
       throw new ConflictError("This onboarding has already been completed.");
     }
     if (existing.status !== "READY") {
       throw new ValidationError("Complete every checklist step before finishing onboarding.");
     }
-    const updated = await clientOnboardingRepository.update(id4, {
+    const updated = await clientOnboardingRepository.update(id6, {
       status: "COMPLETED",
       completedAt: /* @__PURE__ */ new Date(),
       completedBy: { connect: { id: caller.id } }
@@ -8267,10 +8279,10 @@ var onboardingService = {
       actorType: "USER",
       action: "CLIENT_ONBOARDING_COMPLETED",
       resourceType: "client_onboarding",
-      resourceId: id4,
+      resourceId: id6,
       afterData: { status: "COMPLETED" },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     if (existing.ownerId && existing.ownerId !== caller.id) {
       await notificationService.notify({
@@ -8290,7 +8302,7 @@ var onboardingService = {
         actorId: caller.id,
         actorType: "USER",
         sourceModule: "ONBOARDING",
-        payload: { onboardingId: id4 }
+        payload: { onboardingId: id6 }
       });
     } catch {
     }
@@ -8301,9 +8313,9 @@ var onboardingService = {
     return clientOnboardingRepository.dashboardStats(organizationId, callerId);
   },
   /** Phase 13 — real activity timeline for one onboarding record, same audit-log-backed pattern as leadService/opportunityService/clientService.getActivity. */
-  async getActivity(organizationId, id4) {
-    await loadOnboardingInOrgOrThrow(id4, organizationId);
-    const { rows } = await auditLogQueryRepository.list({ organizationId, resourceType: "client_onboarding", resourceId: id4 }, 1, 100);
+  async getActivity(organizationId, id6) {
+    await loadOnboardingInOrgOrThrow(id6, organizationId);
+    const { rows } = await auditLogQueryRepository.list({ organizationId, resourceType: "client_onboarding", resourceId: id6 }, 1, 100);
     return rows;
   }
 };
@@ -8336,9 +8348,9 @@ var workspaceRepository = {
     return { rows, total };
   },
   /** The single ownership-scoped lookup method — a workspace id belonging to another tenant's CRM is invisible, not just filtered client-side. */
-  async findByIdForOwner(id4, ownerOrganizationId) {
+  async findByIdForOwner(id6, ownerOrganizationId) {
     return prisma.organization.findFirst({
-      where: { id: id4, provisionedForClient: { organizationId: ownerOrganizationId } },
+      where: { id: id6, provisionedForClient: { organizationId: ownerOrganizationId } },
       include: { provisionedForClient: true }
     });
   },
@@ -8353,8 +8365,8 @@ var workspaceRepository = {
     }
     return slug;
   },
-  async update(id4, data) {
-    return prisma.organization.update({ where: { id: id4 }, data });
+  async update(id6, data) {
+    return prisma.organization.update({ where: { id: id6 }, data });
   },
   async countMembers(organizationId) {
     return prisma.organizationMembership.count({ where: { organizationId } });
@@ -8382,8 +8394,8 @@ async function loadClientInOrgOrThrow3(clientId, organizationId) {
   if (!client3) throw new NotFoundError("Client not found.");
   return client3;
 }
-async function loadWorkspaceForOwnerOrThrow(id4, ownerOrganizationId) {
-  const workspace = await workspaceRepository.findByIdForOwner(id4, ownerOrganizationId);
+async function loadWorkspaceForOwnerOrThrow(id6, ownerOrganizationId) {
+  const workspace = await workspaceRepository.findByIdForOwner(id6, ownerOrganizationId);
   if (!workspace) throw new NotFoundError("Workspace not found.");
   return workspace;
 }
@@ -8391,8 +8403,8 @@ var workspaceService = {
   async listWorkspaces(ownerOrganizationId, filters, page, limit) {
     return workspaceRepository.list(ownerOrganizationId, filters, page, limit);
   },
-  async getWorkspace(ownerOrganizationId, id4) {
-    return loadWorkspaceForOwnerOrThrow(id4, ownerOrganizationId);
+  async getWorkspace(ownerOrganizationId, id6) {
+    return loadWorkspaceForOwnerOrThrow(id6, ownerOrganizationId);
   },
   /**
    * The core transactional provisioning operation (§13). Idempotency/
@@ -8403,7 +8415,7 @@ var workspaceService = {
    * client both succeeding — the loser's transaction rolls back entirely,
    * including the Organization row it just created.
    */
-  async provisionWorkspace(caller, clientId, input, meta10 = {}) {
+  async provisionWorkspace(caller, clientId, input, meta11 = {}) {
     const client3 = await loadClientInOrgOrThrow3(clientId, caller.organizationId);
     if (client3.workspaceOrganizationId) {
       throw new ConflictError("This client has already been provisioned into a workspace.", {
@@ -8467,14 +8479,14 @@ var workspaceService = {
       resourceType: "organization",
       resourceId: result.workspace.id,
       afterData: { clientId, name: result.workspace.name, status: result.workspace.status },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     await onboardingService.completeStepForClient(clientId, "WORKSPACE_CREATED", caller.id);
     return result.workspace;
   },
-  async updateWorkspace(caller, id4, input, callerPermissions, meta10 = {}) {
-    const existing = await loadWorkspaceForOwnerOrThrow(id4, caller.organizationId);
+  async updateWorkspace(caller, id6, input, callerPermissions, meta11 = {}) {
+    const existing = await loadWorkspaceForOwnerOrThrow(id6, caller.organizationId);
     if (input.status !== void 0) {
       assertValidWorkspaceTransition(existing.status, input.status);
       if (SENSITIVE_STATUSES.has(input.status) && !callerPermissions.includes("workspaces.suspend") && caller.role.key !== "SUPER_ADMIN") {
@@ -8491,7 +8503,7 @@ var workspaceService = {
     if (input.currency !== void 0) patch.currency = input.currency;
     if (input.locale !== void 0) patch.locale = input.locale;
     if (input.status !== void 0) patch.status = input.status;
-    const updated = await workspaceRepository.update(id4, patch);
+    const updated = await workspaceRepository.update(id6, patch);
     const action = input.status === "SUSPENDED" ? "WORKSPACE_SUSPENDED" : input.status === "ARCHIVED" ? "WORKSPACE_DEACTIVATED" : "WORKSPACE_UPDATED";
     await auditLogRepository.record({
       organizationId: caller.organizationId,
@@ -8499,11 +8511,11 @@ var workspaceService = {
       actorType: "USER",
       action,
       resourceType: "organization",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { status: existing.status },
       afterData: patch,
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     if (input.name !== void 0 || Object.keys(patch).some((k) => ["timezone", "currency", "locale", "email", "phone", "address"].includes(k))) {
       await onboardingService.completeStepForClient(existing.provisionedForClient.id, "WORKSPACE_CONFIGURED", caller.id);
@@ -8804,19 +8816,19 @@ var opportunityRepository = {
     ]);
     return { rows, total };
   },
-  async findByIdInOrg(id4, organizationId) {
-    return prisma.opportunity.findFirst({ where: { id: id4, organizationId, deletedAt: null }, ...withRelations2 });
+  async findByIdInOrg(id6, organizationId) {
+    return prisma.opportunity.findFirst({ where: { id: id6, organizationId, deletedAt: null }, ...withRelations2 });
   },
   async create(data) {
     const created = await prisma.opportunity.create({ data });
     return await this.findByIdInOrg(created.id, data.organizationId);
   },
-  async update(id4, organizationId, data) {
-    await prisma.opportunity.update({ where: { id: id4 }, data });
-    return await this.findByIdInOrg(id4, organizationId);
+  async update(id6, organizationId, data) {
+    await prisma.opportunity.update({ where: { id: id6 }, data });
+    return await this.findByIdInOrg(id6, organizationId);
   },
-  async softDelete(id4) {
-    await prisma.opportunity.update({ where: { id: id4 }, data: { deletedAt: /* @__PURE__ */ new Date() } });
+  async softDelete(id6) {
+    await prisma.opportunity.update({ where: { id: id6 }, data: { deletedAt: /* @__PURE__ */ new Date() } });
   },
   async countByStage(organizationId) {
     const rows = await prisma.opportunity.groupBy({
@@ -8923,11 +8935,11 @@ var productRepository = {
     ]);
     return { rows, total };
   },
-  async findById(id4) {
-    return prisma.product.findUnique({ where: { id: id4 } });
+  async findById(id6) {
+    return prisma.product.findUnique({ where: { id: id6 } });
   },
-  async findByIdWithDetail(id4) {
-    return prisma.product.findUnique({ where: { id: id4 }, ...withDetail });
+  async findByIdWithDetail(id6) {
+    return prisma.product.findUnique({ where: { id: id6 }, ...withDetail });
   },
   /** Existence check for relatedProductIds/duplicate validation — never trusts a caller-supplied id list without checking which ones are real. */
   async findManyByIds(ids) {
@@ -8941,8 +8953,8 @@ var productRepository = {
     return prisma.product.findUnique({ where: { slug } });
   },
   /** Server-generated, collision-safe (§7) — never trusts a frontend-supplied slug for uniqueness beyond a caller-requested starting point. */
-  async findUniqueSlug(base2) {
-    const baseSlug = slugify4(base2) || "product";
+  async findUniqueSlug(base3) {
+    const baseSlug = slugify4(base3) || "product";
     let slug = baseSlug;
     let attempt2 = 1;
     while (await this.findBySlug(slug)) {
@@ -8971,8 +8983,8 @@ var productRepository = {
       }
     });
   },
-  async update(id4, data) {
-    return prisma.product.update({ where: { id: id4 }, data });
+  async update(id6, data) {
+    return prisma.product.update({ where: { id: id6 }, data });
   },
   // --- Revisions (Phase 10) — mirrors templateRepository's own revision helpers. ---
   async listRevisions(productId) {
@@ -9061,8 +9073,8 @@ function assertValidStageTransition(current, next) {
     throw new ValidationError("Use POST /opportunities/:id/win or /lose to close an opportunity \u2014 stage cannot be set to a closed value directly.");
   }
 }
-async function loadOpportunityOrThrow(id4, organizationId) {
-  const opportunity = await opportunityRepository.findByIdInOrg(id4, organizationId);
+async function loadOpportunityOrThrow(id6, organizationId) {
+  const opportunity = await opportunityRepository.findByIdInOrg(id6, organizationId);
   if (!opportunity) throw new NotFoundError("Opportunity not found.");
   return opportunity;
 }
@@ -9089,7 +9101,7 @@ async function emitStageChangedEvent(organizationId, opportunityId, actorId, fro
   });
 }
 async function notifyClose(params) {
-  const recipients = new Set([params.assignedTo, params.createdById].filter((id4) => !!id4 && id4 !== params.actorId));
+  const recipients = new Set([params.assignedTo, params.createdById].filter((id6) => !!id6 && id6 !== params.actorId));
   await Promise.all(
     [...recipients].map((userId) => notificationService.notify({ organizationId: params.organizationId, userId, type: params.type, title: params.title, message: params.message }))
   );
@@ -9098,10 +9110,10 @@ var opportunityService = {
   async listOpportunities(organizationId, filters, page, limit, sort, order) {
     return opportunityRepository.list(organizationId, filters, page, limit, sort, order);
   },
-  async getOpportunity(organizationId, id4) {
-    return loadOpportunityOrThrow(id4, organizationId);
+  async getOpportunity(organizationId, id6) {
+    return loadOpportunityOrThrow(id6, organizationId);
   },
-  async createOpportunity(caller, input, meta10 = {}) {
+  async createOpportunity(caller, input, meta11 = {}) {
     const organizationId = caller.organizationId;
     if (input.clientId) {
       const client3 = await clientRepository.findByIdInOrg(input.clientId, organizationId);
@@ -9142,8 +9154,8 @@ var opportunityService = {
       resourceType: "opportunity",
       resourceId: opportunity.id,
       afterData: { name: opportunity.name, stage: opportunity.stage, clientId: opportunity.clientId, leadId: opportunity.leadId, value: opportunity.value.toString() },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     await analyticsEventService.recordBusinessEvent({
       organizationId,
@@ -9177,9 +9189,9 @@ var opportunityService = {
     }
     return opportunity;
   },
-  async updateOpportunity(caller, id4, input, meta10 = {}) {
+  async updateOpportunity(caller, id6, input, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const existing = await loadOpportunityOrThrow(id4, organizationId);
+    const existing = await loadOpportunityOrThrow(id6, organizationId);
     if (input.stage !== void 0) {
       assertValidStageTransition(existing.stage, input.stage);
     } else if (TERMINAL_STAGES.has(existing.stage)) {
@@ -9200,60 +9212,60 @@ var opportunityService = {
     if (input.productId !== void 0) patch.productId = input.productId;
     if (input.source !== void 0) patch.source = input.source;
     if (input.probability !== void 0) patch.probability = input.probability;
-    const updated = await opportunityRepository.update(id4, organizationId, patch);
+    const updated = await opportunityRepository.update(id6, organizationId, patch);
     await auditLogRepository.record({
       organizationId,
       actorUserId: caller.id,
       actorType: "USER",
       action: "OPPORTUNITY_UPDATED",
       resourceType: "opportunity",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { stage: existing.stage, value: existing.value.toString() },
       afterData: { ...patch, value: patch.value !== void 0 ? patch.value.toString() : void 0 },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     if (input.stage !== void 0 && input.stage !== existing.stage) {
-      await emitStageChangedEvent(organizationId, id4, caller.id, existing.stage, input.stage);
+      await emitStageChangedEvent(organizationId, id6, caller.id, existing.stage, input.stage);
     }
     return updated;
   },
-  async deleteOpportunity(caller, id4, meta10 = {}) {
+  async deleteOpportunity(caller, id6, meta11 = {}) {
     const organizationId = caller.organizationId;
-    await loadOpportunityOrThrow(id4, organizationId);
-    await opportunityRepository.softDelete(id4);
+    await loadOpportunityOrThrow(id6, organizationId);
+    await opportunityRepository.softDelete(id6);
     await auditLogRepository.record({
       organizationId,
       actorUserId: caller.id,
       actorType: "USER",
       action: "OPPORTUNITY_DELETED",
       resourceType: "opportunity",
-      resourceId: id4,
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      resourceId: id6,
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
   },
-  async winOpportunity(caller, id4, meta10 = {}) {
+  async winOpportunity(caller, id6, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const existing = await loadOpportunityOrThrow(id4, organizationId);
+    const existing = await loadOpportunityOrThrow(id6, organizationId);
     if (TERMINAL_STAGES.has(existing.stage)) {
       throw new ConflictError("This opportunity is already closed.");
     }
     if (!existing.clientId) {
       throw new ValidationError("This opportunity must be linked to a client (see POST /opportunities/:id/link-client) before it can be marked as won.");
     }
-    const updated = await opportunityRepository.update(id4, organizationId, { stage: "CLOSED_WON", actualCloseDate: /* @__PURE__ */ new Date() });
+    const updated = await opportunityRepository.update(id6, organizationId, { stage: "CLOSED_WON", actualCloseDate: /* @__PURE__ */ new Date() });
     await auditLogRepository.record({
       organizationId,
       actorUserId: caller.id,
       actorType: "USER",
       action: "OPPORTUNITY_WON",
       resourceType: "opportunity",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { stage: existing.stage },
       afterData: { stage: "CLOSED_WON", value: existing.value.toString() },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     await notifyClose({
       organizationId,
@@ -9264,16 +9276,16 @@ var opportunityService = {
       title: "Opportunity won",
       message: `${existing.name} was marked as won.`
     });
-    await emitStageChangedEvent(organizationId, id4, caller.id, existing.stage, "CLOSED_WON");
+    await emitStageChangedEvent(organizationId, id6, caller.id, existing.stage, "CLOSED_WON");
     return updated;
   },
-  async loseOpportunity(caller, id4, input, meta10 = {}) {
+  async loseOpportunity(caller, id6, input, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const existing = await loadOpportunityOrThrow(id4, organizationId);
+    const existing = await loadOpportunityOrThrow(id6, organizationId);
     if (TERMINAL_STAGES.has(existing.stage)) {
       throw new ConflictError("This opportunity is already closed.");
     }
-    const updated = await opportunityRepository.update(id4, organizationId, {
+    const updated = await opportunityRepository.update(id6, organizationId, {
       stage: "CLOSED_LOST",
       actualCloseDate: /* @__PURE__ */ new Date(),
       lostReason: input.lostReason
@@ -9284,11 +9296,11 @@ var opportunityService = {
       actorType: "USER",
       action: "OPPORTUNITY_LOST",
       resourceType: "opportunity",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { stage: existing.stage },
       afterData: { stage: "CLOSED_LOST", lostReason: input.lostReason ?? null },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     await notifyClose({
       organizationId,
@@ -9299,7 +9311,7 @@ var opportunityService = {
       title: "Opportunity lost",
       message: `${existing.name} was marked as lost.`
     });
-    await emitStageChangedEvent(organizationId, id4, caller.id, existing.stage, "CLOSED_LOST");
+    await emitStageChangedEvent(organizationId, id6, caller.id, existing.stage, "CLOSED_LOST");
     return updated;
   },
   async dashboardStats(organizationId) {
@@ -9316,9 +9328,9 @@ var opportunityService = {
    * converts anything itself (reuse leadService.convertLead for that) —
    * this only links two already-real records together.
    */
-  async linkClient(caller, id4, input, meta10 = {}) {
+  async linkClient(caller, id6, input, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const existing = await loadOpportunityOrThrow(id4, organizationId);
+    const existing = await loadOpportunityOrThrow(id6, organizationId);
     if (TERMINAL_STAGES.has(existing.stage)) {
       throw new ConflictError("This opportunity is closed and can no longer be changed.");
     }
@@ -9327,25 +9339,25 @@ var opportunityService = {
     }
     const client3 = await clientRepository.findByIdInOrg(input.clientId, organizationId);
     if (!client3) throw new ValidationError("clientId does not belong to this organization.");
-    const updated = await opportunityRepository.update(id4, organizationId, { clientId: input.clientId });
+    const updated = await opportunityRepository.update(id6, organizationId, { clientId: input.clientId });
     await auditLogRepository.record({
       organizationId,
       actorUserId: caller.id,
       actorType: "USER",
       action: "OPPORTUNITY_CLIENT_LINKED",
       resourceType: "opportunity",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { clientId: null },
       afterData: { clientId: input.clientId },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return updated;
   },
   /** Phase 12 — unified activity timeline for one opportunity, drawn entirely from the existing audit trail (never a parallel "activity" table). */
-  async getActivity(organizationId, id4) {
-    await loadOpportunityOrThrow(id4, organizationId);
-    const { rows } = await auditLogQueryRepository.list({ organizationId, resourceType: "opportunity", resourceId: id4 }, 1, 100);
+  async getActivity(organizationId, id6) {
+    await loadOpportunityOrThrow(id6, organizationId);
+    const { rows } = await auditLogQueryRepository.list({ organizationId, resourceType: "opportunity", resourceId: id6 }, 1, 100);
     return rows;
   }
 };
@@ -9575,21 +9587,21 @@ var aiApprovalRepository = {
     ]);
     return { rows, total };
   },
-  async findByIdInOrg(id4, organizationId) {
+  async findByIdInOrg(id6, organizationId) {
     return prisma.aIApprovalRequest.findFirst({
-      where: { id: id4, organizationId },
+      where: { id: id6, organizationId },
       include: { toolExecution: true, execution: true }
     });
   },
-  async approve(id4, approvedById) {
+  async approve(id6, approvedById) {
     return prisma.aIApprovalRequest.update({
-      where: { id: id4 },
+      where: { id: id6 },
       data: { status: "APPROVED", approvedById, approvedAt: /* @__PURE__ */ new Date() }
     });
   },
-  async reject(id4, approvedById, rejectionReason) {
+  async reject(id6, approvedById, rejectionReason) {
     return prisma.aIApprovalRequest.update({
-      where: { id: id4 },
+      where: { id: id6 },
       data: { status: "REJECTED", approvedById, approvedAt: /* @__PURE__ */ new Date(), rejectionReason }
     });
   },
@@ -9645,8 +9657,8 @@ var postRepository = {
     ]);
     return { rows, total };
   },
-  async findByIdInOrg(id4, organizationId) {
-    return prisma.post.findFirst({ where: { id: id4, organizationId, deletedAt: null }, ...withRelations3 });
+  async findByIdInOrg(id6, organizationId) {
+    return prisma.post.findFirst({ where: { id: id6, organizationId, deletedAt: null }, ...withRelations3 });
   },
   async findBySlugInOrg(organizationId, slug) {
     return prisma.post.findFirst({ where: { organizationId, slug, deletedAt: null } });
@@ -9661,8 +9673,8 @@ var postRepository = {
     return prisma.post.findFirst({ where: { organizationId, slug, status: "PUBLISHED", deletedAt: null }, ...withPublicRelations });
   },
   /** Phase 5 — resolves a navigation-menu "post" link target to its slug, PUBLISHED only. */
-  async findPublishedByIdInOrg(id4, organizationId) {
-    return prisma.post.findFirst({ where: { id: id4, organizationId, status: "PUBLISHED", deletedAt: null }, select: { slug: true } });
+  async findPublishedByIdInOrg(id6, organizationId) {
+    return prisma.post.findFirst({ where: { id: id6, organizationId, status: "PUBLISHED", deletedAt: null }, select: { slug: true } });
   },
   /** Phase 11 public projection — PUBLISHED only, paginated, with the same relations as findPublishedBySlugWithMedia. */
   async listPublished(organizationId, filters, page, limit, sort, order) {
@@ -9702,8 +9714,8 @@ var postRepository = {
       }
     });
   },
-  async findUniqueSlugInOrg(organizationId, base2) {
-    const baseSlug = slugify5(base2) || "post";
+  async findUniqueSlugInOrg(organizationId, base3) {
+    const baseSlug = slugify5(base3) || "post";
     let slug = baseSlug;
     let attempt2 = 1;
     while (await this.findBySlugInOrg(organizationId, slug)) {
@@ -9722,8 +9734,8 @@ var postRepository = {
       ...tagIds.length > 0 ? [prisma.postTag.createMany({ data: tagIds.map((tagId) => ({ postId, tagId })) })] : []
     ]);
   },
-  async softDelete(id4) {
-    await prisma.post.update({ where: { id: id4 }, data: { deletedAt: /* @__PURE__ */ new Date() } });
+  async softDelete(id6) {
+    await prisma.post.update({ where: { id: id6 }, data: { deletedAt: /* @__PURE__ */ new Date() } });
   },
   /** Phase 7 — Trash view: posts soft-deleted but not yet permanently gone, newest-deleted first. */
   async listTrash(organizationId, page, limit) {
@@ -9735,11 +9747,11 @@ var postRepository = {
     return { rows, total };
   },
   /** Phase 7 — Trash view: a single soft-deleted post, org-scoped (never a live one). */
-  async findTrashedByIdInOrg(id4, organizationId) {
-    return prisma.post.findFirst({ where: { id: id4, organizationId, deletedAt: { not: null } } });
+  async findTrashedByIdInOrg(id6, organizationId) {
+    return prisma.post.findFirst({ where: { id: id6, organizationId, deletedAt: { not: null } } });
   },
-  async restore(id4) {
-    await prisma.post.update({ where: { id: id4 }, data: { deletedAt: null } });
+  async restore(id6) {
+    await prisma.post.update({ where: { id: id6 }, data: { deletedAt: null } });
   },
   /** Phase 15 — content analytics inventory: real post counts, never fabricated. */
   async countForContentInventory(organizationId) {
@@ -9764,14 +9776,14 @@ var categoryRepository = {
     });
     return rows.map(({ _count, ...c }) => ({ ...c, postCount: _count.posts }));
   },
-  async findByIdInOrg(id4, organizationId) {
-    return prisma.category.findFirst({ where: { id: id4, organizationId } });
+  async findByIdInOrg(id6, organizationId) {
+    return prisma.category.findFirst({ where: { id: id6, organizationId } });
   },
   async findBySlugInOrg(organizationId, slug) {
     return prisma.category.findFirst({ where: { organizationId, slug } });
   },
-  async findUniqueSlugInOrg(organizationId, base2) {
-    const baseSlug = slugify6(base2) || "category";
+  async findUniqueSlugInOrg(organizationId, base3) {
+    const baseSlug = slugify6(base3) || "category";
     let slug = baseSlug;
     let attempt2 = 1;
     while (await this.findBySlugInOrg(organizationId, slug)) {
@@ -9782,22 +9794,22 @@ var categoryRepository = {
     return slug;
   },
   /** Phase 7 — this category's own parentId, org-scoped (for cycle-checking a reparent), mirrors pageRepository.findParentId. */
-  async findParentId(id4, organizationId) {
-    const row = await prisma.category.findFirst({ where: { id: id4, organizationId }, select: { parentId: true } });
+  async findParentId(id6, organizationId) {
+    const row = await prisma.category.findFirst({ where: { id: id6, organizationId }, select: { parentId: true } });
     return row?.parentId ?? null;
   },
   /** Phase 7 — how many posts currently reference this category, for the delete-in-use guard. */
-  async countPostsUsing(id4) {
-    return prisma.post.count({ where: { categoryId: id4, deletedAt: null } });
+  async countPostsUsing(id6) {
+    return prisma.post.count({ where: { categoryId: id6, deletedAt: null } });
   },
   async create(data) {
     return prisma.category.create({ data });
   },
-  async update(id4, data) {
-    return prisma.category.update({ where: { id: id4 }, data });
+  async update(id6, data) {
+    return prisma.category.update({ where: { id: id6 }, data });
   },
-  async delete(id4) {
-    await prisma.category.delete({ where: { id: id4 } });
+  async delete(id6) {
+    await prisma.category.delete({ where: { id: id6 } });
   }
 };
 
@@ -9814,14 +9826,14 @@ var tagRepository = {
     });
     return rows.map(({ _count, ...t }) => ({ ...t, postCount: _count.posts }));
   },
-  async findByIdInOrg(id4, organizationId) {
-    return prisma.tag.findFirst({ where: { id: id4, organizationId } });
+  async findByIdInOrg(id6, organizationId) {
+    return prisma.tag.findFirst({ where: { id: id6, organizationId } });
   },
   async findBySlugInOrg(organizationId, slug) {
     return prisma.tag.findFirst({ where: { organizationId, slug } });
   },
-  async findUniqueSlugInOrg(organizationId, base2) {
-    const baseSlug = slugify7(base2) || "tag";
+  async findUniqueSlugInOrg(organizationId, base3) {
+    const baseSlug = slugify7(base3) || "tag";
     let slug = baseSlug;
     let attempt2 = 1;
     while (await this.findBySlugInOrg(organizationId, slug)) {
@@ -9836,17 +9848,17 @@ var tagRepository = {
     return prisma.tag.findMany({ where: { id: { in: ids }, organizationId } });
   },
   /** Phase 7 — how many posts currently carry this tag, for the delete-in-use guard. */
-  async countPostsUsing(id4) {
-    return prisma.postTag.count({ where: { tagId: id4, post: { deletedAt: null } } });
+  async countPostsUsing(id6) {
+    return prisma.postTag.count({ where: { tagId: id6, post: { deletedAt: null } } });
   },
   async create(data) {
     return prisma.tag.create({ data });
   },
-  async update(id4, data) {
-    return prisma.tag.update({ where: { id: id4 }, data });
+  async update(id6, data) {
+    return prisma.tag.update({ where: { id: id6 }, data });
   },
-  async delete(id4) {
-    await prisma.tag.delete({ where: { id: id4 } });
+  async delete(id6) {
+    await prisma.tag.delete({ where: { id: id6 } });
   }
 };
 
@@ -9917,8 +9929,8 @@ var redirectRepository = {
     ]);
     return { rows, total };
   },
-  async findByIdInOrg(id4, organizationId) {
-    return prisma.redirect.findFirst({ where: { id: id4, organizationId } });
+  async findByIdInOrg(id6, organizationId) {
+    return prisma.redirect.findFirst({ where: { id: id6, organizationId } });
   },
   /** Phase 15 — SEO reporting: real redirect counts, never fabricated. */
   async count(organizationId) {
@@ -9954,11 +9966,11 @@ var redirectRepository = {
   async repointChainedRedirects(organizationId, oldToPath, newToPath) {
     await prisma.redirect.updateMany({ where: { organizationId, toPath: oldToPath }, data: { toPath: newToPath } });
   },
-  async update(id4, data) {
-    return prisma.redirect.update({ where: { id: id4 }, data });
+  async update(id6, data) {
+    return prisma.redirect.update({ where: { id: id6 }, data });
   },
-  async delete(id4) {
-    await prisma.redirect.delete({ where: { id: id4 } });
+  async delete(id6) {
+    await prisma.redirect.delete({ where: { id: id6 } });
   }
 };
 
@@ -9967,8 +9979,8 @@ init_errors();
 function isUniqueConstraintError(err) {
   return !!err && typeof err === "object" && "code" in err && err.code === "P2002";
 }
-async function loadRedirectOrThrow(id4, organizationId) {
-  const redirect = await redirectRepository.findByIdInOrg(id4, organizationId);
+async function loadRedirectOrThrow(id6, organizationId) {
+  const redirect = await redirectRepository.findByIdInOrg(id6, organizationId);
   if (!redirect) throw new NotFoundError("Redirect not found.");
   return redirect;
 }
@@ -9985,10 +9997,10 @@ var redirectService = {
   async listRedirects(organizationId, filters, page, limit, sort, order) {
     return redirectRepository.list(organizationId, filters, page, limit, sort, order);
   },
-  async getRedirect(organizationId, id4) {
-    return loadRedirectOrThrow(id4, organizationId);
+  async getRedirect(organizationId, id6) {
+    return loadRedirectOrThrow(id6, organizationId);
   },
-  async createRedirect(caller, input, meta10 = {}) {
+  async createRedirect(caller, input, meta11 = {}) {
     const organizationId = caller.organizationId;
     const dup = await redirectRepository.findByFromPathInOrg(organizationId, input.fromPath);
     if (dup) throw new ConflictError(`A redirect from "${input.fromPath}" already exists.`, { existingRedirectId: dup.id });
@@ -10015,14 +10027,14 @@ var redirectService = {
       resourceType: "redirect",
       resourceId: redirect.id,
       afterData: { fromPath: redirect.fromPath, toPath: redirect.toPath, statusCode: redirect.statusCode },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return redirect;
   },
-  async updateRedirect(caller, id4, input, meta10 = {}) {
+  async updateRedirect(caller, id6, input, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const existing = await loadRedirectOrThrow(id4, organizationId);
+    const existing = await loadRedirectOrThrow(id6, organizationId);
     if (input.toPath !== void 0) {
       await assertNoRedirectCycle(organizationId, existing.fromPath, input.toPath);
     }
@@ -10031,35 +10043,35 @@ var redirectService = {
     if (input.statusCode !== void 0) patch.statusCode = input.statusCode;
     if (input.isActive !== void 0) patch.isActive = input.isActive;
     if (input.notes !== void 0) patch.notes = input.notes;
-    const updated = await redirectRepository.update(id4, patch);
+    const updated = await redirectRepository.update(id6, patch);
     await auditLogRepository.record({
       organizationId,
       actorUserId: caller.id,
       actorType: "USER",
       action: "REDIRECT_UPDATED",
       resourceType: "redirect",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { toPath: existing.toPath, statusCode: existing.statusCode },
       afterData: patch,
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return updated;
   },
-  async deleteRedirect(caller, id4, meta10 = {}) {
+  async deleteRedirect(caller, id6, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const existing = await loadRedirectOrThrow(id4, organizationId);
-    await redirectRepository.delete(id4);
+    const existing = await loadRedirectOrThrow(id6, organizationId);
+    await redirectRepository.delete(id6);
     await auditLogRepository.record({
       organizationId,
       actorUserId: caller.id,
       actorType: "USER",
       action: "REDIRECT_DELETED",
       resourceType: "redirect",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { fromPath: existing.fromPath, toPath: existing.toPath },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
   },
   /**
@@ -10088,8 +10100,8 @@ function assertHasPublishableContent(revision) {
     throw new ValidationError("This post needs a title and body before it can be published or scheduled.");
   }
 }
-async function loadPostOrThrow(id4, organizationId) {
-  const post = await postRepository.findByIdInOrg(id4, organizationId);
+async function loadPostOrThrow(id6, organizationId) {
+  const post = await postRepository.findByIdInOrg(id6, organizationId);
   if (!post) throw new NotFoundError("Post not found.");
   return post;
 }
@@ -10109,14 +10121,14 @@ var postService = {
   async listPosts(organizationId, filters, page, limit, sort, order) {
     return postRepository.list(organizationId, filters, page, limit, sort, order);
   },
-  async getPost(organizationId, id4) {
-    return loadPostOrThrow(id4, organizationId);
+  async getPost(organizationId, id6) {
+    return loadPostOrThrow(id6, organizationId);
   },
-  async listRevisions(organizationId, id4) {
-    await loadPostOrThrow(id4, organizationId);
-    return postRepository.listRevisions(id4);
+  async listRevisions(organizationId, id6) {
+    await loadPostOrThrow(id6, organizationId);
+    return postRepository.listRevisions(id6);
   },
-  async createPost(caller, input, meta10 = {}) {
+  async createPost(caller, input, meta11 = {}) {
     const organizationId = caller.organizationId;
     const body = sanitizeContentHtml(input.body);
     await assertCategoryInOrg(input.categoryId, organizationId);
@@ -10171,14 +10183,14 @@ var postService = {
       resourceType: "post",
       resourceId: createdId,
       afterData: { title: input.title, slug },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return loadPostOrThrow(createdId, organizationId);
   },
-  async updatePost(caller, id4, input, meta10 = {}) {
+  async updatePost(caller, id6, input, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const existing = await loadPostOrThrow(id4, organizationId);
+    const existing = await loadPostOrThrow(id6, organizationId);
     const sanitizedBody = input.body !== void 0 ? sanitizeContentHtml(input.body) : void 0;
     const hasContentEdit = input.title !== void 0 || input.body !== void 0 || input.excerpt !== void 0 || input.metadata !== void 0 || input.slug !== void 0;
     if (hasContentEdit && input.status === void 0 && CONTENT_EDIT_BLOCKED_STATUSES.has(existing.status)) {
@@ -10186,7 +10198,7 @@ var postService = {
     }
     if (input.slug !== void 0 && input.slug !== existing.slug) {
       const dup = await postRepository.findBySlugInOrg(organizationId, input.slug);
-      if (dup && dup.id !== id4) throw new ConflictError(`A post with slug "${input.slug}" already exists.`, { existingPostId: dup.id });
+      if (dup && dup.id !== id6) throw new ConflictError(`A post with slug "${input.slug}" already exists.`, { existingPostId: dup.id });
     }
     if (input.categoryId !== void 0) await assertCategoryInOrg(input.categoryId, organizationId);
     if (input.tagIds !== void 0) await assertTagsInOrg(input.tagIds, organizationId);
@@ -10211,7 +10223,7 @@ var postService = {
         if (currentRevision && (unpublishing || liveEditOfPublished || hasContentEdit && currentRevision.status === "PUBLISHED")) {
           const newRevision = await tx.contentRevision.create({
             data: {
-              postId: id4,
+              postId: id6,
               version: currentRevision.version + 1,
               status: liveEditOfPublished ? "PUBLISHED" : "DRAFT",
               title: input.title ?? currentRevision.title,
@@ -10238,16 +10250,16 @@ var postService = {
           postPatch.updatedAt = /* @__PURE__ */ new Date();
         }
         if (Object.keys(postPatch).length > 0) {
-          const where2 = { id: id4, ...input.expectedUpdatedAt !== void 0 ? { updatedAt: input.expectedUpdatedAt } : {} };
+          const where2 = { id: id6, ...input.expectedUpdatedAt !== void 0 ? { updatedAt: input.expectedUpdatedAt } : {} };
           const result = await tx.post.updateMany({ where: where2, data: postPatch });
           if (result.count === 0) {
             throw new ConflictError("This post was changed by someone else since you loaded it. Reload and try again.");
           }
         }
         if (input.tagIds !== void 0) {
-          await tx.postTag.deleteMany({ where: { postId: id4 } });
+          await tx.postTag.deleteMany({ where: { postId: id6 } });
           if (input.tagIds.length > 0) {
-            await tx.postTag.createMany({ data: input.tagIds.map((tagId) => ({ postId: id4, tagId })) });
+            await tx.postTag.createMany({ data: input.tagIds.map((tagId) => ({ postId: id6, tagId })) });
           }
         }
       });
@@ -10260,11 +10272,11 @@ var postService = {
       actorType: "USER",
       action: "POST_UPDATED",
       resourceType: "post",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { status: existing.status, title: existing.title },
       afterData: { status: input.status, title: input.title, slug: input.slug },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     if (input.slug !== void 0 && input.slug !== existing.slug) {
       const finalStatus = input.status ?? existing.status;
@@ -10274,7 +10286,7 @@ var postService = {
           fromPath: `/blog/${existing.slug}`,
           toPath: `/blog/${input.slug}`,
           resourceType: "post",
-          resourceId: id4
+          resourceId: id6
         });
       }
     }
@@ -10285,40 +10297,40 @@ var postService = {
         actorType: "USER",
         action: input.featuredMediaId ? "MEDIA_ATTACHED_TO_CONTENT" : "MEDIA_DETACHED_FROM_CONTENT",
         resourceType: "post",
-        resourceId: id4,
+        resourceId: id6,
         beforeData: { featuredMediaId: existing.featuredMediaId },
         afterData: { featuredMediaId: input.featuredMediaId ?? null },
-        ipAddress: meta10.ip,
-        userAgent: meta10.userAgent
+        ipAddress: meta11.ip,
+        userAgent: meta11.userAgent
       });
     }
-    return loadPostOrThrow(id4, organizationId);
+    return loadPostOrThrow(id6, organizationId);
   },
-  async submitForReview(caller, id4, meta10 = {}) {
+  async submitForReview(caller, id6, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const existing = await loadPostOrThrow(id4, organizationId);
+    const existing = await loadPostOrThrow(id6, organizationId);
     if (existing.status !== "DRAFT") throw new ConflictError(`Only a DRAFT post can be submitted for review (current status: ${existing.status}).`);
     if (!existing.currentRevision || !existing.currentRevision.body.trim()) {
       throw new ValidationError("This post needs body content before it can be submitted for review.");
     }
-    await prisma.post.update({ where: { id: id4 }, data: { status: "IN_REVIEW" } });
+    await prisma.post.update({ where: { id: id6 }, data: { status: "IN_REVIEW" } });
     await auditLogRepository.record({
       organizationId,
       actorUserId: caller.id,
       actorType: "USER",
       action: "POST_SUBMITTED_FOR_REVIEW",
       resourceType: "post",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { status: existing.status },
       afterData: { status: "IN_REVIEW" },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     try {
       await eventEngine.emit({
         eventType: "content.submitted_for_review",
         entityType: "post",
-        entityId: id4,
+        entityId: id6,
         organizationId,
         actorId: caller.id,
         actorType: "USER",
@@ -10327,11 +10339,11 @@ var postService = {
       });
     } catch {
     }
-    return loadPostOrThrow(id4, organizationId);
+    return loadPostOrThrow(id6, organizationId);
   },
-  async publishPost(caller, id4, meta10 = {}) {
+  async publishPost(caller, id6, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const existing = await loadPostOrThrow(id4, organizationId);
+    const existing = await loadPostOrThrow(id6, organizationId);
     if (existing.status === "ARCHIVED") throw new ConflictError("An archived post must be restored before it can be published.");
     if (existing.status === "PUBLISHED") throw new ConflictError("This post is already published.");
     if (!existing.currentRevisionId) throw new ConflictError("This post has no content revision to publish.");
@@ -10339,7 +10351,7 @@ var postService = {
     const now = /* @__PURE__ */ new Date();
     await prisma.$transaction([
       prisma.contentRevision.update({ where: { id: existing.currentRevisionId }, data: { status: "PUBLISHED", publishedAt: now } }),
-      prisma.post.update({ where: { id: id4 }, data: { status: "PUBLISHED", publishedAt: now, scheduledAt: null } })
+      prisma.post.update({ where: { id: id6 }, data: { status: "PUBLISHED", publishedAt: now, scheduledAt: null } })
     ]);
     await auditLogRepository.record({
       organizationId,
@@ -10347,11 +10359,11 @@ var postService = {
       actorType: "USER",
       action: "POST_PUBLISHED",
       resourceType: "post",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { status: existing.status },
       afterData: { status: "PUBLISHED" },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     if (existing.createdById && existing.createdById !== caller.id) {
       await notificationService.notify({
@@ -10362,53 +10374,53 @@ var postService = {
         message: `"${existing.title}" is now live.`
       });
     }
-    return loadPostOrThrow(id4, organizationId);
+    return loadPostOrThrow(id6, organizationId);
   },
-  async schedulePost(caller, id4, input, meta10 = {}) {
+  async schedulePost(caller, id6, input, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const existing = await loadPostOrThrow(id4, organizationId);
+    const existing = await loadPostOrThrow(id6, organizationId);
     if (existing.status === "ARCHIVED") throw new ConflictError("An archived post must be restored before it can be scheduled.");
     if (existing.status === "PUBLISHED") throw new ConflictError("This post is already published.");
     assertHasPublishableContent(existing.currentRevision);
-    await prisma.post.update({ where: { id: id4 }, data: { status: "SCHEDULED", scheduledAt: input.scheduledAt } });
+    await prisma.post.update({ where: { id: id6 }, data: { status: "SCHEDULED", scheduledAt: input.scheduledAt } });
     await auditLogRepository.record({
       organizationId,
       actorUserId: caller.id,
       actorType: "USER",
       action: "POST_SCHEDULED",
       resourceType: "post",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { status: existing.status },
       afterData: { status: "SCHEDULED", scheduledAt: input.scheduledAt },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
-    return loadPostOrThrow(id4, organizationId);
+    return loadPostOrThrow(id6, organizationId);
   },
-  async archivePost(caller, id4, meta10 = {}) {
+  async archivePost(caller, id6, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const existing = await loadPostOrThrow(id4, organizationId);
+    const existing = await loadPostOrThrow(id6, organizationId);
     if (existing.status === "ARCHIVED") throw new ConflictError("This post is already archived.");
-    await prisma.post.update({ where: { id: id4 }, data: { status: "ARCHIVED" } });
+    await prisma.post.update({ where: { id: id6 }, data: { status: "ARCHIVED" } });
     await auditLogRepository.record({
       organizationId,
       actorUserId: caller.id,
       actorType: "USER",
       action: "POST_ARCHIVED",
       resourceType: "post",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { status: existing.status },
       afterData: { status: "ARCHIVED" },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
-    return loadPostOrThrow(id4, organizationId);
+    return loadPostOrThrow(id6, organizationId);
   },
-  async revertPost(caller, id4, input, meta10 = {}) {
+  async revertPost(caller, id6, input, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const existing = await loadPostOrThrow(id4, organizationId);
+    const existing = await loadPostOrThrow(id6, organizationId);
     if (existing.status === "ARCHIVED") throw new ConflictError("An archived post must be restored before its content can be reverted.");
-    const target = await prisma.contentRevision.findFirst({ where: { id: input.revisionId, postId: id4 } });
+    const target = await prisma.contentRevision.findFirst({ where: { id: input.revisionId, postId: id6 } });
     if (!target) throw new NotFoundError("Revision not found on this post.");
     const current = existing.currentRevision;
     const nextVersion = (current?.version ?? 0) + 1;
@@ -10416,7 +10428,7 @@ var postService = {
     await prisma.$transaction(async (tx) => {
       const newRevision = await tx.contentRevision.create({
         data: {
-          postId: id4,
+          postId: id6,
           version: nextVersion,
           status: wasPublished ? "PUBLISHED" : "DRAFT",
           title: target.title,
@@ -10428,7 +10440,7 @@ var postService = {
         }
       });
       await tx.post.update({
-        where: { id: id4 },
+        where: { id: id6 },
         data: { currentRevisionId: newRevision.id }
       });
     });
@@ -10438,49 +10450,49 @@ var postService = {
       actorType: "USER",
       action: "POST_REVERTED",
       resourceType: "post",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { fromVersion: current?.version, revertedToRevisionId: target.id, revertedToVersion: target.version },
       afterData: { newVersion: nextVersion },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
-    return loadPostOrThrow(id4, organizationId);
+    return loadPostOrThrow(id6, organizationId);
   },
-  async deletePost(caller, id4, meta10 = {}) {
+  async deletePost(caller, id6, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const existing = await loadPostOrThrow(id4, organizationId);
-    await postRepository.softDelete(id4);
+    const existing = await loadPostOrThrow(id6, organizationId);
+    await postRepository.softDelete(id6);
     await auditLogRepository.record({
       organizationId,
       actorUserId: caller.id,
       actorType: "USER",
       action: "POST_DELETED",
       resourceType: "post",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { status: existing.status, title: existing.title },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
   },
   /** Phase 7 — Trash view (Content Dashboard): soft-deleted posts, paginated. */
   async listTrash(organizationId, page, limit) {
     return postRepository.listTrash(organizationId, page, limit);
   },
-  async restorePost(caller, id4, meta10 = {}) {
+  async restorePost(caller, id6, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const existing = await postRepository.findTrashedByIdInOrg(id4, organizationId);
+    const existing = await postRepository.findTrashedByIdInOrg(id6, organizationId);
     if (!existing) throw new NotFoundError("Post not found in trash.");
-    await postRepository.restore(id4);
+    await postRepository.restore(id6);
     await auditLogRepository.record({
       organizationId,
       actorUserId: caller.id,
       actorType: "USER",
       action: "POST_RESTORED",
       resourceType: "post",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { status: existing.status, title: existing.title },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
   },
   /**
@@ -10492,17 +10504,17 @@ var postService = {
    * the rest of the batch — mirrors contentSchedulingService's per-item
    * isolation for the same reason.
    */
-  async bulkAction(caller, action, ids, meta10 = {}) {
+  async bulkAction(caller, action, ids, meta11 = {}) {
     const succeeded = [];
     const failed = [];
-    for (const id4 of ids) {
+    for (const id6 of ids) {
       try {
-        if (action === "archive") await this.archivePost(caller, id4, meta10);
-        else if (action === "trash") await this.deletePost(caller, id4, meta10);
-        else await this.restorePost(caller, id4, meta10);
-        succeeded.push(id4);
+        if (action === "archive") await this.archivePost(caller, id6, meta11);
+        else if (action === "trash") await this.deletePost(caller, id6, meta11);
+        else await this.restorePost(caller, id6, meta11);
+        succeeded.push(id6);
       } catch (err) {
-        failed.push({ id: id4, error: err instanceof Error ? err.message : "Action failed." });
+        failed.push({ id: id6, error: err instanceof Error ? err.message : "Action failed." });
       }
     }
     return { succeeded, failed };
@@ -10520,8 +10532,8 @@ var productCategoryRepository = {
       orderBy: [{ displayOrder: "asc" }, { name: "asc" }]
     });
   },
-  async findById(id4) {
-    return prisma.productCategory.findUnique({ where: { id: id4 } });
+  async findById(id6) {
+    return prisma.productCategory.findUnique({ where: { id: id6 } });
   },
   async findBySlug(slug) {
     return prisma.productCategory.findUnique({ where: { slug } });
@@ -10530,8 +10542,8 @@ var productCategoryRepository = {
     if (ids.length === 0) return [];
     return prisma.productCategory.findMany({ where: { id: { in: ids } } });
   },
-  async findUniqueSlug(base2) {
-    const baseSlug = slugify8(base2) || "category";
+  async findUniqueSlug(base3) {
+    const baseSlug = slugify8(base3) || "category";
     let slug = baseSlug;
     let attempt2 = 1;
     while (await this.findBySlug(slug)) {
@@ -10544,14 +10556,14 @@ var productCategoryRepository = {
   async create(data) {
     return prisma.productCategory.create({ data });
   },
-  async update(id4, data) {
-    return prisma.productCategory.update({ where: { id: id4 }, data });
+  async update(id6, data) {
+    return prisma.productCategory.update({ where: { id: id6 }, data });
   },
-  async countProducts(id4) {
-    return prisma.product.count({ where: { categoryId: id4 } });
+  async countProducts(id6) {
+    return prisma.product.count({ where: { categoryId: id6 } });
   },
-  async delete(id4) {
-    await prisma.productCategory.delete({ where: { id: id4 } });
+  async delete(id6) {
+    await prisma.productCategory.delete({ where: { id: id6 } });
   }
 };
 
@@ -10560,7 +10572,7 @@ function slugify9(input) {
   return input.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 150);
 }
 function buildWhere11(organizationId, filters) {
-  const where2 = { organizationId, deletedAt: null };
+  const where2 = { organizationId, deletedAt: null, landingPageId: null };
   if (filters.status) where2.status = filters.status;
   if (filters.search) where2.name = { contains: filters.search, mode: "insensitive" };
   return where2;
@@ -10574,14 +10586,14 @@ var formRepository = {
     ]);
     return { rows, total };
   },
-  async findByIdInOrg(id4, organizationId) {
-    return prisma.form.findFirst({ where: { id: id4, organizationId, deletedAt: null } });
+  async findByIdInOrg(id6, organizationId) {
+    return prisma.form.findFirst({ where: { id: id6, organizationId, deletedAt: null } });
   },
   async findBySlugInOrg(organizationId, slug) {
     return prisma.form.findFirst({ where: { organizationId, slug, deletedAt: null } });
   },
-  async findUniqueSlugInOrg(organizationId, base2) {
-    const baseSlug = slugify9(base2) || "form";
+  async findUniqueSlugInOrg(organizationId, base3) {
+    const baseSlug = slugify9(base3) || "form";
     let slug = baseSlug;
     let attempt2 = 1;
     while (await this.findBySlugInOrg(organizationId, slug)) {
@@ -10594,11 +10606,11 @@ var formRepository = {
   async create(data) {
     return prisma.form.create({ data });
   },
-  async update(id4, data) {
-    return prisma.form.update({ where: { id: id4 }, data });
+  async update(id6, data) {
+    return prisma.form.update({ where: { id: id6 }, data });
   },
-  async softDelete(id4) {
-    await prisma.form.update({ where: { id: id4 }, data: { deletedAt: /* @__PURE__ */ new Date() } });
+  async softDelete(id6) {
+    await prisma.form.update({ where: { id: id6 }, data: { deletedAt: /* @__PURE__ */ new Date() } });
   },
   async countSubmissions(formId) {
     return prisma.formSubmission.count({ where: { formId } });
@@ -10646,20 +10658,20 @@ function assertValidTransition2(current, next) {
 function isUniqueConstraintError3(err) {
   return !!err && typeof err === "object" && "code" in err && err.code === "P2002";
 }
-async function loadProductOrThrow(id4) {
-  const product = await productRepository.findById(id4);
+async function loadProductOrThrow(id6) {
+  const product = await productRepository.findById(id6);
   if (!product) throw new NotFoundError("Product not found.");
   return product;
 }
-async function loadProductDetailOrThrow(id4) {
-  const product = await productRepository.findByIdWithDetail(id4);
+async function loadProductDetailOrThrow(id6) {
+  const product = await productRepository.findByIdWithDetail(id6);
   if (!product) throw new NotFoundError("Product not found.");
   return product;
 }
 async function assertFeaturedMediaUsable2(mediaId) {
   if (!mediaId) return;
-  const orgId = config.publicWebsiteOrganizationId;
-  const media = orgId ? await mediaRepository.findByIdInOrg(mediaId, orgId) : null;
+  const orgId2 = config.publicWebsiteOrganizationId;
+  const media = orgId2 ? await mediaRepository.findByIdInOrg(mediaId, orgId2) : null;
   if (!media) throw new ValidationError("featuredMediaId must refer to a real media asset in the public website's organization.");
 }
 async function assertCategoryUsable(categoryId) {
@@ -10669,9 +10681,9 @@ async function assertCategoryUsable(categoryId) {
 }
 async function assertCtaFormUsable(ctaFormId) {
   if (!ctaFormId) return;
-  const orgId = config.publicWebsiteOrganizationId;
-  const form = orgId ? await formRepository.findByIdInOrg(ctaFormId, orgId) : null;
-  if (!form) throw new ValidationError("content.ctaFormId must refer to a real form in the public website's organization.");
+  const orgId2 = config.publicWebsiteOrganizationId;
+  const form2 = orgId2 ? await formRepository.findByIdInOrg(ctaFormId, orgId2) : null;
+  if (!form2) throw new ValidationError("content.ctaFormId must refer to a real form in the public website's organization.");
 }
 async function assertRelatedProductsUsable(productId, relatedIds) {
   if (!relatedIds || relatedIds.length === 0) return;
@@ -10692,14 +10704,14 @@ var productService = {
   async listProducts(filters, page, limit, sort, order) {
     return productRepository.list(filters, page, limit, sort, order);
   },
-  async getProduct(id4) {
-    return loadProductDetailOrThrow(id4);
+  async getProduct(id6) {
+    return loadProductDetailOrThrow(id6);
   },
-  async listRevisions(id4) {
-    await loadProductOrThrow(id4);
-    return productRepository.listRevisions(id4);
+  async listRevisions(id6) {
+    await loadProductOrThrow(id6);
+    return productRepository.listRevisions(id6);
   },
-  async createProduct(caller, input, meta10 = {}) {
+  async createProduct(caller, input, meta11 = {}) {
     const existingCode = await productRepository.findByCode(input.code);
     if (existingCode) throw new ConflictError(`A product with code "${input.code}" already exists.`, { existingProductId: existingCode.id });
     let slug;
@@ -10756,13 +10768,13 @@ var productService = {
       resourceType: "product",
       resourceId: productId,
       afterData: { code: input.code, name: input.name, type: input.type, status: input.status ?? "DRAFT" },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return loadProductDetailOrThrow(productId);
   },
-  async updateProduct(caller, id4, input, meta10 = {}) {
-    const existing = await loadProductDetailOrThrow(id4);
+  async updateProduct(caller, id6, input, meta11 = {}) {
+    const existing = await loadProductDetailOrThrow(id6);
     if (TERMINAL_STATUSES3.has(existing.status)) {
       throw new ConflictError("This product is archived and can no longer be edited.");
     }
@@ -10774,13 +10786,13 @@ var productService = {
     }
     if (input.slug !== void 0 && input.slug !== existing.slug) {
       const dup = await productRepository.findBySlug(input.slug);
-      if (dup && dup.id !== id4) throw new ConflictError(`A product with slug "${input.slug}" already exists.`, { existingProductId: dup.id });
+      if (dup && dup.id !== id6) throw new ConflictError(`A product with slug "${input.slug}" already exists.`, { existingProductId: dup.id });
     }
     await Promise.all([
       assertFeaturedMediaUsable2(input.featuredMediaId),
       assertCategoryUsable(input.categoryId),
       assertCtaFormUsable(input.content?.ctaFormId),
-      assertRelatedProductsUsable(id4, input.relatedProductIds),
+      assertRelatedProductsUsable(id6, input.relatedProductIds),
       assertIndustriesUsable(input.industryIds)
     ]);
     const patch = {};
@@ -10798,68 +10810,68 @@ var productService = {
     try {
       await prisma.$transaction(async (tx) => {
         if (Object.keys(patch).length > 0) {
-          await tx.product.update({ where: { id: id4 }, data: patch });
+          await tx.product.update({ where: { id: id6 }, data: patch });
         }
         if (input.content !== void 0) {
           const currentContent = existing.currentRevision?.content ?? {};
           const nextContent = { ...currentContent, ...input.content };
           const nextVersion = (existing.currentRevision?.version ?? 0) + 1;
           const revision = await tx.productRevision.create({
-            data: { productId: id4, version: nextVersion, name: input.name ?? existing.name, content: nextContent, createdById: caller.id }
+            data: { productId: id6, version: nextVersion, name: input.name ?? existing.name, content: nextContent, createdById: caller.id }
           });
-          await tx.product.update({ where: { id: id4 }, data: { currentRevisionId: revision.id } });
+          await tx.product.update({ where: { id: id6 }, data: { currentRevisionId: revision.id } });
         }
       });
     } catch (err) {
       throw isUniqueConstraintError3(err) ? new ConflictError("A product with this slug already exists.") : err;
     }
-    if (input.relatedProductIds !== void 0) await productRepository.setRelatedProducts(id4, input.relatedProductIds, caller.id);
-    if (input.industryIds !== void 0) await productRepository.setIndustries(id4, input.industryIds);
+    if (input.relatedProductIds !== void 0) await productRepository.setRelatedProducts(id6, input.relatedProductIds, caller.id);
+    if (input.industryIds !== void 0) await productRepository.setIndustries(id6, input.industryIds);
     await auditLogRepository.record({
       actorUserId: caller.id,
       actorType: "USER",
       action: "PRODUCT_UPDATED",
       resourceType: "product",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { status: existing.status, name: existing.name },
       afterData: patch,
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
-    return loadProductDetailOrThrow(id4);
+    return loadProductDetailOrThrow(id6);
   },
-  async revertProduct(caller, id4, revisionId, meta10 = {}) {
-    const existing = await loadProductDetailOrThrow(id4);
+  async revertProduct(caller, id6, revisionId, meta11 = {}) {
+    const existing = await loadProductDetailOrThrow(id6);
     if (TERMINAL_STATUSES3.has(existing.status)) throw new ConflictError("This product is archived and can no longer be edited.");
-    const target = await productRepository.findRevision(id4, revisionId);
+    const target = await productRepository.findRevision(id6, revisionId);
     if (!target) throw new NotFoundError("Revision not found on this product.");
     const nextVersion = (existing.currentRevision?.version ?? 0) + 1;
-    const revision = await productRepository.createRevision({ productId: id4, version: nextVersion, name: target.name, content: target.content, createdById: caller.id });
-    await productRepository.update(id4, { currentRevision: { connect: { id: revision.id } }, updatedBy: { connect: { id: caller.id } } });
+    const revision = await productRepository.createRevision({ productId: id6, version: nextVersion, name: target.name, content: target.content, createdById: caller.id });
+    await productRepository.update(id6, { currentRevision: { connect: { id: revision.id } }, updatedBy: { connect: { id: caller.id } } });
     await auditLogRepository.record({
       actorUserId: caller.id,
       actorType: "USER",
       action: "PRODUCT_REVERTED",
       resourceType: "product",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { fromVersion: existing.currentRevision?.version, revertedToVersion: target.version },
       afterData: { newVersion: nextVersion },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
-    return loadProductDetailOrThrow(id4);
+    return loadProductDetailOrThrow(id6);
   },
-  async duplicateProduct(caller, id4, name, meta10 = {}) {
-    const existing = await loadProductDetailOrThrow(id4);
+  async duplicateProduct(caller, id6, name, meta11 = {}) {
+    const existing = await loadProductDetailOrThrow(id6);
     const baseName = name ?? `${existing.name} (Copy)`;
     const slug = await productRepository.findUniqueSlug(baseName);
     const code = await (async () => {
-      const base2 = existing.code.replace(/-COPY(-\d+)?$/, "");
-      let candidate = `${base2}-COPY`;
+      const base3 = existing.code.replace(/-COPY(-\d+)?$/, "");
+      let candidate = `${base3}-COPY`;
       let attempt2 = 1;
       while (await productRepository.findByCode(candidate)) {
         attempt2 += 1;
-        candidate = `${base2}-COPY-${attempt2}`;
+        candidate = `${base3}-COPY-${attempt2}`;
         if (attempt2 > 50) break;
       }
       return candidate;
@@ -10897,40 +10909,40 @@ var productService = {
       action: "PRODUCT_DUPLICATED",
       resourceType: "product",
       resourceId: productId,
-      afterData: { duplicatedFromId: id4, name: baseName },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      afterData: { duplicatedFromId: id6, name: baseName },
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return loadProductDetailOrThrow(productId);
   },
-  async archiveProduct(caller, id4, meta10 = {}) {
-    const existing = await loadProductOrThrow(id4);
+  async archiveProduct(caller, id6, meta11 = {}) {
+    const existing = await loadProductOrThrow(id6);
     if (existing.status === "ARCHIVED") {
       throw new ConflictError("This product is already archived.");
     }
-    const archived = await productRepository.update(id4, { status: "ARCHIVED", updatedBy: { connect: { id: caller.id } } });
+    const archived = await productRepository.update(id6, { status: "ARCHIVED", updatedBy: { connect: { id: caller.id } } });
     await auditLogRepository.record({
       actorUserId: caller.id,
       actorType: "USER",
       action: "PRODUCT_ARCHIVED",
       resourceType: "product",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { status: existing.status },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return archived;
   },
   /** Phase 10 — bulk archive, the one bulk action that's unambiguous and safe for a catalog that's never hard-deleted. */
-  async bulkArchiveProducts(caller, ids, meta10 = {}) {
+  async bulkArchiveProducts(caller, ids, meta11 = {}) {
     const skipped = [];
     let archived = 0;
-    for (const id4 of ids) {
+    for (const id6 of ids) {
       try {
-        await productService.archiveProduct(caller, id4, meta10);
+        await productService.archiveProduct(caller, id6, meta11);
         archived += 1;
       } catch {
-        skipped.push(id4);
+        skipped.push(id6);
       }
     }
     return { archived, skipped };
@@ -10963,8 +10975,8 @@ var invoiceRepository = {
     ]);
     return { rows, total };
   },
-  async findByIdInOrg(id4, organizationId) {
-    return prisma.invoice.findFirst({ where: { id: id4, organizationId }, ...withItemsAndPayments });
+  async findByIdInOrg(id6, organizationId) {
+    return prisma.invoice.findFirst({ where: { id: id6, organizationId }, ...withItemsAndPayments });
   },
   async listForClientInOrg(clientId, organizationId) {
     return prisma.invoice.findMany({ where: { clientId, organizationId }, orderBy: { issueDate: "desc" } });
@@ -10975,24 +10987,24 @@ var invoiceRepository = {
       ...withItemsAndPayments
     });
   },
-  async update(id4, data) {
-    return prisma.invoice.update({ where: { id: id4 }, data });
+  async update(id6, data) {
+    return prisma.invoice.update({ where: { id: id6 }, data });
   },
   async replaceItems(tx, invoiceId, items) {
     await tx.invoiceItem.deleteMany({ where: { invoiceId } });
     await tx.invoiceItem.createMany({ data: items.map((item) => ({ ...item, invoiceId })) });
   },
   /** Race-safe conditional status transition — see contractRepository.transitionStatus for the pattern rationale. */
-  async transitionStatus(id4, fromStatuses, data) {
+  async transitionStatus(id6, fromStatuses, data) {
     const result = await prisma.invoice.updateMany({
-      where: { id: id4, status: { in: fromStatuses } },
+      where: { id: id6, status: { in: fromStatuses } },
       data
     });
     return result.count;
   },
   /** Serializes concurrent payment record/reversal against the same invoice — required because those operations read a computed sum (Σ completed payments) and validate against it before writing, which a plain conditional updateMany cannot express (§37). */
-  async lockForPayment(tx, id4) {
-    await tx.$queryRaw`SELECT id FROM invoices WHERE id = ${id4} FOR UPDATE`;
+  async lockForPayment(tx, id6) {
+    await tx.$queryRaw`SELECT id FROM invoices WHERE id = ${id6} FOR UPDATE`;
   },
   async completedPaymentAmounts(tx, invoiceId) {
     const rows = await tx.payment.findMany({ where: { invoiceId, status: "COMPLETED" }, select: { amount: true } });
@@ -11024,8 +11036,8 @@ var paymentRepository = {
     ]);
     return { rows, total };
   },
-  async findByIdInOrg(id4, organizationId) {
-    return prisma.payment.findFirst({ where: { id: id4, organizationId } });
+  async findByIdInOrg(id6, organizationId) {
+    return prisma.payment.findFirst({ where: { id: id6, organizationId } });
   },
   async listForInvoiceInOrg(invoiceId, organizationId) {
     return prisma.payment.findMany({ where: { invoiceId, organizationId }, orderBy: { createdAt: "asc" } });
@@ -11047,9 +11059,9 @@ var paymentRepository = {
     });
   },
   /** Race-safe conditional reversal — only a COMPLETED payment can be reversed, and the invoice row must already be locked (FOR UPDATE) by the caller within the same transaction (§37). */
-  async reverse(tx, id4, data) {
+  async reverse(tx, id6, data) {
     const result = await tx.payment.updateMany({
-      where: { id: id4, status: "COMPLETED" },
+      where: { id: id6, status: "COMPLETED" },
       data: { status: "REVERSED", reversalReason: data.reversalReason, reversedById: data.reversedById, reversedAt: data.reversedAt }
     });
     return result.count;
@@ -11080,8 +11092,8 @@ var contractRepository = {
     return { rows, total };
   },
   /** The only lookup-by-id this module exposes — always organization-scoped (§25 IDOR requirement). */
-  async findByIdInOrg(id4, organizationId) {
-    return prisma.contract.findFirst({ where: { id: id4, organizationId }, ...withVariations });
+  async findByIdInOrg(id6, organizationId) {
+    return prisma.contract.findFirst({ where: { id: id6, organizationId }, ...withVariations });
   },
   async listForClientInOrg(clientId, organizationId) {
     return prisma.contract.findMany({ where: { clientId, organizationId }, orderBy: { createdAt: "desc" } });
@@ -11089,8 +11101,8 @@ var contractRepository = {
   async create(data) {
     return prisma.contract.create({ data });
   },
-  async update(id4, data) {
-    return prisma.contract.update({ where: { id: id4 }, data });
+  async update(id6, data) {
+    return prisma.contract.update({ where: { id: id6 }, data });
   },
   /**
    * Race-safe conditional status transition — `WHERE id = ? AND status IN
@@ -11100,9 +11112,9 @@ var contractRepository = {
    * affected row count so the caller can distinguish a genuine race from
    * success without a separate read-then-write.
    */
-  async transitionStatus(id4, fromStatuses, toStatus) {
+  async transitionStatus(id6, fromStatuses, toStatus) {
     const result = await prisma.contract.updateMany({
-      where: { id: id4, status: { in: fromStatuses } },
+      where: { id: id6, status: { in: fromStatuses } },
       data: { status: toStatus }
     });
     return result.count;
@@ -11115,8 +11127,8 @@ var contractRepository = {
     return last?.variationNumber ?? 0;
   },
   /** Row-locks the parent Contract so concurrent variation creates against the same contract serialize instead of racing on `variationNumber` (§37). */
-  async lockForVariation(tx, id4) {
-    await tx.$queryRaw`SELECT id FROM contracts WHERE id = ${id4} FOR UPDATE`;
+  async lockForVariation(tx, id6) {
+    await tx.$queryRaw`SELECT id FROM contracts WHERE id = ${id6} FOR UPDATE`;
   }
 };
 
@@ -11139,8 +11151,8 @@ var subscriptionRepository = {
     ]);
     return { rows, total };
   },
-  async findByIdInOrg(id4, organizationId) {
-    return prisma.subscription.findFirst({ where: { id: id4, organizationId }, ...withItems });
+  async findByIdInOrg(id6, organizationId) {
+    return prisma.subscription.findFirst({ where: { id: id6, organizationId }, ...withItems });
   },
   async listForClientInOrg(clientId, organizationId) {
     return prisma.subscription.findMany({ where: { clientId, organizationId }, orderBy: { createdAt: "desc" } });
@@ -11163,13 +11175,13 @@ var subscriptionRepository = {
       ...withItems
     });
   },
-  async update(id4, data) {
-    return prisma.subscription.update({ where: { id: id4 }, data });
+  async update(id6, data) {
+    return prisma.subscription.update({ where: { id: id6 }, data });
   },
   /** Race-safe conditional status transition — see contractRepository.transitionStatus for the pattern rationale. */
-  async transitionStatus(id4, fromStatuses, data) {
+  async transitionStatus(id6, fromStatuses, data) {
     const result = await prisma.subscription.updateMany({
-      where: { id: id4, status: { in: fromStatuses } },
+      where: { id: id6, status: { in: fromStatuses } },
       data
     });
     return result.count;
@@ -11195,12 +11207,12 @@ var productModuleRepository = {
     ]);
     return { rows, total };
   },
-  async findByIdForProduct(id4, productId) {
-    return prisma.productModule.findFirst({ where: { id: id4, productId } });
+  async findByIdForProduct(id6, productId) {
+    return prisma.productModule.findFirst({ where: { id: id6, productId } });
   },
   /** Standalone lookup for the flat /product-modules/:id routes, which take no separate productId to cross-check against — the id itself is authoritative for the record and its true parent product, so there is no manipulation surface here (unlike the nested /products/:id/modules routes, which use findByIdForProduct). */
-  async findById(id4) {
-    return prisma.productModule.findUnique({ where: { id: id4 } });
+  async findById(id6) {
+    return prisma.productModule.findUnique({ where: { id: id6 } });
   },
   async findByCodeForProduct(productId, code) {
     return prisma.productModule.findFirst({ where: { productId, code } });
@@ -11208,8 +11220,8 @@ var productModuleRepository = {
   async findBySlugForProduct(productId, slug) {
     return prisma.productModule.findFirst({ where: { productId, slug } });
   },
-  async findUniqueSlugForProduct(productId, base2) {
-    const baseSlug = slugify10(base2) || "module";
+  async findUniqueSlugForProduct(productId, base3) {
+    const baseSlug = slugify10(base3) || "module";
     let slug = baseSlug;
     let attempt2 = 1;
     while (await this.findBySlugForProduct(productId, slug)) {
@@ -11242,12 +11254,12 @@ var productModuleRepository = {
       }
     });
   },
-  async update(id4, data) {
-    return prisma.productModule.update({ where: { id: id4 }, data });
+  async update(id6, data) {
+    return prisma.productModule.update({ where: { id: id6 }, data });
   },
   /** All-or-nothing reorder — validated one product's worth of module ids, applied transactionally (§36). */
   async reorder(productId, orderedIds) {
-    await prisma.$transaction(orderedIds.map((id4, index) => prisma.productModule.update({ where: { id: id4, productId }, data: { displayOrder: index } })));
+    await prisma.$transaction(orderedIds.map((id6, index) => prisma.productModule.update({ where: { id: id6, productId }, data: { displayOrder: index } })));
   }
 };
 
@@ -11322,8 +11334,8 @@ function statusForBalance(amountPaid, amountDue) {
   if (amountPaid.isZero()) return "ISSUED";
   return "PARTIALLY_PAID";
 }
-async function loadInvoiceOrThrow(id4, organizationId) {
-  const invoice = await invoiceRepository.findByIdInOrg(id4, organizationId);
+async function loadInvoiceOrThrow(id6, organizationId) {
+  const invoice = await invoiceRepository.findByIdInOrg(id6, organizationId);
   if (!invoice) throw new NotFoundError("Invoice not found.");
   return invoice;
 }
@@ -11349,10 +11361,10 @@ var invoiceService = {
     const { rows, total } = await invoiceRepository.list(organizationId, filters, page, limit, sort, order);
     return { rows: rows.map((row) => ({ ...row, effectiveStatus: effectiveInvoiceStatus(row) })), total };
   },
-  async getInvoice(organizationId, id4) {
-    return withEffectiveStatus(await loadInvoiceOrThrow(id4, organizationId));
+  async getInvoice(organizationId, id6) {
+    return withEffectiveStatus(await loadInvoiceOrThrow(id6, organizationId));
   },
-  async createInvoice(caller, input, meta10 = {}) {
+  async createInvoice(caller, input, meta11 = {}) {
     const organizationId = caller.organizationId;
     const client3 = await clientRepository.findByIdInOrg(input.clientId, organizationId);
     if (!client3) throw new ValidationError("The specified client does not exist in this organization.");
@@ -11403,14 +11415,14 @@ var invoiceService = {
       resourceType: "invoice",
       resourceId: invoice.id,
       afterData: { invoiceNumber, clientId: input.clientId, total: total.toString(), currency },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return withEffectiveStatus(invoice);
   },
-  async updateInvoice(caller, id4, input, meta10 = {}) {
+  async updateInvoice(caller, id6, input, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const existing = await loadInvoiceOrThrow(id4, organizationId);
+    const existing = await loadInvoiceOrThrow(id6, organizationId);
     if (existing.status !== "DRAFT") {
       throw new ConflictError("Only a DRAFT invoice can be edited \u2014 once issued, an invoice is immutable (correct via credit/void instead).");
     }
@@ -11425,7 +11437,7 @@ var invoiceService = {
       let lines = existing.items.map((item) => ({ quantity: item.quantity, unitPrice: item.unitPrice, discount: item.discount, lineTotal: item.lineTotal }));
       if (input.items !== void 0) {
         const built = await buildLineItems(input.items, void 0);
-        await invoiceRepository.replaceItems(tx, id4, built);
+        await invoiceRepository.replaceItems(tx, id6, built);
         lines = built;
       }
       const discount = input.discount !== void 0 ? toMoney(input.discount) : existing.discount;
@@ -11438,7 +11450,7 @@ var invoiceService = {
       patch.total = total;
       patch.amountDue = amountDue;
       const where2 = {
-        id: id4,
+        id: id6,
         status: "DRAFT",
         ...input.expectedUpdatedAt !== void 0 ? { updatedAt: input.expectedUpdatedAt } : {}
       };
@@ -11453,19 +11465,19 @@ var invoiceService = {
       actorType: "USER",
       action: "INVOICE_UPDATED",
       resourceType: "invoice",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { total: existing.total.toString() },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
-    return this.getInvoice(organizationId, id4);
+    return this.getInvoice(organizationId, id6);
   },
-  async issueInvoice(caller, id4, input, meta10 = {}) {
+  async issueInvoice(caller, id6, input, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const existing = await loadInvoiceOrThrow(id4, organizationId);
+    const existing = await loadInvoiceOrThrow(id6, organizationId);
     if (existing.items.length === 0) throw new ValidationError("An invoice needs at least one line item before it can be issued.");
     const where2 = {
-      id: id4,
+      id: id6,
       status: { in: ISSUABLE_FROM },
       ...input.expectedUpdatedAt !== void 0 ? { updatedAt: input.expectedUpdatedAt } : {}
     };
@@ -11479,17 +11491,17 @@ var invoiceService = {
       actorType: "USER",
       action: "INVOICE_ISSUED",
       resourceType: "invoice",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { status: existing.status },
       afterData: { status: "ISSUED", total: existing.total.toString() },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
-    return this.getInvoice(organizationId, id4);
+    return this.getInvoice(organizationId, id6);
   },
-  async voidInvoice(caller, id4, input, meta10 = {}) {
+  async voidInvoice(caller, id6, input, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const existing = await loadInvoiceOrThrow(id4, organizationId);
+    const existing = await loadInvoiceOrThrow(id6, organizationId);
     if (existing.status === "VOID" || existing.status === "CANCELLED" || existing.status === "PAID") {
       throw new ConflictError(`An invoice with status ${existing.status} cannot be voided.`);
     }
@@ -11497,7 +11509,7 @@ var invoiceService = {
       throw new ConflictError("This invoice has completed payments \u2014 reverse them before voiding the invoice.");
     }
     const targetStatus = existing.status === "DRAFT" ? "CANCELLED" : "VOID";
-    const count = await invoiceRepository.transitionStatus(id4, [existing.status], { status: targetStatus, voidReason: input.reason });
+    const count = await invoiceRepository.transitionStatus(id6, [existing.status], { status: targetStatus, voidReason: input.reason });
     if (count === 0) throw new ConflictError("This invoice was changed by someone else since you loaded it. Reload and try again.");
     await auditLogRepository.record({
       organizationId,
@@ -11505,15 +11517,15 @@ var invoiceService = {
       actorType: "USER",
       action: targetStatus === "VOID" ? "INVOICE_VOIDED" : "INVOICE_CANCELLED",
       resourceType: "invoice",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { status: existing.status },
       afterData: { status: targetStatus, reason: input.reason },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
-    return this.getInvoice(organizationId, id4);
+    return this.getInvoice(organizationId, id6);
   },
-  async recordPayment(caller, invoiceId, input, meta10 = {}) {
+  async recordPayment(caller, invoiceId, input, meta11 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadInvoiceOrThrow(invoiceId, organizationId);
     const amount = toMoney(input.amount);
@@ -11557,8 +11569,8 @@ var invoiceService = {
       resourceType: "payment",
       resourceId: payment.id,
       afterData: { invoiceId, amount: amount.toString(), currency, method: input.method },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return payment;
   }
@@ -11572,8 +11584,8 @@ var TERMINABLE_FROM = ["DRAFT", "ACTIVE", "SUSPENDED"];
 function withCurrentValue(contract) {
   return { ...contract, currentValue: calculateContractCurrentValue(contract.contractValue, contract.variations.map((v) => v.amount)) };
 }
-async function loadContractOrThrow(id4, organizationId) {
-  const contract = await contractRepository.findByIdInOrg(id4, organizationId);
+async function loadContractOrThrow(id6, organizationId) {
+  const contract = await contractRepository.findByIdInOrg(id6, organizationId);
   if (!contract) throw new NotFoundError("Contract not found.");
   return contract;
 }
@@ -11586,10 +11598,10 @@ var contractService = {
     const { rows, total } = await contractRepository.list(organizationId, filters, page, limit, sort, order);
     return { rows: rows.map(withCurrentValue), total };
   },
-  async getContract(organizationId, id4) {
-    return withCurrentValue(await loadContractOrThrow(id4, organizationId));
+  async getContract(organizationId, id6) {
+    return withCurrentValue(await loadContractOrThrow(id6, organizationId));
   },
-  async createContract(caller, input, meta10 = {}) {
+  async createContract(caller, input, meta11 = {}) {
     const organizationId = caller.organizationId;
     await assertClientInOrg2(input.clientId, organizationId);
     if (input.endDate && input.endDate.getTime() < input.startDate.getTime()) {
@@ -11617,14 +11629,14 @@ var contractService = {
       resourceType: "contract",
       resourceId: contract.id,
       afterData: { contractNumber, clientId: input.clientId, contractValue: contract.contractValue.toString(), currency: contract.currency },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return this.getContract(organizationId, contract.id);
   },
-  async updateContract(caller, id4, input, meta10 = {}) {
+  async updateContract(caller, id6, input, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const existing = await loadContractOrThrow(id4, organizationId);
+    const existing = await loadContractOrThrow(id6, organizationId);
     if (existing.status === "TERMINATED" || existing.status === "EXPIRED") {
       throw new ConflictError(`A ${existing.status.toLowerCase()} contract can no longer be edited.`);
     }
@@ -11633,7 +11645,7 @@ var contractService = {
     if (input.description !== void 0) patch.description = input.description;
     if (input.endDate !== void 0) patch.endDate = input.endDate;
     if (input.notes !== void 0) patch.notes = input.notes;
-    const where2 = { id: id4, ...input.expectedUpdatedAt !== void 0 ? { updatedAt: input.expectedUpdatedAt } : {} };
+    const where2 = { id: id6, ...input.expectedUpdatedAt !== void 0 ? { updatedAt: input.expectedUpdatedAt } : {} };
     const result = await prisma.contract.updateMany({ where: where2, data: patch });
     if (result.count === 0) {
       throw new ConflictError("This contract was changed by someone else since you loaded it. Reload and try again.");
@@ -11644,18 +11656,18 @@ var contractService = {
       actorType: "USER",
       action: "CONTRACT_UPDATED",
       resourceType: "contract",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { title: existing.title },
       afterData: patch,
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
-    return this.getContract(organizationId, id4);
+    return this.getContract(organizationId, id6);
   },
-  async activateContract(caller, id4, meta10 = {}) {
+  async activateContract(caller, id6, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const existing = await loadContractOrThrow(id4, organizationId);
-    const count = await contractRepository.transitionStatus(id4, ACTIVATABLE_FROM, "ACTIVE");
+    const existing = await loadContractOrThrow(id6, organizationId);
+    const count = await contractRepository.transitionStatus(id6, ACTIVATABLE_FROM, "ACTIVE");
     if (count === 0) throw new ConflictError(`Contract cannot move from ${existing.status} to ACTIVE.`);
     await auditLogRepository.record({
       organizationId,
@@ -11663,18 +11675,18 @@ var contractService = {
       actorType: "USER",
       action: "CONTRACT_ACTIVATED",
       resourceType: "contract",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { status: existing.status },
       afterData: { status: "ACTIVE" },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
-    return this.getContract(organizationId, id4);
+    return this.getContract(organizationId, id6);
   },
-  async suspendContract(caller, id4, meta10 = {}) {
+  async suspendContract(caller, id6, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const existing = await loadContractOrThrow(id4, organizationId);
-    const count = await contractRepository.transitionStatus(id4, SUSPENDABLE_FROM, "SUSPENDED");
+    const existing = await loadContractOrThrow(id6, organizationId);
+    const count = await contractRepository.transitionStatus(id6, SUSPENDABLE_FROM, "SUSPENDED");
     if (count === 0) throw new ConflictError(`Contract cannot move from ${existing.status} to SUSPENDED.`);
     await auditLogRepository.record({
       organizationId,
@@ -11682,18 +11694,18 @@ var contractService = {
       actorType: "USER",
       action: "CONTRACT_SUSPENDED",
       resourceType: "contract",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { status: existing.status },
       afterData: { status: "SUSPENDED" },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
-    return this.getContract(organizationId, id4);
+    return this.getContract(organizationId, id6);
   },
-  async terminateContract(caller, id4, input, meta10 = {}) {
+  async terminateContract(caller, id6, input, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const existing = await loadContractOrThrow(id4, organizationId);
-    const count = await contractRepository.transitionStatus(id4, TERMINABLE_FROM, "TERMINATED");
+    const existing = await loadContractOrThrow(id6, organizationId);
+    const count = await contractRepository.transitionStatus(id6, TERMINABLE_FROM, "TERMINATED");
     if (count === 0) throw new ConflictError(`Contract cannot move from ${existing.status} to TERMINATED.`);
     await auditLogRepository.record({
       organizationId,
@@ -11701,15 +11713,15 @@ var contractService = {
       actorType: "USER",
       action: "CONTRACT_TERMINATED",
       resourceType: "contract",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { status: existing.status },
       afterData: { status: "TERMINATED", reason: input.reason },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
-    return this.getContract(organizationId, id4);
+    return this.getContract(organizationId, id6);
   },
-  async createVariation(caller, contractId, input, meta10 = {}) {
+  async createVariation(caller, contractId, input, meta11 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadContractOrThrow(contractId, organizationId);
     if (existing.status === "TERMINATED" || existing.status === "EXPIRED") {
@@ -11732,8 +11744,8 @@ var contractService = {
       resourceType: "contract",
       resourceId: contractId,
       afterData: { amount: amount.toString(), effectiveDate: input.effectiveDate, reason: input.reason },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return this.getContract(organizationId, contractId);
   }
@@ -11824,7 +11836,7 @@ var AI_TOOL_REGISTRY = Object.freeze({
     isMutating: true,
     requiresApproval: false,
     inputSchema: createLeadInput,
-    handler: async (caller, input, meta10) => leadService.createLead(caller, input, meta10)
+    handler: async (caller, input, meta11) => leadService.createLead(caller, input, meta11)
   }),
   "leads.convert": tool({
     code: "leads.convert",
@@ -11835,9 +11847,9 @@ var AI_TOOL_REGISTRY = Object.freeze({
     isMutating: true,
     requiresApproval: false,
     inputSchema: convertLeadInput,
-    handler: async (caller, input, meta10) => {
+    handler: async (caller, input, meta11) => {
       const { leadId, ...rest } = input;
-      return leadService.convertLead(caller, leadId, rest, meta10);
+      return leadService.convertLead(caller, leadId, rest, meta11);
     }
   }),
   "clients.list": tool({
@@ -11863,7 +11875,7 @@ var AI_TOOL_REGISTRY = Object.freeze({
     isMutating: true,
     requiresApproval: false,
     inputSchema: createClientInput,
-    handler: async (caller, input, meta10) => clientService.createClient(caller, input, meta10)
+    handler: async (caller, input, meta11) => clientService.createClient(caller, input, meta11)
   }),
   "content.list_posts": tool({
     code: "content.list_posts",
@@ -11888,7 +11900,7 @@ var AI_TOOL_REGISTRY = Object.freeze({
     isMutating: true,
     requiresApproval: false,
     inputSchema: createDraftPostInput,
-    handler: async (caller, input, meta10) => postService.createPost(caller, input, meta10)
+    handler: async (caller, input, meta11) => postService.createPost(caller, input, meta11)
   }),
   "products.list": tool({
     code: "products.list",
@@ -11913,7 +11925,7 @@ var AI_TOOL_REGISTRY = Object.freeze({
     isMutating: true,
     requiresApproval: true,
     inputSchema: issueInvoiceInput,
-    handler: async (caller, input, meta10) => invoiceService.issueInvoice(caller, input.invoiceId, {}, meta10)
+    handler: async (caller, input, meta11) => invoiceService.issueInvoice(caller, input.invoiceId, {}, meta11)
   }),
   "contracts.activate": tool({
     code: "contracts.activate",
@@ -11924,7 +11936,7 @@ var AI_TOOL_REGISTRY = Object.freeze({
     isMutating: true,
     requiresApproval: true,
     inputSchema: activateContractInput,
-    handler: async (caller, input, meta10) => contractService.activateContract(caller, input.contractId, meta10)
+    handler: async (caller, input, meta11) => contractService.activateContract(caller, input.contractId, meta11)
   })
 });
 function isRegisteredToolCode(code) {
@@ -11953,7 +11965,7 @@ async function assertToolEnabledForOrg(organizationId, toolCode) {
   }
 }
 async function executeGovernedTool(params) {
-  const { caller, toolCode, input, executionId, stepOrder, meta: meta10 = {} } = params;
+  const { caller, toolCode, input, executionId, stepOrder, meta: meta11 = {} } = params;
   if (!isRegisteredToolCode(toolCode)) {
     throw new NotFoundError(`AI tool "${toolCode}" is not registered.`);
   }
@@ -12011,8 +12023,8 @@ async function executeGovernedTool(params) {
       resourceType: "ai_tool",
       resourceId: toolCode,
       afterData: { approvalRequestId: approval.id, toolExecutionId: toolExecution2.id },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return { status: "AWAITING_APPROVAL", toolExecutionId: toolExecution2.id, approvalRequestId: approval.id };
   }
@@ -12028,12 +12040,12 @@ async function executeGovernedTool(params) {
       startedAt
     }
   });
-  return runToolHandler(definition, caller, validatedInput, meta10, toolExecution.id);
+  return runToolHandler(definition, caller, validatedInput, meta11, toolExecution.id);
 }
-async function runToolHandler(definition, caller, validatedInput, meta10, toolExecutionId) {
+async function runToolHandler(definition, caller, validatedInput, meta11, toolExecutionId) {
   const startedAt = /* @__PURE__ */ new Date();
   try {
-    const output = await definition.handler(caller, validatedInput, meta10);
+    const output = await definition.handler(caller, validatedInput, meta11);
     const completedAt = /* @__PURE__ */ new Date();
     await prisma.aIToolExecution.update({
       where: { id: toolExecutionId },
@@ -12053,8 +12065,8 @@ async function runToolHandler(definition, caller, validatedInput, meta10, toolEx
       resourceType: "ai_tool",
       resourceId: definition.code,
       afterData: { toolExecutionId },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return { status: "COMPLETED", output, toolExecutionId };
   } catch (err) {
@@ -12079,8 +12091,8 @@ async function runToolHandler(definition, caller, validatedInput, meta10, toolEx
       resourceId: definition.code,
       result: "FAILURE",
       afterData: { toolExecutionId, error: errorMessage },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return { status: "FAILED", error: errorMessage, toolExecutionId };
   }
@@ -12095,25 +12107,25 @@ var aiApprovalService = {
   async listApprovals(organizationId, filters, page, limit, sort, order) {
     return aiApprovalRepository.list(organizationId, filters, page, limit, sort, order);
   },
-  async getApproval(organizationId, id4) {
-    const approval = await aiApprovalRepository.findByIdInOrg(id4, organizationId);
+  async getApproval(organizationId, id6) {
+    const approval = await aiApprovalRepository.findByIdInOrg(id6, organizationId);
     if (!approval) throw new NotFoundError("AI approval request not found.");
     return approval;
   },
-  async decide(caller, id4, input, meta10 = {}) {
-    const approval = await this.getApproval(caller.organizationId, id4);
+  async decide(caller, id6, input, meta11 = {}) {
+    const approval = await this.getApproval(caller.organizationId, id6);
     if (approval.status !== "PENDING") {
       throw new ConflictError(`This approval request has already been ${approval.status.toLowerCase()}.`);
     }
     if (approval.expiresAt.getTime() < Date.now()) {
-      await aiApprovalRepository.reject(id4, caller.id, "Expired before a decision was made.");
+      await aiApprovalRepository.reject(id6, caller.id, "Expired before a decision was made.");
       throw new ConflictError("This approval request has expired.");
     }
     if (payloadHash2(approval.payload) !== approval.payloadHash) {
       throw new ConflictError("This approval request's payload no longer matches what was requested; it cannot be approved.");
     }
     if (input.decision === "REJECT") {
-      const rejected = await aiApprovalRepository.reject(id4, caller.id, input.rejectionReason);
+      const rejected = await aiApprovalRepository.reject(id6, caller.id, input.rejectionReason);
       if (approval.toolExecutionId) {
         await prisma.aIToolExecution.update({ where: { id: approval.toolExecutionId }, data: { status: "CANCELLED" } });
       }
@@ -12123,10 +12135,10 @@ var aiApprovalService = {
         actorType: "USER",
         action: "AI_APPROVAL_REJECTED",
         resourceType: "ai_approval_request",
-        resourceId: id4,
+        resourceId: id6,
         afterData: { rejectionReason: input.rejectionReason },
-        ipAddress: meta10.ip,
-        userAgent: meta10.userAgent
+        ipAddress: meta11.ip,
+        userAgent: meta11.userAgent
       });
       return rejected;
     }
@@ -12141,16 +12153,16 @@ var aiApprovalService = {
     if (!parsed.success) {
       throw new ValidationError(`Approved payload no longer matches "${approval.action}"'s current input schema.`);
     }
-    const approved = await aiApprovalRepository.approve(id4, caller.id);
+    const approved = await aiApprovalRepository.approve(id6, caller.id);
     await auditLogRepository.record({
       organizationId: caller.organizationId,
       actorUserId: caller.id,
       actorType: "USER",
       action: "AI_APPROVAL_APPROVED",
       resourceType: "ai_approval_request",
-      resourceId: id4,
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      resourceId: id6,
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     const requestingUser = await userRepository.findById(approval.requestedById);
     if (!requestingUser) {
@@ -12160,7 +12172,7 @@ var aiApprovalService = {
     if (!requesterCaller) {
       throw new ConflictError("The user who originally requested this action no longer has access to this organization.");
     }
-    await runToolHandler(definition, requesterCaller, parsed.data, meta10, approval.toolExecutionId);
+    await runToolHandler(definition, requesterCaller, parsed.data, meta11, approval.toolExecutionId);
     return approved;
   }
 };
@@ -12357,8 +12369,8 @@ var ActionRegistry = class _ActionRegistry {
   registerAction(action) {
     this.actions.set(action.id, action);
   }
-  getAction(id4) {
-    return this.actions.get(id4);
+  getAction(id6) {
+    return this.actions.get(id6);
   }
   listActions() {
     return Array.from(this.actions.values()).map((a) => ({
@@ -12900,6 +12912,9 @@ var ApprovalEngine = class _ApprovalEngine {
     if (approval.status !== "PENDING") {
       throw new ValidationError(`Approval request is already resolved with status ${approval.status}.`);
     }
+    if (approval.entityType === "landing_page") {
+      throw new ValidationError("Landing page approvals are decided in the Approvals center (Landing pages).");
+    }
     if (approval.requiredRole && params.userRole !== approval.requiredRole && params.userRole !== "SUPER_ADMIN" && params.userRole !== "ADMIN") {
       throw new ValidationError(`Forbidden: Only users with role ${approval.requiredRole} can decide this approval.`);
     }
@@ -13272,8 +13287,8 @@ var SchedulerEngine = class _SchedulerEngine {
     }
     if (schedule.scheduleType === "RECURRING") {
       const intervalSec = schedule.intervalSeconds || 3600;
-      const base2 = schedule.lastRunAt ? new Date(schedule.lastRunAt) : now;
-      const next = new Date(base2.getTime() + intervalSec * 1e3);
+      const base3 = schedule.lastRunAt ? new Date(schedule.lastRunAt) : now;
+      const next = new Date(base3.getTime() + intervalSec * 1e3);
       if (next.getTime() <= now.getTime()) {
         return new Date(now.getTime() + intervalSec * 1e3);
       }
@@ -13402,9 +13417,9 @@ var SchedulerEngine = class _SchedulerEngine {
   /**
    * Toggle schedule active state.
    */
-  async toggleSchedule(id4, organizationId, isActive) {
+  async toggleSchedule(id6, organizationId, isActive) {
     const schedule = await prisma.automationSchedule.findFirst({
-      where: { id: id4, organizationId }
+      where: { id: id6, organizationId }
     });
     if (!schedule) {
       throw new NotFoundError("Schedule not found.");
@@ -13429,15 +13444,15 @@ var SchedulerEngine = class _SchedulerEngine {
   /**
    * Delete schedule.
    */
-  async deleteSchedule(id4, organizationId) {
+  async deleteSchedule(id6, organizationId) {
     const schedule = await prisma.automationSchedule.findFirst({
-      where: { id: id4, organizationId }
+      where: { id: id6, organizationId }
     });
     if (!schedule) {
       throw new NotFoundError("Schedule not found.");
     }
-    await prisma.automationSchedule.delete({ where: { id: id4 } });
-    return { deleted: true, id: id4 };
+    await prisma.automationSchedule.delete({ where: { id: id6 } });
+    return { deleted: true, id: id6 };
   }
   /**
    * List schedules with pagination.
@@ -13487,7 +13502,7 @@ var aiQuotaService = {
     const parsed = aiLimitsSchema.safeParse(row?.value);
     return parsed.success ? parsed.data : { dailyRequests: 0, dailyTokens: 0 };
   },
-  async setLimits(organizationId, actorUserId, limits, meta10 = {}) {
+  async setLimits(organizationId, actorUserId, limits, meta11 = {}) {
     const before = await this.getLimits(organizationId);
     await systemSettingRepository.upsert({
       organizationId,
@@ -13505,8 +13520,8 @@ var aiQuotaService = {
       resourceType: "ai_limits",
       beforeData: before,
       afterData: limits,
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return limits;
   },
@@ -13622,9 +13637,9 @@ var NotificationEngine = class _NotificationEngine {
   /**
    * Mark notification as read.
    */
-  async markAsRead(id4, organizationId) {
+  async markAsRead(id6, organizationId) {
     await prisma.automationNotification.updateMany({
-      where: { id: id4, organizationId },
+      where: { id: id6, organizationId },
       data: { status: "READ", readAt: /* @__PURE__ */ new Date() }
     });
     return true;
@@ -14511,16 +14526,16 @@ var KnowledgeService = class {
       orderBy: { createdAt: "desc" }
     });
   }
-  static async getCollection(id4, organizationId) {
+  static async getCollection(id6, organizationId) {
     const col = await prisma.knowledgeCollection.findFirst({
-      where: { id: id4, organizationId },
+      where: { id: id6, organizationId },
       include: {
         sources: true,
         documents: true
       }
     });
     if (!col) {
-      throw new NotFoundError(`Knowledge Collection "${id4}" not found.`);
+      throw new NotFoundError(`Knowledge Collection "${id6}" not found.`);
     }
     return col;
   }
@@ -15522,10 +15537,10 @@ var AutomationService = class _AutomationService {
   // Workflows Lifecycle & Management
   // ---------------------------------------------------------------------------
   async createWorkflow(params) {
-    const id4 = crypto11.randomUUID();
+    const id6 = crypto11.randomUUID();
     const workflow = await prisma.automationWorkflow.create({
       data: {
-        id: id4,
+        id: id6,
         organizationId: params.organizationId,
         name: params.name,
         description: params.description || null,
@@ -15661,9 +15676,9 @@ ${validation.errors.join("\n")}`);
     });
     return published;
   }
-  async getWorkflow(id4, organizationId) {
+  async getWorkflow(id6, organizationId) {
     const workflow = await prisma.automationWorkflow.findFirst({
-      where: { id: id4, organizationId },
+      where: { id: id6, organizationId },
       include: {
         versions: {
           orderBy: { version: "desc" },
@@ -15740,9 +15755,9 @@ ${validation.errors.join("\n")}`);
       correlationId: params.correlationId
     });
   }
-  async getExecution(id4, organizationId) {
+  async getExecution(id6, organizationId) {
     const execution = await prisma.automationExecution.findFirst({
-      where: { id: id4, organizationId },
+      where: { id: id6, organizationId },
       include: {
         workflow: {
           select: { id: true, name: true, category: true, steps: true }
@@ -15788,25 +15803,25 @@ ${validation.errors.join("\n")}`);
     ]);
     return { rows, total, page, limit };
   }
-  async retryExecution(id4, organizationId) {
+  async retryExecution(id6, organizationId) {
     const execution = await prisma.automationExecution.findFirst({
-      where: { id: id4, organizationId }
+      where: { id: id6, organizationId }
     });
     if (!execution) throw new NotFoundError("Execution not found.");
     if (execution.status !== "FAILED") {
       throw new ValidationError(`Only failed executions can be retried (current status: ${execution.status}).`);
     }
     await prisma.automationExecution.update({
-      where: { id: id4 },
+      where: { id: id6 },
       data: {
         status: "QUEUED",
         errorMessage: null
       }
     });
-    return workflowEngine.execute(id4);
+    return workflowEngine.execute(id6);
   }
-  async cancelExecution(id4, organizationId, reason) {
-    return workflowEngine.cancelExecution(id4, organizationId, reason);
+  async cancelExecution(id6, organizationId, reason) {
+    return workflowEngine.cancelExecution(id6, organizationId, reason);
   }
   // ---------------------------------------------------------------------------
   // Approvals
@@ -15849,11 +15864,11 @@ ${validation.errors.join("\n")}`);
   async createSchedule(params) {
     return schedulerEngine.createSchedule(params);
   }
-  async toggleSchedule(id4, organizationId, isActive) {
-    return schedulerEngine.toggleSchedule(id4, organizationId, isActive);
+  async toggleSchedule(id6, organizationId, isActive) {
+    return schedulerEngine.toggleSchedule(id6, organizationId, isActive);
   }
-  async deleteSchedule(id4, organizationId) {
-    return schedulerEngine.deleteSchedule(id4, organizationId);
+  async deleteSchedule(id6, organizationId) {
+    return schedulerEngine.deleteSchedule(id6, organizationId);
   }
   // ---------------------------------------------------------------------------
   // Events
@@ -16021,7 +16036,7 @@ function slugify11(input) {
 var withCurrentRevision = { include: { currentRevision: true } };
 var withPublicRelations2 = { include: { currentRevision: true, featuredMedia: true, template: { include: { currentRevision: true } } } };
 function buildWhere16(organizationId, filters) {
-  const where2 = { organizationId, deletedAt: null };
+  const where2 = { organizationId, deletedAt: null, landingBuilder: false };
   if (filters.status) where2.status = filters.status;
   if (filters.fromDate || filters.toDate) {
     where2.createdAt = { ...filters.fromDate ? { gte: filters.fromDate } : {}, ...filters.toDate ? { lte: filters.toDate } : {} };
@@ -16040,8 +16055,8 @@ var pageRepository = {
     ]);
     return { rows, total };
   },
-  async findByIdInOrg(id4, organizationId) {
-    return prisma.page.findFirst({ where: { id: id4, organizationId, deletedAt: null }, ...withCurrentRevision });
+  async findByIdInOrg(id6, organizationId) {
+    return prisma.page.findFirst({ where: { id: id6, organizationId, deletedAt: null, landingBuilder: false }, ...withCurrentRevision });
   },
   async findBySlugInOrg(organizationId, slug) {
     return prisma.page.findFirst({ where: { organizationId, slug, deletedAt: null } });
@@ -16053,15 +16068,15 @@ var pageRepository = {
   },
   /** Phase 11 public projection — PUBLISHED only, with the revision content and featured media needed to render the page (docs/PUBLIC_API_ARCHITECTURE.md). Never returns DRAFT/IN_REVIEW/SCHEDULED/ARCHIVED. */
   async findPublishedBySlugWithMedia(organizationId, slug) {
-    return prisma.page.findFirst({ where: { organizationId, slug, status: "PUBLISHED", deletedAt: null }, ...withPublicRelations2 });
+    return prisma.page.findFirst({ where: { organizationId, slug, status: "PUBLISHED", deletedAt: null, landingBuilder: false }, ...withPublicRelations2 });
   },
   /** Phase 5 — the org's designated homepage, PUBLISHED only (same safety as findPublishedBySlugWithMedia). */
   async findPublishedHomepageWithMedia(organizationId) {
-    return prisma.page.findFirst({ where: { organizationId, isHomepage: true, status: "PUBLISHED", deletedAt: null }, ...withPublicRelations2 });
+    return prisma.page.findFirst({ where: { organizationId, isHomepage: true, status: "PUBLISHED", deletedAt: null, landingBuilder: false }, ...withPublicRelations2 });
   },
   /** Phase 5 — resolves a navigation-menu "page" link target to its slug, PUBLISHED only (never leaks a draft page's existence/slug). */
-  async findPublishedByIdInOrg(id4, organizationId) {
-    return prisma.page.findFirst({ where: { id: id4, organizationId, status: "PUBLISHED", deletedAt: null }, select: { slug: true } });
+  async findPublishedByIdInOrg(id6, organizationId) {
+    return prisma.page.findFirst({ where: { id: id6, organizationId, status: "PUBLISHED", deletedAt: null, landingBuilder: false }, select: { slug: true } });
   },
   /**
    * Cross-organization by design (see postRepository.findDueScheduled) —
@@ -16078,7 +16093,7 @@ var pageRepository = {
   /** Phase 5 SEO audit — every live-or-about-to-be-live page (not ARCHIVED, not soft-deleted), with exactly the fields the rule-based checks need. */
   async listForSeoAudit(organizationId) {
     return prisma.page.findMany({
-      where: { organizationId, deletedAt: null, status: { not: "ARCHIVED" } },
+      where: { organizationId, deletedAt: null, landingBuilder: false, status: { not: "ARCHIVED" } },
       select: {
         id: true,
         slug: true,
@@ -16089,8 +16104,8 @@ var pageRepository = {
       }
     });
   },
-  async findUniqueSlugInOrg(organizationId, base2) {
-    const baseSlug = slugify11(base2) || "page";
+  async findUniqueSlugInOrg(organizationId, base3) {
+    const baseSlug = slugify11(base3) || "page";
     let slug = baseSlug;
     let attempt2 = 1;
     while (await this.findBySlugInOrg(organizationId, slug)) {
@@ -16104,8 +16119,8 @@ var pageRepository = {
     return prisma.contentRevision.findMany({ where: { pageId }, orderBy: { version: "desc" } });
   },
   /** Phase 5 — page hierarchy: this page's own parentId (for cycle-checking a reparent), org-scoped. */
-  async findParentId(id4, organizationId) {
-    const row = await prisma.page.findFirst({ where: { id: id4, organizationId, deletedAt: null }, select: { parentId: true } });
+  async findParentId(id6, organizationId) {
+    const row = await prisma.page.findFirst({ where: { id: id6, organizationId, deletedAt: null }, select: { parentId: true } });
     return row?.parentId ?? null;
   },
   /** Phase 5 — direct children of a page, for the Pages hierarchy UI. */
@@ -16116,12 +16131,12 @@ var pageRepository = {
       orderBy: { title: "asc" }
     });
   },
-  async softDelete(id4) {
-    await prisma.page.update({ where: { id: id4 }, data: { deletedAt: /* @__PURE__ */ new Date() } });
+  async softDelete(id6) {
+    await prisma.page.update({ where: { id: id6 }, data: { deletedAt: /* @__PURE__ */ new Date() } });
   },
   /** Phase 7 — Trash view: pages soft-deleted but not yet permanently gone, newest-deleted first. */
   async listTrash(organizationId, page, limit) {
-    const where2 = { organizationId, deletedAt: { not: null } };
+    const where2 = { organizationId, deletedAt: { not: null }, landingBuilder: false };
     const [rows, total] = await Promise.all([
       prisma.page.findMany({ where: where2, orderBy: { deletedAt: "desc" }, skip: (page - 1) * limit, take: limit }),
       prisma.page.count({ where: where2 })
@@ -16129,11 +16144,11 @@ var pageRepository = {
     return { rows, total };
   },
   /** Phase 7 — Trash view: a single soft-deleted page, org-scoped (never a live one). */
-  async findTrashedByIdInOrg(id4, organizationId) {
-    return prisma.page.findFirst({ where: { id: id4, organizationId, deletedAt: { not: null } } });
+  async findTrashedByIdInOrg(id6, organizationId) {
+    return prisma.page.findFirst({ where: { id: id6, organizationId, deletedAt: { not: null } } });
   },
-  async restore(id4) {
-    await prisma.page.update({ where: { id: id4 }, data: { deletedAt: null } });
+  async restore(id6) {
+    await prisma.page.update({ where: { id: id6 }, data: { deletedAt: null } });
   },
   /** Phase 14 — marketing dashboard: real landing-page counts (pageType=LANDING), never fabricated. */
   async countLandingPages(organizationId) {
@@ -16181,18 +16196,18 @@ var templateRepository = {
     ]);
     return { rows, total };
   },
-  async findByIdInOrg(id4, organizationId) {
-    return prisma.template.findFirst({ where: { id: id4, organizationId, deletedAt: null }, ...withUsage });
+  async findByIdInOrg(id6, organizationId) {
+    return prisma.template.findFirst({ where: { id: id6, organizationId, deletedAt: null }, ...withUsage });
   },
   async findBySlugInOrg(organizationId, slug) {
     return prisma.template.findFirst({ where: { organizationId, slug, deletedAt: null } });
   },
   /** Only PUBLISHED, non-deleted templates may be assigned to a page (pageService's job to enforce). */
-  async findPublishedByIdInOrg(id4, organizationId) {
-    return prisma.template.findFirst({ where: { id: id4, organizationId, status: "PUBLISHED", deletedAt: null } });
+  async findPublishedByIdInOrg(id6, organizationId) {
+    return prisma.template.findFirst({ where: { id: id6, organizationId, status: "PUBLISHED", deletedAt: null } });
   },
-  async findUniqueSlugInOrg(organizationId, base2) {
-    const baseSlug = slugify12(base2) || "template";
+  async findUniqueSlugInOrg(organizationId, base3) {
+    const baseSlug = slugify12(base3) || "template";
     let slug = baseSlug;
     let attempt2 = 1;
     while (await this.findBySlugInOrg(organizationId, slug)) {
@@ -16213,8 +16228,8 @@ var templateRepository = {
       orderBy: { title: "asc" }
     });
   },
-  async softDelete(id4) {
-    await prisma.template.update({ where: { id: id4 }, data: { deletedAt: /* @__PURE__ */ new Date() } });
+  async softDelete(id6) {
+    await prisma.template.update({ where: { id: id6 }, data: { deletedAt: /* @__PURE__ */ new Date() } });
   }
 };
 
@@ -16431,8 +16446,8 @@ function assertHasPublishableContent2(revision) {
     throw new ValidationError("This page needs a title and body before it can be published or scheduled.");
   }
 }
-async function loadPageOrThrow(id4, organizationId) {
-  const page = await pageRepository.findByIdInOrg(id4, organizationId);
+async function loadPageOrThrow(id6, organizationId) {
+  const page = await pageRepository.findByIdInOrg(id6, organizationId);
   if (!page) throw new NotFoundError("Page not found.");
   return page;
 }
@@ -16440,19 +16455,19 @@ var pageService = {
   async listPages(organizationId, filters, page, limit, sort, order) {
     return pageRepository.list(organizationId, filters, page, limit, sort, order);
   },
-  async getPage(organizationId, id4) {
-    return loadPageOrThrow(id4, organizationId);
+  async getPage(organizationId, id6) {
+    return loadPageOrThrow(id6, organizationId);
   },
-  async listRevisions(organizationId, id4) {
-    await loadPageOrThrow(id4, organizationId);
-    return pageRepository.listRevisions(id4);
+  async listRevisions(organizationId, id6) {
+    await loadPageOrThrow(id6, organizationId);
+    return pageRepository.listRevisions(id6);
   },
   /** Phase 5 — "clear page hierarchy": this page's direct children. */
-  async getChildren(organizationId, id4) {
-    await loadPageOrThrow(id4, organizationId);
-    return pageRepository.listChildren(id4, organizationId);
+  async getChildren(organizationId, id6) {
+    await loadPageOrThrow(id6, organizationId);
+    return pageRepository.listChildren(id6, organizationId);
   },
-  async createPage(caller, input, meta10 = {}) {
+  async createPage(caller, input, meta11 = {}) {
     const organizationId = caller.organizationId;
     const body = sanitizeContentHtml(input.body);
     const editorBlocks = input.editorBlocks ? sanitizeEditorDocument(input.editorBlocks) : void 0;
@@ -16512,14 +16527,14 @@ var pageService = {
       resourceType: "page",
       resourceId: createdId,
       afterData: { title: input.title, slug },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return loadPageOrThrow(createdId, organizationId);
   },
-  async updatePage(caller, id4, input, meta10 = {}) {
+  async updatePage(caller, id6, input, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const existing = await loadPageOrThrow(id4, organizationId);
+    const existing = await loadPageOrThrow(id6, organizationId);
     const sanitizedBody = input.body !== void 0 ? sanitizeContentHtml(input.body) : void 0;
     const sanitizedEditorBlocks = input.editorBlocks === void 0 ? void 0 : input.editorBlocks === null ? null : sanitizeEditorDocument(input.editorBlocks);
     const hasContentEdit = input.title !== void 0 || input.body !== void 0 || input.excerpt !== void 0 || input.metadata !== void 0 || input.slug !== void 0 || input.editorBlocks !== void 0;
@@ -16528,10 +16543,10 @@ var pageService = {
     }
     if (input.slug !== void 0 && input.slug !== existing.slug) {
       const dup = await pageRepository.findBySlugInOrg(organizationId, input.slug);
-      if (dup && dup.id !== id4) throw new ConflictError(`A page with slug "${input.slug}" already exists.`, { existingPageId: dup.id });
+      if (dup && dup.id !== id6) throw new ConflictError(`A page with slug "${input.slug}" already exists.`, { existingPageId: dup.id });
     }
     if (input.templateId !== void 0) await assertTemplateUsable(input.templateId, organizationId);
-    if (input.parentId !== void 0) await assertParentUsable(input.parentId, organizationId, id4);
+    if (input.parentId !== void 0) await assertParentUsable(input.parentId, organizationId, id6);
     const hasFeaturedMediaEdit = input.featuredMediaId !== void 0;
     if (hasFeaturedMediaEdit) {
       if (existing.status === "ARCHIVED") throw new ConflictError("Page content cannot be edited while status is ARCHIVED.");
@@ -16555,7 +16570,7 @@ var pageService = {
         if (currentRevision && (unpublishing || liveEditOfPublished || hasContentEdit && currentRevision.status === "PUBLISHED")) {
           const newRevision = await tx.contentRevision.create({
             data: {
-              pageId: id4,
+              pageId: id6,
               version: currentRevision.version + 1,
               status: liveEditOfPublished ? "PUBLISHED" : "DRAFT",
               title: input.title ?? currentRevision.title,
@@ -16583,7 +16598,7 @@ var pageService = {
           pagePatch.updatedAt = /* @__PURE__ */ new Date();
         }
         if (Object.keys(pagePatch).length > 0) {
-          const where2 = { id: id4, ...input.expectedUpdatedAt !== void 0 ? { updatedAt: input.expectedUpdatedAt } : {} };
+          const where2 = { id: id6, ...input.expectedUpdatedAt !== void 0 ? { updatedAt: input.expectedUpdatedAt } : {} };
           const result = await tx.page.updateMany({ where: where2, data: pagePatch });
           if (result.count === 0) {
             throw new ConflictError("This page was changed by someone else since you loaded it. Reload and try again.");
@@ -16600,11 +16615,11 @@ var pageService = {
       actorType: "USER",
       action: "PAGE_UPDATED",
       resourceType: "page",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { status: existing.status, title: existing.title },
       afterData: { status: input.status, title: input.title, slug: input.slug },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     if (hasFeaturedMediaEdit && input.featuredMediaId !== existing.featuredMediaId) {
       await auditLogRepository.record({
@@ -16613,11 +16628,11 @@ var pageService = {
         actorType: "USER",
         action: input.featuredMediaId ? "MEDIA_ATTACHED_TO_CONTENT" : "MEDIA_DETACHED_FROM_CONTENT",
         resourceType: "page",
-        resourceId: id4,
+        resourceId: id6,
         beforeData: { featuredMediaId: existing.featuredMediaId },
         afterData: { featuredMediaId: input.featuredMediaId ?? null },
-        ipAddress: meta10.ip,
-        userAgent: meta10.userAgent
+        ipAddress: meta11.ip,
+        userAgent: meta11.userAgent
       });
     }
     if (input.slug !== void 0 && input.slug !== existing.slug) {
@@ -16628,37 +16643,37 @@ var pageService = {
           fromPath: `/${existing.slug}`,
           toPath: `/${input.slug}`,
           resourceType: "page",
-          resourceId: id4
+          resourceId: id6
         });
       }
     }
-    return loadPageOrThrow(id4, organizationId);
+    return loadPageOrThrow(id6, organizationId);
   },
-  async submitForReview(caller, id4, meta10 = {}) {
+  async submitForReview(caller, id6, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const existing = await loadPageOrThrow(id4, organizationId);
+    const existing = await loadPageOrThrow(id6, organizationId);
     if (existing.status !== "DRAFT") throw new ConflictError(`Only a DRAFT page can be submitted for review (current status: ${existing.status}).`);
     if (!existing.currentRevision || !existing.currentRevision.body.trim()) {
       throw new ValidationError("This page needs body content before it can be submitted for review.");
     }
-    await prisma.page.update({ where: { id: id4 }, data: { status: "IN_REVIEW" } });
+    await prisma.page.update({ where: { id: id6 }, data: { status: "IN_REVIEW" } });
     await auditLogRepository.record({
       organizationId,
       actorUserId: caller.id,
       actorType: "USER",
       action: "PAGE_SUBMITTED_FOR_REVIEW",
       resourceType: "page",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { status: existing.status },
       afterData: { status: "IN_REVIEW" },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     try {
       await eventEngine.emit({
         eventType: "content.submitted_for_review",
         entityType: "page",
-        entityId: id4,
+        entityId: id6,
         organizationId,
         actorId: caller.id,
         actorType: "USER",
@@ -16667,11 +16682,11 @@ var pageService = {
       });
     } catch {
     }
-    return loadPageOrThrow(id4, organizationId);
+    return loadPageOrThrow(id6, organizationId);
   },
-  async publishPage(caller, id4, meta10 = {}) {
+  async publishPage(caller, id6, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const existing = await loadPageOrThrow(id4, organizationId);
+    const existing = await loadPageOrThrow(id6, organizationId);
     if (existing.status === "ARCHIVED") throw new ConflictError("An archived page must be restored before it can be published.");
     if (existing.status === "PUBLISHED") throw new ConflictError("This page is already published.");
     if (!existing.currentRevisionId) throw new ConflictError("This page has no content revision to publish.");
@@ -16679,7 +16694,7 @@ var pageService = {
     const now = /* @__PURE__ */ new Date();
     await prisma.$transaction([
       prisma.contentRevision.update({ where: { id: existing.currentRevisionId }, data: { status: "PUBLISHED", publishedAt: now } }),
-      prisma.page.update({ where: { id: id4 }, data: { status: "PUBLISHED", publishedAt: now, scheduledAt: null } })
+      prisma.page.update({ where: { id: id6 }, data: { status: "PUBLISHED", publishedAt: now, scheduledAt: null } })
     ]);
     await auditLogRepository.record({
       organizationId,
@@ -16687,11 +16702,11 @@ var pageService = {
       actorType: "USER",
       action: "PAGE_PUBLISHED",
       resourceType: "page",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { status: existing.status },
       afterData: { status: "PUBLISHED" },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     if (existing.createdById && existing.createdById !== caller.id) {
       await notificationService.notify({
@@ -16702,53 +16717,53 @@ var pageService = {
         message: `"${existing.title}" is now live.`
       });
     }
-    return loadPageOrThrow(id4, organizationId);
+    return loadPageOrThrow(id6, organizationId);
   },
-  async schedulePage(caller, id4, input, meta10 = {}) {
+  async schedulePage(caller, id6, input, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const existing = await loadPageOrThrow(id4, organizationId);
+    const existing = await loadPageOrThrow(id6, organizationId);
     if (existing.status === "ARCHIVED") throw new ConflictError("An archived page must be restored before it can be scheduled.");
     if (existing.status === "PUBLISHED") throw new ConflictError("This page is already published.");
     assertHasPublishableContent2(existing.currentRevision);
-    await prisma.page.update({ where: { id: id4 }, data: { status: "SCHEDULED", scheduledAt: input.scheduledAt } });
+    await prisma.page.update({ where: { id: id6 }, data: { status: "SCHEDULED", scheduledAt: input.scheduledAt } });
     await auditLogRepository.record({
       organizationId,
       actorUserId: caller.id,
       actorType: "USER",
       action: "PAGE_SCHEDULED",
       resourceType: "page",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { status: existing.status },
       afterData: { status: "SCHEDULED", scheduledAt: input.scheduledAt },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
-    return loadPageOrThrow(id4, organizationId);
+    return loadPageOrThrow(id6, organizationId);
   },
-  async archivePage(caller, id4, meta10 = {}) {
+  async archivePage(caller, id6, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const existing = await loadPageOrThrow(id4, organizationId);
+    const existing = await loadPageOrThrow(id6, organizationId);
     if (existing.status === "ARCHIVED") throw new ConflictError("This page is already archived.");
-    await prisma.page.update({ where: { id: id4 }, data: { status: "ARCHIVED" } });
+    await prisma.page.update({ where: { id: id6 }, data: { status: "ARCHIVED" } });
     await auditLogRepository.record({
       organizationId,
       actorUserId: caller.id,
       actorType: "USER",
       action: "PAGE_ARCHIVED",
       resourceType: "page",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { status: existing.status },
       afterData: { status: "ARCHIVED" },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
-    return loadPageOrThrow(id4, organizationId);
+    return loadPageOrThrow(id6, organizationId);
   },
-  async revertPage(caller, id4, input, meta10 = {}) {
+  async revertPage(caller, id6, input, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const existing = await loadPageOrThrow(id4, organizationId);
+    const existing = await loadPageOrThrow(id6, organizationId);
     if (existing.status === "ARCHIVED") throw new ConflictError("An archived page must be restored before its content can be reverted.");
-    const target = await prisma.contentRevision.findFirst({ where: { id: input.revisionId, pageId: id4 } });
+    const target = await prisma.contentRevision.findFirst({ where: { id: input.revisionId, pageId: id6 } });
     if (!target) throw new NotFoundError("Revision not found on this page.");
     const current = existing.currentRevision;
     const nextVersion = (current?.version ?? 0) + 1;
@@ -16756,7 +16771,7 @@ var pageService = {
     await prisma.$transaction(async (tx) => {
       const newRevision = await tx.contentRevision.create({
         data: {
-          pageId: id4,
+          pageId: id6,
           version: nextVersion,
           status: wasPublished ? "PUBLISHED" : "DRAFT",
           title: target.title,
@@ -16769,7 +16784,7 @@ var pageService = {
         }
       });
       await tx.page.update({
-        where: { id: id4 },
+        where: { id: id6 },
         data: { currentRevisionId: newRevision.id }
       });
     });
@@ -16779,63 +16794,63 @@ var pageService = {
       actorType: "USER",
       action: "PAGE_REVERTED",
       resourceType: "page",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { fromVersion: current?.version, revertedToRevisionId: target.id, revertedToVersion: target.version },
       afterData: { newVersion: nextVersion },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
-    return loadPageOrThrow(id4, organizationId);
+    return loadPageOrThrow(id6, organizationId);
   },
-  async deletePage(caller, id4, meta10 = {}) {
+  async deletePage(caller, id6, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const existing = await loadPageOrThrow(id4, organizationId);
-    await pageRepository.softDelete(id4);
+    const existing = await loadPageOrThrow(id6, organizationId);
+    await pageRepository.softDelete(id6);
     await auditLogRepository.record({
       organizationId,
       actorUserId: caller.id,
       actorType: "USER",
       action: "PAGE_DELETED",
       resourceType: "page",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { status: existing.status, title: existing.title },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
   },
   /** Phase 7 — Trash view (Content Dashboard): soft-deleted pages, paginated. */
   async listTrash(organizationId, page, limit) {
     return pageRepository.listTrash(organizationId, page, limit);
   },
-  async restorePage(caller, id4, meta10 = {}) {
+  async restorePage(caller, id6, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const existing = await pageRepository.findTrashedByIdInOrg(id4, organizationId);
+    const existing = await pageRepository.findTrashedByIdInOrg(id6, organizationId);
     if (!existing) throw new NotFoundError("Page not found in trash.");
-    await pageRepository.restore(id4);
+    await pageRepository.restore(id6);
     await auditLogRepository.record({
       organizationId,
       actorUserId: caller.id,
       actorType: "USER",
       action: "PAGE_RESTORED",
       resourceType: "page",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { status: existing.status, title: existing.title },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
   },
   /** Phase 7 — bulk workflow actions, same per-item isolation as postService.bulkAction. */
-  async bulkAction(caller, action, ids, meta10 = {}) {
+  async bulkAction(caller, action, ids, meta11 = {}) {
     const succeeded = [];
     const failed = [];
-    for (const id4 of ids) {
+    for (const id6 of ids) {
       try {
-        if (action === "archive") await this.archivePage(caller, id4, meta10);
-        else if (action === "trash") await this.deletePage(caller, id4, meta10);
-        else await this.restorePage(caller, id4, meta10);
-        succeeded.push(id4);
+        if (action === "archive") await this.archivePage(caller, id6, meta11);
+        else if (action === "trash") await this.deletePage(caller, id6, meta11);
+        else await this.restorePage(caller, id6, meta11);
+        succeeded.push(id6);
       } catch (err) {
-        failed.push({ id: id4, error: err instanceof Error ? err.message : "Action failed." });
+        failed.push({ id: id6, error: err instanceof Error ? err.message : "Action failed." });
       }
     }
     return { succeeded, failed };
@@ -16862,13 +16877,13 @@ async function getOrCreateWorkflow(organizationId) {
     }
   });
 }
-async function loadContentOrThrow(contentType, id4, organizationId) {
+async function loadContentOrThrow(contentType, id6, organizationId) {
   if (contentType === "page") {
-    const page = await prisma.page.findFirst({ where: { id: id4, organizationId }, select: { title: true, slug: true, status: true } });
+    const page = await prisma.page.findFirst({ where: { id: id6, organizationId }, select: { title: true, slug: true, status: true } });
     if (!page) throw new NotFoundError("Page not found.");
     return page;
   }
-  const post = await prisma.post.findFirst({ where: { id: id4, organizationId }, select: { title: true, slug: true, status: true } });
+  const post = await prisma.post.findFirst({ where: { id: id6, organizationId }, select: { title: true, slug: true, status: true } });
   if (!post) throw new NotFoundError("Post not found.");
   return post;
 }
@@ -17018,6 +17033,777 @@ var contentApprovalService = {
   }
 };
 
+// server/services/landing/landingApprovalService.ts
+import crypto14 from "node:crypto";
+init_errors();
+
+// server/schemas/landingSchemas.ts
+import { z as z21 } from "zod";
+var CONTROL_CHARS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/;
+var plain = (max, min = 0) => z21.string().trim().min(min).max(max).refine((v) => !CONTROL_CHARS.test(v), "Control characters are not allowed.");
+function isSafeHref(raw) {
+  const v = raw.trim();
+  if (!v || v.length > 2e3 || CONTROL_CHARS.test(v) || /\s/.test(v)) return false;
+  if (v.startsWith("#")) return v.length > 1;
+  if (v.startsWith("/")) return !v.startsWith("//") && !v.includes("\\");
+  if (/^mailto:[^\s@]+@[^\s@]+$/i.test(v)) return true;
+  if (/^tel:\+?[0-9()\-.\s]{3,30}$/i.test(v)) return true;
+  try {
+    const u = new URL(v);
+    return u.protocol === "https:" && !!u.hostname;
+  } catch {
+    return false;
+  }
+}
+var href = z21.string().trim().min(1).max(2e3).refine(isSafeHref, "Use an https:// link, a /site path, #anchor, mailto: or tel:.");
+var idSchema = z21.string().trim().min(1).max(60).regex(/^[A-Za-z0-9_-]+$/, "Block ids use letters, numbers, - and _.");
+var base = { id: idSchema, placeholder: z21.boolean().optional() };
+var cta = z21.object({ label: plain(40, 1), href });
+var imageRef = z21.object({ mediaId: z21.string().trim().uuid(), alt: plain(200, 1) });
+var hero = z21.object({
+  ...base,
+  type: z21.literal("lp_hero"),
+  props: z21.object({ eyebrow: plain(60).optional(), headline: plain(120, 1), subheadline: plain(300).optional(), primaryCta: cta, secondaryCta: cta.optional(), image: imageRef.optional() })
+});
+var benefits = z21.object({
+  ...base,
+  type: z21.literal("lp_benefits"),
+  props: z21.object({ heading: plain(120, 1), items: z21.array(z21.object({ title: plain(80, 1), text: plain(240, 1) })).min(2).max(6) })
+});
+var features = z21.object({
+  ...base,
+  type: z21.literal("lp_features"),
+  props: z21.object({ heading: plain(120, 1), intro: plain(300).optional(), items: z21.array(z21.object({ title: plain(80, 1), text: plain(300, 1), image: imageRef.optional() })).min(1).max(8) })
+});
+var testimonials = z21.object({
+  ...base,
+  type: z21.literal("lp_testimonials"),
+  props: z21.object({
+    heading: plain(120, 1),
+    items: z21.array(z21.object({ quote: plain(500, 1), authorName: plain(80, 1), authorRole: plain(80).optional(), company: plain(80).optional(), avatar: imageRef.optional() })).min(1).max(6),
+    /** Publishing requires an explicit attestation that every quote is real, permitted, and attributed correctly. */
+    confirmedReal: z21.boolean().default(false)
+  })
+});
+var pricing = z21.object({
+  ...base,
+  type: z21.literal("lp_pricing"),
+  props: z21.object({
+    heading: plain(120, 1),
+    intro: plain(300).optional(),
+    plans: z21.array(z21.object({ name: plain(60, 1), price: plain(40, 1), period: plain(30).optional(), description: plain(160).optional(), features: z21.array(plain(100, 1)).max(10).default([]), cta, highlighted: z21.boolean().optional() })).min(1).max(4),
+    footnote: plain(200).optional()
+  })
+});
+var faq = z21.object({
+  ...base,
+  type: z21.literal("lp_faq"),
+  props: z21.object({ heading: plain(120, 1), items: z21.array(z21.object({ question: plain(200, 1), answer: plain(1e3, 1) })).min(1).max(12) })
+});
+var ctaBlock = z21.object({
+  ...base,
+  type: z21.literal("lp_cta"),
+  props: z21.object({ heading: plain(120, 1), text: plain(300).optional(), cta })
+});
+var RESERVED_FORM_KEYS = ["website", "consent", "utm", "touch"];
+var formField = z21.object({
+  key: z21.string().trim().regex(/^[a-z][a-z0-9_]{0,29}$/, "Field keys are lowercase letters, numbers and _ (start with a letter)."),
+  label: plain(60, 1),
+  type: z21.enum(["text", "email", "tel", "textarea", "select"]),
+  required: z21.boolean().default(false),
+  options: z21.array(z21.object({ value: plain(60, 1), label: plain(60, 1) })).max(12).optional()
+});
+var leadForm = z21.object({
+  ...base,
+  type: z21.literal("lp_form"),
+  props: z21.object({
+    heading: plain(120, 1),
+    intro: plain(300).optional(),
+    fields: z21.array(formField).min(1).max(8),
+    consent: z21.object({ enabled: z21.boolean().default(false), text: plain(300).default(""), privacyUrl: z21.string().trim().max(2e3).default("") }).default({ enabled: false, text: "", privacyUrl: "" }),
+    submitLabel: plain(40, 1).default("Send"),
+    successMessage: plain(300, 1),
+    /** Optional: send the visitor to this page after a successful submit instead of showing the message. */
+    redirectUrl: href.optional()
+  })
+});
+var footer = z21.object({
+  ...base,
+  type: z21.literal("lp_footer"),
+  props: z21.object({ text: plain(300).optional(), links: z21.array(z21.object({ label: plain(40, 1), href })).max(6).default([]), copyright: plain(100).optional() })
+});
+var landingBlockSchema = z21.discriminatedUnion("type", [hero, benefits, features, testimonials, pricing, faq, ctaBlock, leadForm, footer]);
+var landingDocumentSchema = z21.object({ version: z21.literal(1).default(1), blocks: z21.array(landingBlockSchema).max(20) }).superRefine((doc, ctx) => {
+  const ids = /* @__PURE__ */ new Set();
+  doc.blocks.forEach((b, i) => {
+    if (ids.has(b.id)) ctx.addIssue({ code: "custom", path: ["blocks", i, "id"], message: `Duplicate block id "${b.id}".` });
+    ids.add(b.id);
+  });
+  const count = (t) => doc.blocks.filter((b) => b.type === t).length;
+  if (doc.blocks.length > 0) {
+    if (count("lp_hero") !== 1) ctx.addIssue({ code: "custom", path: ["blocks"], message: "A landing page needs exactly one hero block (it carries the page's single H1)." });
+    else if (doc.blocks[0].type !== "lp_hero") ctx.addIssue({ code: "custom", path: ["blocks"], message: "The hero block must be first." });
+    if (count("lp_form") > 1) ctx.addIssue({ code: "custom", path: ["blocks"], message: "Only one lead form per page." });
+    if (count("lp_footer") > 1) ctx.addIssue({ code: "custom", path: ["blocks"], message: "Only one footer per page." });
+    const footerAt = doc.blocks.findIndex((b) => b.type === "lp_footer");
+    if (footerAt !== -1 && footerAt !== doc.blocks.length - 1) ctx.addIssue({ code: "custom", path: ["blocks", footerAt], message: "The footer must be the last block." });
+  }
+  doc.blocks.forEach((b, i) => {
+    if (b.type !== "lp_form") return;
+    const keys = /* @__PURE__ */ new Set();
+    b.props.fields.forEach((f, j) => {
+      if (RESERVED_FORM_KEYS.includes(f.key)) ctx.addIssue({ code: "custom", path: ["blocks", i, "props", "fields", j, "key"], message: `"${f.key}" is reserved.` });
+      if (keys.has(f.key)) ctx.addIssue({ code: "custom", path: ["blocks", i, "props", "fields", j, "key"], message: `Duplicate field key "${f.key}".` });
+      keys.add(f.key);
+      if (f.type === "select" && !(f.options && f.options.length >= 2)) ctx.addIssue({ code: "custom", path: ["blocks", i, "props", "fields", j, "options"], message: "A select field needs at least two options." });
+      if (f.key === "email" && f.type !== "email") ctx.addIssue({ code: "custom", path: ["blocks", i, "props", "fields", j, "type"], message: 'The "email" field must have type email.' });
+      if (f.key === "phone" && f.type !== "tel") ctx.addIssue({ code: "custom", path: ["blocks", i, "props", "fields", j, "type"], message: 'The "phone" field must have type tel.' });
+    });
+    if (!keys.has("email") && !keys.has("phone")) ctx.addIssue({ code: "custom", path: ["blocks", i, "props", "fields"], message: "The form needs an email or a phone field so the lead can be contacted." });
+    const consent = b.props.consent;
+    if (consent.enabled) {
+      if (consent.text.trim().length < 10) ctx.addIssue({ code: "custom", path: ["blocks", i, "props", "consent", "text"], message: "Consent text is required (at least 10 characters) when the consent checkbox is on." });
+      if (!isSafeHref(consent.privacyUrl) || /^(mailto|tel):|^#/i.test(consent.privacyUrl.trim())) ctx.addIssue({ code: "custom", path: ["blocks", i, "props", "consent", "privacyUrl"], message: "A privacy policy link (https:// or /path) is required when the consent checkbox is on." });
+    }
+  });
+});
+var LANDING_TEMPLATE_KEYS = ["lead-gen", "product-launch", "consultation"];
+var landingSlugSchema = z21.string().trim().min(3, "Slugs have at least 3 characters.").max(80).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "Use lowercase letters, numbers and single hyphens (no leading, trailing or double hyphens).");
+var landingSeoSchema = z21.object({
+  metaTitle: plain(70).optional(),
+  metaDescription: plain(320).optional(),
+  ogImageMediaId: z21.string().trim().uuid().nullable().optional(),
+  noindex: z21.boolean().optional()
+});
+var createLandingSchema = z21.object({ title: plain(200, 1), slug: landingSlugSchema.optional(), templateKey: z21.enum(LANDING_TEMPLATE_KEYS) });
+var updateLandingSchema = z21.object({
+  title: plain(200, 1).optional(),
+  slug: landingSlugSchema.optional(),
+  document: landingDocumentSchema.optional(),
+  seo: landingSeoSchema.optional(),
+  expectedUpdatedAt: z21.coerce.date().optional()
+}).refine((v) => Object.keys(v).some((k) => k !== "expectedUpdatedAt" && v[k] !== void 0), { message: "Nothing to update." });
+var restoreLandingSchema = z21.object({ revisionId: z21.string().trim().uuid() });
+var previewTokenSchema = z21.object({ ttlHours: z21.coerce.number().int().min(1).max(72).default(24) });
+var listLandingQuerySchema = z21.object({
+  page: z21.coerce.number().int().positive().default(1),
+  limit: z21.coerce.number().int().positive().max(100).default(25),
+  search: z21.string().trim().max(100).optional(),
+  status: z21.enum(["DRAFT", "IN_REVIEW", "PUBLISHED", "UNPUBLISHED", "ARCHIVED"]).optional()
+});
+var landingStatsQuerySchema = z21.object({ days: z21.coerce.number().int().min(1).max(365).default(30) });
+var utmLinkQuerySchema = z21.object({
+  source: z21.string().trim().min(1).max(60).regex(/^[A-Za-z0-9._~-]+$/, "Letters, numbers and . _ ~ - only."),
+  medium: z21.string().trim().min(1).max(60).regex(/^[A-Za-z0-9._~-]+$/, "Letters, numbers and . _ ~ - only."),
+  campaign: z21.string().trim().min(1).max(100).regex(/^[A-Za-z0-9._~-]+$/, "Letters, numbers and . _ ~ - only."),
+  term: z21.string().trim().max(60).regex(/^[A-Za-z0-9._~-]*$/).optional(),
+  content: z21.string().trim().max(60).regex(/^[A-Za-z0-9._~-]*$/).optional()
+});
+var touch = z21.object({
+  utmSource: z21.string().trim().max(200).optional(),
+  utmMedium: z21.string().trim().max(200).optional(),
+  utmCampaign: z21.string().trim().max(200).optional(),
+  utmTerm: z21.string().trim().max(200).optional(),
+  utmContent: z21.string().trim().max(200).optional(),
+  referrer: z21.string().trim().max(2e3).optional(),
+  landingPath: z21.string().trim().max(500).optional(),
+  at: z21.string().trim().max(40).optional()
+}).strict();
+var publicLandingSubmitSchema = z21.object({
+  data: z21.record(z21.union([z21.string().max(5e3), z21.array(z21.string().max(500)).max(20)])).default({}),
+  /** Honeypot: a real visitor never sees or fills this field. */
+  website: z21.string().max(500).optional(),
+  firstTouch: touch.optional(),
+  lastTouch: touch.optional()
+});
+
+// server/services/landing/landingContent.ts
+var RESERVED_LANDING_SLUGS = /* @__PURE__ */ new Set([
+  "admin",
+  "api",
+  "app",
+  "assets",
+  "blog",
+  "case-studies",
+  "contact",
+  "about",
+  "privacy",
+  "terms",
+  "portal",
+  "login",
+  "logout",
+  "register",
+  "signup",
+  "sign-in",
+  "sign-up",
+  "verify-email",
+  "reset-password",
+  "sitemap",
+  "sitemap-xml",
+  "robots",
+  "robots-txt",
+  "health",
+  "static",
+  "public",
+  "preview",
+  "submit",
+  "lp",
+  "services",
+  "solutions",
+  "ai-solutions",
+  "industries",
+  "ecosystem",
+  "updates",
+  "search",
+  "new",
+  "edit",
+  "draft",
+  "null",
+  "undefined",
+  "favicon",
+  "www",
+  "cc",
+  "dashboard",
+  "settings",
+  "account"
+]);
+var isReservedLandingSlug = (slug) => RESERVED_LANDING_SLUGS.has(slug.toLowerCase());
+function collectLandingMediaIds(doc) {
+  const ids = /* @__PURE__ */ new Set();
+  for (const b of doc.blocks) {
+    if (b.type === "lp_hero" && b.props.image) ids.add(b.props.image.mediaId);
+    if (b.type === "lp_features") b.props.items.forEach((i) => i.image && ids.add(i.image.mediaId));
+    if (b.type === "lp_testimonials") b.props.items.forEach((i) => i.avatar && ids.add(i.avatar.mediaId));
+  }
+  return [...ids];
+}
+function strings(value, out = []) {
+  if (typeof value === "string") out.push(value);
+  else if (Array.isArray(value)) value.forEach((v) => strings(v, out));
+  else if (value && typeof value === "object") Object.values(value).forEach((v) => strings(v, out));
+  return out;
+}
+function blockText(b) {
+  const p = b.props;
+  const walk2 = (v) => {
+    if (typeof v === "string") return [v];
+    if (Array.isArray(v)) return v.flatMap(walk2);
+    if (v && typeof v === "object") return Object.entries(v).filter(([k]) => !["href", "mediaId", "key", "type", "privacyUrl", "redirectUrl", "value"].includes(k)).flatMap(([, x]) => walk2(x));
+    return [];
+  };
+  return walk2(p);
+}
+function flattenLandingText(doc) {
+  return doc.blocks.flatMap(blockText).join("\n").slice(0, 1e5);
+}
+var PLACEHOLDER_TOKEN = /\[\[|\]\]/;
+function landingPublishIssues(input) {
+  const issues = [];
+  if (!input.title.trim()) issues.push({ message: "The page needs a title." });
+  if (!input.seo.metaDescription?.trim()) issues.push({ message: "Add a meta description (search and social previews)." });
+  const parsed = landingDocumentSchema.safeParse(input.document);
+  if (!parsed.success) {
+    issues.push({ message: "The page content is not valid: " + (parsed.error.issues[0]?.message ?? "check the blocks.") });
+    return issues;
+  }
+  const doc = parsed.data;
+  if (doc.blocks.length === 0) issues.push({ message: "Add at least a hero block." });
+  for (const b of doc.blocks) {
+    if (b.placeholder) issues.push({ blockId: b.id, message: `The ${b.type.replace("lp_", "")} block still holds placeholder content. Replace it with real content, then confirm it.` });
+    else if (blockText(b).some((t) => PLACEHOLDER_TOKEN.test(t))) issues.push({ blockId: b.id, message: `The ${b.type.replace("lp_", "")} block still contains a [[placeholder]].` });
+    if (b.type === "lp_testimonials" && !b.props.confirmedReal) issues.push({ blockId: b.id, message: "Confirm that every testimonial is a real quote from a real customer who agreed to be quoted." });
+  }
+  if (input.seo.metaTitle && PLACEHOLDER_TOKEN.test(input.seo.metaTitle)) issues.push({ message: "The meta title still contains a [[placeholder]]." });
+  if (input.seo.metaDescription && PLACEHOLDER_TOKEN.test(input.seo.metaDescription)) issues.push({ message: "The meta description still contains a [[placeholder]]." });
+  if (PLACEHOLDER_TOKEN.test(input.title)) issues.push({ message: "The title still contains a [[placeholder]]." });
+  void strings;
+  return issues;
+}
+
+// server/services/landing/landingPageService.ts
+import crypto13 from "node:crypto";
+init_errors();
+
+// server/services/landing/landingTemplates.ts
+var seq = 0;
+var id = (p) => `${p}-${(++seq).toString(36)}`;
+var ph = (what) => `[[Replace: ${what}]]`;
+var hero2 = () => ({ id: id("hero"), type: "lp_hero", placeholder: true, props: { eyebrow: void 0, headline: ph("your headline"), subheadline: ph("one sentence that says who this is for and what they get"), primaryCta: { label: "Get started", href: "#lead-form" } } });
+var benefits2 = () => ({ id: id("benefits"), type: "lp_benefits", placeholder: true, props: { heading: "Why people choose this", items: [1, 2, 3].map((n) => ({ title: ph(`benefit ${n}`), text: ph(`one honest sentence about benefit ${n}`) })) } });
+var features2 = (n = 3) => ({ id: id("features"), type: "lp_features", placeholder: true, props: { heading: "What you get", items: Array.from({ length: n }, (_, i) => ({ title: ph(`feature ${i + 1}`), text: ph(`describe feature ${i + 1} in one or two sentences`) })) } });
+var testimonials2 = () => ({ id: id("proof"), type: "lp_testimonials", placeholder: true, props: { heading: "What customers say", confirmedReal: false, items: [{ quote: ph("a REAL customer quote you have permission to use"), authorName: ph("customer name"), authorRole: ph("role"), company: void 0 }] } });
+var pricing2 = () => ({ id: id("pricing"), type: "lp_pricing", placeholder: true, props: { heading: "Pricing", plans: [{ name: ph("plan name"), price: ph("price"), period: void 0, features: [ph("what is included")], cta: { label: "Choose plan", href: "#lead-form" } }] } });
+var faq2 = () => ({ id: id("faq"), type: "lp_faq", placeholder: true, props: { heading: "Frequently asked questions", items: [{ question: ph("question"), answer: ph("answer") }, { question: ph("question"), answer: ph("answer") }] } });
+var cta2 = () => ({ id: id("cta"), type: "lp_cta", placeholder: true, props: { heading: ph("closing call to action"), text: void 0, cta: { label: "Talk to us", href: "#lead-form" } } });
+var form = (message = true) => ({
+  id: id("form"),
+  type: "lp_form",
+  props: {
+    heading: "Get in touch",
+    intro: "Leave your details and we will reply.",
+    fields: [
+      { key: "name", label: "Your name", type: "text", required: true },
+      { key: "email", label: "Email", type: "email", required: true },
+      { key: "company", label: "Company", type: "text", required: false },
+      ...message ? [{ key: "message", label: "How can we help?", type: "textarea", required: false }] : []
+    ],
+    consent: { enabled: true, text: "I agree to be contacted about my enquiry. I can withdraw this at any time.", privacyUrl: "/privacy" },
+    submitLabel: "Send",
+    successMessage: "Thank you. We will be in touch shortly."
+  }
+});
+var footer2 = () => ({ id: id("footer"), type: "lp_footer", placeholder: true, props: { text: ph("legal or company line"), links: [{ label: "Privacy policy", href: "/privacy" }, { label: "Terms", href: "/terms" }] } });
+var LANDING_TEMPLATES = [
+  { key: "lead-gen", name: "Lead generation", description: "Hero, benefits, social proof, FAQ and a contact form. For a service offer." },
+  { key: "product-launch", name: "Product launch", description: "Hero, features, pricing, FAQ, call to action and an enquiry form." },
+  { key: "consultation", name: "Book a consultation", description: "A short page: hero, benefits, call to action and a form. For one clear ask." }
+];
+function buildTemplateDocument(key2) {
+  seq = 0;
+  const blocks = key2 === "lead-gen" ? [hero2(), benefits2(), testimonials2(), faq2(), form(), footer2()] : key2 === "product-launch" ? [hero2(), features2(4), pricing2(), faq2(), cta2(), form(), footer2()] : [hero2(), benefits2(), cta2(), form(false), footer2()];
+  return { version: 1, blocks };
+}
+
+// server/services/landing/landingForm.ts
+var landingFormSlug = (pageId) => `lp-${pageId.replace(/-/g, "").slice(0, 12)}`;
+async function syncLandingForm(page, doc, live) {
+  const existing = await prisma.form.findUnique({ where: { landingPageId: page.id } });
+  const block = doc?.blocks.find((b) => b.type === "lp_form");
+  if (!doc || !block || block.type !== "lp_form" || !live) {
+    if (existing && existing.status !== "ARCHIVED") await prisma.form.update({ where: { id: existing.id }, data: { status: "ARCHIVED" } });
+    return existing?.id ?? null;
+  }
+  const p = block.props;
+  const fields = [
+    ...p.fields.map((f) => ({ key: f.key, label: f.label, type: f.type, required: f.required, ...f.options ? { options: f.options } : {} })),
+    ...p.consent.enabled ? [{ key: "consent", label: "Consent", type: "checkbox", required: true }] : []
+  ];
+  const data = {
+    name: `Landing: ${page.title}`.slice(0, 200),
+    status: "ACTIVE",
+    fields,
+    successMessage: p.successMessage,
+    notifyUserIds: page.createdById ? [page.createdById] : []
+  };
+  if (existing) return (await prisma.form.update({ where: { id: existing.id }, data })).id;
+  return (await prisma.form.create({ data: { ...data, organizationId: page.organizationId, slug: landingFormSlug(page.id), landingPageId: page.id, createdById: page.createdById } })).id;
+}
+
+// server/services/landing/landingPageService.ts
+var landingPath = (slug) => `/lp/${slug}`;
+var landingPublicUrl = (slug) => config.publicSiteBaseUrl ? `${config.publicSiteBaseUrl.replace(/\/+$/, "")}${landingPath(slug)}` : null;
+var hasPermission2 = (u, key2) => u.role.key === "SUPER_ADMIN" || u.role.permissions.includes(key2);
+function readSeo(metadata) {
+  const m = metadata && typeof metadata === "object" ? metadata : {};
+  return { metaTitle: m.metaTitle, metaDescription: m.metaDescription, ogImageMediaId: m.ogImageMediaId ?? null, noindex: (m.robotsDirective ?? "").startsWith("noindex") };
+}
+var writeSeo = (seo) => ({
+  ...seo.metaTitle ? { metaTitle: seo.metaTitle } : {},
+  ...seo.metaDescription ? { metaDescription: seo.metaDescription } : {},
+  ...seo.ogImageMediaId ? { ogImageMediaId: seo.ogImageMediaId } : {},
+  robotsDirective: seo.noindex ? "noindex, nofollow" : "index, follow"
+});
+function readDocument(rev) {
+  const parsed = landingDocumentSchema.safeParse(rev?.editorBlocks ?? { version: 1, blocks: [] });
+  return parsed.success ? parsed.data : { version: 1, blocks: [] };
+}
+function deriveStatus(page) {
+  if (page.status === "ARCHIVED") return "ARCHIVED";
+  if (page.landingLiveRevisionId) return "PUBLISHED";
+  if (page.status === "IN_REVIEW") return "IN_REVIEW";
+  return page.landingUnpublishedAt ? "UNPUBLISHED" : "DRAFT";
+}
+function slugifyTitle(title) {
+  const base3 = title.toLowerCase().normalize("NFKD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60);
+  return base3.length >= 3 ? base3 : "landing-page";
+}
+async function assertSlugAvailable(organizationId, slug, selfId) {
+  if (isReservedLandingSlug(slug)) throw new ValidationError(`"${slug}" is a reserved address and cannot be used for a landing page.`);
+  const dup = await prisma.page.findFirst({ where: { organizationId, slug }, select: { id: true } });
+  if (dup && dup.id !== selfId) throw new ConflictError(`The address "${slug}" is already used by another page.`);
+}
+async function uniqueSlug(organizationId, title) {
+  const base3 = slugifyTitle(title);
+  for (let n = 1; n < 200; n++) {
+    const candidate = n === 1 ? base3 : `${base3}-${n}`;
+    if (isReservedLandingSlug(candidate)) continue;
+    if (!await prisma.page.findFirst({ where: { organizationId, slug: candidate }, select: { id: true } })) return candidate;
+  }
+  throw new ConflictError("Could not find a free address; choose one manually.");
+}
+async function assertMediaUsable(doc, organizationId) {
+  for (const id6 of collectLandingMediaIds(doc)) {
+    try {
+      await assertFeaturedMediaUsable(id6, organizationId);
+    } catch (err) {
+      throw new ValidationError(`An image in the page is not usable: ${err.message.replace("featuredMediaId", "the image")}`);
+    }
+  }
+}
+async function loadPage(organizationId, id6) {
+  const page = await prisma.page.findFirst({ where: { id: id6, organizationId, deletedAt: null, landingBuilder: true }, include: { currentRevision: true } });
+  if (!page) throw new NotFoundError("Landing page not found.");
+  return page;
+}
+var pendingApprovalFor = (organizationId, pageId) => prisma.automationApproval.findFirst({ where: { organizationId, entityType: "landing_page", entityId: pageId, status: "PENDING" }, select: { id: true, requestedAt: true, requesterId: true } });
+async function audit(caller, organizationId, action, pageId, meta11, extra = {}) {
+  await auditLogRepository.record({
+    organizationId,
+    actorUserId: caller?.id,
+    actorType: caller ? "USER" : "SYSTEM",
+    action,
+    resourceType: "landing_page",
+    resourceId: pageId,
+    afterData: extra,
+    ipAddress: meta11.ip,
+    userAgent: meta11.userAgent
+  });
+}
+async function toView(page) {
+  const rev = page.currentRevision;
+  const document = readDocument(rev);
+  const seo = readSeo(rev?.metadata);
+  const status = deriveStatus(page);
+  const pending = await pendingApprovalFor(page.organizationId, page.id);
+  const live = page.landingLiveRevisionId ? await prisma.contentRevision.findUnique({ where: { id: page.landingLiveRevisionId }, select: { id: true, version: true, publishedAt: true } }) : null;
+  const issues = landingPublishIssues({ title: rev?.title ?? page.title, document: rev?.editorBlocks ?? { version: 1, blocks: [] }, seo });
+  return {
+    id: page.id,
+    title: page.title,
+    slug: page.slug,
+    status,
+    templateKey: page.landingTemplateKey,
+    document,
+    seo,
+    version: rev?.version ?? 1,
+    updatedAt: page.updatedAt,
+    createdAt: page.createdAt,
+    publishedAt: page.publishedAt,
+    unpublishedAt: page.landingUnpublishedAt,
+    live: live ? { revisionId: live.id, version: live.version, publishedAt: live.publishedAt } : null,
+    hasUnpublishedChanges: !!live && page.currentRevisionId !== live.id,
+    pendingApproval: pending ? { id: pending.id, requestedAt: pending.requestedAt } : null,
+    publishIssues: issues,
+    canPublishNow: issues.length === 0,
+    path: landingPath(page.slug),
+    publicUrl: status === "PUBLISHED" ? landingPublicUrl(page.slug) : null
+  };
+}
+var landingPageService = {
+  templates: () => LANDING_TEMPLATES,
+  async list(caller, q) {
+    const where2 = {
+      organizationId: caller.organizationId,
+      landingBuilder: true,
+      deletedAt: null,
+      ...q.search ? { OR: [{ title: { contains: q.search, mode: "insensitive" } }, { slug: { contains: q.search, mode: "insensitive" } }] } : {},
+      ...q.status === "ARCHIVED" ? { status: "ARCHIVED" } : q.status === "PUBLISHED" ? { status: { not: "ARCHIVED" }, landingLiveRevisionId: { not: null } } : q.status === "IN_REVIEW" ? { status: "IN_REVIEW", landingLiveRevisionId: null } : q.status === "UNPUBLISHED" ? { status: "DRAFT", landingLiveRevisionId: null, landingUnpublishedAt: { not: null } } : q.status === "DRAFT" ? { status: "DRAFT", landingLiveRevisionId: null, landingUnpublishedAt: null } : {}
+    };
+    const [rows, total] = await Promise.all([
+      prisma.page.findMany({ where: where2, orderBy: { updatedAt: "desc" }, skip: (q.page - 1) * q.limit, take: q.limit, include: { currentRevision: { select: { version: true, metadata: true } } } }),
+      prisma.page.count({ where: where2 })
+    ]);
+    const pendingIds = new Set((await prisma.automationApproval.findMany({ where: { organizationId: caller.organizationId, entityType: "landing_page", status: "PENDING", entityId: { in: rows.map((r) => r.id) } }, select: { entityId: true } })).map((a) => a.entityId));
+    return {
+      rows: rows.map((p) => ({
+        id: p.id,
+        title: p.title,
+        slug: p.slug,
+        status: deriveStatus(p),
+        path: landingPath(p.slug),
+        templateKey: p.landingTemplateKey,
+        updatedAt: p.updatedAt,
+        publishedAt: p.publishedAt,
+        hasUnpublishedChanges: !!p.landingLiveRevisionId && p.currentRevisionId !== p.landingLiveRevisionId,
+        pendingApproval: pendingIds.has(p.id),
+        version: p.currentRevision?.version ?? 1,
+        noindex: readSeo(p.currentRevision?.metadata).noindex
+      })),
+      total,
+      page: q.page,
+      limit: q.limit
+    };
+  },
+  async get(caller, id6) {
+    return toView(await loadPage(caller.organizationId, id6));
+  },
+  async create(caller, input, meta11 = {}) {
+    const organizationId = caller.organizationId;
+    const slug = input.slug ?? await uniqueSlug(organizationId, input.title);
+    if (input.slug) await assertSlugAvailable(organizationId, slug);
+    const doc = landingDocumentSchema.parse(buildTemplateDocument(input.templateKey));
+    const pageId = await prisma.$transaction(async (tx) => {
+      const page = await tx.page.create({ data: { organizationId, slug, title: input.title, status: "DRAFT", createdById: caller.id, pageType: "LANDING", landingBuilder: true, landingTemplateKey: input.templateKey } });
+      const rev = await tx.contentRevision.create({
+        data: { pageId: page.id, version: 1, status: "DRAFT", title: input.title, body: flattenLandingText(doc), metadata: writeSeo({ ogImageMediaId: null, noindex: false }), editorBlocks: doc, createdById: caller.id }
+      });
+      await tx.page.update({ where: { id: page.id }, data: { currentRevisionId: rev.id } });
+      return page.id;
+    });
+    await audit(caller, organizationId, "LANDING_PAGE_CREATED", pageId, meta11, { slug, templateKey: input.templateKey });
+    return toView(await loadPage(organizationId, pageId));
+  },
+  async update(caller, id6, input, meta11 = {}) {
+    const organizationId = caller.organizationId;
+    const page = await loadPage(organizationId, id6);
+    if (page.status === "ARCHIVED") throw new ConflictError("An archived landing page must be restored before it can be edited.");
+    if (await pendingApprovalFor(organizationId, id6)) throw new ConflictError("This page is waiting for approval. Withdraw the request to edit it.");
+    if (input.expectedUpdatedAt && page.updatedAt.getTime() !== input.expectedUpdatedAt.getTime()) throw new ConflictError("This page was changed by someone else. Reload to see the latest version.");
+    const rev = page.currentRevision;
+    if (!rev) throw new ConflictError("This page has no revision to edit.");
+    let slugPatch;
+    if (input.slug !== void 0 && input.slug !== page.slug) {
+      await assertSlugAvailable(organizationId, input.slug, id6);
+      if (page.landingLiveRevisionId && !hasPermission2(caller, "marketing.landing.publish")) throw new AuthorizationError("Changing the address of a live page needs publish permission.");
+      slugPatch = input.slug;
+    }
+    if (input.document) await assertMediaUsable(input.document, organizationId);
+    if (input.seo?.ogImageMediaId) await assertFeaturedMediaUsable(input.seo.ogImageMediaId, organizationId).catch((e) => {
+      throw new ValidationError(`The social image is not usable: ${e.message.replace("featuredMediaId", "the image")}`);
+    });
+    const seoNow = readSeo(rev.metadata);
+    const seoNext = input.seo ? {
+      metaTitle: input.seo.metaTitle !== void 0 ? input.seo.metaTitle || void 0 : seoNow.metaTitle,
+      metaDescription: input.seo.metaDescription !== void 0 ? input.seo.metaDescription || void 0 : seoNow.metaDescription,
+      ogImageMediaId: input.seo.ogImageMediaId !== void 0 ? input.seo.ogImageMediaId : seoNow.ogImageMediaId,
+      noindex: input.seo.noindex ?? seoNow.noindex
+    } : seoNow;
+    const title = input.title ?? rev.title;
+    const doc = input.document ?? readDocument(rev);
+    const fork = rev.id === page.landingLiveRevisionId || rev.status === "PUBLISHED";
+    await prisma.$transaction(async (tx) => {
+      let currentRevisionId = page.currentRevisionId;
+      const data = { title, body: flattenLandingText(doc), metadata: writeSeo(seoNext), editorBlocks: doc };
+      if (fork) {
+        const last = await tx.contentRevision.findFirst({ where: { pageId: id6 }, orderBy: { version: "desc" }, select: { version: true } });
+        const created = await tx.contentRevision.create({ data: { ...data, pageId: id6, version: (last?.version ?? rev.version) + 1, status: "DRAFT", createdById: caller.id } });
+        currentRevisionId = created.id;
+      } else {
+        await tx.contentRevision.update({ where: { id: rev.id }, data });
+      }
+      await tx.page.update({ where: { id: id6 }, data: { title, currentRevisionId, ...slugPatch ? { slug: slugPatch } : {} } });
+    });
+    if (slugPatch && page.publishedAt) {
+      await redirectService.autoRedirectOnSlugChange({ organizationId, fromPath: landingPath(page.slug), toPath: landingPath(slugPatch), resourceType: "landing_page", resourceId: id6 });
+    }
+    await audit(caller, organizationId, "LANDING_PAGE_UPDATED", id6, meta11, { fields: Object.keys(input).filter((k) => k !== "expectedUpdatedAt"), slugChanged: !!slugPatch, forkedRevision: fork });
+    return toView(await loadPage(organizationId, id6));
+  },
+  async listRevisions(caller, id6) {
+    const page = await loadPage(caller.organizationId, id6);
+    const rows = await prisma.contentRevision.findMany({ where: { pageId: id6 }, orderBy: { version: "desc" }, take: 100, include: { createdBy: { select: { firstName: true, lastName: true } } } });
+    return rows.map((r) => ({
+      id: r.id,
+      version: r.version,
+      title: r.title,
+      createdAt: r.createdAt,
+      publishedAt: r.publishedAt,
+      createdBy: r.createdBy ? `${r.createdBy.firstName} ${r.createdBy.lastName}`.trim() : null,
+      isCurrent: r.id === page.currentRevisionId,
+      isLive: r.id === page.landingLiveRevisionId,
+      blocks: readDocument(r).blocks.length
+    }));
+  },
+  /** Restore = clone an earlier revision into a NEW working draft (history is append-only); it goes live only through approval. */
+  async restoreRevision(caller, id6, revisionId, meta11 = {}) {
+    const organizationId = caller.organizationId;
+    const page = await loadPage(organizationId, id6);
+    if (page.status === "ARCHIVED") throw new ConflictError("An archived landing page must be restored first.");
+    if (await pendingApprovalFor(organizationId, id6)) throw new ConflictError("This page is waiting for approval. Withdraw the request first.");
+    const target = await prisma.contentRevision.findFirst({ where: { id: revisionId, pageId: id6 } });
+    if (!target) throw new NotFoundError("Revision not found.");
+    await prisma.$transaction(async (tx) => {
+      const last = await tx.contentRevision.findFirst({ where: { pageId: id6 }, orderBy: { version: "desc" }, select: { version: true } });
+      const created = await tx.contentRevision.create({
+        data: { pageId: id6, version: (last?.version ?? 0) + 1, status: "DRAFT", title: target.title, body: target.body, excerpt: target.excerpt, metadata: target.metadata ?? {}, editorBlocks: target.editorBlocks ?? void 0, createdById: caller.id }
+      });
+      await tx.page.update({ where: { id: id6 }, data: { currentRevisionId: created.id, title: target.title } });
+    });
+    await audit(caller, organizationId, "LANDING_PAGE_REVISION_RESTORED", id6, meta11, { fromVersion: target.version });
+    return toView(await loadPage(organizationId, id6));
+  },
+  /** Takes a live page offline at once (the address then answers 410). Needs publish permission. The draft stays; going live again needs approval. */
+  async unpublish(caller, id6, meta11 = {}) {
+    const organizationId = caller.organizationId;
+    const page = await loadPage(organizationId, id6);
+    if (!page.landingLiveRevisionId) throw new ConflictError("This page is not live.");
+    await prisma.page.update({ where: { id: id6 }, data: { status: "DRAFT", landingLiveRevisionId: null, landingUnpublishedAt: /* @__PURE__ */ new Date() } });
+    await syncLandingForm(page, null, false);
+    await audit(caller, organizationId, "LANDING_PAGE_UNPUBLISHED", id6, meta11, { slug: page.slug });
+    return toView(await loadPage(organizationId, id6));
+  },
+  async archive(caller, id6, meta11 = {}) {
+    const organizationId = caller.organizationId;
+    const page = await loadPage(organizationId, id6);
+    if (page.status === "ARCHIVED") throw new ConflictError("This page is already archived.");
+    const wasLive = !!page.landingLiveRevisionId;
+    if (wasLive && !hasPermission2(caller, "marketing.landing.publish")) throw new AuthorizationError("Archiving a live page needs publish permission.");
+    await prisma.automationApproval.updateMany({ where: { organizationId, entityType: "landing_page", entityId: id6, status: "PENDING" }, data: { status: "CANCELLED", decidedAt: /* @__PURE__ */ new Date(), decisionReason: "Page archived" } });
+    await prisma.page.update({ where: { id: id6 }, data: { status: "ARCHIVED", landingLiveRevisionId: null, ...wasLive || page.publishedAt ? { landingUnpublishedAt: /* @__PURE__ */ new Date() } : {} } });
+    await syncLandingForm(page, null, false);
+    await audit(caller, organizationId, "LANDING_PAGE_ARCHIVED", id6, meta11, { wasLive });
+    return toView(await loadPage(organizationId, id6));
+  },
+  async unarchive(caller, id6, meta11 = {}) {
+    const organizationId = caller.organizationId;
+    const page = await loadPage(organizationId, id6);
+    if (page.status !== "ARCHIVED") throw new ConflictError("This page is not archived.");
+    await prisma.page.update({ where: { id: id6 }, data: { status: "DRAFT" } });
+    await audit(caller, organizationId, "LANDING_PAGE_UNARCHIVED", id6, meta11);
+    return toView(await loadPage(organizationId, id6));
+  },
+  /** A private link to the exact public rendering of the WORKING draft. Only a hash is stored; the raw token is returned once. */
+  async createPreview(caller, id6, ttlHours, meta11 = {}) {
+    const organizationId = caller.organizationId;
+    await loadPage(organizationId, id6);
+    const token = crypto13.randomBytes(32).toString("base64url");
+    const expiresAt = new Date(Date.now() + ttlHours * 36e5);
+    await prisma.landingPreviewToken.create({ data: { pageId: id6, tokenHash: hashToken(token), expiresAt, createdById: caller.id } });
+    await audit(caller, organizationId, "LANDING_PAGE_PREVIEW_CREATED", id6, meta11, { expiresAt });
+    const base3 = config.publicSiteBaseUrl ? config.publicSiteBaseUrl.replace(/\/+$/, "") : null;
+    return { token, expiresAt, url: base3 ? `${base3}/lp-preview/${token}` : null, path: `/lp-preview/${token}` };
+  },
+  async revokePreviews(caller, id6, meta11 = {}) {
+    await loadPage(caller.organizationId, id6);
+    const res = await prisma.landingPreviewToken.updateMany({ where: { pageId: id6, revokedAt: null, expiresAt: { gt: /* @__PURE__ */ new Date() } }, data: { revokedAt: /* @__PURE__ */ new Date() } });
+    await audit(caller, caller.organizationId, "LANDING_PAGE_PREVIEWS_REVOKED", id6, meta11, { count: res.count });
+    return { revoked: res.count };
+  },
+  /** `https://<site>/lp/<slug>?utm_*` for Composer posts: only for a LIVE page, with validated parameters. `url` is null when PUBLIC_SITE_BASE_URL is not configured (the relative `path` is always returned). */
+  async utmLink(caller, id6, p) {
+    const page = await loadPage(caller.organizationId, id6);
+    if (!page.landingLiveRevisionId) throw new ConflictError("Only a live landing page can be linked. Publish it first.");
+    const base3 = landingPublicUrl(page.slug);
+    const q = new URLSearchParams({ utm_source: p.source, utm_medium: p.medium, utm_campaign: p.campaign });
+    if (p.term) q.set("utm_term", p.term);
+    if (p.content) q.set("utm_content", p.content);
+    return { url: base3 ? `${base3}?${q.toString()}` : null, path: `${landingPath(page.slug)}?${q.toString()}` };
+  },
+  /** Live pages for pickers (Composer UTM helper): slug, title, address. Nothing else. */
+  async listLive(caller) {
+    const rows = await prisma.page.findMany({ where: { organizationId: caller.organizationId, landingBuilder: true, deletedAt: null, landingLiveRevisionId: { not: null }, status: { not: "ARCHIVED" } }, orderBy: { title: "asc" }, take: 100, select: { id: true, title: true, slug: true } });
+    return rows.map((r) => ({ ...r, path: landingPath(r.slug), url: landingPublicUrl(r.slug) }));
+  },
+  /** For the approval flow. */
+  loadPage,
+  toView
+};
+
+// server/services/landing/landingApprovalService.ts
+var LANDING_ENTITY = "landing_page";
+var WORKFLOW_CATEGORY = "CONTENT_APPROVAL";
+var APPROVER_ROLE_KEYS2 = ["ADMIN", "SUPER_ADMIN"];
+var can = (u, key2) => u.role.key === "SUPER_ADMIN" || u.role.permissions.includes(key2);
+async function workflowFor(organizationId) {
+  const existing = await prisma.automationWorkflow.findFirst({ where: { organizationId, category: WORKFLOW_CATEGORY } });
+  if (existing) return existing;
+  return prisma.automationWorkflow.create({
+    data: { organizationId, name: "Content Approval", description: "System workflow anchoring CMS content approval requests.", category: WORKFLOW_CATEGORY, status: "ACTIVE", triggerType: "MANUAL", steps: [] }
+  });
+}
+var landingApprovalService = {
+  /** Author asks for the working draft to go live (first publish, or an update to a live page). */
+  async submit(caller, id6, meta11 = {}) {
+    const organizationId = caller.organizationId;
+    const page = await landingPageService.loadPage(organizationId, id6);
+    if (page.status === "ARCHIVED") throw new ConflictError("An archived landing page must be restored first.");
+    if (await pendingApprovalFor(organizationId, id6)) throw new ConflictError("This page already has a pending approval request.");
+    const rev = page.currentRevision;
+    if (!rev) throw new ConflictError("This page has no content to publish.");
+    if (page.landingLiveRevisionId === rev.id) throw new ConflictError("There are no unpublished changes to send for approval.");
+    const issues = landingPublishIssues({ title: rev.title, document: rev.editorBlocks ?? { version: 1, blocks: [] }, seo: readSeo(rev.metadata) });
+    if (issues.length > 0) throw new ValidationError("This page cannot be sent for approval yet.", { issues });
+    await assertMediaUsable(readDocument(rev), organizationId);
+    const workflow = await workflowFor(organizationId);
+    const execution = await prisma.automationExecution.create({
+      data: { organizationId, workflowId: workflow.id, workflowVersion: workflow.currentVersion, status: "WAITING_APPROVAL", triggerType: "MANUAL", entityType: LANDING_ENTITY, entityId: id6, correlationId: crypto14.randomUUID(), initiatedById: caller.id }
+    });
+    const approval = await prisma.automationApproval.create({
+      data: {
+        organizationId,
+        executionId: execution.id,
+        workflowId: workflow.id,
+        stepId: "landing-approval",
+        action: "publish_landing_page",
+        description: `Publish landing page "${rev.title}"`,
+        entityType: LANDING_ENTITY,
+        entityId: id6,
+        requesterId: caller.id,
+        status: "PENDING",
+        payload: { revisionId: rev.id, version: rev.version, slug: page.slug, update: !!page.landingLiveRevisionId }
+      }
+    });
+    if (!page.landingLiveRevisionId) await prisma.page.update({ where: { id: id6 }, data: { status: "IN_REVIEW" } });
+    await auditLogRepository.record({ organizationId, actorUserId: caller.id, actorType: "USER", action: "LANDING_PAGE_SUBMITTED_FOR_APPROVAL", resourceType: "landing_page", resourceId: id6, afterData: { approvalId: approval.id, version: rev.version }, ipAddress: meta11.ip, userAgent: meta11.userAgent });
+    const approvers = await userRepository.listActiveByRoleKeysInOrg(organizationId, APPROVER_ROLE_KEYS2);
+    await Promise.all(approvers.filter((u) => u.id !== caller.id).map((u) => notificationService.notify({ organizationId, userId: u.id, type: "approval_requested", title: "Landing page approval requested", message: `"${rev.title}" is waiting for your approval.`, entityType: "automation_approval", entityId: approval.id })));
+    return { approvalId: approval.id };
+  },
+  /** The requester (or anyone who can edit) takes the request back so the page can be edited again. */
+  async withdraw(caller, id6, meta11 = {}) {
+    const organizationId = caller.organizationId;
+    const page = await landingPageService.loadPage(organizationId, id6);
+    const pending = await pendingApprovalFor(organizationId, id6);
+    if (!pending) throw new ConflictError("There is no pending approval request for this page.");
+    await prisma.automationApproval.update({ where: { id: pending.id }, data: { status: "CANCELLED", decidedAt: /* @__PURE__ */ new Date(), decisionReason: "Withdrawn by the author" } });
+    await prisma.automationExecution.updateMany({ where: { approvals: { some: { id: pending.id } } }, data: { status: "CANCELLED", completedAt: /* @__PURE__ */ new Date() } }).catch(() => void 0);
+    if (!page.landingLiveRevisionId && page.status === "IN_REVIEW") await prisma.page.update({ where: { id: id6 }, data: { status: "DRAFT" } });
+    await auditLogRepository.record({ organizationId, actorUserId: caller.id, actorType: "USER", action: "LANDING_PAGE_APPROVAL_WITHDRAWN", resourceType: "landing_page", resourceId: id6, afterData: { approvalId: pending.id }, ipAddress: meta11.ip, userAgent: meta11.userAgent });
+  },
+  /** Called by the Approvals center. Needs `marketing.landing.publish`. */
+  async decide(caller, approvalId, decision, reason, meta11 = {}) {
+    if (!can(caller, "marketing.landing.publish")) throw new AuthorizationError('Permission denied. Required privilege: "marketing.landing.publish"');
+    const organizationId = caller.organizationId;
+    const approval = await prisma.automationApproval.findFirst({ where: { id: approvalId, organizationId, entityType: LANDING_ENTITY } });
+    if (!approval) throw new NotFoundError("Approval request not found.");
+    if (approval.status !== "PENDING") throw new ValidationError(`This approval is already resolved with status ${approval.status}.`);
+    const pageId = approval.entityId;
+    const page = await landingPageService.loadPage(organizationId, pageId);
+    const rev = page.currentRevision;
+    const reviewed = approval.payload?.revisionId;
+    if (decision === "APPROVED") {
+      if (!rev || rev.id !== reviewed) throw new ConflictError("The page changed after it was submitted. Ask the author to send the current version again.");
+      const issues = landingPublishIssues({ title: rev.title, document: rev.editorBlocks ?? { version: 1, blocks: [] }, seo: readSeo(rev.metadata) });
+      if (issues.length > 0) throw new ConflictError("The page can no longer be published.", { issues });
+      const doc = readDocument(rev);
+      await assertMediaUsable(doc, organizationId);
+      const now = /* @__PURE__ */ new Date();
+      await prisma.$transaction([
+        prisma.contentRevision.update({ where: { id: rev.id }, data: { status: "PUBLISHED", publishedAt: now } }),
+        prisma.page.update({ where: { id: pageId }, data: { status: "PUBLISHED", publishedAt: now, scheduledAt: null, landingLiveRevisionId: rev.id, landingUnpublishedAt: null, title: rev.title } })
+      ]);
+      await syncLandingForm({ id: page.id, organizationId, title: rev.title, createdById: page.createdById }, doc, true);
+    } else if (!page.landingLiveRevisionId) {
+      await prisma.page.update({ where: { id: pageId }, data: { status: "DRAFT" } });
+    }
+    const updated = await prisma.automationApproval.update({ where: { id: approval.id }, data: { status: decision, approverId: caller.id, decisionReason: reason || null, decidedAt: /* @__PURE__ */ new Date() } });
+    await prisma.automationExecution.update({ where: { id: approval.executionId }, data: { status: decision === "APPROVED" ? "COMPLETED" : "CANCELLED", completedAt: /* @__PURE__ */ new Date() } });
+    await auditLogRepository.record({
+      organizationId,
+      actorUserId: caller.id,
+      actorType: "USER",
+      action: decision === "APPROVED" ? "LANDING_PAGE_PUBLISHED" : decision === "CHANGES_REQUESTED" ? "LANDING_PAGE_CHANGES_REQUESTED" : "LANDING_PAGE_APPROVAL_REJECTED",
+      resourceType: "landing_page",
+      resourceId: pageId,
+      afterData: { approvalId: approval.id, reason: reason ?? null, path: landingPath(page.slug) },
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
+    });
+    if (approval.requesterId && approval.requesterId !== caller.id) {
+      await notificationService.notify({
+        organizationId,
+        userId: approval.requesterId,
+        type: decision === "APPROVED" ? "approval_completed" : "approval_rejected",
+        title: decision === "APPROVED" ? "Landing page published" : decision === "CHANGES_REQUESTED" ? "Changes requested" : "Landing page rejected",
+        message: reason ? `"${page.title}": ${reason}` : `"${page.title}" was ${decision.toLowerCase().replace("_", " ")}.`,
+        entityType: LANDING_ENTITY,
+        entityId: pageId
+      });
+    }
+    return { approvalId: updated.id, decision: updated.status };
+  }
+};
+
 // server/services/social/socialPostService.ts
 init_errors();
 
@@ -17126,8 +17912,8 @@ var mockProvider = {
     if (t.includes("[[fail-permanent]]")) throw new SocialPublishError("permanent", "Mock: content rejected by the network.", { httpStatus: 422 });
     if (t.includes("[[fail-auth]]")) throw new SocialPublishError("auth", "Mock: access token revoked.", { httpStatus: 401 });
     if (t.includes("[[timeout]]")) throw new SocialPublishError("uncertain", "Mock: request timed out after being sent.");
-    const id4 = `mockpost_${input.idempotencyKey.slice(0, 12)}`;
-    return { externalPostId: id4, externalUrl: `https://mock.example/posts/${id4}` };
+    const id6 = `mockpost_${input.idempotencyKey.slice(0, 12)}`;
+    return { externalPostId: id6, externalUrl: `https://mock.example/posts/${id6}` };
   },
   // ---- Inbox ----
   /** Mirrors Messenger's rule so the core enforcement is testable without a network: DMs can be answered for 24 hours after the last inbound message. */
@@ -17326,9 +18112,9 @@ var retryAfter = (h) => {
 };
 function errorFromResponse(status, retryAfterHeader, bodyHint) {
   const kind = classifyHttpStatus(status);
-  const base2 = kind === "auth" ? "LinkedIn rejected the credentials" : kind === "transient" ? "LinkedIn is temporarily unavailable or rate limiting" : "LinkedIn rejected the post";
+  const base3 = kind === "auth" ? "LinkedIn rejected the credentials" : kind === "transient" ? "LinkedIn is temporarily unavailable or rate limiting" : "LinkedIn rejected the post";
   const hint = bodyHint ? `: ${bodyHint.replace(/\s+/g, " ").slice(0, 160)}` : "";
-  return new SocialPublishError(kind, `${base2} (HTTP ${status})${hint}`, { httpStatus: status, retryAfterMs: retryAfter(retryAfterHeader) });
+  return new SocialPublishError(kind, `${base3} (HTTP ${status})${hint}`, { httpStatus: status, retryAfterMs: retryAfter(retryAfterHeader) });
 }
 function errorFromNetwork(err, phase) {
   const code = err?.cause?.code ?? err?.code;
@@ -17338,8 +18124,8 @@ function errorFromNetwork(err, phase) {
   return new SocialPublishError("uncertain", `No response from LinkedIn after sending (${code ?? name ?? "timeout"}); the post may have been published.`);
 }
 function postUrnFromResponse(status, headers) {
-  const id4 = headers.get("x-restli-id") ?? headers.get("x-linkedin-id");
-  if (status >= 200 && status < 300 && id4) return decodeURIComponent(id4);
+  const id6 = headers.get("x-restli-id") ?? headers.get("x-linkedin-id");
+  if (status >= 200 && status < 300 && id6) return decodeURIComponent(id6);
   throw new SocialPublishError("uncertain", `LinkedIn answered HTTP ${status} without a post id; the post may have been published.`, { httpStatus: status });
 }
 
@@ -17710,8 +18496,8 @@ var facebookAnalytics = {
 var DEFAULT_FACEBOOK_SCOPES = ["pages_show_list", "pages_manage_metadata", "pages_manage_posts", "pages_manage_engagement", "pages_read_engagement", "pages_messaging"];
 var ANALYTICS_SCOPE = "read_insights";
 var facebookScopes = () => {
-  const base2 = config.metaLoginScopes ? config.metaLoginScopes.split(",") : [...DEFAULT_FACEBOOK_SCOPES];
-  return config.socialAnalyticsScopes && !base2.includes(ANALYTICS_SCOPE) ? [...base2, ANALYTICS_SCOPE] : base2;
+  const base3 = config.metaLoginScopes ? config.metaLoginScopes.split(",") : [...DEFAULT_FACEBOOK_SCOPES];
+  return config.socialAnalyticsScopes && !base3.includes(ANALYTICS_SCOPE) ? [...base3, ANALYTICS_SCOPE] : base3;
 };
 var REQUIRED_SCOPES = ["pages_manage_posts", "pages_manage_engagement", "pages_read_engagement"];
 var SUBSCRIBED_FIELDS_FULL = "feed,messages,mention";
@@ -17720,9 +18506,9 @@ var MESSENGER_TEXT_LIMIT = 2e3;
 var appToken = () => `${config.metaAppId}|${config.metaAppSecret}`;
 var pageIdOf = (tokens2, fallback) => String(tokens2.pageId ?? fallback ?? "");
 var epochToIso = (seconds) => typeof seconds === "number" ? new Date(seconds * 1e3).toISOString() : void 0;
-var postUrl = (id4) => {
-  const cut = id4.lastIndexOf("_");
-  return cut > 0 ? `https://www.facebook.com/${id4.slice(0, cut)}/posts/${id4.slice(cut + 1)}` : `https://www.facebook.com/${id4}`;
+var postUrl = (id6) => {
+  const cut = id6.lastIndexOf("_");
+  return cut > 0 ? `https://www.facebook.com/${id6.slice(0, cut)}/posts/${id6.slice(cut + 1)}` : `https://www.facebook.com/${id6}`;
 };
 var messengerReplyWindow = (lastInboundAt, now) => {
   if (!lastInboundAt) return { open: false, closesAt: null, reason: "There is no message from this person to reply to." };
@@ -17765,13 +18551,13 @@ function parseWebhookPayload(payload) {
         const from = v.from;
         const commentId = typeof v.comment_id === "string" ? v.comment_id : void 0;
         const postId = typeof v.post_id === "string" ? v.post_id : void 0;
-        const id4 = commentId ?? postId;
-        if (!id4 || from?.id && from.id === pageId) continue;
+        const id6 = commentId ?? postId;
+        if (!id6 || from?.id && from.id === pageId) continue;
         out.push({
           type: "MENTION",
           accountExternalId: pageId,
-          providerThreadId: `m:${id4}`,
-          providerMessageId: id4,
+          providerThreadId: `m:${id6}`,
+          providerMessageId: id6,
           participant: { externalId: from?.id, name: from?.name },
           text: typeof v.message === "string" && v.message ? v.message : "[mention without text]",
           subjectRef: postId,
@@ -17780,9 +18566,9 @@ function parseWebhookPayload(payload) {
         });
       } else if (change.field === "ratings" && (v.review_text || v.rating_text || v.recommendation_type)) {
         const reviewer = v.reviewer_id;
-        const id4 = v.open_graph_story_id ?? (reviewer ? `${reviewer}:${v.created_time ?? ""}` : void 0);
-        if (!id4 || reviewer === pageId) continue;
-        out.push({ type: "REVIEW", accountExternalId: pageId, providerThreadId: `r:${id4}`, providerMessageId: id4, participant: { externalId: reviewer, name: v.reviewer_name }, text: String(v.review_text ?? v.rating_text ?? v.recommendation_type), createdAt: epochToIso(v.created_time) });
+        const id6 = v.open_graph_story_id ?? (reviewer ? `${reviewer}:${v.created_time ?? ""}` : void 0);
+        if (!id6 || reviewer === pageId) continue;
+        out.push({ type: "REVIEW", accountExternalId: pageId, providerThreadId: `r:${id6}`, providerMessageId: id6, participant: { externalId: reviewer, name: v.reviewer_name }, text: String(v.review_text ?? v.rating_text ?? v.recommendation_type), createdAt: epochToIso(v.created_time) });
       }
     }
     for (const m of entry.messaging ?? []) {
@@ -17854,8 +18640,8 @@ var facebookPageProvider = {
     throw new Error("Facebook Page access tokens cannot be refreshed automatically; reconnect the Page to renew access.");
   },
   async getProfile(tokens2) {
-    const id4 = pageIdOf(tokens2);
-    const r = await graph({ method: "GET", path: `/${id4}`, token: tokens2.accessToken, phase: "read", query: { fields: "id,name,username,category,picture{url}" } });
+    const id6 = pageIdOf(tokens2);
+    const r = await graph({ method: "GET", path: `/${id6}`, token: tokens2.accessToken, phase: "read", query: { fields: "id,name,username,category,picture{url}" } });
     return { externalAccountId: r.json.id, displayName: r.json.name ?? r.json.id, handle: r.json.username ?? null, avatarUrl: r.json.picture?.data?.url ?? null, accountType: "PAGE" };
   },
   async healthCheck(tokens2) {
@@ -17890,9 +18676,9 @@ var facebookPageProvider = {
 
 ${input.linkUrl}`.trim() : input.text;
       res = await graph({ method: "POST", path: `/${page}/photos`, token: tokens2.accessToken, phase: "write", body: { url, caption, published: true } });
-      const id4 = res.json.post_id ?? res.json.id;
-      if (!id4) throw new SocialPublishError("uncertain", "Meta answered without a post id; the photo may have been published.");
-      return { externalPostId: id4, externalUrl: postUrl(id4) };
+      const id6 = res.json.post_id ?? res.json.id;
+      if (!id6) throw new SocialPublishError("uncertain", "Meta answered without a post id; the photo may have been published.");
+      return { externalPostId: id6, externalUrl: postUrl(id6) };
     }
     res = await graph({ method: "POST", path: `/${page}/feed`, token: tokens2.accessToken, phase: "write", body: { message: input.text, ...input.linkUrl ? { link: input.linkUrl } : {}, published: true } });
     if (!res.json.id) throw new SocialPublishError("uncertain", "Meta answered without a post id; the post may have been published.");
@@ -18156,8 +18942,8 @@ var instagramAnalytics = {
 var DEFAULT_INSTAGRAM_SCOPES = ["instagram_basic", "instagram_content_publish", "instagram_manage_comments", "instagram_manage_messages", "pages_show_list", "pages_read_engagement", "business_management"];
 var INSIGHTS_SCOPE = "instagram_manage_insights";
 var instagramScopes = () => {
-  const base2 = config.metaInstagramLoginScopes ? config.metaInstagramLoginScopes.split(",") : [...DEFAULT_INSTAGRAM_SCOPES];
-  return config.socialAnalyticsScopes && !base2.includes(INSIGHTS_SCOPE) ? [...base2, INSIGHTS_SCOPE] : base2;
+  const base3 = config.metaInstagramLoginScopes ? config.metaInstagramLoginScopes.split(",") : [...DEFAULT_INSTAGRAM_SCOPES];
+  return config.socialAnalyticsScopes && !base3.includes(INSIGHTS_SCOPE) ? [...base3, INSIGHTS_SCOPE] : base3;
 };
 var REQUIRED_SCOPES2 = ["instagram_basic", "instagram_content_publish", "instagram_manage_comments"];
 var WEBHOOK_OBJECT = "instagram";
@@ -18205,17 +18991,17 @@ function parseWebhookPayload2(payload) {
         const mediaId = typeof v.media_id === "string" ? v.media_id : void 0;
         const mentionCommentId = typeof v.comment_id === "string" ? v.comment_id : void 0;
         if (!mediaId && !mentionCommentId) continue;
-        const id4 = mentionCommentId ?? mediaId;
+        const id6 = mentionCommentId ?? mediaId;
         out.push({
           type: "MENTION",
           accountExternalId: igId,
           providerThreadId: mentionCommentId ? `mc:${mentionCommentId}` : `mm:${mediaId}`,
-          providerMessageId: id4,
+          providerMessageId: id6,
           participant: {},
           text: "",
           subjectRef: mediaId,
           createdAt: epochToIso2(entry.time),
-          lookup: { kind: mentionCommentId ? "ig_comment" : "ig_media", id: id4 }
+          lookup: { kind: mentionCommentId ? "ig_comment" : "ig_media", id: id6 }
         });
         continue;
       }
@@ -18392,8 +19178,8 @@ var instagramProvider = {
     throw new Error("The Page access token used for Instagram cannot be refreshed automatically; reconnect the account to renew access.");
   },
   async getProfile(tokens2) {
-    const id4 = String(tokens2.igId ?? "");
-    const target = id4 || "me";
+    const id6 = String(tokens2.igId ?? "");
+    const target = id6 || "me";
     const r = await graph({ method: "GET", path: `/${target}`, token: tokens2.accessToken, phase: "read", query: { fields: "id,username,name,profile_picture_url" } });
     return { externalAccountId: r.json.id, displayName: r.json.name ? `${r.json.name} (@${r.json.username ?? r.json.id})` : `@${r.json.username ?? r.json.id}`, handle: r.json.username ?? null, avatarUrl: r.json.profile_picture_url ?? null, accountType: "BUSINESS" };
   },
@@ -18652,9 +19438,9 @@ function stub(key2, label, configured, scopes, constraints) {
 }
 
 // server/services/social/connectors/googleBusinessProvider.ts
-var base = stub("google_business", "Google Business Profile", () => false, ["https://www.googleapis.com/auth/business.manage"], () => ({ ...DEFAULT_CONSTRAINTS }));
+var base2 = stub("google_business", "Google Business Profile", () => false, ["https://www.googleapis.com/auth/business.manage"], () => ({ ...DEFAULT_CONSTRAINTS }));
 var googleBusinessProvider = {
-  ...base,
+  ...base2,
   async fetchReviewSummary() {
     throw new ConnectorNotImplementedError("Google Business Profile", "reading reviews (API access not approved)");
   },
@@ -18720,38 +19506,38 @@ function runGuardrails(input) {
   for (const target of input.targets) {
     const c = target.constraints;
     const where2 = target.label;
-    const base2 = { socialAccountId: target.socialAccountId };
-    if (target.accountStatus === "DISCONNECTED" || target.accountStatus === "ERROR") add({ rule: "account_unavailable", severity: "block", message: `${where2}: this account is ${target.accountStatus.toLowerCase()}. Reconnect it first.`, ...base2 });
-    else if (target.accountStatus === "NEEDS_REAUTH") add({ rule: "account_unavailable", severity: "warn", message: `${where2}: this account needs to be reconnected before publishing.`, ...base2 });
-    if (!target.text.trim()) add({ rule: "empty_body", severity: "block", message: `${where2}: the text is empty.`, ...base2 });
-    if (target.text.length > c.maxChars) add({ rule: "too_long", severity: "block", message: `${where2}: ${target.text.length}/${c.maxChars} characters \u2014 shorten the text.`, ...base2 });
+    const base3 = { socialAccountId: target.socialAccountId };
+    if (target.accountStatus === "DISCONNECTED" || target.accountStatus === "ERROR") add({ rule: "account_unavailable", severity: "block", message: `${where2}: this account is ${target.accountStatus.toLowerCase()}. Reconnect it first.`, ...base3 });
+    else if (target.accountStatus === "NEEDS_REAUTH") add({ rule: "account_unavailable", severity: "warn", message: `${where2}: this account needs to be reconnected before publishing.`, ...base3 });
+    if (!target.text.trim()) add({ rule: "empty_body", severity: "block", message: `${where2}: the text is empty.`, ...base3 });
+    if (target.text.length > c.maxChars) add({ rule: "too_long", severity: "block", message: `${where2}: ${target.text.length}/${c.maxChars} characters \u2014 shorten the text.`, ...base3 });
     const tags = countHashtags(target.text, c.hashtagPrefix);
-    if (tags > c.maxHashtags) add({ rule: "too_many_hashtags", severity: "warn", message: `${where2}: ${tags} hashtags (recommended maximum ${c.maxHashtags}).`, ...base2 });
-    if (c.requiresMedia && input.mediaCount === 0) add({ rule: "media_required", severity: "block", message: `${where2}: this network requires an image or video.`, ...base2 });
-    if (input.mediaCount > c.maxMedia) add({ rule: "too_much_media", severity: "block", message: `${where2}: ${input.mediaCount} media attached, maximum ${c.maxMedia}.`, ...base2 });
-    if (input.linkUrl && !c.supportsLink) add({ rule: "invalid_link", severity: "warn", message: `${where2}: links in captions are not clickable on this network.`, ...base2 });
+    if (tags > c.maxHashtags) add({ rule: "too_many_hashtags", severity: "warn", message: `${where2}: ${tags} hashtags (recommended maximum ${c.maxHashtags}).`, ...base3 });
+    if (c.requiresMedia && input.mediaCount === 0) add({ rule: "media_required", severity: "block", message: `${where2}: this network requires an image or video.`, ...base3 });
+    if (input.mediaCount > c.maxMedia) add({ rule: "too_much_media", severity: "block", message: `${where2}: ${input.mediaCount} media attached, maximum ${c.maxMedia}.`, ...base3 });
+    if (input.linkUrl && !c.supportsLink) add({ rule: "invalid_link", severity: "warn", message: `${where2}: links in captions are not clickable on this network.`, ...base3 });
     for (const m of input.media ?? []) {
       if (c.allowedMediaTypes.length > 0 && !c.allowedMediaTypes.includes(m.mimeType)) {
-        add({ rule: "media_type_unsupported", severity: "block", message: `${where2}: ${m.mimeType} files are not accepted here (allowed: ${c.allowedMediaTypes.join(", ")}).`, ...base2 });
+        add({ rule: "media_type_unsupported", severity: "block", message: `${where2}: ${m.mimeType} files are not accepted here (allowed: ${c.allowedMediaTypes.join(", ")}).`, ...base3 });
         continue;
       }
       const lim = c.mediaLimits;
       if (!lim || !m.mimeType.startsWith("image/")) continue;
-      if (lim.imageMaxBytes && m.sizeBytes && m.sizeBytes > lim.imageMaxBytes) add({ rule: "media_too_large", severity: "block", message: `${where2}: an image is ${(m.sizeBytes / 1048576).toFixed(1)} MB; the maximum is ${(lim.imageMaxBytes / 1048576).toFixed(0)} MB.`, ...base2 });
+      if (lim.imageMaxBytes && m.sizeBytes && m.sizeBytes > lim.imageMaxBytes) add({ rule: "media_too_large", severity: "block", message: `${where2}: an image is ${(m.sizeBytes / 1048576).toFixed(1)} MB; the maximum is ${(lim.imageMaxBytes / 1048576).toFixed(0)} MB.`, ...base3 });
       if (m.width && m.height) {
         const ratio = m.width / m.height;
-        if (lim.imageMinWidth && m.width < lim.imageMinWidth) add({ rule: "media_dimensions", severity: "block", message: `${where2}: an image is ${m.width}px wide; the minimum is ${lim.imageMinWidth}px.`, ...base2 });
+        if (lim.imageMinWidth && m.width < lim.imageMinWidth) add({ rule: "media_dimensions", severity: "block", message: `${where2}: an image is ${m.width}px wide; the minimum is ${lim.imageMinWidth}px.`, ...base3 });
         if (lim.imageMinRatio && ratio < lim.imageMinRatio - 5e-3 || lim.imageMaxRatio && ratio > lim.imageMaxRatio + 5e-3) {
-          add({ rule: "media_dimensions", severity: "block", message: `${where2}: an image's aspect ratio (${ratio.toFixed(2)}:1) is outside the allowed ${lim.imageMinRatio?.toFixed(2)}\u2013${lim.imageMaxRatio?.toFixed(2)}:1 range.`, ...base2 });
+          add({ rule: "media_dimensions", severity: "block", message: `${where2}: an image's aspect ratio (${ratio.toFixed(2)}:1) is outside the allowed ${lim.imageMinRatio?.toFixed(2)}\u2013${lim.imageMaxRatio?.toFixed(2)}:1 range.`, ...base3 });
         }
       }
     }
     for (const word of input.brandVoice.bannedWords) {
-      if (containsWord(target.text, word)) add({ rule: "banned_word", severity: "block", message: `${where2}: contains the banned word \u201C${word}\u201D.`, ...base2 });
+      if (containsWord(target.text, word)) add({ rule: "banned_word", severity: "block", message: `${where2}: contains the banned word \u201C${word}\u201D.`, ...base3 });
     }
     for (const disclaimer of input.brandVoice.requiredDisclaimers) {
       if (disclaimer.trim() && !normalize2(target.text).includes(normalize2(disclaimer))) {
-        add({ rule: "missing_disclaimer", severity: "block", message: `${where2}: missing required disclaimer \u201C${disclaimer}\u201D.`, ...base2 });
+        add({ rule: "missing_disclaimer", severity: "block", message: `${where2}: missing required disclaimer \u201C${disclaimer}\u201D.`, ...base3 });
       }
     }
   }
@@ -18823,8 +19609,8 @@ function projectPost(post) {
     targets: post.targets.map((t) => ({ id: t.id, accountId: t.socialAccountId, bodyOverride: t.bodyOverride, status: t.status, scheduledAt: t.scheduledAt, publishedAt: t.publishedAt, externalUrl: t.externalUrl, account: t.account }))
   };
 }
-async function loadPost(organizationId, id4) {
-  const post = await prisma.socialPost.findFirst({ where: { id: id4, organizationId, deletedAt: null }, include: POST_INCLUDE });
+async function loadPost(organizationId, id6) {
+  const post = await prisma.socialPost.findFirst({ where: { id: id6, organizationId, deletedAt: null }, include: POST_INCLUDE });
   if (!post) throw new NotFoundError("Social post not found.");
   return post;
 }
@@ -18868,7 +19654,7 @@ async function evaluate(organizationId, post, targets) {
     fallbackText: post.body,
     linkUrl: post.linkUrl,
     mediaCount: post.mediaIds.length,
-    media: post.mediaIds.map((id4) => mediaRows.find((m) => m.id === id4)).filter((m) => !!m).map((m) => ({ mimeType: m.mimeType, sizeBytes: Number(m.sizeBytes), width: m.width, height: m.height })),
+    media: post.mediaIds.map((id6) => mediaRows.find((m) => m.id === id6)).filter((m) => !!m).map((m) => ({ mimeType: m.mimeType, sizeBytes: Number(m.sizeBytes), width: m.width, height: m.height })),
     hasSourceContent: !!post.sourceContentId,
     brandVoice: { bannedWords: voice.bannedWords, requiredDisclaimers: voice.requiredDisclaimers },
     recentBodies: recent.map((r) => r.body)
@@ -18883,7 +19669,7 @@ async function userIdsWithPermission(organizationId, permission) {
   return rows.map((r) => r.userId);
 }
 var has = (caller, key2) => caller.role.permissions.includes(key2);
-async function record(caller, action, post, meta10, extra = {}) {
+async function record(caller, action, post, meta11, extra = {}) {
   await auditLogRepository.record({
     organizationId: caller.organizationId,
     actorUserId: caller.id,
@@ -18892,8 +19678,8 @@ async function record(caller, action, post, meta10, extra = {}) {
     resourceType: "social_post",
     resourceId: post.id,
     metadata: auditMeta(post, extra),
-    ipAddress: meta10.ip,
-    userAgent: meta10.userAgent
+    ipAddress: meta11.ip,
+    userAgent: meta11.userAgent
   });
 }
 async function getApprovalMode(organizationId) {
@@ -18902,13 +19688,13 @@ async function getApprovalMode(organizationId) {
 var socialPostService = {
   evaluateGuardrails: evaluate,
   loadPost,
-  async create(caller, input, meta10 = {}, extra = {}) {
+  async create(caller, input, meta11 = {}, extra = {}) {
     const accounts = await accountsInOrg(caller.organizationId, input.accountIds);
     await assertMediaInOrg(caller.organizationId, input.mediaIds);
     if (input.sourceContent) await this.resolveSourceContent(caller.organizationId, input.sourceContent.type, input.sourceContent.id);
     const targets = accounts.map((a) => ({ socialAccountId: a.id, bodyOverride: input.bodyOverrides[a.id] ?? null }));
-    const base2 = { body: input.body, linkUrl: input.linkUrl ?? null, mediaIds: input.mediaIds, sourceContentId: input.sourceContent?.id ?? null };
-    const guardrailResult = await evaluate(caller.organizationId, base2, targets);
+    const base3 = { body: input.body, linkUrl: input.linkUrl ?? null, mediaIds: input.mediaIds, sourceContentId: input.sourceContent?.id ?? null };
+    const guardrailResult = await evaluate(caller.organizationId, base3, targets);
     const created = await prisma.socialPost.create({
       data: {
         organizationId: caller.organizationId,
@@ -18929,11 +19715,11 @@ var socialPostService = {
       },
       include: POST_INCLUDE
     });
-    await record(caller, extra.aiGenerated ? "SOCIAL_POST_CREATED_BY_AI" : "SOCIAL_POST_CREATED", created, meta10, { accounts: accounts.length, aiExecutionId: extra.aiExecutionId });
+    await record(caller, extra.aiGenerated ? "SOCIAL_POST_CREATED_BY_AI" : "SOCIAL_POST_CREATED", created, meta11, { accounts: accounts.length, aiExecutionId: extra.aiExecutionId });
     return projectPost(created);
   },
-  async get(organizationId, id4) {
-    return projectPost(await loadPost(organizationId, id4));
+  async get(organizationId, id6) {
+    return projectPost(await loadPost(organizationId, id6));
   },
   async list(organizationId, q) {
     const where2 = {
@@ -18962,8 +19748,8 @@ var socialPostService = {
     for (const post of rows) (days[post.scheduledAt.toISOString().slice(0, 10)] ??= []).push(projectPost(post));
     return { days, total: rows.length };
   },
-  async update(caller, id4, input, meta10 = {}) {
-    const post = await loadPost(caller.organizationId, id4);
+  async update(caller, id6, input, meta11 = {}) {
+    const post = await loadPost(caller.organizationId, id6);
     const touchesContent = ["title", "body", "mediaIds", "linkUrl", "accountIds", "bodyOverrides", "sourceContent"].some((k) => k in input);
     const touchesSchedule = "scheduledAt" in input || "timezone" in input;
     if (post.targets.some((t) => t.status === "PUBLISHING")) throw new ConflictError("This post is being published right now. Try again in a moment.");
@@ -18984,18 +19770,18 @@ var socialPostService = {
     const guardrailResult = await evaluate(caller.organizationId, { id: post.id, body, linkUrl, mediaIds, sourceContentId }, targets);
     const updated = await prisma.$transaction(async (tx) => {
       if (touchesContent) {
-        await tx.socialPostTarget.deleteMany({ where: { postId: id4, socialAccountId: { notIn: accountIds } } });
+        await tx.socialPostTarget.deleteMany({ where: { postId: id6, socialAccountId: { notIn: accountIds } } });
         for (const t of targets) {
           await tx.socialPostTarget.upsert({
-            where: { postId_socialAccountId: { postId: id4, socialAccountId: t.socialAccountId } },
-            create: { postId: id4, socialAccountId: t.socialAccountId, bodyOverride: t.bodyOverride, scheduledAt },
+            where: { postId_socialAccountId: { postId: id6, socialAccountId: t.socialAccountId } },
+            create: { postId: id6, socialAccountId: t.socialAccountId, bodyOverride: t.bodyOverride, scheduledAt },
             update: { bodyOverride: t.bodyOverride }
           });
         }
       }
-      if (touchesSchedule) await tx.socialPostTarget.updateMany({ where: { postId: id4 }, data: { scheduledAt } });
+      if (touchesSchedule) await tx.socialPostTarget.updateMany({ where: { postId: id6 }, data: { scheduledAt } });
       return tx.socialPost.update({
-        where: { id: id4 },
+        where: { id: id6 },
         data: {
           ...input.title !== void 0 ? { title: input.title } : {},
           body,
@@ -19011,18 +19797,18 @@ var socialPostService = {
         include: POST_INCLUDE
       });
     });
-    await record(caller, touchesContent ? "SOCIAL_POST_UPDATED" : "SOCIAL_POST_RESCHEDULED", updated, meta10);
+    await record(caller, touchesContent ? "SOCIAL_POST_UPDATED" : "SOCIAL_POST_RESCHEDULED", updated, meta11);
     return projectPost(updated);
   },
-  async remove(caller, id4, meta10 = {}) {
-    const post = await loadPost(caller.organizationId, id4);
+  async remove(caller, id6, meta11 = {}) {
+    const post = await loadPost(caller.organizationId, id6);
     if (!["DRAFT", "REJECTED", "CANCELLED"].includes(post.status)) throw new ConflictError(`A post in status ${post.status} cannot be deleted. Cancel it first.`);
-    await prisma.socialPost.update({ where: { id: id4 }, data: { deletedAt: /* @__PURE__ */ new Date() } });
-    await record(caller, "SOCIAL_POST_DELETED", post, meta10);
+    await prisma.socialPost.update({ where: { id: id6 }, data: { deletedAt: /* @__PURE__ */ new Date() } });
+    await record(caller, "SOCIAL_POST_DELETED", post, meta11);
   },
   /** Moves a post to a new status after checking the transition table, guardrails and role rules. */
-  async transition(caller, id4, to, opts = {}, meta10 = {}) {
-    const post = await loadPost(caller.organizationId, id4);
+  async transition(caller, id6, to, opts = {}, meta11 = {}) {
+    const post = await loadPost(caller.organizationId, id6);
     if (!canTransition(post.status, to)) throw new ConflictError(`A ${post.status} post cannot move to ${to}.`);
     if (post.targets.some((t) => t.status === "PUBLISHING")) throw new ConflictError("This post is being published right now. Try again in a moment.");
     if (post.targets.some((t) => t.status === "UNCERTAIN")) throw new ConflictError("A publish for this post has an unknown outcome. Resolve it from the Failures page first.");
@@ -19082,12 +19868,12 @@ var socialPostService = {
     const targetStatus = target === "SCHEDULED" ? "SCHEDULED" : target === "CANCELLED" ? "CANCELLED" : "PENDING";
     const updated = await prisma.$transaction(async (tx) => {
       await tx.socialPostTarget.updateMany({
-        where: { postId: id4, status: { notIn: ["PUBLISHED", "PUBLISHING", "UNCERTAIN"] } },
+        where: { postId: id6, status: { notIn: ["PUBLISHED", "PUBLISHING", "UNCERTAIN"] } },
         data: { status: targetStatus, ...targetStatus === "SCHEDULED" ? { attempts: 0, nextAttemptAt: null, publishError: null } : {}, ...data.scheduledAt ? { scheduledAt: data.scheduledAt } : {} }
       });
-      return tx.socialPost.update({ where: { id: id4 }, data: { ...data, status: target }, include: POST_INCLUDE });
+      return tx.socialPost.update({ where: { id: id6 }, data: { ...data, status: target }, include: POST_INCLUDE });
     });
-    await record(caller, action, updated, meta10, { from: post.status, to: updated.status, ...opts.comment ? { comment: opts.comment.slice(0, 500) } : {} });
+    await record(caller, action, updated, meta11, { from: post.status, to: updated.status, ...opts.comment ? { comment: opts.comment.slice(0, 500) } : {} });
     if (action === "SOCIAL_POST_SUBMITTED") {
       const approvers = (await userIdsWithPermission(caller.organizationId, "social.approve")).filter((u) => u !== caller.id);
       await Promise.all(approvers.map((userId) => notificationService.notify({ organizationId: caller.organizationId, userId, type: "approval_requested", title: "Social post awaiting approval", message: `"${post.title}" is waiting for your approval.`, entityType: "social_post", entityId: post.id })));
@@ -19105,24 +19891,24 @@ var socialPostService = {
     return projectPost(updated);
   },
   /** Approvals-center entry point: approve/reject a post that is PENDING_APPROVAL. */
-  async decide(caller, id4, approve2, comment, meta10 = {}) {
-    const post = await loadPost(caller.organizationId, id4);
+  async decide(caller, id6, approve2, comment, meta11 = {}) {
+    const post = await loadPost(caller.organizationId, id6);
     if (post.status !== "PENDING_APPROVAL") throw new ConflictError(`This post is ${post.status}, not awaiting approval.`);
-    return this.transition(caller, id4, approve2 ? "APPROVED" : "REJECTED", { comment }, meta10);
+    return this.transition(caller, id6, approve2 ? "APPROVED" : "REJECTED", { comment }, meta11);
   },
   // ---- source content ("share this blog post / case study") ----
-  async resolveSourceContent(organizationId, type, id4) {
-    const base2 = (config.publicSiteBaseUrl || "https://artifysols.com").replace(/\/+$/, "");
+  async resolveSourceContent(organizationId, type, id6) {
+    const base3 = (config.publicSiteBaseUrl || "https://artifysols.com").replace(/\/+$/, "");
     const strip = (html) => html.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
     const excerptOf = (excerpt, body) => (excerpt?.trim() || strip(body ?? "")).slice(0, 280);
     if (type === "post") {
-      const post = await prisma.post.findFirst({ where: { id: id4, organizationId, status: "PUBLISHED", deletedAt: null }, include: { currentRevision: { select: { excerpt: true, body: true } } } });
+      const post = await prisma.post.findFirst({ where: { id: id6, organizationId, status: "PUBLISHED", deletedAt: null }, include: { currentRevision: { select: { excerpt: true, body: true } } } });
       if (!post) throw new NotFoundError("Published blog post not found.");
-      return { type, id: post.id, title: post.title, excerpt: excerptOf(post.currentRevision?.excerpt, post.currentRevision?.body), url: `${base2}/blog/${post.slug}`, featuredMediaId: post.featuredMediaId };
+      return { type, id: post.id, title: post.title, excerpt: excerptOf(post.currentRevision?.excerpt, post.currentRevision?.body), url: `${base3}/blog/${post.slug}`, featuredMediaId: post.featuredMediaId };
     }
-    const study = await prisma.caseStudy.findFirst({ where: { id: id4, organizationId, status: "PUBLISHED", deletedAt: null }, include: { currentRevision: { select: { excerpt: true, body: true } } } });
+    const study = await prisma.caseStudy.findFirst({ where: { id: id6, organizationId, status: "PUBLISHED", deletedAt: null }, include: { currentRevision: { select: { excerpt: true, body: true } } } });
     if (!study) throw new NotFoundError("Published case study not found.");
-    return { type, id: study.id, title: study.title, excerpt: excerptOf(study.currentRevision?.excerpt, study.currentRevision?.body), url: `${base2}/case-studies/${study.slug}`, featuredMediaId: study.featuredMediaId };
+    return { type, id: study.id, title: study.title, excerpt: excerptOf(study.currentRevision?.excerpt, study.currentRevision?.body), url: `${base3}/case-studies/${study.slug}`, featuredMediaId: study.featuredMediaId };
   },
   async listSourceContent(organizationId, type, search) {
     const where2 = { organizationId, status: "PUBLISHED", deletedAt: null, ...search ? { title: { contains: search, mode: "insensitive" } } : {} };
@@ -19135,7 +19921,7 @@ var socialPostService = {
     const { toneDescriptors, audience, dos, donts, bannedWords, requiredDisclaimers, defaultHashtags, ctaPhrases, languages } = row;
     return { toneDescriptors, audience, dos, donts, bannedWords, requiredDisclaimers, defaultHashtags, ctaPhrases, languages };
   },
-  async updateBrandVoice(caller, input, meta10 = {}) {
+  async updateBrandVoice(caller, input, meta11 = {}) {
     const data = { ...input, audience: input.audience ?? null, defaultHashtags: input.defaultHashtags.map((h) => h.startsWith("#") ? h : `#${h}`), updatedById: caller.id };
     await prisma.socialBrandVoice.upsert({ where: { organizationId: caller.organizationId }, create: { organizationId: caller.organizationId, ...data }, update: data });
     await auditLogRepository.record({
@@ -19145,15 +19931,15 @@ var socialPostService = {
       action: "SOCIAL_BRAND_VOICE_UPDATED",
       resourceType: "social_brand_voice",
       metadata: { bannedWords: data.bannedWords.length, disclaimers: data.requiredDisclaimers.length, languages: data.languages },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return this.getBrandVoice(caller.organizationId);
   },
   async getSettings(organizationId) {
     return { approvalMode: await getApprovalMode(organizationId) };
   },
-  async updateSettings(caller, approvalMode, meta10 = {}) {
+  async updateSettings(caller, approvalMode, meta11 = {}) {
     if (caller.role.key !== "ADMIN" && caller.role.key !== "SUPER_ADMIN") throw new AuthorizationError("Only administrators can change the approval mode.");
     const before = await getApprovalMode(caller.organizationId);
     await prisma.socialWorkspaceSetting.upsert({ where: { organizationId: caller.organizationId }, create: { organizationId: caller.organizationId, approvalMode, updatedById: caller.id }, update: { approvalMode, updatedById: caller.id } });
@@ -19165,8 +19951,8 @@ var socialPostService = {
       resourceType: "social_workspace_setting",
       beforeData: { approvalMode: before },
       afterData: { approvalMode },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return { approvalMode };
   }
@@ -19178,15 +19964,18 @@ var SOURCE_READ_PERMISSION = {
   ai: "ai.approvals.read",
   automation: "automation.read",
   content: "content.update",
-  social: "social.read"
+  social: "social.read",
+  landing: "marketing.landing.read"
 };
 var SOURCE_DECIDE_PERMISSION = {
   ai: "ai.approvals.decide",
   automation: "automation.approve",
   content: "content.publish",
-  social: "social.approve"
+  social: "social.approve",
+  landing: "marketing.landing.publish"
 };
 var CONTENT_ENTITY_TYPES = ["page", "post"];
+var LANDING_ENTITY_TYPE = "landing_page";
 var has2 = (caller, key2) => caller.role.permissions.includes(key2);
 var isUniversalApprover = (caller) => caller.role.key === "ADMIN" || caller.role.key === "SUPER_ADMIN";
 var fullName = (u) => u ? `${u.firstName} ${u.lastName}`.trim() : "";
@@ -19211,12 +20000,12 @@ function aiWhere(caller, q) {
     ...dateRange(q, "createdAt")
   };
 }
-function automationBaseWhere(caller, q, content) {
+function automationBaseWhere(caller, q, content, landing = false) {
   const status = q.status === "pending" ? { status: "PENDING" } : q.status === "approved" ? { status: "APPROVED" } : { status: { in: ["REJECTED", "CHANGES_REQUESTED", "EXPIRED", "CANCELLED"] } };
   const and = [];
   if (q.assignee === "me") {
     if (q.status === "pending") {
-      if (!content && !isUniversalApprover(caller)) and.push({ requiredRole: caller.role.key });
+      if (!content && !landing && !isUniversalApprover(caller)) and.push({ requiredRole: caller.role.key });
     } else {
       and.push({ OR: [{ requesterId: caller.id }, { approverId: caller.id }] });
     }
@@ -19225,7 +20014,7 @@ function automationBaseWhere(caller, q, content) {
   return {
     organizationId: caller.organizationId,
     ...status,
-    ...content ? { entityType: { in: CONTENT_ENTITY_TYPES } } : { OR: [{ entityType: null }, { entityType: { notIn: CONTENT_ENTITY_TYPES } }] },
+    ...landing ? { entityType: LANDING_ENTITY_TYPE } : content ? { entityType: { in: CONTENT_ENTITY_TYPES } } : { OR: [{ entityType: null }, { entityType: { notIn: [...CONTENT_ENTITY_TYPES, LANDING_ENTITY_TYPE] } }] },
     ...and.length ? { AND: and } : {},
     ...dateRange(q, "requestedAt")
   };
@@ -19276,9 +20065,11 @@ async function fetchAi(caller, q, take) {
   }));
   return { items, total };
 }
-async function fetchAutomation(caller, q, take, content) {
-  const where2 = automationBaseWhere(caller, q, content);
-  const source = content ? "content" : "automation";
+async function fetchAutomation(caller, q, take, kind) {
+  const landing = kind === "landing";
+  const content = kind === "content" || landing;
+  const where2 = automationBaseWhere(caller, q, kind === "content", landing);
+  const source = kind;
   const [rows, total] = await Promise.all([
     prisma.automationApproval.findMany({
       where: where2,
@@ -19297,12 +20088,12 @@ async function fetchAutomation(caller, q, take, content) {
       id: r.id,
       source,
       title,
-      summary: content ? `${r.entityType === "post" ? "Blog post" : "Page"} awaiting publish approval` : `Workflow "${r.workflow.name}" \xB7 ${r.action}${r.requiredRole ? ` \xB7 needs ${r.requiredRole}` : ""}`,
+      summary: landing ? "Landing page awaiting publish approval" : content ? `${r.entityType === "post" ? "Blog post" : "Page"} awaiting publish approval` : `Workflow "${r.workflow.name}" \xB7 ${r.action}${r.requiredRole ? ` \xB7 needs ${r.requiredRole}` : ""}`,
       requestedBy: person(r.requesterId ? users.get(r.requesterId) : null),
       requestedAt: r.requestedAt,
       status: normStatus(r.status),
       dueAt: r.expiresAt,
-      link: content ? r.entityType === "post" ? `/cms/posts?q=${encodeURIComponent(title)}` : `/cms/pages?q=${encodeURIComponent(title)}` : "/automation",
+      link: landing ? `/marketing/landing-pages?id=${r.entityId}` : content ? r.entityType === "post" ? `/cms/posts?q=${encodeURIComponent(title)}` : `/cms/pages?q=${encodeURIComponent(title)}` : "/automation",
       decidedBy: person(r.approverId ? users.get(r.approverId) : null),
       decidedAt: r.decidedAt,
       decisionComment: r.decisionReason,
@@ -19347,10 +20138,10 @@ async function fetchSocial(caller, q, take) {
 var approvalCenterService = {
   async list(caller, q) {
     const allowed = visibleSources(caller);
-    const wanted = (q.source ? [q.source] : ["ai", "automation", "content", "social"]).filter((s) => allowed.includes(s));
+    const wanted = (q.source ? [q.source] : ["ai", "automation", "content", "social", "landing"]).filter((s) => allowed.includes(s));
     const take = Math.min(q.page * q.limit, 500);
     const parts = await Promise.all(
-      wanted.map((s) => s === "ai" ? fetchAi(caller, q, take) : s === "social" ? fetchSocial(caller, q, take) : fetchAutomation(caller, q, take, s === "content"))
+      wanted.map((s) => s === "ai" ? fetchAi(caller, q, take) : s === "social" ? fetchSocial(caller, q, take) : fetchAutomation(caller, q, take, s))
     );
     const merged = parts.flatMap((p) => p.items).sort((a, b) => b.requestedAt.getTime() - a.requestedAt.getTime());
     const total = parts.reduce((n, p) => n + p.total, 0);
@@ -19360,33 +20151,39 @@ var approvalCenterService = {
   /** Pending counts per source for the caller — role-matched for automation, exactly what they could act on. */
   async summary(caller) {
     const allowed = visibleSources(caller);
-    const counts = { ai: 0, automation: 0, content: 0, social: 0 };
-    const orgId = caller.organizationId;
+    const counts = { ai: 0, automation: 0, content: 0, social: 0, landing: 0 };
+    const orgId2 = caller.organizationId;
     await Promise.all([
-      allowed.includes("ai") ? prisma.aIApprovalRequest.count({ where: { organizationId: orgId, status: "PENDING", expiresAt: { gt: /* @__PURE__ */ new Date() } } }).then((n) => counts.ai = n) : null,
+      allowed.includes("ai") ? prisma.aIApprovalRequest.count({ where: { organizationId: orgId2, status: "PENDING", expiresAt: { gt: /* @__PURE__ */ new Date() } } }).then((n) => counts.ai = n) : null,
       allowed.includes("automation") ? prisma.automationApproval.count({ where: automationBaseWhere(caller, { status: "pending", assignee: "me", page: 1, limit: 1 }, false) }).then((n) => counts.automation = n) : null,
       allowed.includes("content") ? prisma.automationApproval.count({ where: automationBaseWhere(caller, { status: "pending", assignee: "me", page: 1, limit: 1 }, true) }).then((n) => counts.content = n) : null,
-      allowed.includes("social") ? prisma.socialPost.count({ where: { organizationId: orgId, deletedAt: null, status: "PENDING_APPROVAL" } }).then((n) => counts.social = n) : null
+      allowed.includes("landing") ? prisma.automationApproval.count({ where: automationBaseWhere(caller, { status: "pending", assignee: "me", page: 1, limit: 1 }, false, true) }).then((n) => counts.landing = n) : null,
+      allowed.includes("social") ? prisma.socialPost.count({ where: { organizationId: orgId2, deletedAt: null, status: "PENDING_APPROVAL" } }).then((n) => counts.social = n) : null
     ]);
-    return { total: counts.ai + counts.automation + counts.content + counts.social, counts, sources: allowed };
+    return { total: counts.ai + counts.automation + counts.content + counts.social + counts.landing, counts, sources: allowed };
   },
-  async decide(caller, source, id4, input, meta10 = {}) {
+  async decide(caller, source, id6, input, meta11 = {}) {
     const allowed = visibleSources(caller);
     if (!allowed.includes(source)) throw new AuthorizationError("You do not have access to this approval source.");
     if (!canDecideSource(caller, source)) throw new AuthorizationError(`Missing permission: ${SOURCE_DECIDE_PERMISSION[source]}`);
     const approve2 = input.decision === "approve";
     let result;
     if (source === "social") {
-      result = await socialPostService.decide(caller, id4, approve2, input.comment, meta10);
+      result = await socialPostService.decide(caller, id6, approve2, input.comment, meta11);
     } else if (source === "ai") {
-      result = await aiApprovalService.decide(caller, id4, { decision: approve2 ? "APPROVE" : "REJECT", rejectionReason: input.comment }, meta10);
+      result = await aiApprovalService.decide(caller, id6, { decision: approve2 ? "APPROVE" : "REJECT", rejectionReason: input.comment }, meta11);
+    } else if (source === "landing") {
+      const row = await prisma.automationApproval.findFirst({ where: { id: id6, organizationId: caller.organizationId }, select: { entityType: true } });
+      if (!row) throw new NotFoundError("Approval request not found.");
+      if (row.entityType !== LANDING_ENTITY_TYPE) throw new ValidationError('This approval does not belong to the "landing" source.');
+      result = await landingApprovalService.decide(caller, id6, approve2 ? "APPROVED" : "REJECTED", input.comment, meta11);
     } else {
-      const row = await prisma.automationApproval.findFirst({ where: { id: id4, organizationId: caller.organizationId }, select: { entityType: true } });
+      const row = await prisma.automationApproval.findFirst({ where: { id: id6, organizationId: caller.organizationId }, select: { entityType: true } });
       if (!row) throw new NotFoundError("Approval request not found.");
       const isContent = !!row.entityType && CONTENT_ENTITY_TYPES.includes(row.entityType);
       if (isContent !== (source === "content")) throw new ValidationError(`This approval belongs to the "${isContent ? "content" : "automation"}" source.`);
-      result = source === "content" ? await contentApprovalService.decide(caller, id4, approve2 ? "APPROVED" : "REJECTED", input.comment) : await automationService.decideApproval({
-        approvalId: id4,
+      result = source === "content" ? await contentApprovalService.decide(caller, id6, approve2 ? "APPROVED" : "REJECTED", input.comment) : await automationService.decideApproval({
+        approvalId: id6,
         organizationId: caller.organizationId,
         userId: caller.id,
         userRole: caller.role.key,
@@ -19400,37 +20197,37 @@ var approvalCenterService = {
       actorType: "USER",
       action: "APPROVAL_CENTER_DECISION",
       resourceType: `${source}_approval`,
-      resourceId: id4,
+      resourceId: id6,
       metadata: { source, decision: input.decision, comment: input.comment ?? null },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
-    return { source, id: id4, decision: input.decision, result };
+    return { source, id: id6, decision: input.decision, result };
   }
 };
 
 // server/schemas/approvalCenterSchemas.ts
-import { z as z21 } from "zod";
-var APPROVAL_SOURCES = ["ai", "automation", "content", "social"];
-var listApprovalsQuerySchema = z21.object({
-  source: z21.enum(APPROVAL_SOURCES).optional(),
-  status: z21.enum(["pending", "approved", "rejected"]).default("pending"),
-  assignee: z21.enum(["me", "all"]).default("all"),
-  search: z21.string().trim().max(200).optional(),
-  from: z21.coerce.date().optional(),
-  to: z21.coerce.date().optional(),
-  page: z21.coerce.number().int().min(1).default(1),
-  limit: z21.coerce.number().int().min(1).max(50).default(20)
+import { z as z22 } from "zod";
+var APPROVAL_SOURCES = ["ai", "automation", "content", "social", "landing"];
+var listApprovalsQuerySchema = z22.object({
+  source: z22.enum(APPROVAL_SOURCES).optional(),
+  status: z22.enum(["pending", "approved", "rejected"]).default("pending"),
+  assignee: z22.enum(["me", "all"]).default("all"),
+  search: z22.string().trim().max(200).optional(),
+  from: z22.coerce.date().optional(),
+  to: z22.coerce.date().optional(),
+  page: z22.coerce.number().int().min(1).default(1),
+  limit: z22.coerce.number().int().min(1).max(50).default(20)
 });
-var approvalDecisionSchema = z21.object({
-  decision: z21.enum(["approve", "reject"]),
-  comment: z21.string().trim().max(2e3).optional()
+var approvalDecisionSchema = z22.object({
+  decision: z22.enum(["approve", "reject"]),
+  comment: z22.string().trim().max(2e3).optional()
 }).superRefine((v, ctx) => {
   if (v.decision === "reject" && !v.comment) {
-    ctx.addIssue({ code: z21.ZodIssueCode.custom, path: ["comment"], message: "A comment is required when rejecting." });
+    ctx.addIssue({ code: z22.ZodIssueCode.custom, path: ["comment"], message: "A comment is required when rejecting." });
   }
 });
-var approvalSourceParamSchema = z21.enum(APPROVAL_SOURCES);
+var approvalSourceParamSchema = z22.enum(APPROVAL_SOURCES);
 
 // server/services/social/publishing/publisher.ts
 import { randomUUID as randomUUID4 } from "node:crypto";
@@ -19469,8 +20266,8 @@ function connectorOrThrow(provider) {
   if (!connector) throw new ValidationError(`${known.label} is not configured yet.`);
   return connector;
 }
-async function loadInOrgOrThrow(organizationId, id4) {
-  const account = await prisma.socialAccount.findFirst({ where: { id: id4, organizationId }, select: ACCOUNT_SELECT });
+async function loadInOrgOrThrow(organizationId, id6) {
+  const account = await prisma.socialAccount.findFirst({ where: { id: id6, organizationId }, select: ACCOUNT_SELECT });
   if (!account) throw new NotFoundError("Social account not found.");
   return account;
 }
@@ -19508,16 +20305,16 @@ async function notifyManagers(account, title, message) {
   );
 }
 var SELECTION_TTL_MS = 15 * 60 * 1e3;
-async function startSelection(user, provider, selectable, meta10) {
+async function startSelection(user, provider, selectable, meta11) {
   await prisma.socialConnectSession.deleteMany({ where: { OR: [{ expiresAt: { lt: /* @__PURE__ */ new Date() } }, { organizationId: user.organizationId, userId: user.id, provider }] } });
-  const id4 = randomUUID3();
-  const { ciphertext, keyVersion } = tokenVault.encrypt({ accessToken: "", pages: selectable.map((p) => ({ profile: p.profile, tokens: p.tokens })) }, id4);
-  await prisma.socialConnectSession.create({ data: { id: id4, organizationId: user.organizationId, userId: user.id, provider, ciphertext, keyVersion, expiresAt: new Date(Date.now() + SELECTION_TTL_MS) } });
+  const id6 = randomUUID3();
+  const { ciphertext, keyVersion } = tokenVault.encrypt({ accessToken: "", pages: selectable.map((p) => ({ profile: p.profile, tokens: p.tokens })) }, id6);
+  await prisma.socialConnectSession.create({ data: { id: id6, organizationId: user.organizationId, userId: user.id, provider, ciphertext, keyVersion, expiresAt: new Date(Date.now() + SELECTION_TTL_MS) } });
   const existing = new Set((await prisma.socialAccount.findMany({ where: { organizationId: user.organizationId, provider, status: { not: "DISCONNECTED" } }, select: { externalAccountId: true } })).map((a) => a.externalAccountId));
-  await auditLogRepository.record({ organizationId: user.organizationId, actorUserId: user.id, actorType: "USER", action: "SOCIAL_ACCOUNT_SELECTION_STARTED", resourceType: "social_account", metadata: { provider, candidates: selectable.length }, ipAddress: meta10.ip, userAgent: meta10.userAgent });
-  return { selection: { id: id4, provider, pages: selectable.map((p) => ({ externalId: p.profile.externalAccountId, name: p.profile.displayName, category: p.profile.accountType ?? null, avatarUrl: p.profile.avatarUrl ?? null, tasks: p.tasks ?? [], warnings: p.warnings ?? [], alreadyConnected: existing.has(p.profile.externalAccountId) })) } };
+  await auditLogRepository.record({ organizationId: user.organizationId, actorUserId: user.id, actorType: "USER", action: "SOCIAL_ACCOUNT_SELECTION_STARTED", resourceType: "social_account", metadata: { provider, candidates: selectable.length }, ipAddress: meta11.ip, userAgent: meta11.userAgent });
+  return { selection: { id: id6, provider, pages: selectable.map((p) => ({ externalId: p.profile.externalAccountId, name: p.profile.displayName, category: p.profile.accountType ?? null, avatarUrl: p.profile.avatarUrl ?? null, tasks: p.tasks ?? [], warnings: p.warnings ?? [], alreadyConnected: existing.has(p.profile.externalAccountId) })) } };
 }
-async function persistAccount(user, provider, connector, profile, tokens2, reconnectAccountId, meta10) {
+async function persistAccount(user, provider, connector, profile, tokens2, reconnectAccountId, meta11) {
   if (reconnectAccountId) {
     const target = await loadInOrgOrThrow(user.organizationId, reconnectAccountId);
     if (target.externalAccountId !== profile.externalAccountId) throw new ValidationError("You signed in with a different account than the one being reconnected.");
@@ -19563,8 +20360,8 @@ async function persistAccount(user, provider, connector, profile, tokens2, recon
     resourceType: "social_account",
     resourceId: account.id,
     metadata: { provider: account.provider, externalAccountId: account.externalAccountId, handle: account.handle, ...warnings?.length ? { warnings: warnings.length } : {} },
-    ipAddress: meta10.ip,
-    userAgent: meta10.userAgent
+    ipAddress: meta11.ip,
+    userAgent: meta11.userAgent
   });
   return { account, ...warnings?.length ? { warnings } : {} };
 }
@@ -19576,7 +20373,7 @@ var socialAccountService = {
     const accounts = await prisma.socialAccount.findMany({ where: { organizationId }, orderBy: [{ status: "asc" }, { displayName: "asc" }], select: ACCOUNT_SELECT });
     return { accounts, providers: connectorRegistry.list() };
   },
-  get: (organizationId, id4) => loadInOrgOrThrow(organizationId, id4),
+  get: (organizationId, id6) => loadInOrgOrThrow(organizationId, id6),
   /** Begins OAuth: returns the provider URL. The single-use `state` is stored hashed and bound to this user + workspace + provider. */
   async startConnect(user, provider, reconnectAccountId) {
     const connector = connectorOrThrow(provider);
@@ -19590,7 +20387,7 @@ var socialAccountService = {
     });
     return { authUrl: connector.getAuthUrl({ state, redirectUri: redirectUri(), scopes: connector.defaultScopes }) };
   },
-  async handleCallback(user, input, meta10 = {}) {
+  async handleCallback(user, input, meta11 = {}) {
     const invalid = () => new AuthenticationError("This connection request is invalid or has expired. Please start again.");
     const stateHash = hashToken(input.state);
     const row = await prisma.socialOAuthState.findUnique({ where: { stateHash } });
@@ -19611,8 +20408,8 @@ var socialAccountService = {
         resourceType: "social_account",
         result: "FAILURE",
         metadata: { provider: row.provider, reason: safeError(err, [input.code]) },
-        ipAddress: meta10.ip,
-        userAgent: meta10.userAgent
+        ipAddress: meta11.ip,
+        userAgent: meta11.userAgent
       });
       if (err instanceof ConnectorUserError) throw new ValidationError(err.message);
       throw new ValidationError("Could not connect the account. Please try again.");
@@ -19623,14 +20420,14 @@ var socialAccountService = {
         const target = await loadInOrgOrThrow(user.organizationId, row.reconnectAccountId);
         const match = result.selectable.find((p) => p.profile.externalAccountId === target.externalAccountId);
         if (!match) throw new ValidationError("You signed in with a different account than the one being reconnected.");
-        return persistAccount(user, row.provider, connector, match.profile, match.tokens, row.reconnectAccountId, meta10);
+        return persistAccount(user, row.provider, connector, match.profile, match.tokens, row.reconnectAccountId, meta11);
       }
-      return startSelection(user, row.provider, result.selectable, meta10);
+      return startSelection(user, row.provider, result.selectable, meta11);
     }
-    return persistAccount(user, row.provider, connector, profile, tokens2, row.reconnectAccountId ?? void 0, meta10);
+    return persistAccount(user, row.provider, connector, profile, tokens2, row.reconnectAccountId ?? void 0, meta11);
   },
   /** Step 2 of a multi-asset connect: create accounts for the chosen assets from the encrypted session. */
-  async completeSelection(user, input, meta10 = {}) {
+  async completeSelection(user, input, meta11 = {}) {
     const invalid = () => new AuthenticationError("This selection has expired. Please start the connection again.");
     const row = await prisma.socialConnectSession.findUnique({ where: { id: input.selectionId } });
     if (!row || row.usedAt || row.expiresAt.getTime() <= Date.now() || row.userId !== user.id || row.organizationId !== user.organizationId) throw invalid();
@@ -19651,33 +20448,33 @@ var socialAccountService = {
     const accounts = [];
     const warnings = [];
     for (const p of chosen) {
-      const out = await persistAccount(user, row.provider, connector, p.profile, p.tokens, void 0, meta10);
+      const out = await persistAccount(user, row.provider, connector, p.profile, p.tokens, void 0, meta11);
       accounts.push(out.account);
       warnings.push(...(out.warnings ?? []).map((w) => `${out.account.displayName}: ${w}`));
     }
     return { accounts, warnings };
   },
-  async disconnect(user, id4, meta10 = {}) {
-    const account = await loadInOrgOrThrow(user.organizationId, id4);
+  async disconnect(user, id6, meta11 = {}) {
+    const account = await loadInOrgOrThrow(user.organizationId, id6);
     try {
       const connector = connectorRegistry.getAvailable(account.provider);
-      const tokens2 = connector?.onDisconnect ? await loadTokens(id4) : null;
+      const tokens2 = connector?.onDisconnect ? await loadTokens(id6) : null;
       if (connector?.onDisconnect && tokens2) await connector.onDisconnect(tokens2, { externalAccountId: account.externalAccountId });
     } catch (err) {
-      logger.warn({ accountId: id4, err: safeError(err) }, "[social] provider cleanup on disconnect failed");
+      logger.warn({ accountId: id6, err: safeError(err) }, "[social] provider cleanup on disconnect failed");
     }
-    await prisma.socialAccountCredential.deleteMany({ where: { socialAccountId: id4 } });
-    const updated = await prisma.socialAccount.update({ where: { id: id4 }, data: { status: "DISCONNECTED", tokenExpiresAt: null, lastError: null }, select: ACCOUNT_SELECT });
+    await prisma.socialAccountCredential.deleteMany({ where: { socialAccountId: id6 } });
+    const updated = await prisma.socialAccount.update({ where: { id: id6 }, data: { status: "DISCONNECTED", tokenExpiresAt: null, lastError: null }, select: ACCOUNT_SELECT });
     await auditLogRepository.record({
       organizationId: user.organizationId,
       actorUserId: user.id,
       actorType: "USER",
       action: "SOCIAL_ACCOUNT_DISCONNECTED",
       resourceType: "social_account",
-      resourceId: id4,
+      resourceId: id6,
       metadata: { provider: account.provider, externalAccountId: account.externalAccountId, handle: account.handle },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return updated;
   },
@@ -19755,13 +20552,13 @@ var socialAccountService = {
     });
     let needsAttention = 0;
     let errors = 0;
-    for (const { id: id4 } of accounts) {
+    for (const { id: id6 } of accounts) {
       try {
-        const result = await this.checkHealth(id4);
+        const result = await this.checkHealth(id6);
         if (result.status === "NEEDS_REAUTH" || result.status === "ERROR") needsAttention += 1;
       } catch (err) {
         errors += 1;
-        logger.error({ accountId: id4, err: safeError(err) }, "[social] token health check crashed");
+        logger.error({ accountId: id6, err: safeError(err) }, "[social] token health check crashed");
       }
     }
     return { checked: accounts.length, needsAttention, errors };
@@ -19842,7 +20639,7 @@ var publishingSettingsService = {
     const gate = evaluateGate(config.socialPublishingDisabled, global, workspace);
     return { global, workspace, envDisabled: config.socialPublishingDisabled, effective: gate.allowed ? { publishing: true, dryRun: gate.dryRun } : { publishing: false, reason: gate.reason } };
   },
-  async updateWorkspace(caller, input, meta10 = {}) {
+  async updateWorkspace(caller, input, meta11 = {}) {
     if (!isAdmin(caller)) throw new AuthorizationError("Only administrators can change publishing settings.");
     const before = await this.getWorkspace(caller.organizationId);
     const data = { ...input, updatedById: caller.id };
@@ -19856,12 +20653,12 @@ var publishingSettingsService = {
       resourceType: "social_publishing_setting",
       beforeData: before,
       afterData: after,
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return this.view(caller.organizationId);
   },
-  async updateGlobal(caller, input, meta10 = {}) {
+  async updateGlobal(caller, input, meta11 = {}) {
     if (caller.role.key !== "SUPER_ADMIN") throw new AuthorizationError("Only a super administrator can change global publishing settings.");
     const before = await this.getGlobal();
     await prisma.socialPublishingGlobal.upsert({ where: { id: "global" }, create: { id: "global", ...GLOBAL_DEFAULT, ...input, updatedById: caller.id }, update: { ...input, updatedById: caller.id } });
@@ -19875,8 +20672,8 @@ var publishingSettingsService = {
       resourceId: "global",
       beforeData: before,
       afterData: after,
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return this.view(caller.organizationId);
   }
@@ -19904,7 +20701,7 @@ async function syncPostStatus(postId) {
   const next = derivePostStatus(post.status, post.targets);
   if (next) await prisma.socialPost.update({ where: { id: postId }, data: { status: next } });
 }
-async function audit(organizationId, action, targetId, result, metadata, actor, meta10) {
+async function audit2(organizationId, action, targetId, result, metadata, actor, meta11) {
   await auditLogRepository.record({
     organizationId,
     actorUserId: actor?.id,
@@ -19914,8 +20711,8 @@ async function audit(organizationId, action, targetId, result, metadata, actor, 
     resourceId: targetId,
     result,
     metadata,
-    ipAddress: meta10?.ip,
-    userAgent: meta10?.userAgent
+    ipAddress: meta11?.ip,
+    userAgent: meta11?.userAgent
   }).catch((err) => logger.error({ targetId, err: safe(err) }, "[social-publish] audit write failed"));
 }
 async function withTimeout3(p, ms) {
@@ -19933,8 +20730,8 @@ async function buildMedia(organizationId, mediaIds) {
   const assets = await prisma.mediaAsset.findMany({ where: { organizationId, id: { in: mediaIds }, status: "ACTIVE" } });
   if (assets.length !== mediaIds.length) throw new SocialPublishError("permanent", "One or more attached media files are missing.");
   const storage = getStorageProvider();
-  return mediaIds.map((id4) => {
-    const a = assets.find((x) => x.id === id4);
+  return mediaIds.map((id6) => {
+    const a = assets.find((x) => x.id === id6);
     return {
       mediaId: a.id,
       mimeType: a.mimeType,
@@ -19999,7 +20796,7 @@ var publisher = {
     const failTerminal = async (outcome, category, message, httpStatus) => {
       await finish({ outcome, category, message, httpStatus });
       await settle("FAILED", { publishError: `${category}: ${message}` });
-      await audit(organizationId, "SOCIAL_PUBLISH_FAILED", targetId, "FAILURE", { provider: account.provider, accountId: account.id, postId: post.id, attempt: attemptNumber, category, message, httpStatus });
+      await audit2(organizationId, "SOCIAL_PUBLISH_FAILED", targetId, "FAILURE", { provider: account.provider, accountId: account.id, postId: post.id, attempt: attemptNumber, category, message, httpStatus });
       await notifyPublishers(organizationId, post.id, "Social post failed to publish", `"${post.title}" \u2192 ${account.displayName}: ${message}`);
       logger.warn({ targetId, postId: post.id, attempt: attemptNumber, category, httpStatus }, "[social-publish] failed");
       return { outcome: "failed", detail: category };
@@ -20034,7 +20831,7 @@ var publisher = {
         const text = target.bodyOverride ?? post.body;
         await finish({ outcome: "DRY_RUN", category: "dry_run", message: `Dry run: would publish ${text.length} characters${post.mediaIds.length ? ` and ${post.mediaIds.length} media` : ""} to ${account.displayName}. Nothing was sent.` });
         await settle("FAILED", { publishError: "dry_run: Dry run \u2014 nothing was sent to the network. Switch off dry-run and use Retry now to publish." });
-        await audit(organizationId, "SOCIAL_PUBLISH_DRY_RUN", targetId, "SUCCESS", { provider: account.provider, accountId: account.id, postId: post.id, attempt: attemptNumber }, actor, opts.manual?.meta);
+        await audit2(organizationId, "SOCIAL_PUBLISH_DRY_RUN", targetId, "SUCCESS", { provider: account.provider, accountId: account.id, postId: post.id, attempt: attemptNumber }, actor, opts.manual?.meta);
         return { outcome: "dry_run" };
       }
       let tokens2 = null;
@@ -20076,14 +20873,14 @@ var publisher = {
         if (decision.action === "retry") {
           await finish({ outcome: "TRANSIENT_FAILURE", category: "transient", message, httpStatus });
           await settle("SCHEDULED", { nextAttemptAt: new Date(now.getTime() + decision.delayMs), publishError: `transient: ${message}` });
-          await audit(organizationId, "SOCIAL_PUBLISH_RETRY_SCHEDULED", targetId, "FAILURE", { provider: account.provider, postId: post.id, attempt: attemptNumber, message, httpStatus, retryInMs: decision.delayMs }, actor, opts.manual?.meta);
+          await audit2(organizationId, "SOCIAL_PUBLISH_RETRY_SCHEDULED", targetId, "FAILURE", { provider: account.provider, postId: post.id, attempt: attemptNumber, message, httpStatus, retryInMs: decision.delayMs }, actor, opts.manual?.meta);
           logger.info({ targetId, attempt: attemptNumber, retryInMs: decision.delayMs, httpStatus }, "[social-publish] transient failure, retry scheduled");
           return { outcome: "retry_scheduled", detail: String(decision.delayMs) };
         }
         if (decision.action === "uncertain") {
           await finish({ outcome: "UNCERTAIN", category: "uncertain", message });
           await settle("UNCERTAIN", { publishError: `uncertain: ${message}` });
-          await audit(organizationId, "SOCIAL_PUBLISH_UNCERTAIN", targetId, "FAILURE", { provider: account.provider, postId: post.id, attempt: attemptNumber, message }, actor, opts.manual?.meta);
+          await audit2(organizationId, "SOCIAL_PUBLISH_UNCERTAIN", targetId, "FAILURE", { provider: account.provider, postId: post.id, attempt: attemptNumber, message }, actor, opts.manual?.meta);
           await notifyPublishers(organizationId, post.id, "Social post needs a manual check", `"${post.title}" \u2192 ${account.displayName}: the network did not confirm whether it was published. Check the account, then mark it published or retry.`);
           logger.warn({ targetId, attempt: attemptNumber }, "[social-publish] outcome unknown \u2014 marked UNCERTAIN");
           return { outcome: "uncertain" };
@@ -20097,7 +20894,7 @@ var publisher = {
       }
       await finish({ outcome: "SUCCESS", externalPostId: result.externalPostId, externalUrl: result.externalUrl });
       await settle("PUBLISHED", { publishedAt: /* @__PURE__ */ new Date(), externalPostId: result.externalPostId, externalUrl: result.externalUrl, publishError: null, nextAttemptAt: null });
-      await audit(organizationId, "SOCIAL_PUBLISHED", targetId, "SUCCESS", { provider: account.provider, accountId: account.id, postId: post.id, attempt: attemptNumber, externalPostId: result.externalPostId }, actor, opts.manual?.meta);
+      await audit2(organizationId, "SOCIAL_PUBLISHED", targetId, "SUCCESS", { provider: account.provider, accountId: account.id, postId: post.id, attempt: attemptNumber, externalPostId: result.externalPostId }, actor, opts.manual?.meta);
       logger.info({ targetId, postId: post.id, provider: account.provider, attempt: attemptNumber, durationMs: Date.now() - startedMs }, "[social-publish] published");
       return { outcome: "published" };
     } catch (err) {
@@ -20115,7 +20912,7 @@ var publisher = {
       n += 1;
       await prisma.socialPublishAttempt.updateMany({ where: { targetId: t.id, finishedAt: null }, data: { finishedAt: now, outcome: "UNCERTAIN", errorCategory: "stale", errorMessage: "Worker stopped before the outcome was recorded." } });
       await syncPostStatus(t.post.id);
-      await audit(t.post.organizationId, "SOCIAL_PUBLISH_UNCERTAIN", t.id, "FAILURE", { postId: t.post.id, reason: "stale_lock" });
+      await audit2(t.post.organizationId, "SOCIAL_PUBLISH_UNCERTAIN", t.id, "FAILURE", { postId: t.post.id, reason: "stale_lock" });
       await notifyPublishers(t.post.organizationId, t.post.id, "Social post needs a manual check", `"${t.post.title}" \u2192 ${t.account.displayName}: publishing was interrupted. Check the account, then mark it published or retry.`);
     }
     return n;
@@ -20139,7 +20936,7 @@ var publisher = {
       if (moved.count !== 1) continue;
       n += 1;
       await syncPostStatus(t.post.id);
-      await audit(org, "SOCIAL_PUBLISH_MISSED", t.id, "FAILURE", { postId: t.post.id, scheduledAt: t.scheduledAt });
+      await audit2(org, "SOCIAL_PUBLISH_MISSED", t.id, "FAILURE", { postId: t.post.id, scheduledAt: t.scheduledAt });
       await notifyPublishers(org, t.post.id, "Social post missed its slot", `"${t.post.title}" \u2192 ${t.account.displayName} was not published within the grace window. Reschedule or retry it from the Failures page.`);
     }
     return n;
@@ -20205,28 +21002,28 @@ async function loadActionable(caller, targetId, allowed = ACTIONABLE) {
 }
 var publishingActions = {
   /** Retry now. UNCERTAIN targets require explicit confirmation that nothing was posted. Never bypasses the gate/dry-run. */
-  async retryNow(caller, targetId, input = {}, meta10 = {}) {
+  async retryNow(caller, targetId, input = {}, meta11 = {}) {
     const t = await loadActionable(caller, targetId, ["FAILED", "MISSED", "UNCERTAIN"]);
     if (t.status === "UNCERTAIN" && !input.confirmNotPosted) throw new ValidationError("Confirm that the post is NOT on the network before retrying an uncertain publish (otherwise it may be duplicated).");
     const now = /* @__PURE__ */ new Date();
     const moved = await prisma.socialPostTarget.updateMany({ where: { id: targetId, status: t.status }, data: { status: "SCHEDULED", scheduledAt: now, nextAttemptAt: null, attempts: 0, publishError: null, providerState: Prisma6.JsonNull } });
     if (moved.count !== 1) throw new ConflictError("This target changed; refresh and try again.");
     await prisma.socialPost.updateMany({ where: { id: t.postId, status: { in: ["FAILED", "SCHEDULED"] } }, data: { status: "SCHEDULED", scheduledAt: now } });
-    await audit(caller.organizationId, "SOCIAL_PUBLISH_RETRY_REQUESTED", targetId, "SUCCESS", { from: t.status, confirmNotPosted: !!input.confirmNotPosted, postId: t.postId }, caller, meta10);
-    const result = await publisher.publishTarget(targetId, { manual: { actor: caller, meta: meta10 } });
+    await audit2(caller.organizationId, "SOCIAL_PUBLISH_RETRY_REQUESTED", targetId, "SUCCESS", { from: t.status, confirmNotPosted: !!input.confirmNotPosted, postId: t.postId }, caller, meta11);
+    const result = await publisher.publishTarget(targetId, { manual: { actor: caller, meta: meta11 } });
     return { result, target: await publishingQueries.getTarget(caller.organizationId, targetId) };
   },
-  async reschedule(caller, targetId, input, meta10 = {}) {
+  async reschedule(caller, targetId, input, meta11 = {}) {
     const t = await loadActionable(caller, targetId);
     if (t.status === "UNCERTAIN" && !input.confirmNotPosted) throw new ValidationError("Confirm that the post is NOT on the network before rescheduling an uncertain publish.");
     if (input.scheduledAt.getTime() <= Date.now()) throw new ValidationError("Choose a future date and time.");
     const moved = await prisma.socialPostTarget.updateMany({ where: { id: targetId, status: t.status }, data: { status: "SCHEDULED", scheduledAt: input.scheduledAt, nextAttemptAt: null, attempts: 0, publishError: null, providerState: Prisma6.JsonNull } });
     if (moved.count !== 1) throw new ConflictError("This target changed; refresh and try again.");
     await prisma.socialPost.updateMany({ where: { id: t.postId, status: { in: ["FAILED", "SCHEDULED"] } }, data: { status: "SCHEDULED", scheduledAt: input.scheduledAt } });
-    await audit(caller.organizationId, "SOCIAL_PUBLISH_RESCHEDULED", targetId, "SUCCESS", { from: t.status, scheduledAt: input.scheduledAt, postId: t.postId }, caller, meta10);
+    await audit2(caller.organizationId, "SOCIAL_PUBLISH_RESCHEDULED", targetId, "SUCCESS", { from: t.status, scheduledAt: input.scheduledAt, postId: t.postId }, caller, meta11);
     return publishingQueries.getTarget(caller.organizationId, targetId);
   },
-  async markPublished(caller, targetId, input, meta10 = {}) {
+  async markPublished(caller, targetId, input, meta11 = {}) {
     const t = await loadActionable(caller, targetId);
     const url = input.url.trim();
     try {
@@ -20238,17 +21035,17 @@ var publishingActions = {
     if (moved.count !== 1) throw new ConflictError("This target changed; refresh and try again.");
     await prisma.socialPublishAttempt.create({ data: { targetId, attemptNumber: await prisma.socialPublishAttempt.count({ where: { targetId } }) + 1, finishedAt: /* @__PURE__ */ new Date(), outcome: "SUCCESS", errorCategory: "manual", errorMessage: "Marked as published manually.", externalUrl: url, actorUserId: caller.id } });
     await syncPostStatus(t.postId);
-    await audit(caller.organizationId, "SOCIAL_PUBLISH_MARKED_MANUALLY", targetId, "SUCCESS", { from: t.status, url, postId: t.postId }, caller, meta10);
+    await audit2(caller.organizationId, "SOCIAL_PUBLISH_MARKED_MANUALLY", targetId, "SUCCESS", { from: t.status, url, postId: t.postId }, caller, meta11);
     return publishingQueries.getTarget(caller.organizationId, targetId);
   },
-  async cancel(caller, targetId, meta10 = {}) {
+  async cancel(caller, targetId, meta11 = {}) {
     const t = await loadActionable(caller, targetId, ["FAILED", "UNCERTAIN", "MISSED", "SCHEDULED"]);
     const moved = await prisma.socialPostTarget.updateMany({ where: { id: targetId, status: t.status }, data: { status: "CANCELLED", nextAttemptAt: null } });
     if (moved.count !== 1) throw new ConflictError("This target changed (it may have started publishing); refresh and try again.");
     await syncPostStatus(t.postId);
     const remaining = await prisma.socialPostTarget.count({ where: { postId: t.postId, status: { not: "CANCELLED" } } });
     if (remaining === 0) await prisma.socialPost.update({ where: { id: t.postId }, data: { status: "CANCELLED" } });
-    await audit(caller.organizationId, "SOCIAL_PUBLISH_CANCELLED", targetId, "SUCCESS", { from: t.status, postId: t.postId }, caller, meta10);
+    await audit2(caller.organizationId, "SOCIAL_PUBLISH_CANCELLED", targetId, "SUCCESS", { from: t.status, postId: t.postId }, caller, meta11);
     return publishingQueries.getTarget(caller.organizationId, targetId);
   }
 };
@@ -20289,8 +21086,8 @@ var publishingQueries = {
     });
     return { items: rows.map(project) };
   },
-  async getTarget(organizationId, id4) {
-    const t = await prisma.socialPostTarget.findFirst({ where: { id: id4, post: { organizationId, deletedAt: null } }, include: { ...ROW_INCLUDE, publishAttempts: { orderBy: { startedAt: "asc" }, take: 100 } } });
+  async getTarget(organizationId, id6) {
+    const t = await prisma.socialPostTarget.findFirst({ where: { id: id6, post: { organizationId, deletedAt: null } }, include: { ...ROW_INCLUDE, publishAttempts: { orderBy: { startedAt: "asc" }, take: 100 } } });
     if (!t) throw new NotFoundError("Publishing target not found.");
     const { publishAttempts, ...rest } = t;
     return {
@@ -20341,11 +21138,11 @@ import { Prisma as Prisma7 } from "@prisma/client";
 init_errors();
 
 // server/services/social/inbox/inboxAi.ts
-import { z as z24 } from "zod";
+import { z as z25 } from "zod";
 
 // server/services/social/socialAiService.ts
 init_errors();
-import { z as z22 } from "zod";
+import { z as z23 } from "zod";
 
 // server/repositories/aiPromptRepository.ts
 var aiPromptRepository = {
@@ -20367,9 +21164,9 @@ var aiPromptRepository = {
     ]);
     return { rows, total };
   },
-  async findByIdInOrg(id4, organizationId) {
+  async findByIdInOrg(id6, organizationId) {
     return prisma.aIPromptTemplate.findFirst({
-      where: { id: id4, organizationId },
+      where: { id: id6, organizationId },
       include: { currentVersion: true, versions: { orderBy: { version: "desc" } } }
     });
   },
@@ -20420,16 +21217,16 @@ var aiPromptRepository = {
       }
     });
   },
-  async update(id4, updatedById, input) {
+  async update(id6, updatedById, input) {
     return prisma.aIPromptTemplate.update({
-      where: { id: id4 },
+      where: { id: id6 },
       data: { ...input, updatedById },
       include: { currentVersion: true }
     });
   },
-  async setCurrentVersion(id4, versionId, updatedById) {
+  async setCurrentVersion(id6, versionId, updatedById) {
     return prisma.aIPromptTemplate.update({
-      where: { id: id4 },
+      where: { id: id6 },
       data: { currentVersionId: versionId, updatedById },
       include: { currentVersion: true }
     });
@@ -20455,9 +21252,9 @@ var aiExecutionRepository = {
     ]);
     return { rows, total };
   },
-  async findByIdInOrg(id4, organizationId) {
+  async findByIdInOrg(id6, organizationId) {
     return prisma.aIExecution.findFirst({
-      where: { id: id4, organizationId },
+      where: { id: id6, organizationId },
       include: { toolExecutions: true, usageRecords: true, approvals: true, workflow: { select: { key: true, name: true } } }
     });
   },
@@ -20475,11 +21272,11 @@ var aiExecutionRepository = {
       }
     });
   },
-  async complete(id4, status, output, errorMessage) {
-    const startedAt = (await prisma.aIExecution.findUnique({ where: { id: id4 }, select: { startedAt: true } }))?.startedAt ?? /* @__PURE__ */ new Date();
+  async complete(id6, status, output, errorMessage) {
+    const startedAt = (await prisma.aIExecution.findUnique({ where: { id: id6 }, select: { startedAt: true } }))?.startedAt ?? /* @__PURE__ */ new Date();
     const completedAt = /* @__PURE__ */ new Date();
     return prisma.aIExecution.update({
-      where: { id: id4 },
+      where: { id: id6 },
       data: {
         status,
         output,
@@ -20673,7 +21470,7 @@ var eachDay = (r) => {
 function computeKpi(def, values, range2, unavailableReason) {
   const days = eachDay(range2.range);
   const prevDays = eachDay(range2.previous);
-  const base2 = { metric: def.key, label: def.label, kind: def.kind, description: def.description, daysInRange: days.length };
+  const base3 = { metric: def.key, label: def.label, kind: def.kind, description: def.description, daysInRange: days.length };
   const series = days.map((date) => ({ date, value: values.get(date) ?? null }));
   if (def.kind === "level") {
     const dated = [...values.entries()].filter(([, v]) => v !== null).sort(([a], [b]) => a.localeCompare(b));
@@ -20684,7 +21481,7 @@ function computeKpi(def, values, range2, unavailableReason) {
     const netChange = cur2 && start && start[0] < cur2[0] ? { value: cur2[1] - start[1], fromDate: start[0], toDate: cur2[0] } : null;
     const comparable = !!cur2 && !!prev2 && prev2[1] !== 0;
     return {
-      ...base2,
+      ...base3,
       current: cur2 ? cur2[1] : null,
       previous: prev2 ? prev2[1] : null,
       daysWithData: dated.filter(([d]) => d >= range2.range.from && d <= range2.range.to).length,
@@ -20718,7 +21515,7 @@ function computeKpi(def, values, range2, unavailableReason) {
   else if (prev.total === 0) compareNote = "The previous period was 0, so a percentage is not meaningful.";
   else changePct = round1((cur.total - prev.total) / prev.total * 100);
   return {
-    ...base2,
+    ...base3,
     current: cur.total,
     previous: prev.total,
     daysWithData: cur.n,
@@ -20736,8 +21533,8 @@ function reasonFor(caps, metric) {
   const c = caps?.daily?.[metric];
   return c?.status === "UNAVAILABLE" ? c.reason ?? "The network does not provide this metric." : null;
 }
-async function loadAccount(organizationId, id4) {
-  const account = await prisma.socialAccount.findFirst({ where: { id: id4, organizationId }, include: { analyticsState: true } });
+async function loadAccount(organizationId, id6) {
+  const account = await prisma.socialAccount.findFirst({ where: { id: id6, organizationId }, include: { analyticsState: true } });
   if (!account) throw new NotFoundError("Social account not found.");
   return account;
 }
@@ -20784,25 +21581,25 @@ var analyticsQueries = {
     const accounts = await prisma.socialAccount.findMany({ where: { organizationId }, include: { analyticsState: true }, orderBy: { createdAt: "asc" }, take: 100 });
     const out = [];
     for (const a of accounts) {
-      const meta10 = accountMeta(a);
+      const meta11 = accountMeta(a);
       let headline = [];
-      if (meta10.analytics === "supported") {
+      if (meta11.analytics === "supported") {
         const values = await dayValues(a.id, [...HEADLINE_METRICS], r.previous.from, r.range.to);
-        headline = HEADLINE_METRICS.map((m) => computeKpi(ACCOUNT_METRICS.find((d) => d.key === m), values.get(m), r, reasonFor(meta10.capabilities, m)));
+        headline = HEADLINE_METRICS.map((m) => computeKpi(ACCOUNT_METRICS.find((d) => d.key === m), values.get(m), r, reasonFor(meta11.capabilities, m)));
       }
-      out.push({ ...meta10, headline: headline.map((k) => ({ ...k, series: [] })) });
+      out.push({ ...meta11, headline: headline.map((k) => ({ ...k, series: [] })) });
     }
     return { range: r.range, previous: r.previous, days: r.days, accounts: out };
   },
   async accountDetail(organizationId, accountId, q, now = /* @__PURE__ */ new Date()) {
     const a = await loadAccount(organizationId, accountId);
     const r = resolveRange(q.from, q.to, now);
-    const meta10 = accountMeta(a);
-    if (meta10.analytics === "unsupported") return { range: r.range, previous: r.previous, days: r.days, account: meta10, kpis: [], coverage: { firstDataDate: null, lastDataDate: null } };
+    const meta11 = accountMeta(a);
+    if (meta11.analytics === "unsupported") return { range: r.range, previous: r.previous, days: r.days, account: meta11, kpis: [], coverage: { firstDataDate: null, lastDataDate: null } };
     const values = await dayValues(a.id, ACCOUNT_METRIC_KEYS, r.previous.from, r.range.to);
-    const kpis = ACCOUNT_METRICS.map((d) => computeKpi(d, values.get(d.key), r, reasonFor(meta10.capabilities, d.key)));
+    const kpis = ACCOUNT_METRICS.map((d) => computeKpi(d, values.get(d.key), r, reasonFor(meta11.capabilities, d.key)));
     const span = await prisma.socialAccountMetric.aggregate({ where: { socialAccountId: a.id, value: { not: null } }, _min: { metricDate: true }, _max: { metricDate: true } });
-    return { range: r.range, previous: r.previous, days: r.days, account: meta10, kpis, coverage: { firstDataDate: span._min.metricDate ? dayString(span._min.metricDate) : null, lastDataDate: span._max.metricDate ? dayString(span._max.metricDate) : null } };
+    return { range: r.range, previous: r.previous, days: r.days, account: meta11, kpis, coverage: { firstDataDate: span._min.metricDate ? dayString(span._min.metricDate) : null, lastDataDate: span._max.metricDate ? dayString(span._max.metricDate) : null } };
   },
   async topPosts(organizationId, accountId, q, now = /* @__PURE__ */ new Date()) {
     const a = await loadAccount(organizationId, accountId);
@@ -20874,7 +21671,7 @@ var analyticsQueries = {
   },
   async audience(organizationId, accountId, q, now = /* @__PURE__ */ new Date()) {
     const a = await loadAccount(organizationId, accountId);
-    const meta10 = accountMeta(a);
+    const meta11 = accountMeta(a);
     const r = resolveRange(q.from ?? dayString(addDays(startOfUtcDay2(now), -90)), q.to, now);
     const connector = connectorRegistry.get(a.provider);
     const followersRows = await prisma.socialAccountMetric.findMany({ where: { socialAccountId: a.id, metric: "followers", metricDate: { gte: parseDay(r.range.from), lte: parseDay(r.range.to) } }, orderBy: { metricDate: "asc" }, select: { metricDate: true, value: true } });
@@ -20907,7 +21704,7 @@ var analyticsQueries = {
     });
     return {
       range: r.range,
-      account: meta10,
+      account: meta11,
       followers: {
         series: followers,
         current: last,
@@ -20934,8 +21731,8 @@ var analyticsQueries = {
       const mm = latest.get(m.targetId) ?? latest.set(m.targetId, /* @__PURE__ */ new Map()).get(m.targetId);
       if (!mm.has(m.metric)) mm.set(m.metric, m.value);
     }
-    const scoreOf = (id4) => {
-      const mm = latest.get(id4);
+    const scoreOf = (id6) => {
+      const mm = latest.get(id6);
       if (!mm) return null;
       const direct = mm.get(metric);
       if (typeof direct === "number") return direct;
@@ -21149,10 +21946,10 @@ function planSlots(start, end, perWeek) {
   }
   return slots;
 }
-var draftSchema = z22.object({ title: z22.string().trim().max(200).optional(), posts: z22.array(z22.object({ accountId: z22.string(), body: z22.string().min(1).max(1e4) })).min(1) });
-var planSchema = z22.object({ posts: z22.array(z22.object({ title: z22.string().trim().max(200).default("Planned post"), body: z22.string().min(1).max(1e4) })).min(1) });
-var rewriteSchema = z22.object({ body: z22.string().min(1).max(1e4) });
-var summarySchema = z22.object({ headline: z22.string().trim().min(1).max(300), bullets: z22.array(z22.string().trim().min(1).max(400)).min(1).max(6) });
+var draftSchema = z23.object({ title: z23.string().trim().max(200).optional(), posts: z23.array(z23.object({ accountId: z23.string(), body: z23.string().min(1).max(1e4) })).min(1) });
+var planSchema = z23.object({ posts: z23.array(z23.object({ title: z23.string().trim().max(200).default("Planned post"), body: z23.string().min(1).max(1e4) })).min(1) });
+var rewriteSchema = z23.object({ body: z23.string().min(1).max(1e4) });
+var summarySchema = z23.object({ headline: z23.string().trim().min(1).max(300), bullets: z23.array(z23.string().trim().min(1).max(400)).min(1).max(6) });
 function aiConfigured() {
   return config.aiProvider === "gemini" && config.geminiApiKey.length > 0;
 }
@@ -21162,7 +21959,7 @@ var socialAiService = {
    * "What worked this period" for one account. The model receives ONLY numbers read from stored snapshots (nulls are omitted, not zeroed) and its text is
    * rejected unless every figure in it exists in that data. Output is advisory text; nothing is saved or published.
    */
-  async analyticsSummary(caller, accountId, q, meta10 = {}) {
+  async analyticsSummary(caller, accountId, q, meta11 = {}) {
     if (!aiConfigured()) throw new ValidationError("AI summaries are not available: no AI provider is configured.");
     const detail = await analyticsQueries.accountDetail(caller.organizationId, accountId, q);
     if (detail.account.analytics !== "supported") throw new ValidationError(detail.account.unsupportedReason ?? "This account has no analytics.");
@@ -21187,18 +21984,18 @@ var socialAiService = {
     let verified = null;
     let executionId = "";
     for (let attempt2 = 0; attempt2 < 2 && !verified; attempt2++) {
-      const { result, executionId: id4 } = await run({
+      const { result, executionId: id6 } = await run({
         caller,
         def: SOCIAL_PROMPTS.analytics,
         toolCode: "social_analytics_summary",
-        meta: meta10,
+        meta: meta11,
         schema: summarySchema,
         inputSummary: { accountId, from: detail.range.from, to: detail.range.to, metrics: kpis.length, posts: topPosts.length },
         variables: { data: JSON.stringify(data, null, 2) }
       });
       if (unknownNumbers([result.headline, ...result.bullets].join("\n"), allowed).length === 0) {
         verified = result;
-        executionId = id4;
+        executionId = id6;
       }
     }
     if (!verified) throw new ValidationError("The AI wrote figures that are not in your stored data, so the summary was discarded. Please try again.");
@@ -21210,8 +22007,8 @@ var socialAiService = {
       resourceType: "social_account",
       resourceId: accountId,
       metadata: { from: detail.range.from, to: detail.range.to, aiExecutionId: executionId },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return { headline: verified.headline, bullets: verified.bullets, executionId, generatedAt: (/* @__PURE__ */ new Date()).toISOString(), range: detail.range, aiGenerated: true };
   },
@@ -21220,7 +22017,7 @@ var socialAiService = {
     return plans.map((p) => ({ id: p.id, brief: p.brief, cadencePerWeek: p.cadencePerWeek, startDate: p.startDate, endDate: p.endDate, status: p.status, createdAt: p.createdAt, postCount: p._count.posts }));
   },
   /** (a) Draft from brief: one DRAFT post with a per-account text for every selected account. */
-  async draftFromBrief(caller, input, meta10 = {}) {
+  async draftFromBrief(caller, input, meta11 = {}) {
     const targets = await accountsFor(caller, input.accountIds);
     const voice = await socialPostService.getBrandVoice(caller.organizationId);
     const source = input.sourceContent ? await socialPostService.resolveSourceContent(caller.organizationId, input.sourceContent.type, input.sourceContent.id) : null;
@@ -21228,7 +22025,7 @@ var socialAiService = {
       caller,
       def: SOCIAL_PROMPTS.draft,
       toolCode: "social_draft_from_brief",
-      meta: meta10,
+      meta: meta11,
       schema: draftSchema,
       inputSummary: { instruction: input.instruction.slice(0, 500), accounts: input.accountIds.length, sourceContent: input.sourceContent ?? null },
       variables: {
@@ -21258,13 +22055,13 @@ Link: ${source.url}` : "(none)"
         bodyOverrides: Object.fromEntries(targets.map((t, i) => [t.account.id, bodies[i]]).filter(([, b]) => b !== bodies[0])),
         sourceContent: input.sourceContent
       },
-      meta10,
+      meta11,
       { aiGenerated: true, aiExecutionId: executionId }
     );
     return { post, executionId };
   },
   /** (b) Generate plan: a SocialContentPlan plus DRAFT posts at suggested slots, all linked to the plan. */
-  async generatePlan(caller, input, meta10 = {}) {
+  async generatePlan(caller, input, meta11 = {}) {
     const targets = await accountsFor(caller, input.accountIds);
     const slots = planSlots(input.startDate, input.endDate, input.cadencePerWeek);
     if (slots.length === 0) throw new ValidationError("There are no future posting slots in that date range.");
@@ -21273,7 +22070,7 @@ Link: ${source.url}` : "(none)"
       caller,
       def: SOCIAL_PROMPTS.plan,
       toolCode: "social_content_plan",
-      meta: meta10,
+      meta: meta11,
       schema: planSchema,
       inputSummary: { brief: input.brief.slice(0, 500), accounts: input.accountIds.length, cadencePerWeek: input.cadencePerWeek, slots: slots.length },
       variables: {
@@ -21294,7 +22091,7 @@ Link: ${source.url}` : "(none)"
         await socialPostService.create(
           caller,
           { title: item.title || `Planned post ${i + 1}`, body: item.body, mediaIds: [], linkUrl: null, scheduledAt: slots[i], timezone: "UTC", accountIds: input.accountIds, bodyOverrides: {} },
-          meta10,
+          meta11,
           { aiGenerated: true, aiExecutionId: executionId, planId: plan.id }
         )
       );
@@ -21307,13 +22104,13 @@ Link: ${source.url}` : "(none)"
       resourceType: "social_content_plan",
       resourceId: plan.id,
       metadata: { posts: posts.length, cadencePerWeek: input.cadencePerWeek, aiExecutionId: executionId },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return { plan: { id: plan.id, brief: plan.brief, cadencePerWeek: plan.cadencePerWeek, startDate: plan.startDate, endDate: plan.endDate, status: plan.status, createdAt: plan.createdAt }, posts, executionId };
   },
   /** (c) Rewrite / shorten / translate the text of an editable draft. The previous text is returned so the UI can undo. */
-  async rewrite(caller, postId, input, meta10 = {}) {
+  async rewrite(caller, postId, input, meta11 = {}) {
     const post = await socialPostService.loadPost(caller.organizationId, postId);
     if (!CONTENT_EDITABLE.includes(post.status)) throw new ConflictError(`A post in status ${post.status} cannot be edited. Move it back to draft first.`);
     const target = input.accountId ? post.targets.find((t) => t.socialAccountId === input.accountId) : void 0;
@@ -21327,12 +22124,12 @@ Link: ${source.url}` : "(none)"
       caller,
       def: SOCIAL_PROMPTS.rewrite,
       toolCode: `social_${input.action}`,
-      meta: meta10,
+      meta: meta11,
       schema: rewriteSchema,
       inputSummary: { postId, action: input.action, language: input.language ?? null },
       variables: { brandVoice: brandVoiceText(voice), task: `${task}${input.instruction ? ` Extra guidance: ${input.instruction}` : ""}`, maxChars: constraints.maxChars, text: current }
     });
-    const updated = await socialPostService.update(caller, postId, target ? { bodyOverrides: { ...Object.fromEntries(post.targets.filter((t) => t.bodyOverride).map((t) => [t.socialAccountId, t.bodyOverride])), [target.socialAccountId]: result.body } } : { body: result.body }, meta10);
+    const updated = await socialPostService.update(caller, postId, target ? { bodyOverrides: { ...Object.fromEntries(post.targets.filter((t) => t.bodyOverride).map((t) => [t.socialAccountId, t.bodyOverride])), [target.socialAccountId]: result.body } } : { body: result.body }, meta11);
     await prisma.socialPost.update({ where: { id: postId }, data: { aiGenerated: true, aiExecutionId: executionId } });
     await auditLogRepository.record({
       organizationId: caller.organizationId,
@@ -21342,28 +22139,28 @@ Link: ${source.url}` : "(none)"
       resourceType: "social_post",
       resourceId: postId,
       metadata: { action: input.action, aiExecutionId: executionId },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return { post: { ...updated, aiGenerated: true, aiExecutionId: executionId }, previousBody: current, executionId };
   }
 };
 
 // server/services/social/inbox/inboxPolicy.ts
-import { z as z23 } from "zod";
+import { z as z24 } from "zod";
 var INTENTS = ["question", "lead", "complaint", "praise", "spam", "support_request", "other"];
 var SENTIMENTS = ["positive", "neutral", "negative"];
 var PRIORITIES = ["LOW", "NORMAL", "HIGH", "URGENT"];
 var PRIORITY_RANK = { LOW: 0, NORMAL: 1, HIGH: 2, URGENT: 3 };
 var maxPriority = (a, b) => PRIORITY_RANK[a] >= PRIORITY_RANK[b] ? a : b;
-var triageSchema = z23.object({
-  intent: z23.string().transform((v) => v.trim().toLowerCase().replace(/[\s-]+/g, "_")),
-  sentiment: z23.string().transform((v) => v.trim().toLowerCase()),
-  priority: z23.string().transform((v) => v.trim().toUpperCase()),
-  language: z23.string().trim().max(10).optional().nullable(),
-  spamScore: z23.coerce.number().min(0).max(1).optional(),
-  category: z23.string().trim().max(60).optional().nullable(),
-  confidence: z23.coerce.number().min(0).max(1).optional()
+var triageSchema = z24.object({
+  intent: z24.string().transform((v) => v.trim().toLowerCase().replace(/[\s-]+/g, "_")),
+  sentiment: z24.string().transform((v) => v.trim().toLowerCase()),
+  priority: z24.string().transform((v) => v.trim().toUpperCase()),
+  language: z24.string().trim().max(10).optional().nullable(),
+  spamScore: z24.coerce.number().min(0).max(1).optional(),
+  category: z24.string().trim().max(60).optional().nullable(),
+  confidence: z24.coerce.number().min(0).max(1).optional()
 });
 function fallbackTriage(partial = {}) {
   return { intent: "other", sentiment: "neutral", priority: "NORMAL", language: null, spamScore: 0, category: null, confidence: null, source: "FALLBACK", flaggedForHuman: true, ...partial };
@@ -21492,7 +22289,7 @@ Approved answers you may rely on (use only these for factual claims):
 </thread>`
   }
 };
-var draftSchema2 = z24.object({ body: z24.string().trim().min(1).max(5e3), confidence: z24.coerce.number().min(0).max(1).optional() });
+var draftSchema2 = z25.object({ body: z25.string().trim().min(1).max(5e3), confidence: z25.coerce.number().min(0).max(1).optional() });
 var inboxAi = {
   async triage(actor, ctx) {
     const { result, executionId } = await run({
@@ -21550,7 +22347,7 @@ async function getInboxSettings(organizationId) {
   return row ? { autoTriage: row.autoTriage, autoDraft: row.autoDraft, autoReply: row.autoReply, autoLead: row.autoLead, firstResponseMinutes: row.firstResponseMinutes, retentionDays: row.retentionDays } : DEFAULT_INBOX_SETTINGS;
 }
 var safeText = (err, secrets = []) => redactSecrets(err, secrets).slice(0, 300);
-async function auditInbox(organizationId, action, resourceId, metadata, actor, meta10, result = "SUCCESS", resourceType = "social_conversation") {
+async function auditInbox(organizationId, action, resourceId, metadata, actor, meta11, result = "SUCCESS", resourceType = "social_conversation") {
   await auditLogRepository.record({
     organizationId,
     actorUserId: actor?.id,
@@ -21560,8 +22357,8 @@ async function auditInbox(organizationId, action, resourceId, metadata, actor, m
     resourceId,
     result,
     metadata,
-    ipAddress: meta10?.ip,
-    userAgent: meta10?.userAgent
+    ipAddress: meta11?.ip,
+    userAgent: meta11?.userAgent
   }).catch((err) => logger.error({ resourceId, action, err: safeText(err) }, "[social-inbox] audit write failed"));
 }
 async function repliers(organizationId) {
@@ -21584,7 +22381,7 @@ async function assertAssignable(organizationId, userId) {
   if (!ok) throw new ValidationError("That person is not an active member of this workspace with permission to reply.");
 }
 var EMAIL_RE = /[\w.+-]+@[\w-]+\.[\w.-]+/;
-async function handoffToCrm(conv, actor, opts = {}, meta10) {
+async function handoffToCrm(conv, actor, opts = {}, meta11) {
   if (conv.leadId || conv.contactId) return { outcome: conv.leadId ? "linked_lead" : "linked_contact", leadId: conv.leadId, contactId: conv.contactId };
   const inbound = await prisma.socialMessage.findMany({ where: { conversationId: conv.id, direction: "INBOUND" }, orderBy: { createdAt: "asc" }, take: 20, select: { body: true } });
   const email = (opts.email?.trim() || inbound.map((m) => EMAIL_RE.exec(m.body)?.[0]).find(Boolean) || "").toLowerCase() || void 0;
@@ -21593,16 +22390,16 @@ async function handoffToCrm(conv, actor, opts = {}, meta10) {
   const name = (opts.name?.trim() || conv.participantName || conv.participantHandle || "Social contact").slice(0, 200);
   const excerpt = (inbound[0]?.body ?? "").replace(/\s+/g, " ").slice(0, 280);
   const link = `Social conversation: /social/inbox?conversation=${conv.id}`;
-  const orgId = conv.organizationId;
+  const orgId2 = conv.organizationId;
   const done = async (outcome, leadId, contactId) => {
     await prisma.socialConversation.update({ where: { id: conv.id }, data: { leadId, contactId } });
-    await auditInbox(orgId, "SOCIAL_INBOX_LEAD_LINKED", conv.id, { outcome, leadId, contactId, auto: !actor }, actor, meta10);
+    await auditInbox(orgId2, "SOCIAL_INBOX_LEAD_LINKED", conv.id, { outcome, leadId, contactId, auto: !actor }, actor, meta11);
     return { outcome, leadId, contactId };
   };
   if (email) {
-    const contact = await prisma.contact.findFirst({ where: { organizationId: orgId, email: { equals: email, mode: "insensitive" }, deletedAt: null }, select: { id: true } });
+    const contact = await prisma.contact.findFirst({ where: { organizationId: orgId2, email: { equals: email, mode: "insensitive" }, deletedAt: null }, select: { id: true } });
     if (contact) return done("linked_contact", null, contact.id);
-    const byEmail = (await leadRepository.findByEmailInOrg(orgId, email))[0];
+    const byEmail = (await leadRepository.findByEmailInOrg(orgId2, email))[0];
     if (byEmail) {
       await prisma.lead.update({ where: { id: byEmail.id }, data: { notes: `${byEmail.notes ? `${byEmail.notes}
 
@@ -21612,7 +22409,7 @@ async function handoffToCrm(conv, actor, opts = {}, meta10) {
       return done("linked_lead", byEmail.id, null);
     }
   }
-  const bySource = await prisma.lead.findFirst({ where: { organizationId: orgId, source, deletedAt: null, status: { notIn: ["CONVERTED", "LOST"] } }, orderBy: { createdAt: "desc" } });
+  const bySource = await prisma.lead.findFirst({ where: { organizationId: orgId2, source, deletedAt: null, status: { notIn: ["CONVERTED", "LOST"] } }, orderBy: { createdAt: "desc" } });
   if (bySource) {
     await prisma.lead.update({ where: { id: bySource.id }, data: { notes: `${bySource.notes ? `${bySource.notes}
 
@@ -21622,7 +22419,7 @@ async function handoffToCrm(conv, actor, opts = {}, meta10) {
     return done("linked_lead", bySource.id, null);
   }
   const lead = await leadRepository.create({
-    organizationId: orgId,
+    organizationId: orgId2,
     companyName: name,
     contactName: name,
     email,
@@ -21630,9 +22427,9 @@ async function handoffToCrm(conv, actor, opts = {}, meta10) {
     notes: [`Social lead from ${conv.account.provider} (${conv.type.toLowerCase()}) ${conv.participantHandle ? `@${conv.participantHandle.replace(/^@/, "")}` : ""}`.trim(), excerpt ? `Excerpt: ${excerpt}` : "", opts.note ?? "", link].filter(Boolean).join("\n\n"),
     assignedTo: conv.assigneeId ?? void 0
   });
-  await auditLogRepository.record({ organizationId: orgId, actorUserId: actor?.id, actorType: actor ? "USER" : "SYSTEM", action: "LEAD_CREATED", resourceType: "lead", resourceId: lead.id, afterData: { companyName: lead.companyName, source: lead.source }, ipAddress: meta10?.ip, userAgent: meta10?.userAgent });
+  await auditLogRepository.record({ organizationId: orgId2, actorUserId: actor?.id, actorType: actor ? "USER" : "SYSTEM", action: "LEAD_CREATED", resourceType: "lead", resourceId: lead.id, afterData: { companyName: lead.companyName, source: lead.source }, ipAddress: meta11?.ip, userAgent: meta11?.userAgent });
   try {
-    await eventEngine.emit({ eventType: "lead.created", entityType: "lead", entityId: lead.id, organizationId: orgId, actorId: actor?.id, actorType: actor ? "USER" : "SYSTEM", sourceModule: "CRM", payload: { companyName: lead.companyName, source: lead.source } });
+    await eventEngine.emit({ eventType: "lead.created", entityType: "lead", entityId: lead.id, organizationId: orgId2, actorId: actor?.id, actorType: actor ? "USER" : "SYSTEM", sourceModule: "CRM", payload: { companyName: lead.companyName, source: lead.source } });
   } catch {
   }
   return done("created", lead.id, null);
@@ -22202,18 +22999,18 @@ var inboxService = {
     ]);
     const ids = rows.map((r) => r.id);
     const [lasts, failed] = await Promise.all([
-      Promise.all(ids.map((id4) => prisma.socialMessage.findFirst({ where: { conversationId: id4, authorKind: { in: ["CUSTOMER", "PAGE"] } }, orderBy: { createdAt: "desc" }, select: { body: true } }))),
+      Promise.all(ids.map((id6) => prisma.socialMessage.findFirst({ where: { conversationId: id6, authorKind: { in: ["CUSTOMER", "PAGE"] } }, orderBy: { createdAt: "desc" }, select: { body: true } }))),
       prisma.socialMessage.groupBy({ by: ["conversationId"], where: { conversationId: { in: ids }, sendStatus: { in: ["FAILED", "UNCERTAIN"] }, authorKind: { not: "NOTE" } }, _count: { _all: true } })
     ]);
     const failedSet = new Set(failed.map((f) => f.conversationId));
     return { conversations: rows.map((r, i) => project2(r, now, { preview: lasts[i]?.body.slice(0, 120) ?? null, failedSend: failedSet.has(r.id) })), total, page: q.page, limit: q.limit };
   },
-  async get(caller, id4) {
-    const conv = await prisma.socialConversation.findFirst({ where: { id: id4, organizationId: caller.organizationId }, include: CONV_INCLUDE });
+  async get(caller, id6) {
+    const conv = await prisma.socialConversation.findFirst({ where: { id: id6, organizationId: caller.organizationId }, include: CONV_INCLUDE });
     if (!conv) throw new NotFoundError("Conversation not found.");
     const [messages, triage] = await Promise.all([
-      prisma.socialMessage.findMany({ where: { conversationId: id4 }, orderBy: { createdAt: "asc" }, take: 300 }),
-      prisma.socialTriage.findFirst({ where: { conversationId: id4 }, orderBy: { createdAt: "desc" } })
+      prisma.socialMessage.findMany({ where: { conversationId: id6 }, orderBy: { createdAt: "asc" }, take: 300 }),
+      prisma.socialTriage.findFirst({ where: { conversationId: id6 }, orderBy: { createdAt: "desc" } })
     ]);
     const connector = connectorRegistry.get(conv.account.provider);
     const win = connector?.replyWindow?.({ type: conv.type, lastInboundAt: conv.lastInboundAt, now: /* @__PURE__ */ new Date() }) ?? { open: true, closesAt: null };
@@ -22262,10 +23059,10 @@ var inboxService = {
     });
   },
   // ---- drafts & replies ----
-  async draft(caller, id4, meta10 = {}) {
-    void meta10;
-    await assertReviewAccess(caller, id4);
-    const r = await generateDraft({ id: caller.id, organizationId: caller.organizationId }, caller.organizationId, id4);
+  async draft(caller, id6, meta11 = {}) {
+    void meta11;
+    await assertReviewAccess(caller, id6);
+    const r = await generateDraft({ id: caller.id, organizationId: caller.organizationId }, caller.organizationId, id6);
     return r;
   },
   async editDraft(caller, messageId, body) {
@@ -22276,55 +23073,55 @@ var inboxService = {
     const updated = await prisma.socialMessage.update({ where: { id: messageId }, data: { body, guardrailResult: guard, sentById: caller.id } });
     return { id: updated.id, body: updated.body, guardrailResult: guard };
   },
-  async send(caller, conversationId, input, meta10 = {}) {
+  async send(caller, conversationId, input, meta11 = {}) {
     await assertReviewAccess(caller, conversationId);
-    const m = await sendReply(caller.organizationId, conversationId, { actor: caller, ...input, meta: meta10 });
+    const m = await sendReply(caller.organizationId, conversationId, { actor: caller, ...input, meta: meta11 });
     return { message: { id: m.id, sendStatus: m.sendStatus, sendError: m.sendError, sentAt: m.sentAt } };
   },
-  async addNote(caller, conversationId, body, meta10 = {}) {
+  async addNote(caller, conversationId, body, meta11 = {}) {
     const conv = await prisma.socialConversation.findFirst({ where: { id: conversationId, organizationId: caller.organizationId } });
     if (!conv) throw new NotFoundError("Conversation not found.");
     const note = await prisma.socialMessage.create({ data: { conversationId, organizationId: caller.organizationId, socialAccountId: conv.socialAccountId, direction: "OUTBOUND", authorKind: "NOTE", body, sendStatus: "RECEIVED", sentById: caller.id } });
-    await auditInbox(caller.organizationId, "SOCIAL_INBOX_NOTE_ADDED", conversationId, { messageId: note.id, chars: body.length }, caller, meta10);
+    await auditInbox(caller.organizationId, "SOCIAL_INBOX_NOTE_ADDED", conversationId, { messageId: note.id, chars: body.length }, caller, meta11);
     return { id: note.id };
   },
   // ---- workflow ----
-  async setStatus(caller, id4, status, meta10 = {}) {
-    const conv = await prisma.socialConversation.findFirst({ where: { id: id4, organizationId: caller.organizationId } });
+  async setStatus(caller, id6, status, meta11 = {}) {
+    const conv = await prisma.socialConversation.findFirst({ where: { id: id6, organizationId: caller.organizationId } });
     if (!conv) throw new NotFoundError("Conversation not found.");
     const settings = await getInboxSettings(caller.organizationId);
     const reopening = status === "OPEN" && conv.status !== "OPEN";
-    await prisma.socialConversation.update({ where: { id: id4 }, data: { status, ...status === "SPAM" || status === "RESOLVED" ? { slaDueAt: null } : {}, ...reopening && !conv.firstResponseAt && conv.lastInboundAt ? { slaDueAt: new Date(conv.lastInboundAt.getTime() + settings.firstResponseMinutes * 6e4) } : {} } });
-    await auditInbox(caller.organizationId, status === "SPAM" ? "SOCIAL_INBOX_MARKED_SPAM" : "SOCIAL_INBOX_STATUS_CHANGED", id4, { from: conv.status, to: status }, caller, meta10);
-    return this.get(caller, id4).then((r) => r.conversation);
+    await prisma.socialConversation.update({ where: { id: id6 }, data: { status, ...status === "SPAM" || status === "RESOLVED" ? { slaDueAt: null } : {}, ...reopening && !conv.firstResponseAt && conv.lastInboundAt ? { slaDueAt: new Date(conv.lastInboundAt.getTime() + settings.firstResponseMinutes * 6e4) } : {} } });
+    await auditInbox(caller.organizationId, status === "SPAM" ? "SOCIAL_INBOX_MARKED_SPAM" : "SOCIAL_INBOX_STATUS_CHANGED", id6, { from: conv.status, to: status }, caller, meta11);
+    return this.get(caller, id6).then((r) => r.conversation);
   },
-  async setPriority(caller, id4, priority, meta10 = {}) {
-    const conv = await prisma.socialConversation.findFirst({ where: { id: id4, organizationId: caller.organizationId } });
+  async setPriority(caller, id6, priority, meta11 = {}) {
+    const conv = await prisma.socialConversation.findFirst({ where: { id: id6, organizationId: caller.organizationId } });
     if (!conv) throw new NotFoundError("Conversation not found.");
-    await prisma.socialConversation.update({ where: { id: id4 }, data: { priority } });
-    await auditInbox(caller.organizationId, "SOCIAL_INBOX_PRIORITY_CHANGED", id4, { from: conv.priority, to: priority }, caller, meta10);
-    return this.get(caller, id4).then((r) => r.conversation);
+    await prisma.socialConversation.update({ where: { id: id6 }, data: { priority } });
+    await auditInbox(caller.organizationId, "SOCIAL_INBOX_PRIORITY_CHANGED", id6, { from: conv.priority, to: priority }, caller, meta11);
+    return this.get(caller, id6).then((r) => r.conversation);
   },
-  async assign(caller, id4, assigneeId, meta10 = {}) {
-    const conv = await prisma.socialConversation.findFirst({ where: { id: id4, organizationId: caller.organizationId } });
+  async assign(caller, id6, assigneeId, meta11 = {}) {
+    const conv = await prisma.socialConversation.findFirst({ where: { id: id6, organizationId: caller.organizationId } });
     if (!conv) throw new NotFoundError("Conversation not found.");
     if (assigneeId) await assertAssignable(caller.organizationId, assigneeId);
-    await prisma.socialConversation.update({ where: { id: id4 }, data: { assigneeId } });
-    await auditInbox(caller.organizationId, "SOCIAL_INBOX_ASSIGNED", id4, { from: conv.assigneeId, to: assigneeId }, caller, meta10);
+    await prisma.socialConversation.update({ where: { id: id6 }, data: { assigneeId } });
+    await auditInbox(caller.organizationId, "SOCIAL_INBOX_ASSIGNED", id6, { from: conv.assigneeId, to: assigneeId }, caller, meta11);
     if (assigneeId && assigneeId !== caller.id) {
-      const last = await prisma.socialMessage.findFirst({ where: { conversationId: id4, authorKind: "CUSTOMER" }, orderBy: { createdAt: "desc" }, select: { body: true } });
-      await notifyInbox(caller.organizationId, [assigneeId], "social_inbox_assigned", "Inbox conversation assigned to you", id4, last?.body);
+      const last = await prisma.socialMessage.findFirst({ where: { conversationId: id6, authorKind: "CUSTOMER" }, orderBy: { createdAt: "desc" }, select: { body: true } });
+      await notifyInbox(caller.organizationId, [assigneeId], "social_inbox_assigned", "Inbox conversation assigned to you", id6, last?.body);
     }
-    return this.get(caller, id4).then((r) => r.conversation);
+    return this.get(caller, id6).then((r) => r.conversation);
   },
-  async markRead(caller, id4, read6) {
-    const conv = await prisma.socialConversation.findFirst({ where: { id: id4, organizationId: caller.organizationId }, include: { account: true } });
+  async markRead(caller, id6, read6) {
+    const conv = await prisma.socialConversation.findFirst({ where: { id: id6, organizationId: caller.organizationId }, include: { account: true } });
     if (!conv) throw new NotFoundError("Conversation not found.");
-    await prisma.socialConversation.update({ where: { id: id4 }, data: { isRead: read6 } });
+    await prisma.socialConversation.update({ where: { id: id6 }, data: { isRead: read6 } });
     if (read6) await syncProviderRead(conv);
-    return { id: id4, isRead: read6 };
+    return { id: id6, isRead: read6 };
   },
-  async hideComment(caller, messageId, hidden, meta10 = {}) {
+  async hideComment(caller, messageId, hidden, meta11 = {}) {
     const msg = await prisma.socialMessage.findFirst({ where: { id: messageId, organizationId: caller.organizationId, direction: "INBOUND" }, include: { conversation: { include: { account: true } } } });
     if (!msg || !msg.providerMessageId) throw new NotFoundError("Message not found.");
     if (msg.conversation.type !== "COMMENT") throw new ValidationError("Only comments can be hidden.");
@@ -22336,20 +23133,20 @@ var inboxService = {
       await connector.hideComment(tokens2, { providerMessageId: msg.providerMessageId, hidden });
     } catch (err) {
       if (err instanceof ConnectorNotImplementedError) throw new ConflictError("Hiding comments is not supported for this provider yet.");
-      await auditInbox(caller.organizationId, "SOCIAL_INBOX_HIDE_FAILED", msg.conversationId, { messageId, hidden, error: safeText(err, [tokens2.accessToken]) }, caller, meta10, "FAILURE");
+      await auditInbox(caller.organizationId, "SOCIAL_INBOX_HIDE_FAILED", msg.conversationId, { messageId, hidden, error: safeText(err, [tokens2.accessToken]) }, caller, meta11, "FAILURE");
       throw new ConflictError("The network did not accept the request. Try again.");
     }
     await prisma.socialMessage.update({ where: { id: messageId }, data: { hidden } });
-    await auditInbox(caller.organizationId, hidden ? "SOCIAL_INBOX_COMMENT_HIDDEN" : "SOCIAL_INBOX_COMMENT_UNHIDDEN", msg.conversationId, { messageId }, caller, meta10);
+    await auditInbox(caller.organizationId, hidden ? "SOCIAL_INBOX_COMMENT_HIDDEN" : "SOCIAL_INBOX_COMMENT_UNHIDDEN", msg.conversationId, { messageId }, caller, meta11);
     return { id: messageId, hidden };
   },
-  async createLead(caller, id4, input, meta10 = {}) {
-    const conv = await prisma.socialConversation.findFirst({ where: { id: id4, organizationId: caller.organizationId }, include: { account: { select: { provider: true } } } });
+  async createLead(caller, id6, input, meta11 = {}) {
+    const conv = await prisma.socialConversation.findFirst({ where: { id: id6, organizationId: caller.organizationId }, include: { account: { select: { provider: true } } } });
     if (!conv) throw new NotFoundError("Conversation not found.");
     if (conv.leadId || conv.contactId) throw new ConflictError("This conversation is already linked to the CRM.", { leadId: conv.leadId, contactId: conv.contactId });
-    return handoffToCrm(conv, caller, input, meta10);
+    return handoffToCrm(conv, caller, input, meta11);
   },
-  async bulk(caller, ids, patch, meta10 = {}) {
+  async bulk(caller, ids, patch, meta11 = {}) {
     if (patch.assigneeId) await assertAssignable(caller.organizationId, patch.assigneeId);
     const where2 = { id: { in: ids }, organizationId: caller.organizationId };
     const data = {};
@@ -22361,7 +23158,7 @@ var inboxService = {
     if (patch.markRead !== void 0) data.isRead = patch.markRead;
     if ("assigneeId" in patch) data.assigneeId = patch.assigneeId;
     const res = await prisma.socialConversation.updateMany({ where: where2, data });
-    await auditInbox(caller.organizationId, "SOCIAL_INBOX_BULK_UPDATE", caller.organizationId, { count: res.count, requested: ids.length, patch: Object.keys(patch) }, caller, meta10, "SUCCESS", "social_inbox");
+    await auditInbox(caller.organizationId, "SOCIAL_INBOX_BULK_UPDATE", caller.organizationId, { count: res.count, requested: ids.length, patch: Object.keys(patch) }, caller, meta11, "SUCCESS", "social_inbox");
     return { updated: res.count };
   },
   /** People who can work the inbox (for the assignee picker). Names only. */
@@ -22377,51 +23174,51 @@ var inboxService = {
   async getSettings(organizationId) {
     return getInboxSettings(organizationId);
   },
-  async updateSettings(caller, input, meta10 = {}) {
+  async updateSettings(caller, input, meta11 = {}) {
     if (!isAdmin2(caller)) throw new AuthorizationError("Only administrators can change inbox settings.");
     const before = await getInboxSettings(caller.organizationId);
     await prisma.socialInboxSetting.upsert({ where: { organizationId: caller.organizationId }, create: { organizationId: caller.organizationId, ...DEFAULT_INBOX_SETTINGS, ...input, updatedById: caller.id }, update: { ...input, updatedById: caller.id } });
     const after = await getInboxSettings(caller.organizationId);
-    await auditInbox(caller.organizationId, "SOCIAL_INBOX_SETTINGS_CHANGED", caller.organizationId, { before, after }, caller, meta10, "SUCCESS", "social_inbox");
+    await auditInbox(caller.organizationId, "SOCIAL_INBOX_SETTINGS_CHANGED", caller.organizationId, { before, after }, caller, meta11, "SUCCESS", "social_inbox");
     return after;
   },
   listRules: (organizationId) => prisma.socialInboxRule.findMany({ where: { organizationId }, orderBy: { position: "asc" }, take: 100 }),
-  async saveRule(caller, id4, input, meta10 = {}) {
+  async saveRule(caller, id6, input, meta11 = {}) {
     if (input.assigneeId) await assertAssignable(caller.organizationId, input.assigneeId);
     if (!(input.matchKeywords?.length || input.matchIntents?.length || input.matchSentiments?.length)) throw new ValidationError("A rule needs at least one condition (keyword, intent or sentiment).");
     let rule;
-    if (id4) {
-      const existing = await prisma.socialInboxRule.findFirst({ where: { id: id4, organizationId: caller.organizationId } });
+    if (id6) {
+      const existing = await prisma.socialInboxRule.findFirst({ where: { id: id6, organizationId: caller.organizationId } });
       if (!existing) throw new NotFoundError("Rule not found.");
-      rule = await prisma.socialInboxRule.update({ where: { id: id4 }, data: input });
+      rule = await prisma.socialInboxRule.update({ where: { id: id6 }, data: input });
     } else rule = await prisma.socialInboxRule.create({ data: { ...input, organizationId: caller.organizationId } });
-    await auditInbox(caller.organizationId, id4 ? "SOCIAL_INBOX_RULE_UPDATED" : "SOCIAL_INBOX_RULE_CREATED", rule.id, { name: rule.name }, caller, meta10, "SUCCESS", "social_inbox_rule");
+    await auditInbox(caller.organizationId, id6 ? "SOCIAL_INBOX_RULE_UPDATED" : "SOCIAL_INBOX_RULE_CREATED", rule.id, { name: rule.name }, caller, meta11, "SUCCESS", "social_inbox_rule");
     return rule;
   },
-  async deleteRule(caller, id4, meta10 = {}) {
-    const res = await prisma.socialInboxRule.deleteMany({ where: { id: id4, organizationId: caller.organizationId } });
+  async deleteRule(caller, id6, meta11 = {}) {
+    const res = await prisma.socialInboxRule.deleteMany({ where: { id: id6, organizationId: caller.organizationId } });
     if (res.count !== 1) throw new NotFoundError("Rule not found.");
-    await auditInbox(caller.organizationId, "SOCIAL_INBOX_RULE_DELETED", id4, {}, caller, meta10, "SUCCESS", "social_inbox_rule");
+    await auditInbox(caller.organizationId, "SOCIAL_INBOX_RULE_DELETED", id6, {}, caller, meta11, "SUCCESS", "social_inbox_rule");
   },
   listCanned: (organizationId) => prisma.socialCannedReply.findMany({ where: { organizationId }, orderBy: { title: "asc" }, take: 200 }),
-  async saveCanned(caller, id4, input, meta10 = {}) {
+  async saveCanned(caller, id6, input, meta11 = {}) {
     if (input.approvedForAuto && !isAdmin2(caller)) throw new AuthorizationError("Only administrators can approve answers for auto-reply.");
     let row;
-    if (id4) {
-      const existing = await prisma.socialCannedReply.findFirst({ where: { id: id4, organizationId: caller.organizationId } });
+    if (id6) {
+      const existing = await prisma.socialCannedReply.findFirst({ where: { id: id6, organizationId: caller.organizationId } });
       if (!existing) throw new NotFoundError("Canned reply not found.");
       if (existing.approvedForAuto && !isAdmin2(caller)) throw new AuthorizationError("Only administrators can edit answers approved for auto-reply.");
-      row = await prisma.socialCannedReply.update({ where: { id: id4 }, data: input });
+      row = await prisma.socialCannedReply.update({ where: { id: id6 }, data: input });
     } else row = await prisma.socialCannedReply.create({ data: { ...input, organizationId: caller.organizationId, createdById: caller.id } });
-    await auditInbox(caller.organizationId, id4 ? "SOCIAL_INBOX_CANNED_UPDATED" : "SOCIAL_INBOX_CANNED_CREATED", row.id, { title: row.title, approvedForAuto: row.approvedForAuto }, caller, meta10, "SUCCESS", "social_canned_reply");
+    await auditInbox(caller.organizationId, id6 ? "SOCIAL_INBOX_CANNED_UPDATED" : "SOCIAL_INBOX_CANNED_CREATED", row.id, { title: row.title, approvedForAuto: row.approvedForAuto }, caller, meta11, "SUCCESS", "social_canned_reply");
     return row;
   },
-  async deleteCanned(caller, id4, meta10 = {}) {
-    const existing = await prisma.socialCannedReply.findFirst({ where: { id: id4, organizationId: caller.organizationId } });
+  async deleteCanned(caller, id6, meta11 = {}) {
+    const existing = await prisma.socialCannedReply.findFirst({ where: { id: id6, organizationId: caller.organizationId } });
     if (!existing) throw new NotFoundError("Canned reply not found.");
     if (existing.approvedForAuto && !isAdmin2(caller)) throw new AuthorizationError("Only administrators can delete answers approved for auto-reply.");
-    await prisma.socialCannedReply.delete({ where: { id: id4 } });
-    await auditInbox(caller.organizationId, "SOCIAL_INBOX_CANNED_DELETED", id4, {}, caller, meta10, "SUCCESS", "social_canned_reply");
+    await prisma.socialCannedReply.delete({ where: { id: id6 } });
+    await auditInbox(caller.organizationId, "SOCIAL_INBOX_CANNED_DELETED", id6, {}, caller, meta11, "SUCCESS", "social_canned_reply");
   },
   /** DEV/TEST ONLY (route is disabled in production): injects a mock event through the same ingest path the webhook uses. */
   async injectMock(caller, input) {
@@ -22511,7 +23308,7 @@ var approvalCenterRoutes_default = router15;
 // server/routes/v1/navRoutes.ts
 import { Router as Router16 } from "express";
 init_apiResponse();
-import { z as z25 } from "zod";
+import { z as z26 } from "zod";
 
 // server/services/navPreferenceService.ts
 var MAX_PINS = 8;
@@ -22551,9 +23348,9 @@ router16.get(
     sendSuccess(res, { badges: await navBadgeService.get(req.user) });
   })
 );
-var updatePreferencesSchema = z25.object({
-  railCollapsed: z25.boolean().optional(),
-  pinned: z25.array(z25.string().regex(/^[a-z0-9-]{1,64}$/, "Invalid item id.")).max(MAX_PINS, `At most ${MAX_PINS} items can be pinned.`).refine((ids) => new Set(ids).size === ids.length, { message: "Pinned items must be unique." }).optional()
+var updatePreferencesSchema = z26.object({
+  railCollapsed: z26.boolean().optional(),
+  pinned: z26.array(z26.string().regex(/^[a-z0-9-]{1,64}$/, "Invalid item id.")).max(MAX_PINS, `At most ${MAX_PINS} items can be pinned.`).refine((ids) => new Set(ids).size === ids.length, { message: "Pinned items must be unique." }).optional()
 }).refine((v) => v.railCollapsed !== void 0 || v.pinned !== void 0, { message: "Nothing to update." });
 router16.get(
   "/preferences",
@@ -22575,28 +23372,28 @@ import { Router as Router17 } from "express";
 init_apiResponse();
 
 // server/schemas/socialSchemas.ts
-import { z as z26 } from "zod";
-var connectStartSchema = z26.object({ provider: z26.string().regex(/^[a-z0-9_]{2,30}$/), accountId: z26.string().min(1).max(64).optional() });
-var connectCallbackSchema = z26.object({
-  state: z26.string().min(10).max(200),
-  code: z26.string().max(2e3).optional(),
-  error: z26.string().max(500).optional()
+import { z as z27 } from "zod";
+var connectStartSchema = z27.object({ provider: z27.string().regex(/^[a-z0-9_]{2,30}$/), accountId: z27.string().min(1).max(64).optional() });
+var connectCallbackSchema = z27.object({
+  state: z27.string().min(10).max(200),
+  code: z27.string().max(2e3).optional(),
+  error: z27.string().max(500).optional()
 });
-var connectSelectSchema = z26.object({ selectionId: z26.string().uuid(), externalIds: z26.array(z26.string().min(1).max(100)).min(1).max(20) });
+var connectSelectSchema = z27.object({ selectionId: z27.string().uuid(), externalIds: z27.array(z27.string().min(1).max(100)).min(1).max(20) });
 
 // server/services/social/connectors/setupInfo.ts
 function providerSetup(provider) {
   if (provider === "meta_instagram") return instagramSetup();
   if (provider !== "meta_facebook") return null;
-  const base2 = config.controlCenterBaseUrl.replace(/\/+$/, "");
+  const base3 = config.controlCenterBaseUrl.replace(/\/+$/, "");
   return {
     provider,
     label: "Facebook Pages",
     configured: !!config.metaAppId && !!config.metaAppSecret,
     appMode: config.metaAppMode,
     apiVersion: config.metaApiVersion,
-    redirectUri: `${base2}/social/accounts`,
-    webhookCallbackUrl: `${base2}/api/v1/social/webhooks/meta_facebook`,
+    redirectUri: `${base3}/social/accounts`,
+    webhookCallbackUrl: `${base3}/api/v1/social/webhooks/meta_facebook`,
     verifyTokenConfigured: !!config.metaWebhookVerifyToken,
     verifyTokenEnvVar: "META_WEBHOOK_VERIFY_TOKEN",
     permissions: facebookScopes().map((name) => ({ name, required: REQUIRED_SCOPES.includes(name) })),
@@ -22620,15 +23417,15 @@ function providerSetup(provider) {
   };
 }
 function instagramSetup() {
-  const base2 = config.controlCenterBaseUrl.replace(/\/+$/, "");
+  const base3 = config.controlCenterBaseUrl.replace(/\/+$/, "");
   return {
     provider: "meta_instagram",
     label: "Instagram",
     configured: !!config.metaAppId && !!config.metaAppSecret,
     appMode: config.metaAppMode,
     apiVersion: config.metaApiVersion,
-    redirectUri: `${base2}/social/accounts`,
-    webhookCallbackUrl: `${base2}/api/v1/social/webhooks/meta_instagram`,
+    redirectUri: `${base3}/social/accounts`,
+    webhookCallbackUrl: `${base3}/api/v1/social/webhooks/meta_instagram`,
     verifyTokenConfigured: !!config.metaWebhookVerifyToken,
     verifyTokenEnvVar: "META_WEBHOOK_VERIFY_TOKEN",
     permissions: instagramScopes().map((name) => ({ name, required: REQUIRED_SCOPES2.includes(name) })),
@@ -22736,9 +23533,9 @@ import { Router as Router18 } from "express";
 init_apiResponse();
 
 // server/schemas/socialPostSchemas.ts
-import { z as z27 } from "zod";
+import { z as z28 } from "zod";
 var POST_STATUSES = ["DRAFT", "PENDING_APPROVAL", "APPROVED", "SCHEDULED", "PUBLISHING", "PUBLISHED", "FAILED", "REJECTED", "CANCELLED"];
-var timezone = z27.string().max(64).refine((tz) => {
+var timezone = z28.string().max(64).refine((tz) => {
   try {
     new Intl.DateTimeFormat("en-US", { timeZone: tz });
     return true;
@@ -22746,85 +23543,85 @@ var timezone = z27.string().max(64).refine((tz) => {
     return false;
   }
 }, "Unknown timezone.");
-var id = z27.string().min(1).max(64);
-var sourceContentSchema = z27.object({ type: z27.enum(["post", "case_study"]), id });
-var createSocialPostSchema = z27.object({
-  title: z27.string().trim().min(1).max(200),
-  body: z27.string().max(1e4).default(""),
-  mediaIds: z27.array(id).max(10).default([]),
-  linkUrl: z27.string().trim().max(2e3).nullable().optional(),
-  scheduledAt: z27.coerce.date().nullable().optional(),
+var id2 = z28.string().min(1).max(64);
+var sourceContentSchema = z28.object({ type: z28.enum(["post", "case_study"]), id: id2 });
+var createSocialPostSchema = z28.object({
+  title: z28.string().trim().min(1).max(200),
+  body: z28.string().max(1e4).default(""),
+  mediaIds: z28.array(id2).max(10).default([]),
+  linkUrl: z28.string().trim().max(2e3).nullable().optional(),
+  scheduledAt: z28.coerce.date().nullable().optional(),
   timezone: timezone.default("UTC"),
-  accountIds: z27.array(id).max(20).default([]),
+  accountIds: z28.array(id2).max(20).default([]),
   /** Per-account text overrides keyed by social account id. */
-  bodyOverrides: z27.record(z27.string().max(1e4)).default({}),
+  bodyOverrides: z28.record(z28.string().max(1e4)).default({}),
   sourceContent: sourceContentSchema.optional()
 });
 var updateSocialPostSchema = createSocialPostSchema.partial().refine((v) => Object.keys(v).length > 0, { message: "Nothing to update." });
-var listSocialPostsQuerySchema = z27.object({
-  status: z27.enum(POST_STATUSES).optional(),
-  accountId: id.optional(),
-  from: z27.coerce.date().optional(),
-  to: z27.coerce.date().optional(),
-  search: z27.string().trim().max(200).optional(),
-  page: z27.coerce.number().int().min(1).default(1),
-  limit: z27.coerce.number().int().min(1).max(100).default(25)
+var listSocialPostsQuerySchema = z28.object({
+  status: z28.enum(POST_STATUSES).optional(),
+  accountId: id2.optional(),
+  from: z28.coerce.date().optional(),
+  to: z28.coerce.date().optional(),
+  search: z28.string().trim().max(200).optional(),
+  page: z28.coerce.number().int().min(1).default(1),
+  limit: z28.coerce.number().int().min(1).max(100).default(25)
 });
-var calendarQuerySchema = z27.object({
-  from: z27.coerce.date(),
-  to: z27.coerce.date(),
-  accountId: id.optional(),
-  status: z27.enum(POST_STATUSES).optional()
+var calendarQuerySchema = z28.object({
+  from: z28.coerce.date(),
+  to: z28.coerce.date(),
+  accountId: id2.optional(),
+  status: z28.enum(POST_STATUSES).optional()
 }).refine((v) => v.to > v.from && v.to.getTime() - v.from.getTime() <= 62 * 864e5, { message: "Choose a date range of at most 62 days." });
-var scheduleSchema = z27.object({ scheduledAt: z27.coerce.date(), timezone: timezone.optional() });
-var commentSchema = z27.object({ comment: z27.string().trim().max(2e3).optional() });
-var rejectSchema = z27.object({ comment: z27.string().trim().min(1, "A comment is required when rejecting.").max(2e3) });
-var rescheduleSchema = z27.object({ scheduledAt: z27.coerce.date().nullable(), timezone: timezone.optional() });
-var brandVoiceSchema = z27.object({
-  toneDescriptors: z27.array(z27.string().trim().min(1).max(60)).max(20).default([]),
-  audience: z27.string().trim().max(500).nullable().optional(),
-  dos: z27.array(z27.string().trim().min(1).max(300)).max(30).default([]),
-  donts: z27.array(z27.string().trim().min(1).max(300)).max(30).default([]),
-  bannedWords: z27.array(z27.string().trim().min(1).max(80)).max(200).default([]),
-  requiredDisclaimers: z27.array(z27.string().trim().min(1).max(500)).max(10).default([]),
-  defaultHashtags: z27.array(z27.string().trim().regex(/^#?[\p{L}\p{N}_]{1,60}$/u, "Invalid hashtag.")).max(30).default([]),
-  ctaPhrases: z27.array(z27.string().trim().min(1).max(200)).max(20).default([]),
-  languages: z27.array(z27.string().trim().regex(/^[a-zA-Z]{2,3}(-[a-zA-Z]{2,4})?$/, "Use a language code like en or pt-BR.")).min(1).max(10).default(["en"])
+var scheduleSchema = z28.object({ scheduledAt: z28.coerce.date(), timezone: timezone.optional() });
+var commentSchema = z28.object({ comment: z28.string().trim().max(2e3).optional() });
+var rejectSchema = z28.object({ comment: z28.string().trim().min(1, "A comment is required when rejecting.").max(2e3) });
+var rescheduleSchema = z28.object({ scheduledAt: z28.coerce.date().nullable(), timezone: timezone.optional() });
+var brandVoiceSchema = z28.object({
+  toneDescriptors: z28.array(z28.string().trim().min(1).max(60)).max(20).default([]),
+  audience: z28.string().trim().max(500).nullable().optional(),
+  dos: z28.array(z28.string().trim().min(1).max(300)).max(30).default([]),
+  donts: z28.array(z28.string().trim().min(1).max(300)).max(30).default([]),
+  bannedWords: z28.array(z28.string().trim().min(1).max(80)).max(200).default([]),
+  requiredDisclaimers: z28.array(z28.string().trim().min(1).max(500)).max(10).default([]),
+  defaultHashtags: z28.array(z28.string().trim().regex(/^#?[\p{L}\p{N}_]{1,60}$/u, "Invalid hashtag.")).max(30).default([]),
+  ctaPhrases: z28.array(z28.string().trim().min(1).max(200)).max(20).default([]),
+  languages: z28.array(z28.string().trim().regex(/^[a-zA-Z]{2,3}(-[a-zA-Z]{2,4})?$/, "Use a language code like en or pt-BR.")).min(1).max(10).default(["en"])
 });
-var workspaceSettingsSchema = z27.object({ approvalMode: z27.enum(["ALWAYS_REQUIRE", "AUTO_IF_GUARDRAILS_PASS"]) });
-var aiDraftSchema = z27.object({
-  instruction: z27.string().trim().min(3).max(2e3),
-  accountIds: z27.array(id).min(1).max(20),
+var workspaceSettingsSchema = z28.object({ approvalMode: z28.enum(["ALWAYS_REQUIRE", "AUTO_IF_GUARDRAILS_PASS"]) });
+var aiDraftSchema = z28.object({
+  instruction: z28.string().trim().min(3).max(2e3),
+  accountIds: z28.array(id2).min(1).max(20),
   sourceContent: sourceContentSchema.optional(),
-  title: z27.string().trim().max(200).optional(),
-  language: z27.string().trim().max(10).optional()
+  title: z28.string().trim().max(200).optional(),
+  language: z28.string().trim().max(10).optional()
 });
-var aiPlanSchema = z27.object({
-  brief: z27.string().trim().min(3).max(2e3),
-  accountIds: z27.array(id).min(1).max(20),
-  cadencePerWeek: z27.number().int().min(1).max(14),
-  startDate: z27.coerce.date(),
-  endDate: z27.coerce.date()
+var aiPlanSchema = z28.object({
+  brief: z28.string().trim().min(3).max(2e3),
+  accountIds: z28.array(id2).min(1).max(20),
+  cadencePerWeek: z28.number().int().min(1).max(14),
+  startDate: z28.coerce.date(),
+  endDate: z28.coerce.date()
 }).refine((v) => v.endDate >= v.startDate && v.endDate.getTime() - v.startDate.getTime() <= 92 * 864e5, { message: "Choose a date range of at most 92 days." });
-var aiRewriteSchema = z27.object({
-  action: z27.enum(["rewrite", "shorten", "translate"]),
-  instruction: z27.string().trim().max(500).optional(),
-  language: z27.string().trim().max(40).optional(),
-  accountId: id.optional()
+var aiRewriteSchema = z28.object({
+  action: z28.enum(["rewrite", "shorten", "translate"]),
+  instruction: z28.string().trim().max(500).optional(),
+  language: z28.string().trim().max(40).optional(),
+  accountId: id2.optional()
 });
-var contentSourcesQuerySchema = z27.object({ type: z27.enum(["post", "case_study"]), search: z27.string().trim().max(200).optional() });
-var publishingSettingsSchema = z27.object({
-  enabled: z27.boolean(),
-  dryRun: z27.boolean(),
-  killSwitch: z27.boolean(),
-  graceMinutes: z27.number().int().min(5).max(1440),
-  maxAttempts: z27.number().int().min(1).max(10)
+var contentSourcesQuerySchema = z28.object({ type: z28.enum(["post", "case_study"]), search: z28.string().trim().max(200).optional() });
+var publishingSettingsSchema = z28.object({
+  enabled: z28.boolean(),
+  dryRun: z28.boolean(),
+  killSwitch: z28.boolean(),
+  graceMinutes: z28.number().int().min(5).max(1440),
+  maxAttempts: z28.number().int().min(1).max(10)
 }).partial().refine((v) => Object.keys(v).length > 0, { message: "Nothing to update." });
-var publishingGlobalSchema = z27.object({ enabled: z27.boolean(), dryRun: z27.boolean(), killSwitch: z27.boolean() }).partial().refine((v) => Object.keys(v).length > 0, { message: "Nothing to update." });
-var failuresQuerySchema = z27.object({ status: z27.enum(["FAILED", "UNCERTAIN", "MISSED"]).optional() });
-var retryTargetSchema = z27.object({ confirmNotPosted: z27.boolean().optional() });
-var rescheduleTargetSchema = z27.object({ scheduledAt: z27.coerce.date(), confirmNotPosted: z27.boolean().optional() });
-var markPublishedSchema = z27.object({ url: z27.string().trim().url().max(2e3) });
+var publishingGlobalSchema = z28.object({ enabled: z28.boolean(), dryRun: z28.boolean(), killSwitch: z28.boolean() }).partial().refine((v) => Object.keys(v).length > 0, { message: "Nothing to update." });
+var failuresQuerySchema = z28.object({ status: z28.enum(["FAILED", "UNCERTAIN", "MISSED"]).optional() });
+var retryTargetSchema = z28.object({ confirmNotPosted: z28.boolean().optional() });
+var rescheduleTargetSchema = z28.object({ scheduledAt: z28.coerce.date(), confirmNotPosted: z28.boolean().optional() });
+var markPublishedSchema = z28.object({ url: z28.string().trim().url().max(2e3) });
 
 // server/routes/v1/socialContentRoutes.ts
 var meta3 = (req) => ({ ip: req.ip, userAgent: req.headers["user-agent"], requestId: req.requestId });
@@ -22973,63 +23770,63 @@ init_apiResponse();
 init_errors();
 
 // server/schemas/socialInboxSchemas.ts
-import { z as z28 } from "zod";
-var statusEnum = z28.enum(["OPEN", "PENDING", "RESOLVED", "SPAM"]);
-var priorityEnum = z28.enum(["LOW", "NORMAL", "HIGH", "URGENT"]);
-var typeEnum = z28.enum(["COMMENT", "DM", "MENTION", "REVIEW"]);
-var bool = z28.enum(["true", "false"]).transform((v) => v === "true");
-var listConversationsSchema = z28.object({
+import { z as z29 } from "zod";
+var statusEnum = z29.enum(["OPEN", "PENDING", "RESOLVED", "SPAM"]);
+var priorityEnum = z29.enum(["LOW", "NORMAL", "HIGH", "URGENT"]);
+var typeEnum = z29.enum(["COMMENT", "DM", "MENTION", "REVIEW"]);
+var bool = z29.enum(["true", "false"]).transform((v) => v === "true");
+var listConversationsSchema = z29.object({
   status: statusEnum.optional(),
-  accountId: z28.string().uuid().optional(),
+  accountId: z29.string().uuid().optional(),
   type: typeEnum.optional(),
-  assignee: z28.string().max(64).optional(),
+  assignee: z29.string().max(64).optional(),
   priority: priorityEnum.optional(),
-  sentiment: z28.enum(["positive", "neutral", "negative"]).optional(),
+  sentiment: z29.enum(["positive", "neutral", "negative"]).optional(),
   overdue: bool.optional(),
   unread: bool.optional(),
-  search: z28.string().trim().max(100).optional(),
-  page: z28.coerce.number().int().min(1).default(1),
-  limit: z28.coerce.number().int().min(1).max(50).default(25)
+  search: z29.string().trim().max(100).optional(),
+  page: z29.coerce.number().int().min(1).default(1),
+  limit: z29.coerce.number().int().min(1).max(50).default(25)
 });
-var sendReplySchema = z28.object({ messageId: z28.string().uuid().optional(), body: z28.string().trim().min(1).max(5e3).optional(), resolve: z28.boolean().optional(), confirmNotSent: z28.boolean().optional() }).refine((v) => v.messageId || v.body, { message: "Provide a draft id or a reply text." });
-var editDraftSchema = z28.object({ body: z28.string().trim().min(1).max(5e3) });
-var noteSchema = z28.object({ body: z28.string().trim().min(1).max(5e3) });
-var statusSchema = z28.object({ status: statusEnum });
-var prioritySchema = z28.object({ priority: priorityEnum });
-var assignSchema = z28.object({ assigneeId: z28.string().uuid().nullable() });
-var readSchema = z28.object({ read: z28.boolean() });
-var hideSchema = z28.object({ hidden: z28.boolean() });
-var leadSchema = z28.object({ email: z28.string().trim().email().max(255).optional(), name: z28.string().trim().max(200).optional(), note: z28.string().trim().max(1e3).optional() });
-var bulkSchema = z28.object({
-  ids: z28.array(z28.string().uuid()).min(1).max(100),
-  patch: z28.object({ status: statusEnum.optional(), assigneeId: z28.string().uuid().nullable().optional(), priority: priorityEnum.optional(), markRead: z28.boolean().optional() }).refine((p) => Object.keys(p).length > 0, { message: "Nothing to update." })
+var sendReplySchema = z29.object({ messageId: z29.string().uuid().optional(), body: z29.string().trim().min(1).max(5e3).optional(), resolve: z29.boolean().optional(), confirmNotSent: z29.boolean().optional() }).refine((v) => v.messageId || v.body, { message: "Provide a draft id or a reply text." });
+var editDraftSchema = z29.object({ body: z29.string().trim().min(1).max(5e3) });
+var noteSchema = z29.object({ body: z29.string().trim().min(1).max(5e3) });
+var statusSchema = z29.object({ status: statusEnum });
+var prioritySchema = z29.object({ priority: priorityEnum });
+var assignSchema = z29.object({ assigneeId: z29.string().uuid().nullable() });
+var readSchema = z29.object({ read: z29.boolean() });
+var hideSchema = z29.object({ hidden: z29.boolean() });
+var leadSchema = z29.object({ email: z29.string().trim().email().max(255).optional(), name: z29.string().trim().max(200).optional(), note: z29.string().trim().max(1e3).optional() });
+var bulkSchema = z29.object({
+  ids: z29.array(z29.string().uuid()).min(1).max(100),
+  patch: z29.object({ status: statusEnum.optional(), assigneeId: z29.string().uuid().nullable().optional(), priority: priorityEnum.optional(), markRead: z29.boolean().optional() }).refine((p) => Object.keys(p).length > 0, { message: "Nothing to update." })
 });
-var inboxSettingsSchema = z28.object({
-  autoTriage: z28.boolean(),
-  autoDraft: z28.boolean(),
-  autoReply: z28.boolean(),
-  autoLead: z28.boolean(),
-  firstResponseMinutes: z28.number().int().min(5).max(10080),
-  retentionDays: z28.number().int().min(7).max(3650)
+var inboxSettingsSchema = z29.object({
+  autoTriage: z29.boolean(),
+  autoDraft: z29.boolean(),
+  autoReply: z29.boolean(),
+  autoLead: z29.boolean(),
+  firstResponseMinutes: z29.number().int().min(5).max(10080),
+  retentionDays: z29.number().int().min(7).max(3650)
 }).partial().refine((v) => Object.keys(v).length > 0, { message: "Nothing to update." });
-var words = z28.array(z28.string().trim().min(1).max(60)).max(30).default([]);
-var ruleSchema = z28.object({
-  name: z28.string().trim().min(1).max(100),
-  enabled: z28.boolean().optional(),
-  position: z28.number().int().min(0).max(1e3).optional(),
+var words = z29.array(z29.string().trim().min(1).max(60)).max(30).default([]);
+var ruleSchema = z29.object({
+  name: z29.string().trim().min(1).max(100),
+  enabled: z29.boolean().optional(),
+  position: z29.number().int().min(0).max(1e3).optional(),
   matchKeywords: words.optional(),
-  matchIntents: z28.array(z28.enum(["question", "lead", "complaint", "praise", "spam", "support_request", "other"])).max(7).optional(),
-  matchSentiments: z28.array(z28.enum(["positive", "neutral", "negative"])).max(3).optional(),
-  assigneeId: z28.string().uuid().nullable().optional(),
+  matchIntents: z29.array(z29.enum(["question", "lead", "complaint", "praise", "spam", "support_request", "other"])).max(7).optional(),
+  matchSentiments: z29.array(z29.enum(["positive", "neutral", "negative"])).max(3).optional(),
+  assigneeId: z29.string().uuid().nullable().optional(),
   setPriority: priorityEnum.nullable().optional(),
-  addTags: z28.array(z28.string().trim().min(1).max(40)).max(10).optional()
+  addTags: z29.array(z29.string().trim().min(1).max(40)).max(10).optional()
 });
-var cannedSchema = z28.object({ title: z28.string().trim().min(1).max(100), body: z28.string().trim().min(1).max(2e3), category: z28.string().trim().max(60).nullable().optional(), approvedForAuto: z28.boolean().optional(), matchKeywords: words.optional() });
-var injectSchema = z28.object({ accountId: z28.string().uuid(), type: typeEnum.default("COMMENT"), text: z28.string().trim().min(1).max(5e3), handle: z28.string().trim().max(60).optional(), name: z28.string().trim().max(100).optional(), threadId: z28.string().max(100).optional(), messageId: z28.string().max(100).optional() });
+var cannedSchema = z29.object({ title: z29.string().trim().min(1).max(100), body: z29.string().trim().min(1).max(2e3), category: z29.string().trim().max(60).nullable().optional(), approvedForAuto: z29.boolean().optional(), matchKeywords: words.optional() });
+var injectSchema = z29.object({ accountId: z29.string().uuid(), type: typeEnum.default("COMMENT"), text: z29.string().trim().min(1).max(5e3), handle: z29.string().trim().max(60).optional(), name: z29.string().trim().max(100).optional(), threadId: z29.string().max(100).optional(), messageId: z29.string().max(100).optional() });
 
 // server/routes/v1/socialInboxRoutes.ts
 var meta5 = (req) => ({ ip: req.ip, userAgent: req.headers["user-agent"], requestId: req.requestId });
-var id2 = (req) => String(req.params.id);
+var id3 = (req) => String(req.params.id);
 var socialWebhookRouter = Router20();
 socialWebhookRouter.post(
   "/:provider",
@@ -23061,19 +23858,19 @@ var read3 = requirePermission("social.read");
 var reply = requirePermission("social.reply");
 var manage3 = requirePermission("social.accounts.manage");
 socialInboxRouter.get("/conversations", read3, asyncHandler(async (req, res) => sendSuccess(res, await inboxService.list(req.user, listConversationsSchema.parse(req.query)))));
-socialInboxRouter.get("/conversations/:id", read3, asyncHandler(async (req, res) => sendSuccess(res, await inboxService.get(req.user, id2(req)))));
+socialInboxRouter.get("/conversations/:id", read3, asyncHandler(async (req, res) => sendSuccess(res, await inboxService.get(req.user, id3(req)))));
 socialInboxRouter.get("/assignees", read3, asyncHandler(async (req, res) => sendSuccess(res, { assignees: await inboxService.assignees(req.user.organizationId) })));
 socialInboxRouter.get("/metrics", read3, asyncHandler(async (req, res) => sendSuccess(res, { metrics: await inboxService.metrics(req.user) })));
-socialInboxRouter.post("/conversations/:id/draft", reply, aiExecutionLimiter, asyncHandler(async (req, res) => sendSuccess(res, { draft: await inboxService.draft(req.user, id2(req), meta5(req)) })));
-socialInboxRouter.post("/conversations/:id/reply", reply, asyncHandler(async (req, res) => sendSuccess(res, await inboxService.send(req.user, id2(req), sendReplySchema.parse(req.body), meta5(req)))));
-socialInboxRouter.patch("/messages/:id", reply, asyncHandler(async (req, res) => sendSuccess(res, { draft: await inboxService.editDraft(req.user, id2(req), editDraftSchema.parse(req.body).body) })));
-socialInboxRouter.post("/messages/:id/hide", reply, asyncHandler(async (req, res) => sendSuccess(res, await inboxService.hideComment(req.user, id2(req), hideSchema.parse(req.body).hidden, meta5(req)))));
-socialInboxRouter.post("/conversations/:id/notes", reply, asyncHandler(async (req, res) => sendSuccess(res, await inboxService.addNote(req.user, id2(req), noteSchema.parse(req.body).body, meta5(req)), 201)));
-socialInboxRouter.post("/conversations/:id/status", reply, asyncHandler(async (req, res) => sendSuccess(res, { conversation: await inboxService.setStatus(req.user, id2(req), statusSchema.parse(req.body).status, meta5(req)) })));
-socialInboxRouter.post("/conversations/:id/priority", reply, asyncHandler(async (req, res) => sendSuccess(res, { conversation: await inboxService.setPriority(req.user, id2(req), prioritySchema.parse(req.body).priority, meta5(req)) })));
-socialInboxRouter.post("/conversations/:id/assign", reply, asyncHandler(async (req, res) => sendSuccess(res, { conversation: await inboxService.assign(req.user, id2(req), assignSchema.parse(req.body).assigneeId, meta5(req)) })));
-socialInboxRouter.post("/conversations/:id/read", reply, asyncHandler(async (req, res) => sendSuccess(res, await inboxService.markRead(req.user, id2(req), readSchema.parse(req.body).read))));
-socialInboxRouter.post("/conversations/:id/lead", reply, asyncHandler(async (req, res) => sendSuccess(res, { handoff: await inboxService.createLead(req.user, id2(req), leadSchema.parse(req.body ?? {}), meta5(req)) })));
+socialInboxRouter.post("/conversations/:id/draft", reply, aiExecutionLimiter, asyncHandler(async (req, res) => sendSuccess(res, { draft: await inboxService.draft(req.user, id3(req), meta5(req)) })));
+socialInboxRouter.post("/conversations/:id/reply", reply, asyncHandler(async (req, res) => sendSuccess(res, await inboxService.send(req.user, id3(req), sendReplySchema.parse(req.body), meta5(req)))));
+socialInboxRouter.patch("/messages/:id", reply, asyncHandler(async (req, res) => sendSuccess(res, { draft: await inboxService.editDraft(req.user, id3(req), editDraftSchema.parse(req.body).body) })));
+socialInboxRouter.post("/messages/:id/hide", reply, asyncHandler(async (req, res) => sendSuccess(res, await inboxService.hideComment(req.user, id3(req), hideSchema.parse(req.body).hidden, meta5(req)))));
+socialInboxRouter.post("/conversations/:id/notes", reply, asyncHandler(async (req, res) => sendSuccess(res, await inboxService.addNote(req.user, id3(req), noteSchema.parse(req.body).body, meta5(req)), 201)));
+socialInboxRouter.post("/conversations/:id/status", reply, asyncHandler(async (req, res) => sendSuccess(res, { conversation: await inboxService.setStatus(req.user, id3(req), statusSchema.parse(req.body).status, meta5(req)) })));
+socialInboxRouter.post("/conversations/:id/priority", reply, asyncHandler(async (req, res) => sendSuccess(res, { conversation: await inboxService.setPriority(req.user, id3(req), prioritySchema.parse(req.body).priority, meta5(req)) })));
+socialInboxRouter.post("/conversations/:id/assign", reply, asyncHandler(async (req, res) => sendSuccess(res, { conversation: await inboxService.assign(req.user, id3(req), assignSchema.parse(req.body).assigneeId, meta5(req)) })));
+socialInboxRouter.post("/conversations/:id/read", reply, asyncHandler(async (req, res) => sendSuccess(res, await inboxService.markRead(req.user, id3(req), readSchema.parse(req.body).read))));
+socialInboxRouter.post("/conversations/:id/lead", reply, asyncHandler(async (req, res) => sendSuccess(res, { handoff: await inboxService.createLead(req.user, id3(req), leadSchema.parse(req.body ?? {}), meta5(req)) })));
 socialInboxRouter.post("/bulk", reply, sensitiveActionLimiter, asyncHandler(async (req, res) => {
   const b = bulkSchema.parse(req.body);
   sendSuccess(res, await inboxService.bulk(req.user, b.ids, b.patch, meta5(req)));
@@ -23082,16 +23879,16 @@ socialInboxRouter.get("/settings", read3, asyncHandler(async (req, res) => sendS
 socialInboxRouter.put("/settings", manage3, sensitiveActionLimiter, asyncHandler(async (req, res) => sendSuccess(res, { settings: await inboxService.updateSettings(req.user, inboxSettingsSchema.parse(req.body), meta5(req)) })));
 socialInboxRouter.get("/rules", read3, asyncHandler(async (req, res) => sendSuccess(res, { rules: await inboxService.listRules(req.user.organizationId) })));
 socialInboxRouter.post("/rules", manage3, sensitiveActionLimiter, asyncHandler(async (req, res) => sendSuccess(res, { rule: await inboxService.saveRule(req.user, null, ruleSchema.parse(req.body), meta5(req)) }, 201)));
-socialInboxRouter.put("/rules/:id", manage3, sensitiveActionLimiter, asyncHandler(async (req, res) => sendSuccess(res, { rule: await inboxService.saveRule(req.user, id2(req), ruleSchema.parse(req.body), meta5(req)) })));
+socialInboxRouter.put("/rules/:id", manage3, sensitiveActionLimiter, asyncHandler(async (req, res) => sendSuccess(res, { rule: await inboxService.saveRule(req.user, id3(req), ruleSchema.parse(req.body), meta5(req)) })));
 socialInboxRouter.delete("/rules/:id", manage3, sensitiveActionLimiter, asyncHandler(async (req, res) => {
-  await inboxService.deleteRule(req.user, id2(req), meta5(req));
+  await inboxService.deleteRule(req.user, id3(req), meta5(req));
   sendSuccess(res, { deleted: true });
 }));
 socialInboxRouter.get("/canned", read3, asyncHandler(async (req, res) => sendSuccess(res, { replies: await inboxService.listCanned(req.user.organizationId) })));
 socialInboxRouter.post("/canned", reply, asyncHandler(async (req, res) => sendSuccess(res, { reply: await inboxService.saveCanned(req.user, null, cannedSchema.parse(req.body), meta5(req)) }, 201)));
-socialInboxRouter.put("/canned/:id", reply, asyncHandler(async (req, res) => sendSuccess(res, { reply: await inboxService.saveCanned(req.user, id2(req), cannedSchema.parse(req.body), meta5(req)) })));
+socialInboxRouter.put("/canned/:id", reply, asyncHandler(async (req, res) => sendSuccess(res, { reply: await inboxService.saveCanned(req.user, id3(req), cannedSchema.parse(req.body), meta5(req)) })));
 socialInboxRouter.delete("/canned/:id", reply, asyncHandler(async (req, res) => {
-  await inboxService.deleteCanned(req.user, id2(req), meta5(req));
+  await inboxService.deleteCanned(req.user, id3(req), meta5(req));
   sendSuccess(res, { deleted: true });
 }));
 socialInboxRouter.post("/dev/inject", manage3, asyncHandler(async (req, res) => {
@@ -23101,7 +23898,7 @@ socialInboxRouter.post("/dev/inject", manage3, asyncHandler(async (req, res) => 
 
 // server/routes/v1/socialAnalyticsRoutes.ts
 import { Router as Router21 } from "express";
-import { z as z29 } from "zod";
+import { z as z30 } from "zod";
 init_apiResponse();
 
 // server/services/social/analytics/analyticsIngest.ts
@@ -23234,14 +24031,14 @@ var analyticsIngest = {
     const lastFinalStr = dayString(lastFinalDay);
     const windowFrom = addDays(today, -analytics.historyDays);
     const windowFromStr = dayString(windowFrom);
-    const orgId = account.organizationId;
+    const orgId2 = account.organizationId;
     const ctx = { accountExternalId: account.externalAccountId };
     try {
       let followers = null;
       try {
         followers = await analytics.fetchFollowers(tokens2, ctx);
-        if (followers !== null) result.daysStored += await storeAccountMetrics(orgId, accountId, [{ date: todayStr, metric: "followers", value: followers, status: "OK" }]);
-        else await storeAccountMetrics(orgId, accountId, [{ date: todayStr, metric: "followers", value: null, status: "UNAVAILABLE", note: "The network did not return a follower count." }]);
+        if (followers !== null) result.daysStored += await storeAccountMetrics(orgId2, accountId, [{ date: todayStr, metric: "followers", value: followers, status: "OK" }]);
+        else await storeAccountMetrics(orgId2, accountId, [{ date: todayStr, metric: "followers", value: null, status: "UNAVAILABLE", note: "The network did not return a follower count." }]);
       } catch (err) {
         if (err instanceof SocialPublishError && err.kind === "transient") throw err;
         lastError = safe2(err);
@@ -23260,7 +24057,7 @@ var analyticsIngest = {
           try {
             const series = await analytics.fetchDailyMetric(tokens2, { ...ctx, metric, from: parseDay(wantFrom), to: lastFinalDay });
             caps.daily[metric] = series.status === "OK" ? { status: "OK", checkedAt: nowIso, from: askedBack ? known.from : wantFrom, through: lastFinalStr } : { status: "UNAVAILABLE", reason: series.note ?? "Not provided by the network.", checkedAt: nowIso };
-            if (series.status === "OK") result.daysStored += await storeAccountMetrics(orgId, accountId, toRows(metric, series, { from: windowFromStr, to: lastFinalStr }));
+            if (series.status === "OK") result.daysStored += await storeAccountMetrics(orgId2, accountId, toRows(metric, series, { from: windowFromStr, to: lastFinalStr }));
           } catch (err) {
             if (err instanceof SocialPublishError && err.kind === "auth") {
               permissionMissing = true;
@@ -23303,7 +24100,7 @@ var analyticsIngest = {
             continue;
           }
           result.postsSnapshotted += 1;
-          await storePostMetrics(orgId, accountId, todayStr, metrics.map((m) => ({ targetId: t.id, metric: m.metric, value: m.value, status: m.status, note: m.note })));
+          await storePostMetrics(orgId2, accountId, todayStr, metrics.map((m) => ({ targetId: t.id, metric: m.metric, value: m.value, status: m.status, note: m.note })));
         }
         if (due.length > POSTS_PER_RUN) complete = false;
       }
@@ -23312,7 +24109,7 @@ var analyticsIngest = {
         if (!last || Date.now() - last.capturedAt.getTime() >= AUDIENCE_EVERY_MS) {
           try {
             const aud = await analytics.fetchAudience(tokens2, { ...ctx, followers });
-            result.audienceStored += await storeAudience(orgId, accountId, todayStr, aud);
+            result.audienceStored += await storeAudience(orgId2, accountId, todayStr, aud);
             const ok = aud.some((a) => a.status === "OK");
             caps.audience = ok ? { status: "OK", checkedAt: nowIso } : { status: "UNAVAILABLE", reason: aud.find((a) => a.reason)?.reason ?? "No demographic data returned.", checkedAt: nowIso };
           } catch (err) {
@@ -23344,7 +24141,7 @@ var analyticsIngest = {
     return result;
   },
   /** "Refresh now" for one account (social.accounts.manage). Ignores the once-a-day gate but never the kill switches. */
-  async refreshNow(caller, accountId, meta10 = {}) {
+  async refreshNow(caller, accountId, meta11 = {}) {
     const account = await prisma.socialAccount.findFirst({ where: { id: accountId, organizationId: caller.organizationId }, select: { id: true } });
     if (!account) throw new NotFoundError("Social account not found.");
     const result = await this.runAccount(accountId, /* @__PURE__ */ new Date(), { budgetMs: REFRESH_BUDGET_MS });
@@ -23356,8 +24153,8 @@ var analyticsIngest = {
       resourceType: "social_account",
       resourceId: accountId,
       metadata: { outcome: result.outcome, reason: result.reason ?? null, days: result.daysStored, posts: result.postsSnapshotted },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     }).catch(() => void 0);
     return result;
   }
@@ -23365,7 +24162,7 @@ var analyticsIngest = {
 
 // server/routes/v1/socialAnalyticsRoutes.ts
 var meta6 = (req) => ({ ip: req.ip, userAgent: req.headers["user-agent"] });
-var range = z29.object({ from: z29.string().optional(), to: z29.string().optional() });
+var range = z30.object({ from: z30.string().optional(), to: z30.string().optional() });
 var read4 = requirePermission("social.analytics.read");
 var socialAnalyticsRouter = Router21();
 socialAnalyticsRouter.use(authenticateToken);
@@ -23377,21 +24174,21 @@ socialAnalyticsRouter.get("/accounts/:id", read4, asyncHandler(async (req, res) 
   sendSuccess(res, { ...await analyticsQueries.accountDetail(req.user.organizationId, req.params.id, range.parse(req.query)), aiAvailable: aiConfigured() });
 }));
 socialAnalyticsRouter.get("/accounts/:id/posts", read4, asyncHandler(async (req, res) => {
-  const q = range.extend({ sort: z29.string().optional(), limit: z29.coerce.number().int().min(1).max(100).optional() }).parse(req.query);
+  const q = range.extend({ sort: z30.string().optional(), limit: z30.coerce.number().int().min(1).max(100).optional() }).parse(req.query);
   sendSuccess(res, await analyticsQueries.topPosts(req.user.organizationId, req.params.id, q));
 }));
 socialAnalyticsRouter.get("/accounts/:id/audience", read4, asyncHandler(async (req, res) => {
   sendSuccess(res, await analyticsQueries.audience(req.user.organizationId, req.params.id, range.parse(req.query)));
 }));
 socialAnalyticsRouter.get("/accounts/:id/best-times", read4, asyncHandler(async (req, res) => {
-  const q = z29.object({ metric: z29.string().optional(), tz: z29.string().max(60).optional() }).parse(req.query);
+  const q = z30.object({ metric: z30.string().optional(), tz: z30.string().max(60).optional() }).parse(req.query);
   sendSuccess(res, await analyticsQueries.bestTimes(req.user.organizationId, req.params.id, q));
 }));
 socialAnalyticsRouter.get("/posts/:targetId", read4, asyncHandler(async (req, res) => {
   sendSuccess(res, await analyticsQueries.postDetail(req.user.organizationId, req.params.targetId));
 }));
 socialAnalyticsRouter.get("/accounts/:id/export", read4, asyncHandler(async (req, res) => {
-  const q = range.extend({ kind: z29.enum(["account", "posts"]).default("account") }).parse(req.query);
+  const q = range.extend({ kind: z30.enum(["account", "posts"]).default("account") }).parse(req.query);
   const { filename, body } = await analyticsExport.csv(req.user.organizationId, req.params.id, q.kind, q);
   res.setHeader("Content-Type", "text/csv; charset=utf-8");
   res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
@@ -23521,31 +24318,31 @@ var listeningQueries = {
     };
   },
   /** 404 unless the conversation is a REVIEW of this workspace (the reviews endpoints only touch reviews). */
-  async assertReview(caller, id4) {
-    const c = await prisma.socialConversation.findFirst({ where: { id: id4, organizationId: caller.organizationId, type: "REVIEW" }, select: { id: true } });
+  async assertReview(caller, id6) {
+    const c = await prisma.socialConversation.findFirst({ where: { id: id6, organizationId: caller.organizationId, type: "REVIEW" }, select: { id: true } });
     if (!c) throw new NotFoundError("Review not found.");
   }
 };
 
 // server/schemas/socialListeningSchemas.ts
-import { z as z30 } from "zod";
-var bool2 = z30.enum(["true", "false"]).transform((v) => v === "true");
-var listeningQuerySchema = z30.object({
-  status: z30.enum(["OPEN", "PENDING", "RESOLVED", "SPAM"]).optional(),
-  sentiment: z30.enum(["positive", "neutral", "negative"]).optional(),
-  topic: z30.string().trim().max(60).optional(),
-  assignee: z30.string().max(64).optional(),
+import { z as z31 } from "zod";
+var bool2 = z31.enum(["true", "false"]).transform((v) => v === "true");
+var listeningQuerySchema = z31.object({
+  status: z31.enum(["OPEN", "PENDING", "RESOLVED", "SPAM"]).optional(),
+  sentiment: z31.enum(["positive", "neutral", "negative"]).optional(),
+  topic: z31.string().trim().max(60).optional(),
+  assignee: z31.string().max(64).optional(),
   crisis: bool2.optional(),
-  accountId: z30.string().uuid().optional(),
-  search: z30.string().trim().max(100).optional(),
-  page: z30.coerce.number().int().min(1).default(1),
-  limit: z30.coerce.number().int().min(1).max(50).default(25)
+  accountId: z31.string().uuid().optional(),
+  search: z31.string().trim().max(100).optional(),
+  page: z31.coerce.number().int().min(1).default(1),
+  limit: z31.coerce.number().int().min(1).max(50).default(25)
 });
-var reviewOverviewSchema = z30.object({ days: z30.coerce.number().int().min(7).max(365).default(90) });
+var reviewOverviewSchema = z31.object({ days: z31.coerce.number().int().min(7).max(365).default(90) });
 
 // server/routes/v1/socialListeningRoutes.ts
 var meta7 = (req) => ({ ip: req.ip, userAgent: req.headers["user-agent"], requestId: req.requestId });
-var id3 = (req) => String(req.params.id);
+var id4 = (req) => String(req.params.id);
 var read5 = requirePermission("social.listening.read");
 var respond = requirePermission("social.reviews.respond");
 var socialListeningRouter = Router22();
@@ -23558,12 +24355,12 @@ socialReviewsRouter.use(authenticateToken);
 socialReviewsRouter.get("/", read5, asyncHandler(async (req, res) => sendSuccess(res, await listeningQueries.reviews(req.user, listeningQuerySchema.parse(req.query)))));
 socialReviewsRouter.get("/overview", read5, asyncHandler(async (req, res) => sendSuccess(res, await listeningQueries.reviewOverview(req.user, reviewOverviewSchema.parse(req.query).days))));
 socialReviewsRouter.post("/:id/draft", respond, aiExecutionLimiter, asyncHandler(async (req, res) => {
-  await listeningQueries.assertReview(req.user, id3(req));
-  sendSuccess(res, { draft: await inboxService.draft(req.user, id3(req), meta7(req)) });
+  await listeningQueries.assertReview(req.user, id4(req));
+  sendSuccess(res, { draft: await inboxService.draft(req.user, id4(req), meta7(req)) });
 }));
 socialReviewsRouter.post("/:id/reply", respond, asyncHandler(async (req, res) => {
-  await listeningQueries.assertReview(req.user, id3(req));
-  sendSuccess(res, await inboxService.send(req.user, id3(req), sendReplySchema.parse(req.body), meta7(req)));
+  await listeningQueries.assertReview(req.user, id4(req));
+  sendSuccess(res, await inboxService.send(req.user, id4(req), sendReplySchema.parse(req.body), meta7(req)));
 }));
 
 // server/routes/v1/formRoutes.ts
@@ -23571,10 +24368,10 @@ import { Router as Router23 } from "express";
 
 // server/services/formService.ts
 init_errors();
-async function loadFormOrThrow(id4, organizationId) {
-  const form = await formRepository.findByIdInOrg(id4, organizationId);
-  if (!form) throw new NotFoundError("Form not found.");
-  return form;
+async function loadFormOrThrow(id6, organizationId) {
+  const form2 = await formRepository.findByIdInOrg(id6, organizationId);
+  if (!form2) throw new NotFoundError("Form not found.");
+  return form2;
 }
 async function assertNotifyUserIdsUsable(ids, organizationId) {
   if (!ids || ids.length === 0) return;
@@ -23585,10 +24382,10 @@ var formService = {
   async listForms(organizationId, filters, page, limit, sort, order) {
     return formRepository.list(organizationId, filters, page, limit, sort, order);
   },
-  async getForm(organizationId, id4) {
-    return loadFormOrThrow(id4, organizationId);
+  async getForm(organizationId, id6) {
+    return loadFormOrThrow(id6, organizationId);
   },
-  async createForm(caller, input, meta10 = {}) {
+  async createForm(caller, input, meta11 = {}) {
     const organizationId = caller.organizationId;
     if (input.slug) {
       const dup = await formRepository.findBySlugInOrg(organizationId, input.slug);
@@ -23596,7 +24393,7 @@ var formService = {
     }
     const slug = input.slug ?? await formRepository.findUniqueSlugInOrg(organizationId, input.name);
     await assertNotifyUserIdsUsable(input.notifyUserIds, organizationId);
-    const form = await formRepository.create({
+    const form2 = await formRepository.create({
       organizationId,
       name: input.name,
       slug,
@@ -23611,19 +24408,19 @@ var formService = {
       actorType: "USER",
       action: "FORM_CREATED",
       resourceType: "form",
-      resourceId: form.id,
-      afterData: { name: form.name, slug: form.slug },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      resourceId: form2.id,
+      afterData: { name: form2.name, slug: form2.slug },
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
-    return form;
+    return form2;
   },
-  async updateForm(caller, id4, input, meta10 = {}) {
+  async updateForm(caller, id6, input, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const existing = await loadFormOrThrow(id4, organizationId);
+    const existing = await loadFormOrThrow(id6, organizationId);
     if (input.slug !== void 0 && input.slug !== existing.slug) {
       const dup = await formRepository.findBySlugInOrg(organizationId, input.slug);
-      if (dup && dup.id !== id4) throw new ConflictError(`A form with slug "${input.slug}" already exists.`, { existingFormId: dup.id });
+      if (dup && dup.id !== id6) throw new ConflictError(`A form with slug "${input.slug}" already exists.`, { existingFormId: dup.id });
     }
     await assertNotifyUserIdsUsable(input.notifyUserIds, organizationId);
     const patch = {};
@@ -23633,38 +24430,38 @@ var formService = {
     if (input.successMessage !== void 0) patch.successMessage = input.successMessage;
     if (input.status !== void 0) patch.status = input.status;
     if (input.notifyUserIds !== void 0) patch.notifyUserIds = input.notifyUserIds;
-    const updated = await formRepository.update(id4, patch);
+    const updated = await formRepository.update(id6, patch);
     await auditLogRepository.record({
       organizationId,
       actorUserId: caller.id,
       actorType: "USER",
       action: "FORM_UPDATED",
       resourceType: "form",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { name: existing.name, slug: existing.slug, status: existing.status },
       afterData: { name: input.name, slug: input.slug, status: input.status },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return updated;
   },
-  async deleteForm(caller, id4, meta10 = {}) {
+  async deleteForm(caller, id6, meta11 = {}) {
     const organizationId = caller.organizationId;
-    await loadFormOrThrow(id4, organizationId);
-    const submissionCount = await formRepository.countSubmissions(id4);
+    await loadFormOrThrow(id6, organizationId);
+    const submissionCount = await formRepository.countSubmissions(id6);
     if (submissionCount > 0) {
       throw new ConflictError(`This form has ${submissionCount} submission${submissionCount === 1 ? "" : "s"} \u2014 archive it instead of deleting, so its history stays traceable.`);
     }
-    await formRepository.softDelete(id4);
+    await formRepository.softDelete(id6);
     await auditLogRepository.record({
       organizationId,
       actorUserId: caller.id,
       actorType: "USER",
       action: "FORM_DELETED",
       resourceType: "form",
-      resourceId: id4,
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      resourceId: id6,
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
   },
   async listSubmissions(organizationId, formId, page, limit) {
@@ -23677,8 +24474,8 @@ var formService = {
 init_apiResponse();
 
 // server/schemas/formSchemas.ts
-import { z as z31 } from "zod";
-var formFieldTypeSchema = z31.enum([
+import { z as z32 } from "zod";
+var formFieldTypeSchema = z32.enum([
   "text",
   "email",
   "tel",
@@ -23692,20 +24489,20 @@ var formFieldTypeSchema = z31.enum([
   "hidden"
 ]);
 var OPTION_TYPES = /* @__PURE__ */ new Set(["select", "multiselect", "radio"]);
-var formFieldOptionSchema = z31.object({
-  value: z31.string().trim().min(1).max(100),
-  label: z31.string().trim().min(1).max(150)
+var formFieldOptionSchema = z32.object({
+  value: z32.string().trim().min(1).max(100),
+  label: z32.string().trim().min(1).max(150)
 });
-var formFieldSchema = z31.object({
-  key: z31.string().trim().min(1).max(40).regex(/^[a-z][a-z0-9_]*$/, "key must start with a lowercase letter and contain only lowercase letters, digits, and underscores"),
-  label: z31.string().trim().min(1).max(100),
+var formFieldSchema = z32.object({
+  key: z32.string().trim().min(1).max(40).regex(/^[a-z][a-z0-9_]*$/, "key must start with a lowercase letter and contain only lowercase letters, digits, and underscores"),
+  label: z32.string().trim().min(1).max(100),
   type: formFieldTypeSchema.default("text"),
-  required: z31.boolean().default(false),
-  placeholder: z31.string().trim().max(150).optional(),
+  required: z32.boolean().default(false),
+  placeholder: z32.string().trim().max(150).optional(),
   /** select/multiselect/radio only — validated below (OPTION_TYPES). */
-  options: z31.array(formFieldOptionSchema).max(50).optional(),
-  min: z31.number().optional(),
-  max: z31.number().optional(),
+  options: z32.array(formFieldOptionSchema).max(50).optional(),
+  min: z32.number().optional(),
+  max: z32.number().optional(),
   /**
    * Conditional visibility — the simplest practical rule the roadmap
    * asks for: show this field only when another field (by key) equals
@@ -23713,57 +24510,57 @@ var formFieldSchema = z31.object({
    * server-side (publicFormService) so a hidden-but-still-submitted
    * value can never bypass required-field validation by hiding it.
    */
-  visibleWhen: z31.object({ fieldKey: z31.string().trim().min(1).max(40), equals: z31.string().trim().max(2e3) }).optional()
+  visibleWhen: z32.object({ fieldKey: z32.string().trim().min(1).max(40), equals: z32.string().trim().max(2e3) }).optional()
 }).refine((f) => !OPTION_TYPES.has(f.type) || f.options && f.options.length > 0, {
   message: "select/multiselect/radio fields need at least one option.",
   path: ["options"]
 });
-var formFieldsSchema = z31.array(formFieldSchema).min(1, "A form needs at least one field.").max(20, "A form may define at most 20 fields.").refine((fields) => new Set(fields.map((f) => f.key)).size === fields.length, { message: "Field keys must be unique." }).refine((fields) => fields.some((f) => f.key === "name" || f.key === "email"), {
+var formFieldsSchema = z32.array(formFieldSchema).min(1, "A form needs at least one field.").max(20, "A form may define at most 20 fields.").refine((fields) => new Set(fields.map((f) => f.key)).size === fields.length, { message: "Field keys must be unique." }).refine((fields) => fields.some((f) => f.key === "name" || f.key === "email"), {
   message: 'At least one field must use key "name" or "email" so a submission has an identity to attach to a CRM Lead.'
 }).refine((fields) => fields.every((f) => !f.visibleWhen || fields.some((other) => other.key === f.visibleWhen.fieldKey)), {
   message: "A field's conditional visibility must reference another real field on the same form."
 });
-var notifyUserIdsSchema = z31.array(z31.string().trim().uuid()).max(20).default([]);
-var listFormsQuerySchema = z31.object({
-  page: z31.coerce.number().int().positive().default(1),
-  limit: z31.coerce.number().int().positive().max(100).default(20),
-  search: z31.string().trim().max(200).optional(),
-  status: z31.enum(["ACTIVE", "ARCHIVED"]).optional(),
-  sort: z31.enum(["createdAt", "updatedAt", "name"]).default("createdAt"),
-  order: z31.enum(["asc", "desc"]).default("desc")
+var notifyUserIdsSchema = z32.array(z32.string().trim().uuid()).max(20).default([]);
+var listFormsQuerySchema = z32.object({
+  page: z32.coerce.number().int().positive().default(1),
+  limit: z32.coerce.number().int().positive().max(100).default(20),
+  search: z32.string().trim().max(200).optional(),
+  status: z32.enum(["ACTIVE", "ARCHIVED"]).optional(),
+  sort: z32.enum(["createdAt", "updatedAt", "name"]).default("createdAt"),
+  order: z32.enum(["asc", "desc"]).default("desc")
 });
-var slugSchema = z31.string().trim().min(1).max(150).regex(/^[a-z0-9]+(-[a-z0-9]+)*$/, "slug must be lowercase, alphanumeric, and hyphen-separated");
-var createFormSchema = z31.object({
-  name: z31.string().trim().min(1).max(200),
+var slugSchema = z32.string().trim().min(1).max(150).regex(/^[a-z0-9]+(-[a-z0-9]+)*$/, "slug must be lowercase, alphanumeric, and hyphen-separated");
+var createFormSchema = z32.object({
+  name: z32.string().trim().min(1).max(200),
   slug: slugSchema.optional(),
   fields: formFieldsSchema,
-  successMessage: z31.string().trim().max(500).optional(),
+  successMessage: z32.string().trim().max(500).optional(),
   notifyUserIds: notifyUserIdsSchema.optional()
 });
-var updateFormSchema = z31.object({
-  name: z31.string().trim().min(1).max(200).optional(),
+var updateFormSchema = z32.object({
+  name: z32.string().trim().min(1).max(200).optional(),
   slug: slugSchema.optional(),
   fields: formFieldsSchema.optional(),
-  successMessage: z31.string().trim().max(500).nullable().optional(),
-  status: z31.enum(["ACTIVE", "ARCHIVED"]).optional(),
+  successMessage: z32.string().trim().max(500).nullable().optional(),
+  status: z32.enum(["ACTIVE", "ARCHIVED"]).optional(),
   notifyUserIds: notifyUserIdsSchema.optional()
 }).refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
-var listFormSubmissionsQuerySchema = z31.object({
-  page: z31.coerce.number().int().positive().default(1),
-  limit: z31.coerce.number().int().positive().max(100).default(20)
+var listFormSubmissionsQuerySchema = z32.object({
+  page: z32.coerce.number().int().positive().default(1),
+  limit: z32.coerce.number().int().positive().max(100).default(20)
 });
-var submittedValueSchema = z31.union([z31.string().trim().max(2e3), z31.array(z31.string().trim().max(2e3)).max(50)]);
-var publicFormSubmitSchema = z31.object({
-  data: z31.record(submittedValueSchema).refine((obj) => Object.keys(obj).length <= 30, { message: "Too many fields submitted." }),
-  utmSource: z31.string().trim().max(200).optional(),
-  utmMedium: z31.string().trim().max(200).optional(),
-  utmCampaign: z31.string().trim().max(200).optional(),
-  utmTerm: z31.string().trim().max(200).optional(),
-  utmContent: z31.string().trim().max(200).optional(),
+var submittedValueSchema = z32.union([z32.string().trim().max(2e3), z32.array(z32.string().trim().max(2e3)).max(50)]);
+var publicFormSubmitSchema = z32.object({
+  data: z32.record(submittedValueSchema).refine((obj) => Object.keys(obj).length <= 30, { message: "Too many fields submitted." }),
+  utmSource: z32.string().trim().max(200).optional(),
+  utmMedium: z32.string().trim().max(200).optional(),
+  utmCampaign: z32.string().trim().max(200).optional(),
+  utmTerm: z32.string().trim().max(200).optional(),
+  utmContent: z32.string().trim().max(200).optional(),
   /** Site-relative path the visitor submitted from, e.g. /landing/spring-sale — for attribution only, never trusted as an identity/auth signal. */
-  landingPagePath: z31.string().trim().max(500).optional(),
+  landingPagePath: z32.string().trim().max(500).optional(),
   /** Honeypot — must stay empty; never render this field visibly to a real visitor (mirrors createPublicLeadSchema's `website`). */
-  website: z31.string().trim().max(200).optional()
+  website: z32.string().trim().max(200).optional()
 });
 
 // server/routes/v1/formRoutes.ts
@@ -23792,8 +24589,8 @@ router17.get(
   "/:id",
   requirePermission("forms.read"),
   asyncHandler(async (req, res) => {
-    const form = await formService.getForm(req.user.organizationId, req.params.id);
-    sendSuccess(res, { form });
+    const form2 = await formService.getForm(req.user.organizationId, req.params.id);
+    sendSuccess(res, { form: form2 });
   })
 );
 router17.post(
@@ -23801,8 +24598,8 @@ router17.post(
   requirePermission("forms.create"),
   asyncHandler(async (req, res) => {
     const input = createFormSchema.parse(req.body);
-    const form = await formService.createForm(req.user, input, requestMeta8(req));
-    sendSuccess(res, { form }, 201);
+    const form2 = await formService.createForm(req.user, input, requestMeta8(req));
+    sendSuccess(res, { form: form2 }, 201);
   })
 );
 router17.patch(
@@ -23810,8 +24607,8 @@ router17.patch(
   requirePermission("forms.update"),
   asyncHandler(async (req, res) => {
     const input = updateFormSchema.parse(req.body);
-    const form = await formService.updateForm(req.user, req.params.id, input, requestMeta8(req));
-    sendSuccess(res, { form });
+    const form2 = await formService.updateForm(req.user, req.params.id, input, requestMeta8(req));
+    sendSuccess(res, { form: form2 });
   })
 );
 router17.delete(
@@ -23835,9 +24632,9 @@ router17.get(
   "/:id/submissions/export",
   requirePermission("forms.read"),
   asyncHandler(async (req, res) => {
-    const form = await formService.getForm(req.user.organizationId, req.params.id);
+    const form2 = await formService.getForm(req.user.organizationId, req.params.id);
     const { rows } = await formService.listSubmissions(req.user.organizationId, req.params.id, 1, 1e4);
-    const fieldKeys = form.fields.map((f) => f.key);
+    const fieldKeys = form2.fields.map((f) => f.key);
     const header = ["submittedAt", ...fieldKeys, "utmSource", "utmMedium", "utmCampaign", "utmTerm", "utmContent", "landingPagePath", "referrer", "consentGiven", "leadId"];
     const escapeCsv = (v) => {
       let s = String(v ?? "");
@@ -23863,7 +24660,7 @@ router17.get(
       lines.push(cells.map(escapeCsv).join(","));
     }
     res.setHeader("Content-Type", "text/csv; charset=utf-8");
-    res.setHeader("Content-Disposition", `attachment; filename="${form.slug}-submissions.csv"`);
+    res.setHeader("Content-Disposition", `attachment; filename="${form2.slug}-submissions.csv"`);
     res.send(lines.join("\n"));
   })
 );
@@ -23984,8 +24781,8 @@ var caseStudyRepository = {
     ]);
     return { rows, total };
   },
-  async findByIdInOrg(id4, organizationId) {
-    return prisma.caseStudy.findFirst({ where: { id: id4, organizationId, deletedAt: null }, ...withRelations4 });
+  async findByIdInOrg(id6, organizationId) {
+    return prisma.caseStudy.findFirst({ where: { id: id6, organizationId, deletedAt: null }, ...withRelations4 });
   },
   async findBySlugInOrg(organizationId, slug) {
     return prisma.caseStudy.findFirst({ where: { organizationId, slug, deletedAt: null } });
@@ -24031,8 +24828,8 @@ var caseStudyRepository = {
       }
     });
   },
-  async findUniqueSlugInOrg(organizationId, base2) {
-    const baseSlug = slugify13(base2) || "case-study";
+  async findUniqueSlugInOrg(organizationId, base3) {
+    const baseSlug = slugify13(base3) || "case-study";
     let slug = baseSlug;
     let attempt2 = 1;
     while (await this.findBySlugInOrg(organizationId, slug)) {
@@ -24073,8 +24870,8 @@ var caseStudyRepository = {
   async countUsageOfPost(postId) {
     return prisma.caseStudyRelatedPost.count({ where: { postId } });
   },
-  async softDelete(id4) {
-    await prisma.caseStudy.update({ where: { id: id4 }, data: { deletedAt: /* @__PURE__ */ new Date() } });
+  async softDelete(id6) {
+    await prisma.caseStudy.update({ where: { id: id6 }, data: { deletedAt: /* @__PURE__ */ new Date() } });
   },
   /** Trash view: case studies soft-deleted but not yet permanently gone, newest-deleted first. */
   async listTrash(organizationId, page, limit) {
@@ -24086,11 +24883,11 @@ var caseStudyRepository = {
     return { rows, total };
   },
   /** Trash view: a single soft-deleted case study, org-scoped (never a live one). */
-  async findTrashedByIdInOrg(id4, organizationId) {
-    return prisma.caseStudy.findFirst({ where: { id: id4, organizationId, deletedAt: { not: null } } });
+  async findTrashedByIdInOrg(id6, organizationId) {
+    return prisma.caseStudy.findFirst({ where: { id: id6, organizationId, deletedAt: { not: null } } });
   },
-  async restore(id4) {
-    await prisma.caseStudy.update({ where: { id: id4 }, data: { deletedAt: null } });
+  async restore(id6) {
+    await prisma.caseStudy.update({ where: { id: id6 }, data: { deletedAt: null } });
   }
 };
 
@@ -24103,8 +24900,8 @@ function assertValidTransition3(current, next) {
     throw new ConflictError("This campaign has been archived and can no longer change status.");
   }
 }
-async function loadCampaignOrThrow(id4, organizationId) {
-  const campaign = await campaignRepository.findByIdInOrg(id4, organizationId);
+async function loadCampaignOrThrow(id6, organizationId) {
+  const campaign = await campaignRepository.findByIdInOrg(id6, organizationId);
   if (!campaign) throw new NotFoundError("Campaign not found.");
   return campaign;
 }
@@ -24136,7 +24933,7 @@ async function assertRelatedCaseStudiesUsable(caseStudyIds, organizationId) {
     throw new ValidationError("One or more relatedCaseStudyIds do not refer to a case study in this organization.");
   }
 }
-async function assertMediaUsable(mediaIds, organizationId) {
+async function assertMediaUsable2(mediaIds, organizationId) {
   if (!mediaIds || mediaIds.length === 0) return;
   for (const mediaId of new Set(mediaIds)) {
     const media = await mediaRepository.findByIdInOrg(mediaId, organizationId);
@@ -24150,8 +24947,8 @@ async function assertLandingPageUsable(landingPageId, organizationId) {
 }
 async function assertFormUsable(formId, organizationId) {
   if (!formId) return;
-  const form = await formRepository.findByIdInOrg(formId, organizationId);
-  if (!form) throw new ValidationError("formId does not refer to a form in this organization.");
+  const form2 = await formRepository.findByIdInOrg(formId, organizationId);
+  if (!form2) throw new ValidationError("formId does not refer to a form in this organization.");
 }
 async function assertRelationshipsUsable(input, organizationId) {
   await Promise.all([
@@ -24159,7 +24956,7 @@ async function assertRelationshipsUsable(input, organizationId) {
     assertRelatedPagesUsable(input.relatedPageIds, organizationId),
     assertRelatedPostsUsable(input.relatedPostIds, organizationId),
     assertRelatedCaseStudiesUsable(input.relatedCaseStudyIds, organizationId),
-    assertMediaUsable(input.mediaIds, organizationId),
+    assertMediaUsable2(input.mediaIds, organizationId),
     assertLandingPageUsable(input.landingPageId, organizationId),
     assertFormUsable(input.formId, organizationId)
   ]);
@@ -24192,10 +24989,10 @@ var campaignService = {
   async listCampaigns(organizationId, filters, page, limit, sort, order) {
     return campaignRepository.list(organizationId, filters, page, limit, sort, order);
   },
-  async getCampaign(organizationId, id4) {
-    return loadCampaignOrThrow(id4, organizationId);
+  async getCampaign(organizationId, id6) {
+    return loadCampaignOrThrow(id6, organizationId);
   },
-  async createCampaign(caller, input, meta10 = {}) {
+  async createCampaign(caller, input, meta11 = {}) {
     const organizationId = caller.organizationId;
     await assertRelationshipsUsable(input, organizationId);
     const campaign = await campaignRepository.create({
@@ -24229,15 +25026,15 @@ var campaignService = {
       resourceType: "campaign",
       resourceId: campaign.id,
       afterData: { name: campaign.name, status: campaign.status, channel: campaign.channel, utmCampaign: campaign.utmCampaign },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     await emitCampaignEvent("campaign.created", campaign, caller.id);
     return loadCampaignOrThrow(campaign.id, organizationId);
   },
-  async updateCampaign(caller, id4, input, meta10 = {}) {
+  async updateCampaign(caller, id6, input, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const existing = await loadCampaignOrThrow(id4, organizationId);
+    const existing = await loadCampaignOrThrow(id6, organizationId);
     if (TERMINAL_STATUSES4.has(existing.status)) {
       throw new ConflictError("This campaign has been archived and can no longer be edited.");
     }
@@ -24261,29 +25058,29 @@ var campaignService = {
     if (input.targetAudience !== void 0) patch.targetAudience = input.targetAudience;
     if (input.notes !== void 0) patch.notes = input.notes;
     if (Object.keys(patch).length > 0) {
-      await campaignRepository.update(id4, patch);
+      await campaignRepository.update(id6, patch);
     }
-    await setRelations(id4, input);
+    await setRelations(id6, input);
     await auditLogRepository.record({
       organizationId,
       actorUserId: caller.id,
       actorType: "USER",
       action: "CAMPAIGN_UPDATED",
       resourceType: "campaign",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { name: existing.name, channel: existing.channel },
       afterData: patch,
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
-    const updated = await loadCampaignOrThrow(id4, organizationId);
+    const updated = await loadCampaignOrThrow(id6, organizationId);
     await emitCampaignEvent("campaign.updated", updated, caller.id);
     return updated;
   },
   /** Creates a new DRAFT campaign copying this one's fields and relations (never its leads/opportunities/clients — those are this campaign's own attributed activity, not the new copy's). */
-  async duplicateCampaign(caller, id4, input, meta10 = {}) {
+  async duplicateCampaign(caller, id6, input, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const existing = await loadCampaignOrThrow(id4, organizationId);
+    const existing = await loadCampaignOrThrow(id6, organizationId);
     const copy = await campaignRepository.create({
       organizationId,
       name: input.name ?? `Copy of ${existing.name}`,
@@ -24324,74 +25121,74 @@ var campaignService = {
       action: "CAMPAIGN_DUPLICATED",
       resourceType: "campaign",
       resourceId: copy.id,
-      beforeData: { duplicatedFromCampaignId: id4 },
+      beforeData: { duplicatedFromCampaignId: id6 },
       afterData: { name: copy.name },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return loadCampaignOrThrow(copy.id, organizationId);
   },
-  async activateCampaign(caller, id4, meta10 = {}) {
+  async activateCampaign(caller, id6, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const existing = await loadCampaignOrThrow(id4, organizationId);
+    const existing = await loadCampaignOrThrow(id6, organizationId);
     assertValidTransition3(existing.status, "ACTIVE");
     if (existing.status === "ACTIVE") throw new ConflictError("This campaign is already active.");
-    await campaignRepository.update(id4, { status: "ACTIVE" });
+    await campaignRepository.update(id6, { status: "ACTIVE" });
     await auditLogRepository.record({
       organizationId,
       actorUserId: caller.id,
       actorType: "USER",
       action: "CAMPAIGN_ACTIVATED",
       resourceType: "campaign",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { status: existing.status },
       afterData: { status: "ACTIVE" },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
-    const updated = await loadCampaignOrThrow(id4, organizationId);
+    const updated = await loadCampaignOrThrow(id6, organizationId);
     await emitCampaignEvent("campaign.activated", updated, caller.id);
     return updated;
   },
-  async pauseCampaign(caller, id4, meta10 = {}) {
+  async pauseCampaign(caller, id6, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const existing = await loadCampaignOrThrow(id4, organizationId);
+    const existing = await loadCampaignOrThrow(id6, organizationId);
     if (existing.status !== "ACTIVE") throw new ConflictError("Only an ACTIVE campaign can be paused.");
-    await campaignRepository.update(id4, { status: "PAUSED" });
+    await campaignRepository.update(id6, { status: "PAUSED" });
     await auditLogRepository.record({
       organizationId,
       actorUserId: caller.id,
       actorType: "USER",
       action: "CAMPAIGN_PAUSED",
       resourceType: "campaign",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { status: existing.status },
       afterData: { status: "PAUSED" },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
-    const updated = await loadCampaignOrThrow(id4, organizationId);
+    const updated = await loadCampaignOrThrow(id6, organizationId);
     await emitCampaignEvent("campaign.paused", updated, caller.id);
     return updated;
   },
-  async archiveCampaign(caller, id4, meta10 = {}) {
+  async archiveCampaign(caller, id6, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const existing = await loadCampaignOrThrow(id4, organizationId);
+    const existing = await loadCampaignOrThrow(id6, organizationId);
     if (existing.status === "ARCHIVED") throw new ConflictError("This campaign is already archived.");
-    await campaignRepository.update(id4, { status: "ARCHIVED" });
+    await campaignRepository.update(id6, { status: "ARCHIVED" });
     await auditLogRepository.record({
       organizationId,
       actorUserId: caller.id,
       actorType: "USER",
       action: "CAMPAIGN_ARCHIVED",
       resourceType: "campaign",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { status: existing.status },
       afterData: { status: "ARCHIVED" },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
-    const updated = await loadCampaignOrThrow(id4, organizationId);
+    const updated = await loadCampaignOrThrow(id6, organizationId);
     await emitCampaignEvent("campaign.archived", updated, caller.id);
     return updated;
   },
@@ -24404,15 +25201,15 @@ var campaignService = {
    * separately permissioned action), it only refuses to go live until
    * that's genuinely true.
    */
-  async publishCampaign(caller, id4, meta10 = {}) {
+  async publishCampaign(caller, id6, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const existing = await loadCampaignOrThrow(id4, organizationId);
+    const existing = await loadCampaignOrThrow(id6, organizationId);
     assertValidTransition3(existing.status, "ACTIVE");
     if (existing.status === "ACTIVE") throw new ConflictError("This campaign is already active.");
     if (existing.landingPageId && existing.landingPage?.status !== "PUBLISHED") {
       throw new ValidationError("This campaign's landing page must be published before the campaign can go live.");
     }
-    return this.activateCampaign(caller, id4, meta10);
+    return this.activateCampaign(caller, id6, meta11);
   },
   /**
    * Composes the real, resolvable preview URL for this campaign's landing
@@ -24421,8 +25218,8 @@ var campaignService = {
    * has no landing page attached, or publicSiteBaseUrl: null when the
    * public site's base URL isn't configured for this environment.
    */
-  async previewCampaign(organizationId, id4) {
-    const campaign = await loadCampaignOrThrow(id4, organizationId);
+  async previewCampaign(organizationId, id6) {
+    const campaign = await loadCampaignOrThrow(id6, organizationId);
     if (!campaign.landingPage) {
       return { landingPageUrl: null, landingPageStatus: null, configured: !!config.publicSiteBaseUrl };
     }
@@ -24436,14 +25233,14 @@ var campaignService = {
     if (campaign.utmTerm) params.set("utm_term", campaign.utmTerm);
     if (campaign.utmContent) params.set("utm_content", campaign.utmContent);
     const query = params.toString();
-    const base2 = config.publicSiteBaseUrl.replace(/\/$/, "");
-    const landingPageUrl = `${base2}/${campaign.landingPage.slug}${query ? `?${query}` : ""}`;
+    const base3 = config.publicSiteBaseUrl.replace(/\/$/, "");
+    const landingPageUrl = `${base3}/${campaign.landingPage.slug}${query ? `?${query}` : ""}`;
     return { landingPageUrl, landingPageStatus: campaign.landingPage.status, configured: true };
   },
   /** Unified activity timeline for one campaign, drawn entirely from the existing audit trail (never a parallel "activity" table — same convention as opportunityService.getActivity). */
-  async getActivity(organizationId, id4) {
-    await loadCampaignOrThrow(id4, organizationId);
-    const { rows } = await auditLogQueryRepository.list({ organizationId, resourceType: "campaign", resourceId: id4 }, 1, 100);
+  async getActivity(organizationId, id6) {
+    await loadCampaignOrThrow(id6, organizationId);
+    const { rows } = await auditLogQueryRepository.list({ organizationId, resourceType: "campaign", resourceId: id6 }, 1, 100);
     return rows;
   }
 };
@@ -24452,71 +25249,71 @@ var campaignService = {
 init_apiResponse();
 
 // server/schemas/campaignSchemas.ts
-import { z as z32 } from "zod";
-var uuidArray = (max) => z32.array(z32.string().trim().uuid()).max(max);
+import { z as z33 } from "zod";
+var uuidArray = (max) => z33.array(z33.string().trim().uuid()).max(max);
 var CAMPAIGN_STATUS_VALUES = ["DRAFT", "ACTIVE", "PAUSED", "ARCHIVED"];
 var CAMPAIGN_CHANNEL_VALUES = ["EMAIL", "SOCIAL", "PAID_SEARCH", "PAID_SOCIAL", "CONTENT", "EVENT", "REFERRAL", "DIRECT", "OTHER"];
-var utmFieldSchema = z32.string().trim().min(1).max(150);
-var createCampaignSchema = z32.object({
-  name: z32.string().trim().min(1).max(200),
-  description: z32.string().trim().max(5e3).optional(),
-  channel: z32.enum(CAMPAIGN_CHANNEL_VALUES).default("OTHER"),
-  startDate: z32.coerce.date().optional(),
-  endDate: z32.coerce.date().optional(),
-  ownerId: z32.string().trim().uuid().optional(),
-  budget: z32.coerce.number().nonnegative().optional(),
-  currency: z32.string().trim().length(3).toUpperCase().optional(),
-  landingPageId: z32.string().trim().uuid().optional(),
-  formId: z32.string().trim().uuid().optional(),
+var utmFieldSchema = z33.string().trim().min(1).max(150);
+var createCampaignSchema = z33.object({
+  name: z33.string().trim().min(1).max(200),
+  description: z33.string().trim().max(5e3).optional(),
+  channel: z33.enum(CAMPAIGN_CHANNEL_VALUES).default("OTHER"),
+  startDate: z33.coerce.date().optional(),
+  endDate: z33.coerce.date().optional(),
+  ownerId: z33.string().trim().uuid().optional(),
+  budget: z33.coerce.number().nonnegative().optional(),
+  currency: z33.string().trim().length(3).toUpperCase().optional(),
+  landingPageId: z33.string().trim().uuid().optional(),
+  formId: z33.string().trim().uuid().optional(),
   utmSource: utmFieldSchema.optional(),
   utmMedium: utmFieldSchema.optional(),
   utmCampaign: utmFieldSchema.optional(),
   utmTerm: utmFieldSchema.optional(),
   utmContent: utmFieldSchema.optional(),
-  targetAudience: z32.string().trim().max(2e3).optional(),
-  notes: z32.string().trim().max(5e3).optional(),
+  targetAudience: z33.string().trim().max(2e3).optional(),
+  notes: z33.string().trim().max(5e3).optional(),
   productIds: uuidArray(50).optional(),
   relatedPageIds: uuidArray(50).optional(),
   relatedPostIds: uuidArray(50).optional(),
   relatedCaseStudyIds: uuidArray(50).optional(),
   mediaIds: uuidArray(50).optional()
 }).refine((v) => !v.startDate || !v.endDate || v.startDate <= v.endDate, { message: "startDate must be before or equal to endDate.", path: ["endDate"] });
-var updateCampaignSchema = z32.object({
-  name: z32.string().trim().min(1).max(200).optional(),
-  description: z32.string().trim().max(5e3).nullable().optional(),
-  channel: z32.enum(CAMPAIGN_CHANNEL_VALUES).optional(),
-  startDate: z32.coerce.date().nullable().optional(),
-  endDate: z32.coerce.date().nullable().optional(),
-  ownerId: z32.string().trim().uuid().nullable().optional(),
-  budget: z32.coerce.number().nonnegative().nullable().optional(),
-  currency: z32.string().trim().length(3).toUpperCase().nullable().optional(),
-  landingPageId: z32.string().trim().uuid().nullable().optional(),
-  formId: z32.string().trim().uuid().nullable().optional(),
+var updateCampaignSchema = z33.object({
+  name: z33.string().trim().min(1).max(200).optional(),
+  description: z33.string().trim().max(5e3).nullable().optional(),
+  channel: z33.enum(CAMPAIGN_CHANNEL_VALUES).optional(),
+  startDate: z33.coerce.date().nullable().optional(),
+  endDate: z33.coerce.date().nullable().optional(),
+  ownerId: z33.string().trim().uuid().nullable().optional(),
+  budget: z33.coerce.number().nonnegative().nullable().optional(),
+  currency: z33.string().trim().length(3).toUpperCase().nullable().optional(),
+  landingPageId: z33.string().trim().uuid().nullable().optional(),
+  formId: z33.string().trim().uuid().nullable().optional(),
   utmSource: utmFieldSchema.nullable().optional(),
   utmMedium: utmFieldSchema.nullable().optional(),
   utmCampaign: utmFieldSchema.nullable().optional(),
   utmTerm: utmFieldSchema.nullable().optional(),
   utmContent: utmFieldSchema.nullable().optional(),
-  targetAudience: z32.string().trim().max(2e3).nullable().optional(),
-  notes: z32.string().trim().max(5e3).nullable().optional(),
+  targetAudience: z33.string().trim().max(2e3).nullable().optional(),
+  notes: z33.string().trim().max(5e3).nullable().optional(),
   productIds: uuidArray(50).optional(),
   relatedPageIds: uuidArray(50).optional(),
   relatedPostIds: uuidArray(50).optional(),
   relatedCaseStudyIds: uuidArray(50).optional(),
   mediaIds: uuidArray(50).optional()
 }).refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
-var listCampaignsQuerySchema = z32.object({
-  page: z32.coerce.number().int().positive().default(1),
-  limit: z32.coerce.number().int().positive().max(100).default(20),
-  search: z32.string().trim().max(200).optional(),
-  status: z32.enum(CAMPAIGN_STATUS_VALUES).optional(),
-  channel: z32.enum(CAMPAIGN_CHANNEL_VALUES).optional(),
-  ownerId: z32.string().trim().uuid().optional(),
-  sort: z32.enum(["name", "status", "channel", "startDate", "endDate", "createdAt", "updatedAt"]).default("updatedAt"),
-  order: z32.enum(["asc", "desc"]).default("desc")
+var listCampaignsQuerySchema = z33.object({
+  page: z33.coerce.number().int().positive().default(1),
+  limit: z33.coerce.number().int().positive().max(100).default(20),
+  search: z33.string().trim().max(200).optional(),
+  status: z33.enum(CAMPAIGN_STATUS_VALUES).optional(),
+  channel: z33.enum(CAMPAIGN_CHANNEL_VALUES).optional(),
+  ownerId: z33.string().trim().uuid().optional(),
+  sort: z33.enum(["name", "status", "channel", "startDate", "endDate", "createdAt", "updatedAt"]).default("updatedAt"),
+  order: z33.enum(["asc", "desc"]).default("desc")
 });
-var duplicateCampaignSchema = z32.object({
-  name: z32.string().trim().min(1).max(200).optional()
+var duplicateCampaignSchema = z33.object({
+  name: z33.string().trim().min(1).max(200).optional()
 });
 
 // server/routes/v1/campaignRoutes.ts
@@ -24690,15 +25487,96 @@ router20.get(
 );
 var marketingRoutes_default = router20;
 
-// server/routes/v1/onboardingRoutes.ts
+// server/routes/v1/landingRoutes.ts
 import { Router as Router27 } from "express";
+
+// server/services/landing/landingStatsService.ts
+var landingStatsService = {
+  async forPage(caller, id6, days) {
+    const org = caller.organizationId;
+    await landingPageService.loadPage(org, id6);
+    const page = await prisma.page.findUnique({ where: { id: id6 }, select: { slug: true } });
+    const since = new Date(Date.now() - days * 864e5);
+    const path = landingPath(page.slug);
+    const [views, sessions, daily, sources, form2] = await Promise.all([
+      prisma.analyticsEvent.count({ where: { organizationId: org, eventType: "page_view", path, createdAt: { gte: since } } }),
+      prisma.$queryRaw`SELECT COUNT(DISTINCT session_id) AS n FROM analytics_events WHERE organization_id = ${org} AND event_type = 'page_view' AND path = ${path} AND created_at >= ${since} AND session_id IS NOT NULL`,
+      prisma.$queryRaw`SELECT date_trunc('day', created_at) AS day, COUNT(*) AS views FROM analytics_events WHERE organization_id = ${org} AND event_type = 'page_view' AND path = ${path} AND created_at >= ${since} GROUP BY 1 ORDER BY 1`,
+      prisma.$queryRaw`SELECT utm_source AS source, COUNT(*) AS n FROM analytics_events WHERE organization_id = ${org} AND event_type = 'page_view' AND path = ${path} AND created_at >= ${since} GROUP BY 1 ORDER BY 2 DESC LIMIT 5`,
+      prisma.form.findUnique({ where: { landingPageId: id6 }, select: { id: true } })
+    ]);
+    const submissions = form2 ? await prisma.formSubmission.count({ where: { organizationId: org, formId: form2.id, createdAt: { gte: since } } }) : 0;
+    const uniqueSessions = Number(sessions[0]?.n ?? 0);
+    return {
+      days,
+      path,
+      formSlug: landingFormSlug(id6),
+      views,
+      uniqueSessions,
+      submissions,
+      /** submissions / unique sessions; null when there are no sessions to divide by (never a made-up 0%). */
+      conversionRate: uniqueSessions > 0 ? Math.round(submissions / uniqueSessions * 1e3) / 10 : null,
+      topSources: sources.map((s) => ({ source: s.source ?? "(direct / none)", views: Number(s.n) })),
+      daily: daily.map((d) => ({ date: d.day.toISOString().slice(0, 10), views: Number(d.views) })),
+      hasData: views > 0 || submissions > 0,
+      note: "Views and sessions come from the website's first-party beacon; a session is one browser tab, not a person. Ad blockers can hide views, so the conversion rate can be overstated."
+    };
+  }
+};
+
+// server/routes/v1/landingRoutes.ts
 init_apiResponse();
 var router21 = Router27();
 router21.use(authenticateToken);
+var meta8 = (req) => ({ ip: req.ip, userAgent: req.headers["user-agent"] });
+var id5 = (req) => req.params.id;
+router21.get("/templates", requirePermission("marketing.landing.read"), asyncHandler(async (_req, res) => sendSuccess(res, { templates: landingPageService.templates() })));
+router21.get("/live", requirePermission("marketing.landing.read"), asyncHandler(async (req, res) => sendSuccess(res, { pages: await landingPageService.listLive(req.user) })));
+router21.get("/", requirePermission("marketing.landing.read"), asyncHandler(async (req, res) => {
+  const q = listLandingQuerySchema.parse(req.query);
+  const { rows, total } = await landingPageService.list(req.user, q);
+  sendSuccess(res, { pages: rows }, 200, { page: q.page, limit: q.limit, total });
+}));
+router21.post("/", requirePermission("marketing.landing.edit"), asyncHandler(async (req, res) => {
+  sendSuccess(res, { page: await landingPageService.create(req.user, createLandingSchema.parse(req.body), meta8(req)) }, 201);
+}));
+router21.get("/:id", requirePermission("marketing.landing.read"), asyncHandler(async (req, res) => sendSuccess(res, { page: await landingPageService.get(req.user, id5(req)) })));
+router21.patch("/:id", requirePermission("marketing.landing.edit"), asyncHandler(async (req, res) => {
+  sendSuccess(res, { page: await landingPageService.update(req.user, id5(req), updateLandingSchema.parse(req.body), meta8(req)) });
+}));
+router21.get("/:id/revisions", requirePermission("marketing.landing.read"), asyncHandler(async (req, res) => sendSuccess(res, { revisions: await landingPageService.listRevisions(req.user, id5(req)) })));
+router21.post("/:id/restore", requirePermission("marketing.landing.edit"), asyncHandler(async (req, res) => {
+  sendSuccess(res, { page: await landingPageService.restoreRevision(req.user, id5(req), restoreLandingSchema.parse(req.body).revisionId, meta8(req)) });
+}));
+router21.post("/:id/submit-for-approval", requirePermission("marketing.landing.edit"), asyncHandler(async (req, res) => {
+  const out = await landingApprovalService.submit(req.user, id5(req), meta8(req));
+  sendSuccess(res, { ...out, page: await landingPageService.get(req.user, id5(req)) }, 201);
+}));
+router21.post("/:id/withdraw", requirePermission("marketing.landing.edit"), asyncHandler(async (req, res) => {
+  await landingApprovalService.withdraw(req.user, id5(req), meta8(req));
+  sendSuccess(res, { page: await landingPageService.get(req.user, id5(req)) });
+}));
+router21.post("/:id/unpublish", requirePermission("marketing.landing.publish"), asyncHandler(async (req, res) => sendSuccess(res, { page: await landingPageService.unpublish(req.user, id5(req), meta8(req)) })));
+router21.post("/:id/archive", requirePermission("marketing.landing.edit"), asyncHandler(async (req, res) => sendSuccess(res, { page: await landingPageService.archive(req.user, id5(req), meta8(req)) })));
+router21.post("/:id/unarchive", requirePermission("marketing.landing.edit"), asyncHandler(async (req, res) => sendSuccess(res, { page: await landingPageService.unarchive(req.user, id5(req), meta8(req)) })));
+router21.post("/:id/preview", requirePermission("marketing.landing.edit"), asyncHandler(async (req, res) => {
+  const { ttlHours } = previewTokenSchema.parse(req.body ?? {});
+  sendSuccess(res, { preview: await landingPageService.createPreview(req.user, id5(req), ttlHours, meta8(req)) }, 201);
+}));
+router21.post("/:id/preview/revoke", requirePermission("marketing.landing.edit"), asyncHandler(async (req, res) => sendSuccess(res, await landingPageService.revokePreviews(req.user, id5(req), meta8(req)))));
+router21.get("/:id/utm-link", requirePermission("marketing.landing.read"), asyncHandler(async (req, res) => sendSuccess(res, await landingPageService.utmLink(req.user, id5(req), utmLinkQuerySchema.parse(req.query)))));
+router21.get("/:id/stats", requirePermission("marketing.landing.read"), asyncHandler(async (req, res) => sendSuccess(res, { stats: await landingStatsService.forPage(req.user, id5(req), landingStatsQuerySchema.parse(req.query).days) })));
+var landingRoutes_default = router21;
+
+// server/routes/v1/onboardingRoutes.ts
+import { Router as Router28 } from "express";
+init_apiResponse();
+var router22 = Router28();
+router22.use(authenticateToken);
 function requestMeta10(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router21.get(
+router22.get(
   "/",
   requirePermission("onboarding.read"),
   asyncHandler(async (req, res) => {
@@ -24712,7 +25590,7 @@ router21.get(
     sendSuccess(res, { onboarding: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router21.get(
+router22.get(
   "/template",
   requirePermission("onboarding.read"),
   asyncHandler(async (req, res) => {
@@ -24720,7 +25598,7 @@ router21.get(
     sendSuccess(res, template);
   })
 );
-router21.put(
+router22.put(
   "/template",
   requirePermission("onboarding.update"),
   asyncHandler(async (req, res) => {
@@ -24729,7 +25607,7 @@ router21.put(
     sendSuccess(res, template);
   })
 );
-router21.get(
+router22.get(
   "/:id",
   requirePermission("onboarding.read"),
   asyncHandler(async (req, res) => {
@@ -24737,7 +25615,7 @@ router21.get(
     sendSuccess(res, { onboarding: record2 });
   })
 );
-router21.get(
+router22.get(
   "/:id/activity",
   requirePermission("onboarding.read"),
   asyncHandler(async (req, res) => {
@@ -24745,7 +25623,7 @@ router21.get(
     sendSuccess(res, { activity });
   })
 );
-router21.patch(
+router22.patch(
   "/:id",
   requirePermission("onboarding.update"),
   asyncHandler(async (req, res) => {
@@ -24754,7 +25632,7 @@ router21.patch(
     sendSuccess(res, { onboarding: record2 });
   })
 );
-router21.patch(
+router22.patch(
   "/:id/steps/:key",
   requirePermission("onboarding.update"),
   asyncHandler(async (req, res) => {
@@ -24763,7 +25641,7 @@ router21.patch(
     sendSuccess(res, { onboarding: record2 });
   })
 );
-router21.post(
+router22.post(
   "/:id/complete",
   requirePermission("onboarding.complete"),
   asyncHandler(async (req, res) => {
@@ -24771,10 +25649,10 @@ router21.post(
     sendSuccess(res, { onboarding: record2 });
   })
 );
-var onboardingRoutes_default = router21;
+var onboardingRoutes_default = router22;
 
 // server/routes/v1/workspaceRoutes.ts
-import { Router as Router28 } from "express";
+import { Router as Router29 } from "express";
 
 // server/repositories/workspaceInvitationRepository.ts
 var workspaceInvitationRepository = {
@@ -24797,12 +25675,12 @@ var workspaceInvitationRepository = {
       data: { revokedAt: /* @__PURE__ */ new Date() }
     });
   },
-  async findByIdInOrg(id4, organizationId) {
-    return prisma.workspaceInvitation.findFirst({ where: { id: id4, organizationId } });
+  async findByIdInOrg(id6, organizationId) {
+    return prisma.workspaceInvitation.findFirst({ where: { id: id6, organizationId } });
   },
   /** No organization filter — callers must separately verify the invitation's workspace (organizationId) belongs to their tenant via workspaceRepository.findByIdForOwner, since an invitation's own organizationId IS the workspace id, not the caller's CRM-owning org. */
-  async findById(id4) {
-    return prisma.workspaceInvitation.findUnique({ where: { id: id4 } });
+  async findById(id6) {
+    return prisma.workspaceInvitation.findUnique({ where: { id: id6 } });
   },
   async findByToken(token) {
     return prisma.workspaceInvitation.findUnique({
@@ -24827,8 +25705,8 @@ var workspaceInvitationRepository = {
     ]);
     return { rows, total };
   },
-  async revoke(id4) {
-    await prisma.workspaceInvitation.update({ where: { id: id4 }, data: { revokedAt: /* @__PURE__ */ new Date() } });
+  async revoke(id6) {
+    await prisma.workspaceInvitation.update({ where: { id: id6 }, data: { revokedAt: /* @__PURE__ */ new Date() } });
   }
 };
 
@@ -24859,7 +25737,7 @@ var invitationService = {
       total
     };
   },
-  async createInvitation(caller, workspaceId, input, meta10 = {}) {
+  async createInvitation(caller, workspaceId, input, meta11 = {}) {
     const workspace = await loadWorkspaceForOwnerOrThrow2(workspaceId, caller.organizationId);
     const adminRole = await roleRepository.findByKey(CLIENT_ADMIN_ROLE_KEY);
     if (!adminRole) throw new InternalError("Required role configuration is missing.");
@@ -24890,15 +25768,15 @@ var invitationService = {
       resourceType: "workspace_invitation",
       resourceId: invitation.id,
       afterData: { workspaceId: workspace.id, email, roleKey: CLIENT_ADMIN_ROLE_KEY },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     if (workspace.provisionedForClient) {
       await onboardingService.completeStepForClient(workspace.provisionedForClient.id, "ADMINISTRATOR_INVITED", caller.id);
     }
     return { invitation, devToken: config.isProduction ? void 0 : token };
   },
-  async revokeInvitation(caller, invitationId, meta10 = {}) {
+  async revokeInvitation(caller, invitationId, meta11 = {}) {
     const invitation = await workspaceInvitationRepository.findById(invitationId);
     const workspace = invitation ? await workspaceRepository.findByIdForOwner(invitation.organizationId, caller.organizationId) : null;
     if (!invitation || !workspace) throw new NotFoundError("Invitation not found.");
@@ -24914,8 +25792,8 @@ var invitationService = {
       action: "CLIENT_ADMIN_INVITATION_REVOKED",
       resourceType: "workspace_invitation",
       resourceId: invitationId,
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
   },
   /** Public, unauthenticated lookup for the acceptance page (§26) — returns only what's needed to render a safe form, never the token hash or workspace internals. */
@@ -24934,7 +25812,7 @@ var invitationService = {
     };
   },
   /** Transactional acceptance (§21) — race-safe against double-acceptance via a conditional updateMany, same TOCTOU-guard pattern as leadService.convertLead. */
-  async acceptInvitation(token, input, meta10 = {}) {
+  async acceptInvitation(token, input, meta11 = {}) {
     const invitation = await workspaceInvitationRepository.findByToken(token);
     if (!invitation || computeInvitationStatus(invitation) !== "PENDING") {
       throw new AuthenticationError("This invitation link is invalid or has expired.");
@@ -24999,8 +25877,8 @@ var invitationService = {
       userId: result.id,
       organizationId: invitation.organizationId,
       expiresAt,
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     const role = await roleRepository.resolveById(invitation.roleId);
     if (!role) throw new InternalError("Role could not be resolved.");
@@ -25012,8 +25890,8 @@ var invitationService = {
       action: "CLIENT_ADMIN_ACCEPTED",
       resourceType: "workspace_invitation",
       resourceId: invitation.id,
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     const client3 = await prisma.client.findUnique({ where: { workspaceOrganizationId: invitation.organizationId } });
     if (client3) {
@@ -25027,31 +25905,31 @@ var invitationService = {
 init_apiResponse();
 
 // server/schemas/invitationSchemas.ts
-import { z as z33 } from "zod";
-var createInvitationSchema = z33.object({
-  email: z33.string().trim().min(1).email()
+import { z as z34 } from "zod";
+var createInvitationSchema = z34.object({
+  email: z34.string().trim().min(1).email()
 });
-var listInvitationsQuerySchema = z33.object({
-  page: z33.coerce.number().int().positive().default(1),
-  limit: z33.coerce.number().int().positive().max(100).default(20)
+var listInvitationsQuerySchema = z34.object({
+  page: z34.coerce.number().int().positive().default(1),
+  limit: z34.coerce.number().int().positive().max(100).default(20)
 });
-var newPasswordSchema3 = z33.string().superRefine((password, ctx) => {
+var newPasswordSchema3 = z34.string().superRefine((password, ctx) => {
   const issue = validatePasswordPolicy(password);
-  if (issue) ctx.addIssue({ code: z33.ZodIssueCode.custom, message: issue });
+  if (issue) ctx.addIssue({ code: z34.ZodIssueCode.custom, message: issue });
 });
-var acceptInvitationSchema = z33.object({
-  firstName: z33.string().trim().min(1).max(100).optional(),
-  lastName: z33.string().trim().min(1).max(100).optional(),
+var acceptInvitationSchema = z34.object({
+  firstName: z34.string().trim().min(1).max(100).optional(),
+  lastName: z34.string().trim().min(1).max(100).optional(),
   password: newPasswordSchema3.optional()
 });
 
 // server/routes/v1/workspaceRoutes.ts
-var router22 = Router28();
-router22.use(authenticateToken);
+var router23 = Router29();
+router23.use(authenticateToken);
 function requestMeta11(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router22.get(
+router23.get(
   "/",
   requirePermission("workspaces.read"),
   asyncHandler(async (req, res) => {
@@ -25065,7 +25943,7 @@ router22.get(
     sendSuccess(res, { workspaces: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router22.get(
+router23.get(
   "/:id",
   requirePermission("workspaces.read"),
   asyncHandler(async (req, res) => {
@@ -25073,7 +25951,7 @@ router22.get(
     sendSuccess(res, { workspace });
   })
 );
-router22.patch(
+router23.patch(
   "/:id",
   requirePermission("workspaces.update"),
   asyncHandler(async (req, res) => {
@@ -25082,7 +25960,7 @@ router22.patch(
     sendSuccess(res, { workspace });
   })
 );
-router22.get(
+router23.get(
   "/:id/members",
   requirePermission("workspaces.read"),
   asyncHandler(async (req, res) => {
@@ -25103,7 +25981,7 @@ router22.get(
     sendSuccess(res, { members }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router22.get(
+router23.get(
   "/:id/invitations",
   requirePermission("invitations.read"),
   asyncHandler(async (req, res) => {
@@ -25112,7 +25990,7 @@ router22.get(
     sendSuccess(res, { invitations: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router22.post(
+router23.post(
   "/:id/invitations",
   requirePermission("invitations.create"),
   asyncHandler(async (req, res) => {
@@ -25122,16 +26000,16 @@ router22.post(
     sendSuccess(res, { invitation: safeInvitation, devToken }, 201);
   })
 );
-var workspaceRoutes_default = router22;
+var workspaceRoutes_default = router23;
 
 // server/routes/v1/invitationRoutes.ts
-import { Router as Router29 } from "express";
+import { Router as Router30 } from "express";
 init_apiResponse();
-var router23 = Router29();
+var router24 = Router30();
 function requestMeta12(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router23.post(
+router24.post(
   "/:id/revoke",
   authenticateToken,
   requirePermission("invitations.revoke"),
@@ -25140,14 +26018,14 @@ router23.post(
     sendSuccess(res, { message: "Invitation revoked." });
   })
 );
-router23.get(
+router24.get(
   "/:token",
   asyncHandler(async (req, res) => {
     const preview = await invitationService.previewInvitation(req.params.token);
     sendSuccess(res, preview);
   })
 );
-router23.post(
+router24.post(
   "/:token/accept",
   asyncHandler(async (req, res) => {
     const input = acceptInvitationSchema.parse(req.body);
@@ -25155,10 +26033,10 @@ router23.post(
     sendSuccess(res, result, 201);
   })
 );
-var invitationRoutes_default = router23;
+var invitationRoutes_default = router24;
 
 // server/routes/v1/productRoutes.ts
-import { Router as Router30 } from "express";
+import { Router as Router31 } from "express";
 
 // server/services/productModuleService.ts
 init_errors();
@@ -25170,8 +26048,8 @@ async function loadProductOrThrow2(productId) {
   if (!product) throw new NotFoundError("Product not found.");
   return product;
 }
-async function loadModuleOrThrow(id4) {
-  const module_ = await productModuleRepository.findById(id4);
+async function loadModuleOrThrow(id6) {
+  const module_ = await productModuleRepository.findById(id6);
   if (!module_) throw new NotFoundError("Product module not found.");
   return module_;
 }
@@ -25180,10 +26058,10 @@ var productModuleService = {
     await loadProductOrThrow2(productId);
     return productModuleRepository.listForProduct(productId, status, page, limit);
   },
-  async getModule(id4) {
-    return loadModuleOrThrow(id4);
+  async getModule(id6) {
+    return loadModuleOrThrow(id6);
   },
-  async createModule(caller, productId, input, meta10 = {}) {
+  async createModule(caller, productId, input, meta11 = {}) {
     const product = await loadProductOrThrow2(productId);
     if (product.status === "ARCHIVED") {
       throw new ConflictError("Cannot add a module to an archived product.");
@@ -25221,16 +26099,16 @@ var productModuleService = {
       resourceType: "product_module",
       resourceId: module_.id,
       afterData: { productId, code: module_.code, name: module_.name, status: module_.status },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return module_;
   },
-  async updateModule(caller, id4, input, meta10 = {}) {
-    const existing = await loadModuleOrThrow(id4);
+  async updateModule(caller, id6, input, meta11 = {}) {
+    const existing = await loadModuleOrThrow(id6);
     if (input.slug !== void 0 && input.slug !== existing.slug) {
       const dup = await productModuleRepository.findBySlugForProduct(existing.productId, input.slug);
-      if (dup && dup.id !== id4) throw new ConflictError(`A module with slug "${input.slug}" already exists on this product.`);
+      if (dup && dup.id !== id6) throw new ConflictError(`A module with slug "${input.slug}" already exists on this product.`);
     }
     if (input.status === "INACTIVE" && existing.isCore) {
       throw new ValidationError("Use POST /product-modules/:id/archive to deactivate a core module.");
@@ -25244,7 +26122,7 @@ var productModuleService = {
     if (input.displayOrder !== void 0) patch.displayOrder = input.displayOrder;
     let updated;
     try {
-      updated = await productModuleRepository.update(id4, patch);
+      updated = await productModuleRepository.update(id6, patch);
     } catch (err) {
       throw isUniqueConstraintError5(err) ? new ConflictError("A module with this slug already exists on this product.") : err;
     }
@@ -25253,39 +26131,39 @@ var productModuleService = {
       actorType: "USER",
       action: "PRODUCT_MODULE_UPDATED",
       resourceType: "product_module",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { status: existing.status, name: existing.name },
       afterData: patch,
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return updated;
   },
-  async archiveModule(caller, id4, meta10 = {}) {
-    const existing = await loadModuleOrThrow(id4);
+  async archiveModule(caller, id6, meta11 = {}) {
+    const existing = await loadModuleOrThrow(id6);
     if (existing.status === "INACTIVE") {
       throw new ConflictError("This module is already inactive.");
     }
-    const archived = await productModuleRepository.update(id4, { status: "INACTIVE" });
+    const archived = await productModuleRepository.update(id6, { status: "INACTIVE" });
     await auditLogRepository.record({
       actorUserId: caller.id,
       actorType: "USER",
       action: "PRODUCT_MODULE_ARCHIVED",
       resourceType: "product_module",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { status: existing.status },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return archived;
   },
   /** Transactional, all-or-nothing reorder — validates every id belongs to this exact product before applying anything (§36). */
-  async reorderModules(caller, productId, moduleIds, meta10 = {}) {
+  async reorderModules(caller, productId, moduleIds, meta11 = {}) {
     await loadProductOrThrow2(productId);
     const existingIds = await productModuleRepository.listAllIdsForProduct(productId);
     const existingSet = new Set(existingIds);
     const requestedSet = new Set(moduleIds);
-    if (moduleIds.length !== existingIds.length || existingIds.some((id4) => !requestedSet.has(id4)) || moduleIds.some((id4) => !existingSet.has(id4))) {
+    if (moduleIds.length !== existingIds.length || existingIds.some((id6) => !requestedSet.has(id6)) || moduleIds.some((id6) => !existingSet.has(id6))) {
       throw new ValidationError("The reorder request must include exactly this product's current modules, each exactly once.");
     }
     await productModuleRepository.reorder(productId, moduleIds);
@@ -25296,8 +26174,8 @@ var productModuleService = {
       resourceType: "product",
       resourceId: productId,
       afterData: { order: moduleIds },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
   }
 };
@@ -25306,179 +26184,179 @@ var productModuleService = {
 init_apiResponse();
 
 // server/schemas/productSchemas.ts
-import { z as z35 } from "zod";
+import { z as z36 } from "zod";
 
 // server/schemas/contentSchemas.ts
-import { z as z34 } from "zod";
-var contentStatusSchema = z34.enum(["DRAFT", "IN_REVIEW", "SCHEDULED", "PUBLISHED", "ARCHIVED"]);
-var patchableContentStatusSchema = z34.enum(["DRAFT"]);
-var expectedUpdatedAtSchema = z34.coerce.date().optional();
-var seoMetadataSchema = z34.object({
-  metaTitle: z34.string().trim().min(1).max(70).optional(),
-  metaDescription: z34.string().trim().min(1).max(320).optional(),
-  focusKeywords: z34.array(z34.string().trim().min(1).max(60)).max(10).optional(),
-  canonicalUrl: z34.string().trim().url().max(500).optional(),
-  ogTitle: z34.string().trim().min(1).max(95).optional(),
-  ogDescription: z34.string().trim().min(1).max(320).optional(),
-  ogImage: z34.string().trim().url().max(1e3).optional(),
-  twitterImage: z34.string().trim().url().max(1e3).optional(),
-  ogType: z34.enum(["article", "website", "news"]).optional(),
-  twitterCard: z34.enum(["summary_large_image", "summary"]).optional(),
-  robotsDirective: z34.enum(["index, follow", "noindex, nofollow", "noindex, follow"]).optional(),
-  schemaType: z34.enum(["TechArticle", "NewsArticle", "BlogPosting", "Report"]).optional()
+import { z as z35 } from "zod";
+var contentStatusSchema = z35.enum(["DRAFT", "IN_REVIEW", "SCHEDULED", "PUBLISHED", "ARCHIVED"]);
+var patchableContentStatusSchema = z35.enum(["DRAFT"]);
+var expectedUpdatedAtSchema = z35.coerce.date().optional();
+var seoMetadataSchema = z35.object({
+  metaTitle: z35.string().trim().min(1).max(70).optional(),
+  metaDescription: z35.string().trim().min(1).max(320).optional(),
+  focusKeywords: z35.array(z35.string().trim().min(1).max(60)).max(10).optional(),
+  canonicalUrl: z35.string().trim().url().max(500).optional(),
+  ogTitle: z35.string().trim().min(1).max(95).optional(),
+  ogDescription: z35.string().trim().min(1).max(320).optional(),
+  ogImage: z35.string().trim().url().max(1e3).optional(),
+  twitterImage: z35.string().trim().url().max(1e3).optional(),
+  ogType: z35.enum(["article", "website", "news"]).optional(),
+  twitterCard: z35.enum(["summary_large_image", "summary"]).optional(),
+  robotsDirective: z35.enum(["index, follow", "noindex, nofollow", "noindex, follow"]).optional(),
+  schemaType: z35.enum(["TechArticle", "NewsArticle", "BlogPosting", "Report"]).optional()
 }).strict();
-var revertContentSchema = z34.object({
-  revisionId: z34.string().trim().uuid()
+var revertContentSchema = z35.object({
+  revisionId: z35.string().trim().uuid()
 });
 var SORT_FIELDS = ["title", "slug", "status", "createdAt", "updatedAt", "publishedAt"];
-var listContentQuerySchema = z34.object({
-  page: z34.coerce.number().int().positive().default(1),
-  limit: z34.coerce.number().int().positive().max(100).default(20),
-  search: z34.string().trim().max(200).optional(),
-  status: contentStatusSchema.optional(),
-  // Phase 7 — Content Dashboard date filtering, inclusive range over createdAt.
-  fromDate: z34.coerce.date().optional(),
-  toDate: z34.coerce.date().optional(),
-  sort: z34.enum(SORT_FIELDS).default("updatedAt"),
-  order: z34.enum(["asc", "desc"]).default("desc")
-});
-var scheduleContentSchema = z34.object({
-  scheduledAt: z34.coerce.date().refine((d) => d.getTime() > Date.now(), { message: "scheduledAt must be in the future" })
-});
-var slugSchema2 = z34.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)");
-var createCategorySchema = z34.object({
-  name: z34.string().trim().min(1).max(150),
-  slug: slugSchema2.optional(),
-  description: z34.string().trim().max(2e3).optional(),
-  // Phase 7 — optional parent for a simple hierarchy (Category.parentId).
-  parentId: z34.string().trim().uuid().optional()
-});
-var updateCategorySchema = z34.object({
-  name: z34.string().trim().min(1).max(150).optional(),
-  slug: slugSchema2.optional(),
-  description: z34.string().trim().max(2e3).nullable().optional(),
-  parentId: z34.string().trim().uuid().nullable().optional()
-}).refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
-var createTagSchema = z34.object({
-  name: z34.string().trim().min(1).max(100),
-  slug: slugSchema2.optional(),
-  // Phase 7 — optional description, matching Category's own field.
-  description: z34.string().trim().max(2e3).optional()
-});
-var updateTagSchema = z34.object({
-  name: z34.string().trim().min(1).max(100).optional(),
-  slug: slugSchema2.optional(),
-  description: z34.string().trim().max(2e3).nullable().optional()
-}).refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
-var bulkContentIdsSchema = z34.object({
-  ids: z34.array(z34.string().trim().uuid()).min(1).max(100)
-});
-
-// server/schemas/productSchemas.ts
-var productTypeSchema = z35.enum(["PRODUCT", "SERVICE", "SOLUTION"]);
-var productStatusSchema = z35.enum(["DRAFT", "ACTIVE", "INACTIVE", "ARCHIVED"]);
-var SORT_FIELDS2 = ["name", "code", "type", "status", "displayOrder", "createdAt", "updatedAt"];
-var listProductsQuerySchema = z35.object({
+var listContentQuerySchema = z35.object({
   page: z35.coerce.number().int().positive().default(1),
   limit: z35.coerce.number().int().positive().max(100).default(20),
   search: z35.string().trim().max(200).optional(),
-  type: productTypeSchema.optional(),
-  status: productStatusSchema.optional(),
-  isFeatured: z35.coerce.boolean().optional(),
-  categoryId: z35.string().trim().uuid().optional(),
-  industryId: z35.string().trim().uuid().optional(),
-  sort: z35.enum(SORT_FIELDS2).default("displayOrder"),
-  order: z35.enum(["asc", "desc"]).default("asc")
+  status: contentStatusSchema.optional(),
+  // Phase 7 — Content Dashboard date filtering, inclusive range over createdAt.
+  fromDate: z35.coerce.date().optional(),
+  toDate: z35.coerce.date().optional(),
+  sort: z35.enum(SORT_FIELDS).default("updatedAt"),
+  order: z35.enum(["asc", "desc"]).default("desc")
 });
-var productContentSchema = z35.object({
-  benefits: z35.array(z35.string().trim().min(1).max(200)).max(20).optional(),
-  features: z35.array(z35.string().trim().min(1).max(200)).max(20).optional(),
-  businessProblem: z35.string().trim().max(2e3).optional(),
-  // Validated for real existence against the public org's Forms at save
-  // time in productService — never trusted as a bare uuid alone.
-  ctaFormId: z35.string().trim().uuid().optional(),
-  seo: seoMetadataSchema.optional()
+var scheduleContentSchema = z35.object({
+  scheduledAt: z35.coerce.date().refine((d) => d.getTime() > Date.now(), { message: "scheduledAt must be in the future" })
 });
-var codeSchema = z35.string().trim().min(1).max(50).regex(/^[A-Za-z0-9._-]+$/, "code may only contain letters, numbers, dots, underscores, and hyphens").transform((v) => v.toUpperCase());
-var createProductSchema = z35.object({
-  code: codeSchema,
-  name: z35.string().trim().min(1).max(200),
-  slug: z35.string().trim().min(1).max(100).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)").optional(),
-  type: productTypeSchema,
-  shortDescription: z35.string().trim().max(300).optional(),
-  description: z35.string().trim().max(1e4).optional(),
-  status: productStatusSchema.optional(),
-  isFeatured: z35.boolean().optional(),
-  displayOrder: z35.number().int().min(0).optional(),
-  featuredMediaId: z35.string().trim().uuid().optional(),
-  categoryId: z35.string().trim().uuid().optional(),
-  content: productContentSchema.optional(),
-  relatedProductIds: z35.array(z35.string().trim().uuid()).max(30).optional(),
-  industryIds: z35.array(z35.string().trim().uuid()).max(30).optional()
+var slugSchema2 = z35.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)");
+var createCategorySchema = z35.object({
+  name: z35.string().trim().min(1).max(150),
+  slug: slugSchema2.optional(),
+  description: z35.string().trim().max(2e3).optional(),
+  // Phase 7 — optional parent for a simple hierarchy (Category.parentId).
+  parentId: z35.string().trim().uuid().optional()
 });
-var updateProductSchema = z35.object({
-  name: z35.string().trim().min(1).max(200).optional(),
-  slug: z35.string().trim().min(1).max(100).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)").optional(),
-  type: productTypeSchema.optional(),
-  shortDescription: z35.string().trim().max(300).nullable().optional(),
-  description: z35.string().trim().max(1e4).nullable().optional(),
-  status: productStatusSchema.optional(),
-  isFeatured: z35.boolean().optional(),
-  displayOrder: z35.number().int().min(0).optional(),
-  featuredMediaId: z35.string().trim().uuid().nullable().optional(),
-  categoryId: z35.string().trim().uuid().nullable().optional(),
-  content: productContentSchema.optional(),
-  relatedProductIds: z35.array(z35.string().trim().uuid()).max(30).optional(),
-  industryIds: z35.array(z35.string().trim().uuid()).max(30).optional()
+var updateCategorySchema = z35.object({
+  name: z35.string().trim().min(1).max(150).optional(),
+  slug: slugSchema2.optional(),
+  description: z35.string().trim().max(2e3).nullable().optional(),
+  parentId: z35.string().trim().uuid().nullable().optional()
 }).refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
-var revertProductSchema = z35.object({
-  revisionId: z35.string().trim().uuid()
+var createTagSchema = z35.object({
+  name: z35.string().trim().min(1).max(100),
+  slug: slugSchema2.optional(),
+  // Phase 7 — optional description, matching Category's own field.
+  description: z35.string().trim().max(2e3).optional()
 });
-var duplicateProductSchema = z35.object({
-  name: z35.string().trim().min(1).max(200).optional()
-});
-var bulkArchiveProductsSchema = z35.object({
+var updateTagSchema = z35.object({
+  name: z35.string().trim().min(1).max(100).optional(),
+  slug: slugSchema2.optional(),
+  description: z35.string().trim().max(2e3).nullable().optional()
+}).refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
+var bulkContentIdsSchema = z35.object({
   ids: z35.array(z35.string().trim().uuid()).min(1).max(100)
 });
 
-// server/schemas/productModuleSchemas.ts
-import { z as z36 } from "zod";
-var productModuleStatusSchema = z36.enum(["DRAFT", "ACTIVE", "INACTIVE"]);
-var listProductModulesQuerySchema = z36.object({
+// server/schemas/productSchemas.ts
+var productTypeSchema = z36.enum(["PRODUCT", "SERVICE", "SOLUTION"]);
+var productStatusSchema = z36.enum(["DRAFT", "ACTIVE", "INACTIVE", "ARCHIVED"]);
+var SORT_FIELDS2 = ["name", "code", "type", "status", "displayOrder", "createdAt", "updatedAt"];
+var listProductsQuerySchema = z36.object({
   page: z36.coerce.number().int().positive().default(1),
-  limit: z36.coerce.number().int().positive().max(100).default(50),
+  limit: z36.coerce.number().int().positive().max(100).default(20),
+  search: z36.string().trim().max(200).optional(),
+  type: productTypeSchema.optional(),
+  status: productStatusSchema.optional(),
+  isFeatured: z36.coerce.boolean().optional(),
+  categoryId: z36.string().trim().uuid().optional(),
+  industryId: z36.string().trim().uuid().optional(),
+  sort: z36.enum(SORT_FIELDS2).default("displayOrder"),
+  order: z36.enum(["asc", "desc"]).default("asc")
+});
+var productContentSchema = z36.object({
+  benefits: z36.array(z36.string().trim().min(1).max(200)).max(20).optional(),
+  features: z36.array(z36.string().trim().min(1).max(200)).max(20).optional(),
+  businessProblem: z36.string().trim().max(2e3).optional(),
+  // Validated for real existence against the public org's Forms at save
+  // time in productService — never trusted as a bare uuid alone.
+  ctaFormId: z36.string().trim().uuid().optional(),
+  seo: seoMetadataSchema.optional()
+});
+var codeSchema = z36.string().trim().min(1).max(50).regex(/^[A-Za-z0-9._-]+$/, "code may only contain letters, numbers, dots, underscores, and hyphens").transform((v) => v.toUpperCase());
+var createProductSchema = z36.object({
+  code: codeSchema,
+  name: z36.string().trim().min(1).max(200),
+  slug: z36.string().trim().min(1).max(100).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)").optional(),
+  type: productTypeSchema,
+  shortDescription: z36.string().trim().max(300).optional(),
+  description: z36.string().trim().max(1e4).optional(),
+  status: productStatusSchema.optional(),
+  isFeatured: z36.boolean().optional(),
+  displayOrder: z36.number().int().min(0).optional(),
+  featuredMediaId: z36.string().trim().uuid().optional(),
+  categoryId: z36.string().trim().uuid().optional(),
+  content: productContentSchema.optional(),
+  relatedProductIds: z36.array(z36.string().trim().uuid()).max(30).optional(),
+  industryIds: z36.array(z36.string().trim().uuid()).max(30).optional()
+});
+var updateProductSchema = z36.object({
+  name: z36.string().trim().min(1).max(200).optional(),
+  slug: z36.string().trim().min(1).max(100).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)").optional(),
+  type: productTypeSchema.optional(),
+  shortDescription: z36.string().trim().max(300).nullable().optional(),
+  description: z36.string().trim().max(1e4).nullable().optional(),
+  status: productStatusSchema.optional(),
+  isFeatured: z36.boolean().optional(),
+  displayOrder: z36.number().int().min(0).optional(),
+  featuredMediaId: z36.string().trim().uuid().nullable().optional(),
+  categoryId: z36.string().trim().uuid().nullable().optional(),
+  content: productContentSchema.optional(),
+  relatedProductIds: z36.array(z36.string().trim().uuid()).max(30).optional(),
+  industryIds: z36.array(z36.string().trim().uuid()).max(30).optional()
+}).refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
+var revertProductSchema = z36.object({
+  revisionId: z36.string().trim().uuid()
+});
+var duplicateProductSchema = z36.object({
+  name: z36.string().trim().min(1).max(200).optional()
+});
+var bulkArchiveProductsSchema = z36.object({
+  ids: z36.array(z36.string().trim().uuid()).min(1).max(100)
+});
+
+// server/schemas/productModuleSchemas.ts
+import { z as z37 } from "zod";
+var productModuleStatusSchema = z37.enum(["DRAFT", "ACTIVE", "INACTIVE"]);
+var listProductModulesQuerySchema = z37.object({
+  page: z37.coerce.number().int().positive().default(1),
+  limit: z37.coerce.number().int().positive().max(100).default(50),
   status: productModuleStatusSchema.optional()
 });
-var codeSchema2 = z36.string().trim().min(1).max(50).regex(/^[A-Za-z0-9._-]+$/, "code may only contain letters, numbers, dots, underscores, and hyphens").transform((v) => v.toUpperCase());
-var slugSchema3 = z36.string().trim().min(1).max(100).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)");
-var createProductModuleSchema = z36.object({
+var codeSchema2 = z37.string().trim().min(1).max(50).regex(/^[A-Za-z0-9._-]+$/, "code may only contain letters, numbers, dots, underscores, and hyphens").transform((v) => v.toUpperCase());
+var slugSchema3 = z37.string().trim().min(1).max(100).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)");
+var createProductModuleSchema = z37.object({
   code: codeSchema2,
-  name: z36.string().trim().min(1).max(200),
+  name: z37.string().trim().min(1).max(200),
   slug: slugSchema3.optional(),
-  description: z36.string().trim().max(1e4).optional(),
+  description: z37.string().trim().max(1e4).optional(),
   status: productModuleStatusSchema.optional(),
-  isCore: z36.boolean().optional(),
-  displayOrder: z36.number().int().min(0).optional()
+  isCore: z37.boolean().optional(),
+  displayOrder: z37.number().int().min(0).optional()
 });
-var updateProductModuleSchema = z36.object({
-  name: z36.string().trim().min(1).max(200).optional(),
+var updateProductModuleSchema = z37.object({
+  name: z37.string().trim().min(1).max(200).optional(),
   slug: slugSchema3.optional(),
-  description: z36.string().trim().max(1e4).nullable().optional(),
+  description: z37.string().trim().max(1e4).nullable().optional(),
   status: productModuleStatusSchema.optional(),
-  isCore: z36.boolean().optional(),
-  displayOrder: z36.number().int().min(0).optional()
+  isCore: z37.boolean().optional(),
+  displayOrder: z37.number().int().min(0).optional()
 }).refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
-var reorderProductModulesSchema = z36.object({
-  moduleIds: z36.array(z36.string().trim().uuid()).min(1).max(200)
+var reorderProductModulesSchema = z37.object({
+  moduleIds: z37.array(z37.string().trim().uuid()).min(1).max(200)
 });
 
 // server/routes/v1/productRoutes.ts
-var router24 = Router30();
-router24.use(authenticateToken);
+var router25 = Router31();
+router25.use(authenticateToken);
 function requestMeta13(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router24.get(
+router25.get(
   "/",
   requirePermission("products.read"),
   asyncHandler(async (req, res) => {
@@ -25493,7 +26371,7 @@ router24.get(
     sendSuccess(res, { products: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router24.post(
+router25.post(
   "/bulk/archive",
   requirePermission("products.archive"),
   asyncHandler(async (req, res) => {
@@ -25502,7 +26380,7 @@ router24.post(
     sendSuccess(res, result);
   })
 );
-router24.get(
+router25.get(
   "/:id",
   requirePermission("products.read"),
   asyncHandler(async (req, res) => {
@@ -25510,7 +26388,7 @@ router24.get(
     sendSuccess(res, { product });
   })
 );
-router24.post(
+router25.post(
   "/",
   requirePermission("products.create"),
   asyncHandler(async (req, res) => {
@@ -25519,7 +26397,7 @@ router24.post(
     sendSuccess(res, { product }, 201);
   })
 );
-router24.patch(
+router25.patch(
   "/:id",
   requirePermission("products.update"),
   asyncHandler(async (req, res) => {
@@ -25528,7 +26406,7 @@ router24.patch(
     sendSuccess(res, { product });
   })
 );
-router24.post(
+router25.post(
   "/:id/archive",
   requirePermission("products.archive"),
   asyncHandler(async (req, res) => {
@@ -25536,7 +26414,7 @@ router24.post(
     sendSuccess(res, { product });
   })
 );
-router24.get(
+router25.get(
   "/:id/revisions",
   requirePermission("products.read"),
   asyncHandler(async (req, res) => {
@@ -25544,7 +26422,7 @@ router24.get(
     sendSuccess(res, { revisions });
   })
 );
-router24.post(
+router25.post(
   "/:id/revert",
   requirePermission("products.update"),
   asyncHandler(async (req, res) => {
@@ -25553,7 +26431,7 @@ router24.post(
     sendSuccess(res, { product });
   })
 );
-router24.post(
+router25.post(
   "/:id/duplicate",
   requirePermission("products.create"),
   asyncHandler(async (req, res) => {
@@ -25562,7 +26440,7 @@ router24.post(
     sendSuccess(res, { product }, 201);
   })
 );
-router24.get(
+router25.get(
   "/:id/modules",
   requirePermission("product_modules.read"),
   asyncHandler(async (req, res) => {
@@ -25571,7 +26449,7 @@ router24.get(
     sendSuccess(res, { modules: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router24.post(
+router25.post(
   "/:id/modules",
   requirePermission("product_modules.create"),
   asyncHandler(async (req, res) => {
@@ -25580,7 +26458,7 @@ router24.post(
     sendSuccess(res, { module: module_ }, 201);
   })
 );
-router24.post(
+router25.post(
   "/:id/modules/reorder",
   requirePermission("product_modules.reorder"),
   asyncHandler(async (req, res) => {
@@ -25589,17 +26467,17 @@ router24.post(
     sendSuccess(res, { message: "Modules reordered." });
   })
 );
-var productRoutes_default = router24;
+var productRoutes_default = router25;
 
 // server/routes/v1/productModuleRoutes.ts
-import { Router as Router31 } from "express";
+import { Router as Router32 } from "express";
 init_apiResponse();
-var router25 = Router31();
-router25.use(authenticateToken);
+var router26 = Router32();
+router26.use(authenticateToken);
 function requestMeta14(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router25.get(
+router26.get(
   "/:id",
   requirePermission("product_modules.read"),
   asyncHandler(async (req, res) => {
@@ -25607,7 +26485,7 @@ router25.get(
     sendSuccess(res, { module: module_ });
   })
 );
-router25.patch(
+router26.patch(
   "/:id",
   requirePermission("product_modules.update"),
   asyncHandler(async (req, res) => {
@@ -25616,7 +26494,7 @@ router25.patch(
     sendSuccess(res, { module: module_ });
   })
 );
-router25.post(
+router26.post(
   "/:id/archive",
   requirePermission("product_modules.archive"),
   asyncHandler(async (req, res) => {
@@ -25624,18 +26502,18 @@ router25.post(
     sendSuccess(res, { module: module_ });
   })
 );
-var productModuleRoutes_default = router25;
+var productModuleRoutes_default = router26;
 
 // server/routes/v1/productCategoryRoutes.ts
-import { Router as Router32 } from "express";
+import { Router as Router33 } from "express";
 
 // server/services/productCategoryService.ts
 init_errors();
 function isUniqueConstraintError6(err) {
   return !!err && typeof err === "object" && "code" in err && err.code === "P2002";
 }
-async function loadOrThrow(id4) {
-  const category = await productCategoryRepository.findById(id4);
+async function loadOrThrow(id6) {
+  const category = await productCategoryRepository.findById(id6);
   if (!category) throw new NotFoundError("Product category not found.");
   return category;
 }
@@ -25643,7 +26521,7 @@ var productCategoryService = {
   async list(search) {
     return productCategoryRepository.list(search);
   },
-  async create(caller, input, meta10 = {}) {
+  async create(caller, input, meta11 = {}) {
     let slug;
     if (input.slug) {
       const existing = await productCategoryRepository.findBySlug(input.slug);
@@ -25665,20 +26543,20 @@ var productCategoryService = {
       resourceType: "product_category",
       resourceId: category.id,
       afterData: { name: category.name, slug: category.slug },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return category;
   },
-  async update(caller, id4, input, meta10 = {}) {
-    const existing = await loadOrThrow(id4);
+  async update(caller, id6, input, meta11 = {}) {
+    const existing = await loadOrThrow(id6);
     if (input.slug !== void 0 && input.slug !== existing.slug) {
       const dup = await productCategoryRepository.findBySlug(input.slug);
-      if (dup && dup.id !== id4) throw new ConflictError(`A category with slug "${input.slug}" already exists.`);
+      if (dup && dup.id !== id6) throw new ConflictError(`A category with slug "${input.slug}" already exists.`);
     }
     let updated;
     try {
-      updated = await productCategoryRepository.update(id4, input);
+      updated = await productCategoryRepository.update(id6, input);
     } catch (err) {
       throw isUniqueConstraintError6(err) ? new ConflictError("A category with this slug already exists.") : err;
     }
@@ -25687,30 +26565,30 @@ var productCategoryService = {
       actorType: "USER",
       action: "PRODUCT_CATEGORY_UPDATED",
       resourceType: "product_category",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { name: existing.name, slug: existing.slug },
       afterData: input,
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return updated;
   },
-  async delete(caller, id4, meta10 = {}) {
-    const existing = await loadOrThrow(id4);
-    const productCount = await productCategoryRepository.countProducts(id4);
+  async delete(caller, id6, meta11 = {}) {
+    const existing = await loadOrThrow(id6);
+    const productCount = await productCategoryRepository.countProducts(id6);
     if (productCount > 0) {
       throw new ConflictError(`This category is assigned to ${productCount} product${productCount === 1 ? "" : "s"} \u2014 reassign them before deleting it.`);
     }
-    await productCategoryRepository.delete(id4);
+    await productCategoryRepository.delete(id6);
     await auditLogRepository.record({
       actorUserId: caller.id,
       actorType: "USER",
       action: "PRODUCT_CATEGORY_DELETED",
       resourceType: "product_category",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { name: existing.name, slug: existing.slug },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
   }
 };
@@ -25719,30 +26597,30 @@ var productCategoryService = {
 init_apiResponse();
 
 // server/schemas/productCategorySchemas.ts
-import { z as z37 } from "zod";
-var listProductCategoriesQuerySchema = z37.object({
-  search: z37.string().trim().max(200).optional()
+import { z as z38 } from "zod";
+var listProductCategoriesQuerySchema = z38.object({
+  search: z38.string().trim().max(200).optional()
 });
-var createProductCategorySchema = z37.object({
-  name: z37.string().trim().min(1).max(150),
-  slug: z37.string().trim().min(1).max(100).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)").optional(),
-  description: z37.string().trim().max(1e3).optional(),
-  displayOrder: z37.number().int().min(0).optional()
+var createProductCategorySchema = z38.object({
+  name: z38.string().trim().min(1).max(150),
+  slug: z38.string().trim().min(1).max(100).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)").optional(),
+  description: z38.string().trim().max(1e3).optional(),
+  displayOrder: z38.number().int().min(0).optional()
 });
-var updateProductCategorySchema = z37.object({
-  name: z37.string().trim().min(1).max(150).optional(),
-  slug: z37.string().trim().min(1).max(100).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)").optional(),
-  description: z37.string().trim().max(1e3).nullable().optional(),
-  displayOrder: z37.number().int().min(0).optional()
+var updateProductCategorySchema = z38.object({
+  name: z38.string().trim().min(1).max(150).optional(),
+  slug: z38.string().trim().min(1).max(100).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)").optional(),
+  description: z38.string().trim().max(1e3).nullable().optional(),
+  displayOrder: z38.number().int().min(0).optional()
 }).refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
 
 // server/routes/v1/productCategoryRoutes.ts
-var router26 = Router32();
-router26.use(authenticateToken);
+var router27 = Router33();
+router27.use(authenticateToken);
 function requestMeta15(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router26.get(
+router27.get(
   "/",
   requirePermission("product_categories.read"),
   asyncHandler(async (req, res) => {
@@ -25751,7 +26629,7 @@ router26.get(
     sendSuccess(res, { categories });
   })
 );
-router26.post(
+router27.post(
   "/",
   requirePermission("product_categories.manage"),
   asyncHandler(async (req, res) => {
@@ -25760,7 +26638,7 @@ router26.post(
     sendSuccess(res, { category }, 201);
   })
 );
-router26.patch(
+router27.patch(
   "/:id",
   requirePermission("product_categories.manage"),
   asyncHandler(async (req, res) => {
@@ -25769,7 +26647,7 @@ router26.patch(
     sendSuccess(res, { category });
   })
 );
-router26.delete(
+router27.delete(
   "/:id",
   requirePermission("product_categories.manage"),
   asyncHandler(async (req, res) => {
@@ -25777,18 +26655,18 @@ router26.delete(
     sendSuccess(res, { message: "Category deleted." });
   })
 );
-var productCategoryRoutes_default = router26;
+var productCategoryRoutes_default = router27;
 
 // server/routes/v1/industryRoutes.ts
-import { Router as Router33 } from "express";
+import { Router as Router34 } from "express";
 
 // server/services/industryService.ts
 init_errors();
 function isUniqueConstraintError7(err) {
   return !!err && typeof err === "object" && "code" in err && err.code === "P2002";
 }
-async function loadOrThrow2(id4) {
-  const industry = await industryRepository.findById(id4);
+async function loadOrThrow2(id6) {
+  const industry = await industryRepository.findById(id6);
   if (!industry) throw new NotFoundError("Industry not found.");
   return industry;
 }
@@ -25796,7 +26674,7 @@ var industryService = {
   async list(search) {
     return industryRepository.list(search);
   },
-  async create(caller, input, meta10 = {}) {
+  async create(caller, input, meta11 = {}) {
     let slug;
     if (input.slug) {
       const existing = await industryRepository.findBySlug(input.slug);
@@ -25818,20 +26696,20 @@ var industryService = {
       resourceType: "industry",
       resourceId: industry.id,
       afterData: { name: industry.name, slug: industry.slug },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return industry;
   },
-  async update(caller, id4, input, meta10 = {}) {
-    const existing = await loadOrThrow2(id4);
+  async update(caller, id6, input, meta11 = {}) {
+    const existing = await loadOrThrow2(id6);
     if (input.slug !== void 0 && input.slug !== existing.slug) {
       const dup = await industryRepository.findBySlug(input.slug);
-      if (dup && dup.id !== id4) throw new ConflictError(`An industry with slug "${input.slug}" already exists.`);
+      if (dup && dup.id !== id6) throw new ConflictError(`An industry with slug "${input.slug}" already exists.`);
     }
     let updated;
     try {
-      updated = await industryRepository.update(id4, input);
+      updated = await industryRepository.update(id6, input);
     } catch (err) {
       throw isUniqueConstraintError7(err) ? new ConflictError("An industry with this slug already exists.") : err;
     }
@@ -25840,30 +26718,30 @@ var industryService = {
       actorType: "USER",
       action: "INDUSTRY_UPDATED",
       resourceType: "industry",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { name: existing.name, slug: existing.slug },
       afterData: input,
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return updated;
   },
-  async delete(caller, id4, meta10 = {}) {
-    const existing = await loadOrThrow2(id4);
-    const productCount = await industryRepository.countProducts(id4);
+  async delete(caller, id6, meta11 = {}) {
+    const existing = await loadOrThrow2(id6);
+    const productCount = await industryRepository.countProducts(id6);
     if (productCount > 0) {
       throw new ConflictError(`This industry is tagged on ${productCount} product${productCount === 1 ? "" : "s"} \u2014 untag them before deleting it.`);
     }
-    await industryRepository.delete(id4);
+    await industryRepository.delete(id6);
     await auditLogRepository.record({
       actorUserId: caller.id,
       actorType: "USER",
       action: "INDUSTRY_DELETED",
       resourceType: "industry",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { name: existing.name, slug: existing.slug },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
   }
 };
@@ -25872,30 +26750,30 @@ var industryService = {
 init_apiResponse();
 
 // server/schemas/industrySchemas.ts
-import { z as z38 } from "zod";
-var listIndustriesQuerySchema = z38.object({
-  search: z38.string().trim().max(200).optional()
+import { z as z39 } from "zod";
+var listIndustriesQuerySchema = z39.object({
+  search: z39.string().trim().max(200).optional()
 });
-var createIndustrySchema = z38.object({
-  name: z38.string().trim().min(1).max(150),
-  slug: z38.string().trim().min(1).max(100).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)").optional(),
-  description: z38.string().trim().max(1e3).optional(),
-  displayOrder: z38.number().int().min(0).optional()
+var createIndustrySchema = z39.object({
+  name: z39.string().trim().min(1).max(150),
+  slug: z39.string().trim().min(1).max(100).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)").optional(),
+  description: z39.string().trim().max(1e3).optional(),
+  displayOrder: z39.number().int().min(0).optional()
 });
-var updateIndustrySchema = z38.object({
-  name: z38.string().trim().min(1).max(150).optional(),
-  slug: z38.string().trim().min(1).max(100).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)").optional(),
-  description: z38.string().trim().max(1e3).nullable().optional(),
-  displayOrder: z38.number().int().min(0).optional()
+var updateIndustrySchema = z39.object({
+  name: z39.string().trim().min(1).max(150).optional(),
+  slug: z39.string().trim().min(1).max(100).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)").optional(),
+  description: z39.string().trim().max(1e3).nullable().optional(),
+  displayOrder: z39.number().int().min(0).optional()
 }).refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
 
 // server/routes/v1/industryRoutes.ts
-var router27 = Router33();
-router27.use(authenticateToken);
+var router28 = Router34();
+router28.use(authenticateToken);
 function requestMeta16(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router27.get(
+router28.get(
   "/",
   requirePermission("industries.read"),
   asyncHandler(async (req, res) => {
@@ -25904,7 +26782,7 @@ router27.get(
     sendSuccess(res, { industries });
   })
 );
-router27.post(
+router28.post(
   "/",
   requirePermission("industries.manage"),
   asyncHandler(async (req, res) => {
@@ -25913,7 +26791,7 @@ router27.post(
     sendSuccess(res, { industry }, 201);
   })
 );
-router27.patch(
+router28.patch(
   "/:id",
   requirePermission("industries.manage"),
   asyncHandler(async (req, res) => {
@@ -25922,7 +26800,7 @@ router27.patch(
     sendSuccess(res, { industry });
   })
 );
-router27.delete(
+router28.delete(
   "/:id",
   requirePermission("industries.manage"),
   asyncHandler(async (req, res) => {
@@ -25930,69 +26808,69 @@ router27.delete(
     sendSuccess(res, { message: "Industry deleted." });
   })
 );
-var industryRoutes_default = router27;
+var industryRoutes_default = router28;
 
 // server/routes/v1/pageRoutes.ts
-import { Router as Router34 } from "express";
+import { Router as Router35 } from "express";
 init_apiResponse();
 
 // server/schemas/pageSchemas.ts
-import { z as z39 } from "zod";
-var slugSchema4 = z39.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)");
-var pageTypeSchema = z39.enum(["STANDARD", "LANDING"]);
-var createPageSchema = z39.object({
-  title: z39.string().trim().min(1).max(200),
+import { z as z40 } from "zod";
+var slugSchema4 = z40.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)");
+var pageTypeSchema = z40.enum(["STANDARD", "LANDING"]);
+var createPageSchema = z40.object({
+  title: z40.string().trim().min(1).max(200),
   slug: slugSchema4.optional(),
-  body: z39.string().trim().max(5e5).default(""),
+  body: z40.string().trim().max(5e5).default(""),
   // Phase 7 — short author-written summary, distinct from SEO metaDescription.
-  excerpt: z39.string().trim().max(500).optional(),
+  excerpt: z40.string().trim().max(500).optional(),
   metadata: seoMetadataSchema.optional(),
   // Phase 2 (Site Editor) — additive, optional. A page created without it
   // behaves exactly as before: body/metadata alone drive rendering
   // (publicSiteService.ts falls back whenever editorBlocks is absent).
   editorBlocks: editorDocumentSchema.optional(),
-  featuredMediaId: z39.string().trim().uuid().optional(),
-  templateId: z39.string().trim().uuid().optional(),
+  featuredMediaId: z40.string().trim().uuid().optional(),
+  templateId: z40.string().trim().uuid().optional(),
   pageType: pageTypeSchema.optional(),
-  isHomepage: z39.boolean().optional(),
+  isHomepage: z40.boolean().optional(),
   // Phase 5 — additive, optional. A page created without it behaves
   // exactly as before: parentId null, no hierarchy.
-  parentId: z39.string().trim().uuid().optional()
+  parentId: z40.string().trim().uuid().optional()
 });
-var updatePageSchema = z39.object({
-  title: z39.string().trim().min(1).max(200).optional(),
+var updatePageSchema = z40.object({
+  title: z40.string().trim().min(1).max(200).optional(),
   slug: slugSchema4.optional(),
-  body: z39.string().trim().max(5e5).optional(),
-  excerpt: z39.string().trim().max(500).nullable().optional(),
+  body: z40.string().trim().max(5e5).optional(),
+  excerpt: z40.string().trim().max(500).nullable().optional(),
   metadata: seoMetadataSchema.optional(),
   // null clears the editor composition (falls back to body-only
   // rendering); omitted leaves it unchanged.
   editorBlocks: editorDocumentSchema.nullable().optional(),
   status: patchableContentStatusSchema.optional(),
-  featuredMediaId: z39.string().trim().uuid().nullable().optional(),
+  featuredMediaId: z40.string().trim().uuid().nullable().optional(),
   // null explicitly unassigns the template (falls back to default
   // rendering — see publicSiteService.ts); omitted leaves it unchanged.
-  templateId: z39.string().trim().uuid().nullable().optional(),
+  templateId: z40.string().trim().uuid().nullable().optional(),
   pageType: pageTypeSchema.optional(),
-  isHomepage: z39.boolean().optional(),
+  isHomepage: z40.boolean().optional(),
   // null explicitly clears the parent (promotes to top-level); omitted
   // leaves it unchanged.
-  parentId: z39.string().trim().uuid().nullable().optional(),
+  parentId: z40.string().trim().uuid().nullable().optional(),
   expectedUpdatedAt: expectedUpdatedAtSchema
 }).refine((v) => Object.keys(v).filter((k) => k !== "expectedUpdatedAt").length > 0, { message: "At least one field must be provided." });
 
 // server/routes/v1/pageRoutes.ts
-import { z as z40 } from "zod";
-var trashQuerySchema = z40.object({
-  page: z40.coerce.number().int().positive().default(1),
-  limit: z40.coerce.number().int().positive().max(100).default(20)
+import { z as z41 } from "zod";
+var trashQuerySchema = z41.object({
+  page: z41.coerce.number().int().positive().default(1),
+  limit: z41.coerce.number().int().positive().max(100).default(20)
 });
-var router28 = Router34();
-router28.use(authenticateToken);
+var router29 = Router35();
+router29.use(authenticateToken);
 function requestMeta17(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router28.get(
+router29.get(
   "/",
   requirePermission("content.read"),
   asyncHandler(async (req, res) => {
@@ -26008,7 +26886,7 @@ router28.get(
     sendSuccess(res, { pages: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router28.get(
+router29.get(
   "/trash",
   requirePermission("content.read"),
   asyncHandler(async (req, res) => {
@@ -26017,7 +26895,7 @@ router28.get(
     sendSuccess(res, { pages: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router28.post(
+router29.post(
   "/bulk/archive",
   requirePermission("content.delete"),
   asyncHandler(async (req, res) => {
@@ -26026,7 +26904,7 @@ router28.post(
     sendSuccess(res, result);
   })
 );
-router28.post(
+router29.post(
   "/bulk/trash",
   requirePermission("content.delete"),
   asyncHandler(async (req, res) => {
@@ -26035,7 +26913,7 @@ router28.post(
     sendSuccess(res, result);
   })
 );
-router28.post(
+router29.post(
   "/bulk/restore",
   requirePermission("content.delete"),
   asyncHandler(async (req, res) => {
@@ -26044,7 +26922,7 @@ router28.post(
     sendSuccess(res, result);
   })
 );
-router28.post(
+router29.post(
   "/:id/restore",
   requirePermission("content.delete"),
   asyncHandler(async (req, res) => {
@@ -26052,7 +26930,7 @@ router28.post(
     sendSuccess(res, { message: "Page restored from trash." });
   })
 );
-router28.get(
+router29.get(
   "/:id",
   requirePermission("content.read"),
   asyncHandler(async (req, res) => {
@@ -26060,7 +26938,7 @@ router28.get(
     sendSuccess(res, { page });
   })
 );
-router28.get(
+router29.get(
   "/:id/revisions",
   requirePermission("content.read"),
   asyncHandler(async (req, res) => {
@@ -26068,7 +26946,7 @@ router28.get(
     sendSuccess(res, { revisions });
   })
 );
-router28.get(
+router29.get(
   "/:id/children",
   requirePermission("content.read"),
   asyncHandler(async (req, res) => {
@@ -26076,7 +26954,7 @@ router28.get(
     sendSuccess(res, { children });
   })
 );
-router28.post(
+router29.post(
   "/",
   requirePermission("content.create"),
   asyncHandler(async (req, res) => {
@@ -26085,7 +26963,7 @@ router28.post(
     sendSuccess(res, { page }, 201);
   })
 );
-router28.patch(
+router29.patch(
   "/:id",
   requirePermission("content.update"),
   asyncHandler(async (req, res) => {
@@ -26094,7 +26972,7 @@ router28.patch(
     sendSuccess(res, { page });
   })
 );
-router28.post(
+router29.post(
   "/:id/submit-review",
   requirePermission("content.update"),
   asyncHandler(async (req, res) => {
@@ -26102,7 +26980,7 @@ router28.post(
     sendSuccess(res, { page });
   })
 );
-router28.post(
+router29.post(
   "/:id/publish",
   requirePermission("content.publish"),
   asyncHandler(async (req, res) => {
@@ -26110,7 +26988,7 @@ router28.post(
     sendSuccess(res, { page });
   })
 );
-router28.post(
+router29.post(
   "/:id/schedule",
   requirePermission("content.publish"),
   asyncHandler(async (req, res) => {
@@ -26119,7 +26997,7 @@ router28.post(
     sendSuccess(res, { page });
   })
 );
-router28.post(
+router29.post(
   "/:id/archive",
   requirePermission("content.delete"),
   asyncHandler(async (req, res) => {
@@ -26127,7 +27005,7 @@ router28.post(
     sendSuccess(res, { page });
   })
 );
-router28.post(
+router29.post(
   "/:id/revert",
   requirePermission("content.update"),
   asyncHandler(async (req, res) => {
@@ -26136,7 +27014,7 @@ router28.post(
     sendSuccess(res, { page });
   })
 );
-router28.delete(
+router29.delete(
   "/:id",
   requirePermission("content.delete"),
   asyncHandler(async (req, res) => {
@@ -26144,10 +27022,10 @@ router28.delete(
     sendSuccess(res, { message: "Page deleted." });
   })
 );
-var pageRoutes_default = router28;
+var pageRoutes_default = router29;
 
 // server/routes/v1/templateRoutes.ts
-import { Router as Router35 } from "express";
+import { Router as Router36 } from "express";
 
 // server/utils/templateStructure.ts
 function normalizeRegions(structure) {
@@ -26214,17 +27092,17 @@ var templatePartRepository = {
     ]);
     return { rows, total };
   },
-  async findByIdInOrg(id4, organizationId) {
-    return prisma.templatePart.findFirst({ where: { id: id4, organizationId, deletedAt: null }, ...withCurrentRevision2 });
+  async findByIdInOrg(id6, organizationId) {
+    return prisma.templatePart.findFirst({ where: { id: id6, organizationId, deletedAt: null }, ...withCurrentRevision2 });
   },
   async findBySlugInOrg(organizationId, slug) {
     return prisma.templatePart.findFirst({ where: { organizationId, slug, deletedAt: null } });
   },
-  async findPublishedByIdInOrg(id4, organizationId) {
-    return prisma.templatePart.findFirst({ where: { id: id4, organizationId, status: "PUBLISHED", deletedAt: null } });
+  async findPublishedByIdInOrg(id6, organizationId) {
+    return prisma.templatePart.findFirst({ where: { id: id6, organizationId, status: "PUBLISHED", deletedAt: null } });
   },
-  async findUniqueSlugInOrg(organizationId, base2) {
-    const baseSlug = slugify14(base2) || "part";
+  async findUniqueSlugInOrg(organizationId, base3) {
+    const baseSlug = slugify14(base3) || "part";
     let slug = baseSlug;
     let attempt2 = 1;
     while (await this.findBySlugInOrg(organizationId, slug)) {
@@ -26264,8 +27142,8 @@ var templatePartRepository = {
       pages: usingPages.map((p) => ({ id: p.id, title: p.title, slug: p.slug, status: p.status }))
     };
   },
-  async softDelete(id4) {
-    await prisma.templatePart.update({ where: { id: id4 }, data: { deletedAt: /* @__PURE__ */ new Date() } });
+  async softDelete(id6) {
+    await prisma.templatePart.update({ where: { id: id6 }, data: { deletedAt: /* @__PURE__ */ new Date() } });
   }
 };
 
@@ -26274,8 +27152,8 @@ init_errors();
 function isUniqueConstraintError8(err) {
   return !!err && typeof err === "object" && "code" in err && err.code === "P2002";
 }
-async function loadTemplateOrThrow(id4, organizationId) {
-  const template = await templateRepository.findByIdInOrg(id4, organizationId);
+async function loadTemplateOrThrow(id6, organizationId) {
+  const template = await templateRepository.findByIdInOrg(id6, organizationId);
   if (!template) throw new NotFoundError("Template not found.");
   return template;
 }
@@ -26286,7 +27164,7 @@ function assertNotSystem(template, action) {
 }
 async function assertRegionsResolvable(organizationId, structure) {
   const regions = normalizeRegions(structure);
-  const partIds = [...new Set(regions.map((r) => r.templatePartId).filter((id4) => !!id4))];
+  const partIds = [...new Set(regions.map((r) => r.templatePartId).filter((id6) => !!id6))];
   if (partIds.length === 0) return;
   const valid = await templatePartRepository.findManyByIdsInOrg(partIds, organizationId);
   const broken = regions.filter((r) => r.templatePartId && !valid.has(r.templatePartId));
@@ -26300,17 +27178,17 @@ var templateService = {
   async listTemplates(organizationId, filters, page, limit, sort, order) {
     return templateRepository.list(organizationId, filters, page, limit, sort, order);
   },
-  async getTemplate(organizationId, id4) {
-    return loadTemplateOrThrow(id4, organizationId);
+  async getTemplate(organizationId, id6) {
+    return loadTemplateOrThrow(id6, organizationId);
   },
-  async listRevisions(organizationId, id4) {
-    await loadTemplateOrThrow(id4, organizationId);
-    return templateRepository.listRevisions(id4);
+  async listRevisions(organizationId, id6) {
+    await loadTemplateOrThrow(id6, organizationId);
+    return templateRepository.listRevisions(id6);
   },
   /** Phase 4 — "show where a template is used": the actual pages assigned to it, not just a count. */
-  async getUsage(organizationId, id4) {
-    await loadTemplateOrThrow(id4, organizationId);
-    const pages = await templateRepository.findPagesUsing(id4, organizationId);
+  async getUsage(organizationId, id6) {
+    await loadTemplateOrThrow(id6, organizationId);
+    const pages = await templateRepository.findPagesUsing(id6, organizationId);
     return { pages };
   },
   /**
@@ -26321,8 +27199,8 @@ var templateService = {
    * see publicSiteService.ts). This is what lets an editor preview a
    * template before publishing it or its parts.
    */
-  async previewTemplate(organizationId, id4) {
-    const template = await loadTemplateOrThrow(id4, organizationId);
+  async previewTemplate(organizationId, id6) {
+    const template = await loadTemplateOrThrow(id6, organizationId);
     const regionEntries = normalizeRegions(template.currentRevision?.structure);
     const regions = await Promise.all(
       regionEntries.map(async (r) => {
@@ -26333,7 +27211,7 @@ var templateService = {
     );
     return { template, regions };
   },
-  async createTemplate(caller, input, meta10 = {}) {
+  async createTemplate(caller, input, meta11 = {}) {
     const organizationId = caller.organizationId;
     if (input.slug) {
       const dup = await templateRepository.findBySlugInOrg(organizationId, input.slug);
@@ -26378,19 +27256,19 @@ var templateService = {
       resourceType: "template",
       resourceId: createdId,
       afterData: { name: input.name, slug, type: input.type },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return loadTemplateOrThrow(createdId, organizationId);
   },
-  async updateTemplate(caller, id4, input, meta10 = {}) {
+  async updateTemplate(caller, id6, input, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const existing = await loadTemplateOrThrow(id4, organizationId);
+    const existing = await loadTemplateOrThrow(id6, organizationId);
     assertNotSystem(existing, "edited");
     const hasContentEdit = input.name !== void 0 || input.slug !== void 0 || input.structure !== void 0;
     if (input.slug !== void 0 && input.slug !== existing.slug) {
       const dup = await templateRepository.findBySlugInOrg(organizationId, input.slug);
-      if (dup && dup.id !== id4) throw new ConflictError(`A template with slug "${input.slug}" already exists.`, { existingTemplateId: dup.id });
+      if (dup && dup.id !== id6) throw new ConflictError(`A template with slug "${input.slug}" already exists.`, { existingTemplateId: dup.id });
     }
     const currentRevision = existing.currentRevision;
     try {
@@ -26402,7 +27280,7 @@ var templateService = {
         if (currentRevision && hasContentEdit && currentRevision.status === "PUBLISHED") {
           const newRevision = await tx.templateRevision.create({
             data: {
-              templateId: id4,
+              templateId: id6,
               version: currentRevision.version + 1,
               status: "DRAFT",
               name: input.name ?? currentRevision.name,
@@ -26423,7 +27301,7 @@ var templateService = {
           templatePatch.updatedAt = /* @__PURE__ */ new Date();
         }
         if (Object.keys(templatePatch).length > 0) {
-          const where2 = { id: id4, ...input.expectedUpdatedAt !== void 0 ? { updatedAt: input.expectedUpdatedAt } : {} };
+          const where2 = { id: id6, ...input.expectedUpdatedAt !== void 0 ? { updatedAt: input.expectedUpdatedAt } : {} };
           const result = await tx.template.updateMany({ where: where2, data: templatePatch });
           if (result.count === 0) {
             throw new ConflictError("This template was changed by someone else since you loaded it. Reload and try again.");
@@ -26439,17 +27317,17 @@ var templateService = {
       actorType: "USER",
       action: "TEMPLATE_UPDATED",
       resourceType: "template",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { name: existing.name, slug: existing.slug },
       afterData: { name: input.name, slug: input.slug },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
-    return loadTemplateOrThrow(id4, organizationId);
+    return loadTemplateOrThrow(id6, organizationId);
   },
-  async publishTemplate(caller, id4, meta10 = {}) {
+  async publishTemplate(caller, id6, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const existing = await loadTemplateOrThrow(id4, organizationId);
+    const existing = await loadTemplateOrThrow(id6, organizationId);
     assertNotSystem(existing, "published");
     if (existing.status === "ARCHIVED") throw new ConflictError("An archived template must be restored before it can be published.");
     if (!existing.currentRevisionId) throw new ConflictError("This template has no revision to publish.");
@@ -26457,7 +27335,7 @@ var templateService = {
     const now = /* @__PURE__ */ new Date();
     await prisma.$transaction([
       prisma.templateRevision.update({ where: { id: existing.currentRevisionId }, data: { status: "PUBLISHED", publishedAt: now } }),
-      prisma.template.update({ where: { id: id4 }, data: { status: "PUBLISHED" } })
+      prisma.template.update({ where: { id: id6 }, data: { status: "PUBLISHED" } })
     ]);
     await auditLogRepository.record({
       organizationId,
@@ -26465,39 +27343,39 @@ var templateService = {
       actorType: "USER",
       action: "TEMPLATE_PUBLISHED",
       resourceType: "template",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { status: existing.status },
       afterData: { status: "PUBLISHED" },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
-    return loadTemplateOrThrow(id4, organizationId);
+    return loadTemplateOrThrow(id6, organizationId);
   },
-  async archiveTemplate(caller, id4, meta10 = {}) {
+  async archiveTemplate(caller, id6, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const existing = await loadTemplateOrThrow(id4, organizationId);
+    const existing = await loadTemplateOrThrow(id6, organizationId);
     assertNotSystem(existing, "archived");
     if (existing.status === "ARCHIVED") throw new ConflictError("This template is already archived.");
-    await prisma.template.update({ where: { id: id4 }, data: { status: "ARCHIVED" } });
+    await prisma.template.update({ where: { id: id6 }, data: { status: "ARCHIVED" } });
     await auditLogRepository.record({
       organizationId,
       actorUserId: caller.id,
       actorType: "USER",
       action: "TEMPLATE_ARCHIVED",
       resourceType: "template",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { status: existing.status },
       afterData: { status: "ARCHIVED" },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
-    return loadTemplateOrThrow(id4, organizationId);
+    return loadTemplateOrThrow(id6, organizationId);
   },
-  async revertTemplate(caller, id4, input, meta10 = {}) {
+  async revertTemplate(caller, id6, input, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const existing = await loadTemplateOrThrow(id4, organizationId);
+    const existing = await loadTemplateOrThrow(id6, organizationId);
     assertNotSystem(existing, "rolled back");
-    const target = await prisma.templateRevision.findFirst({ where: { id: input.revisionId, templateId: id4 } });
+    const target = await prisma.templateRevision.findFirst({ where: { id: input.revisionId, templateId: id6 } });
     if (!target) throw new NotFoundError("Revision not found on this template.");
     const current = existing.currentRevision;
     const nextVersion = (current?.version ?? 0) + 1;
@@ -26505,7 +27383,7 @@ var templateService = {
     await prisma.$transaction(async (tx) => {
       const newRevision = await tx.templateRevision.create({
         data: {
-          templateId: id4,
+          templateId: id6,
           version: nextVersion,
           status: wasPublished ? "PUBLISHED" : "DRAFT",
           name: target.name,
@@ -26514,7 +27392,7 @@ var templateService = {
           publishedAt: wasPublished ? /* @__PURE__ */ new Date() : null
         }
       });
-      await tx.template.update({ where: { id: id4 }, data: { currentRevisionId: newRevision.id } });
+      await tx.template.update({ where: { id: id6 }, data: { currentRevisionId: newRevision.id } });
     });
     await auditLogRepository.record({
       organizationId,
@@ -26522,17 +27400,17 @@ var templateService = {
       actorType: "USER",
       action: "TEMPLATE_REVERTED",
       resourceType: "template",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { fromVersion: current?.version, revertedToRevisionId: target.id, revertedToVersion: target.version },
       afterData: { newVersion: nextVersion },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
-    return loadTemplateOrThrow(id4, organizationId);
+    return loadTemplateOrThrow(id6, organizationId);
   },
-  async duplicateTemplate(caller, id4, input, meta10 = {}) {
+  async duplicateTemplate(caller, id6, input, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const existing = await loadTemplateOrThrow(id4, organizationId);
+    const existing = await loadTemplateOrThrow(id6, organizationId);
     const baseName = input.name ?? `${existing.name} (Copy)`;
     const slug = await templateRepository.findUniqueSlugInOrg(organizationId, baseName);
     const sourceStructure = existing.currentRevision?.structure ?? {};
@@ -26569,30 +27447,30 @@ var templateService = {
       action: "TEMPLATE_DUPLICATED",
       resourceType: "template",
       resourceId: createdId,
-      afterData: { duplicatedFromId: id4, name: baseName },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      afterData: { duplicatedFromId: id6, name: baseName },
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return loadTemplateOrThrow(createdId, organizationId);
   },
-  async deleteTemplate(caller, id4, meta10 = {}) {
+  async deleteTemplate(caller, id6, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const existing = await loadTemplateOrThrow(id4, organizationId);
+    const existing = await loadTemplateOrThrow(id6, organizationId);
     assertNotSystem(existing, "deleted");
     if (existing._count.pages > 0) {
       throw new ValidationError("This template is still assigned to one or more pages. Reassign or unassign them before deleting it.");
     }
-    await templateRepository.softDelete(id4);
+    await templateRepository.softDelete(id6);
     await auditLogRepository.record({
       organizationId,
       actorUserId: caller.id,
       actorType: "USER",
       action: "TEMPLATE_DELETED",
       resourceType: "template",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { name: existing.name, status: existing.status },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
   }
 };
@@ -26601,8 +27479,8 @@ var templateService = {
 init_apiResponse();
 
 // server/schemas/templateSchemas.ts
-import { z as z41 } from "zod";
-var templateTypeSchema = z41.enum([
+import { z as z42 } from "zod";
+var templateTypeSchema = z42.enum([
   "HOMEPAGE",
   "STANDARD_PAGE",
   "BLOG_INDEX",
@@ -26619,7 +27497,7 @@ var templateTypeSchema = z41.enum([
   "CASE_STUDY",
   "LANDING_PAGE"
 ]);
-var templatePartTypeSchema = z41.enum([
+var templatePartTypeSchema = z42.enum([
   "HEADER",
   "FOOTER",
   "PRIMARY_NAVIGATION",
@@ -26631,74 +27509,74 @@ var templatePartTypeSchema = z41.enum([
   "CONTACT_SECTION",
   "SOCIAL_SECTION"
 ]);
-var templateWorkflowStatusSchema = z41.enum(["DRAFT", "PUBLISHED", "ARCHIVED"]);
-var slugSchema5 = z41.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)");
+var templateWorkflowStatusSchema = z42.enum(["DRAFT", "PUBLISHED", "ARCHIVED"]);
+var slugSchema5 = z42.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)");
 var SORT_FIELDS3 = ["name", "slug", "type", "status", "createdAt", "updatedAt"];
-var listTemplatesQuerySchema = z41.object({
-  page: z41.coerce.number().int().positive().default(1),
-  limit: z41.coerce.number().int().positive().max(100).default(20),
-  search: z41.string().trim().max(200).optional(),
+var listTemplatesQuerySchema = z42.object({
+  page: z42.coerce.number().int().positive().default(1),
+  limit: z42.coerce.number().int().positive().max(100).default(20),
+  search: z42.string().trim().max(200).optional(),
   status: templateWorkflowStatusSchema.optional(),
   type: templateTypeSchema.optional(),
-  sort: z41.enum(SORT_FIELDS3).default("updatedAt"),
-  order: z41.enum(["asc", "desc"]).default("desc")
+  sort: z42.enum(SORT_FIELDS3).default("updatedAt"),
+  order: z42.enum(["asc", "desc"]).default("desc")
 });
-var templateStructureSchema = z41.record(z41.unknown());
-var createTemplateSchema = z41.object({
+var templateStructureSchema = z42.record(z42.unknown());
+var createTemplateSchema = z42.object({
   type: templateTypeSchema,
-  name: z41.string().trim().min(1).max(150),
+  name: z42.string().trim().min(1).max(150),
   slug: slugSchema5.optional(),
-  description: z41.string().trim().max(2e3).optional(),
+  description: z42.string().trim().max(2e3).optional(),
   structure: templateStructureSchema.default({})
 });
-var updateTemplateSchema = z41.object({
-  name: z41.string().trim().min(1).max(150).optional(),
+var updateTemplateSchema = z42.object({
+  name: z42.string().trim().min(1).max(150).optional(),
   slug: slugSchema5.optional(),
-  description: z41.string().trim().max(2e3).nullable().optional(),
+  description: z42.string().trim().max(2e3).nullable().optional(),
   structure: templateStructureSchema.optional(),
   expectedUpdatedAt: expectedUpdatedAtSchema
 }).refine((v) => Object.keys(v).filter((k) => k !== "expectedUpdatedAt").length > 0, { message: "At least one field must be provided." });
-var duplicateTemplateSchema = z41.object({
-  name: z41.string().trim().min(1).max(150).optional()
+var duplicateTemplateSchema = z42.object({
+  name: z42.string().trim().min(1).max(150).optional()
 });
-var revertTemplateSchema = z41.object({
-  revisionId: z41.string().trim().uuid()
+var revertTemplateSchema = z42.object({
+  revisionId: z42.string().trim().uuid()
 });
-var listTemplatePartsQuerySchema = z41.object({
-  page: z41.coerce.number().int().positive().default(1),
-  limit: z41.coerce.number().int().positive().max(100).default(20),
-  search: z41.string().trim().max(200).optional(),
+var listTemplatePartsQuerySchema = z42.object({
+  page: z42.coerce.number().int().positive().default(1),
+  limit: z42.coerce.number().int().positive().max(100).default(20),
+  search: z42.string().trim().max(200).optional(),
   status: templateWorkflowStatusSchema.optional(),
   type: templatePartTypeSchema.optional(),
-  sort: z41.enum(SORT_FIELDS3).default("updatedAt"),
-  order: z41.enum(["asc", "desc"]).default("desc")
+  sort: z42.enum(SORT_FIELDS3).default("updatedAt"),
+  order: z42.enum(["asc", "desc"]).default("desc")
 });
-var createTemplatePartSchema = z41.object({
+var createTemplatePartSchema = z42.object({
   type: templatePartTypeSchema,
-  name: z41.string().trim().min(1).max(150),
+  name: z42.string().trim().min(1).max(150),
   slug: slugSchema5.optional(),
-  content: z41.record(z41.unknown()).default({})
+  content: z42.record(z42.unknown()).default({})
 });
-var updateTemplatePartSchema = z41.object({
-  name: z41.string().trim().min(1).max(150).optional(),
+var updateTemplatePartSchema = z42.object({
+  name: z42.string().trim().min(1).max(150).optional(),
   slug: slugSchema5.optional(),
-  content: z41.record(z41.unknown()).optional(),
+  content: z42.record(z42.unknown()).optional(),
   expectedUpdatedAt: expectedUpdatedAtSchema
 }).refine((v) => Object.keys(v).filter((k) => k !== "expectedUpdatedAt").length > 0, { message: "At least one field must be provided." });
-var duplicateTemplatePartSchema = z41.object({
-  name: z41.string().trim().min(1).max(150).optional()
+var duplicateTemplatePartSchema = z42.object({
+  name: z42.string().trim().min(1).max(150).optional()
 });
-var revertTemplatePartSchema = z41.object({
-  revisionId: z41.string().trim().uuid()
+var revertTemplatePartSchema = z42.object({
+  revisionId: z42.string().trim().uuid()
 });
 
 // server/routes/v1/templateRoutes.ts
-var router29 = Router35();
-router29.use(authenticateToken);
+var router30 = Router36();
+router30.use(authenticateToken);
 function requestMeta18(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router29.get(
+router30.get(
   "/",
   requirePermission("templates.read"),
   asyncHandler(async (req, res) => {
@@ -26714,7 +27592,7 @@ router29.get(
     sendSuccess(res, { templates: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router29.get(
+router30.get(
   "/:id",
   requirePermission("templates.read"),
   asyncHandler(async (req, res) => {
@@ -26722,7 +27600,7 @@ router29.get(
     sendSuccess(res, { template });
   })
 );
-router29.get(
+router30.get(
   "/:id/revisions",
   requirePermission("templates.read"),
   asyncHandler(async (req, res) => {
@@ -26730,7 +27608,7 @@ router29.get(
     sendSuccess(res, { revisions });
   })
 );
-router29.get(
+router30.get(
   "/:id/usage",
   requirePermission("templates.read"),
   asyncHandler(async (req, res) => {
@@ -26738,7 +27616,7 @@ router29.get(
     sendSuccess(res, usage);
   })
 );
-router29.get(
+router30.get(
   "/:id/preview",
   requirePermission("templates.read"),
   asyncHandler(async (req, res) => {
@@ -26746,7 +27624,7 @@ router29.get(
     sendSuccess(res, preview);
   })
 );
-router29.post(
+router30.post(
   "/",
   requirePermission("templates.create"),
   asyncHandler(async (req, res) => {
@@ -26755,7 +27633,7 @@ router29.post(
     sendSuccess(res, { template }, 201);
   })
 );
-router29.post(
+router30.post(
   "/:id/duplicate",
   requirePermission("templates.create"),
   asyncHandler(async (req, res) => {
@@ -26764,7 +27642,7 @@ router29.post(
     sendSuccess(res, { template }, 201);
   })
 );
-router29.patch(
+router30.patch(
   "/:id",
   requirePermission("templates.update"),
   asyncHandler(async (req, res) => {
@@ -26773,7 +27651,7 @@ router29.patch(
     sendSuccess(res, { template });
   })
 );
-router29.post(
+router30.post(
   "/:id/publish",
   requirePermission("templates.publish"),
   asyncHandler(async (req, res) => {
@@ -26781,7 +27659,7 @@ router29.post(
     sendSuccess(res, { template });
   })
 );
-router29.post(
+router30.post(
   "/:id/archive",
   requirePermission("templates.delete"),
   asyncHandler(async (req, res) => {
@@ -26789,7 +27667,7 @@ router29.post(
     sendSuccess(res, { template });
   })
 );
-router29.post(
+router30.post(
   "/:id/revert",
   requirePermission("templates.update"),
   asyncHandler(async (req, res) => {
@@ -26798,7 +27676,7 @@ router29.post(
     sendSuccess(res, { template });
   })
 );
-router29.delete(
+router30.delete(
   "/:id",
   requirePermission("templates.delete"),
   asyncHandler(async (req, res) => {
@@ -26806,18 +27684,18 @@ router29.delete(
     sendSuccess(res, { message: "Template deleted." });
   })
 );
-var templateRoutes_default = router29;
+var templateRoutes_default = router30;
 
 // server/routes/v1/templatePartRoutes.ts
-import { Router as Router36 } from "express";
+import { Router as Router37 } from "express";
 
 // server/services/templatePartService.ts
 init_errors();
 function isUniqueConstraintError9(err) {
   return !!err && typeof err === "object" && "code" in err && err.code === "P2002";
 }
-async function loadTemplatePartOrThrow(id4, organizationId) {
-  const part = await templatePartRepository.findByIdInOrg(id4, organizationId);
+async function loadTemplatePartOrThrow(id6, organizationId) {
+  const part = await templatePartRepository.findByIdInOrg(id6, organizationId);
   if (!part) throw new NotFoundError("Template part not found.");
   return part;
 }
@@ -26830,19 +27708,19 @@ var templatePartService = {
   async listParts(organizationId, filters, page, limit, sort, order) {
     return templatePartRepository.list(organizationId, filters, page, limit, sort, order);
   },
-  async getPart(organizationId, id4) {
-    return loadTemplatePartOrThrow(id4, organizationId);
+  async getPart(organizationId, id6) {
+    return loadTemplatePartOrThrow(id6, organizationId);
   },
-  async listRevisions(organizationId, id4) {
-    await loadTemplatePartOrThrow(id4, organizationId);
-    return templatePartRepository.listRevisions(id4);
+  async listRevisions(organizationId, id6) {
+    await loadTemplatePartOrThrow(id6, organizationId);
+    return templatePartRepository.listRevisions(id6);
   },
   /** Phase 4 — "show where a template part is used": every Template region and Page that references it. */
-  async getUsage(organizationId, id4) {
-    await loadTemplatePartOrThrow(id4, organizationId);
-    return templatePartRepository.findUsage(id4, organizationId);
+  async getUsage(organizationId, id6) {
+    await loadTemplatePartOrThrow(id6, organizationId);
+    return templatePartRepository.findUsage(id6, organizationId);
   },
-  async createPart(caller, input, meta10 = {}) {
+  async createPart(caller, input, meta11 = {}) {
     const organizationId = caller.organizationId;
     if (input.slug) {
       const dup = await templatePartRepository.findBySlugInOrg(organizationId, input.slug);
@@ -26887,20 +27765,20 @@ var templatePartService = {
       resourceType: "template_part",
       resourceId: createdId,
       afterData: { name: input.name, slug, type: input.type },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return loadTemplatePartOrThrow(createdId, organizationId);
   },
-  async updatePart(caller, id4, input, meta10 = {}) {
+  async updatePart(caller, id6, input, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const existing = await loadTemplatePartOrThrow(id4, organizationId);
+    const existing = await loadTemplatePartOrThrow(id6, organizationId);
     assertNotSystem2(existing, "edited");
     const hasContentEdit = input.name !== void 0 || input.slug !== void 0 || input.content !== void 0;
     const sanitizedContent = input.content !== void 0 ? sanitizeContentIfEditorDocument(input.content) : void 0;
     if (input.slug !== void 0 && input.slug !== existing.slug) {
       const dup = await templatePartRepository.findBySlugInOrg(organizationId, input.slug);
-      if (dup && dup.id !== id4) throw new ConflictError(`A template part with slug "${input.slug}" already exists.`, { existingTemplatePartId: dup.id });
+      if (dup && dup.id !== id6) throw new ConflictError(`A template part with slug "${input.slug}" already exists.`, { existingTemplatePartId: dup.id });
     }
     const currentRevision = existing.currentRevision;
     try {
@@ -26911,7 +27789,7 @@ var templatePartService = {
         if (currentRevision && hasContentEdit && currentRevision.status === "PUBLISHED") {
           const newRevision = await tx.templatePartRevision.create({
             data: {
-              templatePartId: id4,
+              templatePartId: id6,
               version: currentRevision.version + 1,
               status: "DRAFT",
               name: input.name ?? currentRevision.name,
@@ -26932,7 +27810,7 @@ var templatePartService = {
           partPatch.updatedAt = /* @__PURE__ */ new Date();
         }
         if (Object.keys(partPatch).length > 0) {
-          const where2 = { id: id4, ...input.expectedUpdatedAt !== void 0 ? { updatedAt: input.expectedUpdatedAt } : {} };
+          const where2 = { id: id6, ...input.expectedUpdatedAt !== void 0 ? { updatedAt: input.expectedUpdatedAt } : {} };
           const result = await tx.templatePart.updateMany({ where: where2, data: partPatch });
           if (result.count === 0) {
             throw new ConflictError("This template part was changed by someone else since you loaded it. Reload and try again.");
@@ -26948,24 +27826,24 @@ var templatePartService = {
       actorType: "USER",
       action: "TEMPLATE_PART_UPDATED",
       resourceType: "template_part",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { name: existing.name, slug: existing.slug },
       afterData: { name: input.name, slug: input.slug },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
-    return loadTemplatePartOrThrow(id4, organizationId);
+    return loadTemplatePartOrThrow(id6, organizationId);
   },
-  async publishPart(caller, id4, meta10 = {}) {
+  async publishPart(caller, id6, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const existing = await loadTemplatePartOrThrow(id4, organizationId);
+    const existing = await loadTemplatePartOrThrow(id6, organizationId);
     assertNotSystem2(existing, "published");
     if (existing.status === "ARCHIVED") throw new ConflictError("An archived template part must be restored before it can be published.");
     if (!existing.currentRevisionId) throw new ConflictError("This template part has no revision to publish.");
     const now = /* @__PURE__ */ new Date();
     await prisma.$transaction([
       prisma.templatePartRevision.update({ where: { id: existing.currentRevisionId }, data: { status: "PUBLISHED", publishedAt: now } }),
-      prisma.templatePart.update({ where: { id: id4 }, data: { status: "PUBLISHED" } })
+      prisma.templatePart.update({ where: { id: id6 }, data: { status: "PUBLISHED" } })
     ]);
     await auditLogRepository.record({
       organizationId,
@@ -26973,39 +27851,39 @@ var templatePartService = {
       actorType: "USER",
       action: "TEMPLATE_PART_PUBLISHED",
       resourceType: "template_part",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { status: existing.status },
       afterData: { status: "PUBLISHED" },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
-    return loadTemplatePartOrThrow(id4, organizationId);
+    return loadTemplatePartOrThrow(id6, organizationId);
   },
-  async archivePart(caller, id4, meta10 = {}) {
+  async archivePart(caller, id6, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const existing = await loadTemplatePartOrThrow(id4, organizationId);
+    const existing = await loadTemplatePartOrThrow(id6, organizationId);
     assertNotSystem2(existing, "archived");
     if (existing.status === "ARCHIVED") throw new ConflictError("This template part is already archived.");
-    await prisma.templatePart.update({ where: { id: id4 }, data: { status: "ARCHIVED" } });
+    await prisma.templatePart.update({ where: { id: id6 }, data: { status: "ARCHIVED" } });
     await auditLogRepository.record({
       organizationId,
       actorUserId: caller.id,
       actorType: "USER",
       action: "TEMPLATE_PART_ARCHIVED",
       resourceType: "template_part",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { status: existing.status },
       afterData: { status: "ARCHIVED" },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
-    return loadTemplatePartOrThrow(id4, organizationId);
+    return loadTemplatePartOrThrow(id6, organizationId);
   },
-  async revertPart(caller, id4, input, meta10 = {}) {
+  async revertPart(caller, id6, input, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const existing = await loadTemplatePartOrThrow(id4, organizationId);
+    const existing = await loadTemplatePartOrThrow(id6, organizationId);
     assertNotSystem2(existing, "rolled back");
-    const target = await prisma.templatePartRevision.findFirst({ where: { id: input.revisionId, templatePartId: id4 } });
+    const target = await prisma.templatePartRevision.findFirst({ where: { id: input.revisionId, templatePartId: id6 } });
     if (!target) throw new NotFoundError("Revision not found on this template part.");
     const current = existing.currentRevision;
     const nextVersion = (current?.version ?? 0) + 1;
@@ -27013,7 +27891,7 @@ var templatePartService = {
     await prisma.$transaction(async (tx) => {
       const newRevision = await tx.templatePartRevision.create({
         data: {
-          templatePartId: id4,
+          templatePartId: id6,
           version: nextVersion,
           status: wasPublished ? "PUBLISHED" : "DRAFT",
           name: target.name,
@@ -27022,7 +27900,7 @@ var templatePartService = {
           publishedAt: wasPublished ? /* @__PURE__ */ new Date() : null
         }
       });
-      await tx.templatePart.update({ where: { id: id4 }, data: { currentRevisionId: newRevision.id } });
+      await tx.templatePart.update({ where: { id: id6 }, data: { currentRevisionId: newRevision.id } });
     });
     await auditLogRepository.record({
       organizationId,
@@ -27030,17 +27908,17 @@ var templatePartService = {
       actorType: "USER",
       action: "TEMPLATE_PART_REVERTED",
       resourceType: "template_part",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { fromVersion: current?.version, revertedToRevisionId: target.id, revertedToVersion: target.version },
       afterData: { newVersion: nextVersion },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
-    return loadTemplatePartOrThrow(id4, organizationId);
+    return loadTemplatePartOrThrow(id6, organizationId);
   },
-  async duplicatePart(caller, id4, input, meta10 = {}) {
+  async duplicatePart(caller, id6, input, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const existing = await loadTemplatePartOrThrow(id4, organizationId);
+    const existing = await loadTemplatePartOrThrow(id6, organizationId);
     const baseName = input.name ?? `${existing.name} (Copy)`;
     const slug = await templatePartRepository.findUniqueSlugInOrg(organizationId, baseName);
     const sourceContent = existing.currentRevision?.content ?? {};
@@ -27076,46 +27954,46 @@ var templatePartService = {
       action: "TEMPLATE_PART_DUPLICATED",
       resourceType: "template_part",
       resourceId: createdId,
-      afterData: { duplicatedFromId: id4, name: baseName },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      afterData: { duplicatedFromId: id6, name: baseName },
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return loadTemplatePartOrThrow(createdId, organizationId);
   },
-  async deletePart(caller, id4, meta10 = {}) {
+  async deletePart(caller, id6, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const existing = await loadTemplatePartOrThrow(id4, organizationId);
+    const existing = await loadTemplatePartOrThrow(id6, organizationId);
     assertNotSystem2(existing, "deleted");
-    const usage = await templatePartRepository.findUsage(id4, organizationId);
+    const usage = await templatePartRepository.findUsage(id6, organizationId);
     if (usage.templates.length > 0 || usage.pages.length > 0) {
       const names = [...usage.templates.map((t) => t.name), ...usage.pages.map((p) => p.title)];
       throw new ValidationError(
         `This template part is still used by ${names.length} item(s) (${names.slice(0, 5).join(", ")}${names.length > 5 ? ", \u2026" : ""}). Remove those references before deleting it.`
       );
     }
-    await templatePartRepository.softDelete(id4);
+    await templatePartRepository.softDelete(id6);
     await auditLogRepository.record({
       organizationId,
       actorUserId: caller.id,
       actorType: "USER",
       action: "TEMPLATE_PART_DELETED",
       resourceType: "template_part",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { name: existing.name, status: existing.status },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
   }
 };
 
 // server/routes/v1/templatePartRoutes.ts
 init_apiResponse();
-var router30 = Router36();
-router30.use(authenticateToken);
+var router31 = Router37();
+router31.use(authenticateToken);
 function requestMeta19(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router30.get(
+router31.get(
   "/",
   requirePermission("template_parts.read"),
   asyncHandler(async (req, res) => {
@@ -27131,7 +28009,7 @@ router30.get(
     sendSuccess(res, { templateParts: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router30.get(
+router31.get(
   "/:id",
   requirePermission("template_parts.read"),
   asyncHandler(async (req, res) => {
@@ -27139,7 +28017,7 @@ router30.get(
     sendSuccess(res, { templatePart });
   })
 );
-router30.get(
+router31.get(
   "/:id/revisions",
   requirePermission("template_parts.read"),
   asyncHandler(async (req, res) => {
@@ -27147,7 +28025,7 @@ router30.get(
     sendSuccess(res, { revisions });
   })
 );
-router30.get(
+router31.get(
   "/:id/usage",
   requirePermission("template_parts.read"),
   asyncHandler(async (req, res) => {
@@ -27155,7 +28033,7 @@ router30.get(
     sendSuccess(res, usage);
   })
 );
-router30.post(
+router31.post(
   "/",
   requirePermission("template_parts.create"),
   asyncHandler(async (req, res) => {
@@ -27164,7 +28042,7 @@ router30.post(
     sendSuccess(res, { templatePart }, 201);
   })
 );
-router30.post(
+router31.post(
   "/:id/duplicate",
   requirePermission("template_parts.create"),
   asyncHandler(async (req, res) => {
@@ -27173,7 +28051,7 @@ router30.post(
     sendSuccess(res, { templatePart }, 201);
   })
 );
-router30.patch(
+router31.patch(
   "/:id",
   requirePermission("template_parts.update"),
   asyncHandler(async (req, res) => {
@@ -27182,7 +28060,7 @@ router30.patch(
     sendSuccess(res, { templatePart });
   })
 );
-router30.post(
+router31.post(
   "/:id/publish",
   requirePermission("template_parts.publish"),
   asyncHandler(async (req, res) => {
@@ -27190,7 +28068,7 @@ router30.post(
     sendSuccess(res, { templatePart });
   })
 );
-router30.post(
+router31.post(
   "/:id/archive",
   requirePermission("template_parts.delete"),
   asyncHandler(async (req, res) => {
@@ -27198,7 +28076,7 @@ router30.post(
     sendSuccess(res, { templatePart });
   })
 );
-router30.post(
+router31.post(
   "/:id/revert",
   requirePermission("template_parts.update"),
   asyncHandler(async (req, res) => {
@@ -27207,7 +28085,7 @@ router30.post(
     sendSuccess(res, { templatePart });
   })
 );
-router30.delete(
+router31.delete(
   "/:id",
   requirePermission("template_parts.delete"),
   asyncHandler(async (req, res) => {
@@ -27215,10 +28093,10 @@ router30.delete(
     sendSuccess(res, { message: "Template part deleted." });
   })
 );
-var templatePartRoutes_default = router30;
+var templatePartRoutes_default = router31;
 
 // server/routes/v1/navigationMenuRoutes.ts
-import { Router as Router37 } from "express";
+import { Router as Router38 } from "express";
 
 // server/repositories/navigationMenuRepository.ts
 function slugify15(input) {
@@ -27243,14 +28121,14 @@ var navigationMenuRepository = {
     ]);
     return { rows, total };
   },
-  async findByIdInOrg(id4, organizationId) {
-    return prisma.navigationMenu.findFirst({ where: { id: id4, organizationId, deletedAt: null }, ...withCurrentRevision3 });
+  async findByIdInOrg(id6, organizationId) {
+    return prisma.navigationMenu.findFirst({ where: { id: id6, organizationId, deletedAt: null }, ...withCurrentRevision3 });
   },
   async findBySlugInOrg(organizationId, slug) {
     return prisma.navigationMenu.findFirst({ where: { organizationId, slug, deletedAt: null } });
   },
-  async findUniqueSlugInOrg(organizationId, base2) {
-    const baseSlug = slugify15(base2) || "menu";
+  async findUniqueSlugInOrg(organizationId, base3) {
+    const baseSlug = slugify15(base3) || "menu";
     let slug = baseSlug;
     let attempt2 = 1;
     while (await this.findBySlugInOrg(organizationId, slug)) {
@@ -27289,8 +28167,8 @@ var navigationMenuRepository = {
       pages: usingPages.map((p) => ({ id: p.id, title: p.title, slug: p.slug, status: p.status }))
     };
   },
-  async softDelete(id4) {
-    await prisma.navigationMenu.update({ where: { id: id4 }, data: { deletedAt: /* @__PURE__ */ new Date() } });
+  async softDelete(id6) {
+    await prisma.navigationMenu.update({ where: { id: id6 }, data: { deletedAt: /* @__PURE__ */ new Date() } });
   }
 };
 
@@ -27299,8 +28177,8 @@ init_errors();
 function isUniqueConstraintError10(err) {
   return !!err && typeof err === "object" && "code" in err && err.code === "P2002";
 }
-async function loadMenuOrThrow(id4, organizationId) {
-  const menu = await navigationMenuRepository.findByIdInOrg(id4, organizationId);
+async function loadMenuOrThrow(id6, organizationId) {
+  const menu = await navigationMenuRepository.findByIdInOrg(id6, organizationId);
   if (!menu) throw new NotFoundError("Navigation menu not found.");
   return menu;
 }
@@ -27362,18 +28240,18 @@ var navigationMenuService = {
   async listMenus(organizationId, filters, page, limit, sort, order) {
     return navigationMenuRepository.list(organizationId, filters, page, limit, sort, order);
   },
-  async getMenu(organizationId, id4) {
-    return loadMenuOrThrow(id4, organizationId);
+  async getMenu(organizationId, id6) {
+    return loadMenuOrThrow(id6, organizationId);
   },
-  async listRevisions(organizationId, id4) {
-    await loadMenuOrThrow(id4, organizationId);
-    return navigationMenuRepository.listRevisions(id4);
+  async listRevisions(organizationId, id6) {
+    await loadMenuOrThrow(id6, organizationId);
+    return navigationMenuRepository.listRevisions(id6);
   },
-  async getUsage(organizationId, id4) {
-    await loadMenuOrThrow(id4, organizationId);
-    return navigationMenuRepository.findUsage(id4, organizationId);
+  async getUsage(organizationId, id6) {
+    await loadMenuOrThrow(id6, organizationId);
+    return navigationMenuRepository.findUsage(id6, organizationId);
   },
-  async createMenu(caller, input, meta10 = {}) {
+  async createMenu(caller, input, meta11 = {}) {
     const organizationId = caller.organizationId;
     if (input.slug) {
       const dup = await navigationMenuRepository.findBySlugInOrg(organizationId, input.slug);
@@ -27410,19 +28288,19 @@ var navigationMenuService = {
       resourceType: "navigation_menu",
       resourceId: createdId,
       afterData: { name: input.name, slug, type: input.type },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return loadMenuOrThrow(createdId, organizationId);
   },
-  async updateMenu(caller, id4, input, meta10 = {}) {
+  async updateMenu(caller, id6, input, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const existing = await loadMenuOrThrow(id4, organizationId);
+    const existing = await loadMenuOrThrow(id6, organizationId);
     assertNotSystem3(existing, "edited");
     const hasContentEdit = input.name !== void 0 || input.slug !== void 0 || input.items !== void 0;
     if (input.slug !== void 0 && input.slug !== existing.slug) {
       const dup = await navigationMenuRepository.findBySlugInOrg(organizationId, input.slug);
-      if (dup && dup.id !== id4) throw new ConflictError(`A navigation menu with slug "${input.slug}" already exists.`, { existingNavigationMenuId: dup.id });
+      if (dup && dup.id !== id6) throw new ConflictError(`A navigation menu with slug "${input.slug}" already exists.`, { existingNavigationMenuId: dup.id });
     }
     const currentRevision = existing.currentRevision;
     try {
@@ -27433,7 +28311,7 @@ var navigationMenuService = {
         if (currentRevision && hasContentEdit && currentRevision.status === "PUBLISHED") {
           const newRevision = await tx.navigationMenuRevision.create({
             data: {
-              navigationMenuId: id4,
+              navigationMenuId: id6,
               version: currentRevision.version + 1,
               status: "DRAFT",
               name: input.name ?? currentRevision.name,
@@ -27454,7 +28332,7 @@ var navigationMenuService = {
           menuPatch.updatedAt = /* @__PURE__ */ new Date();
         }
         if (Object.keys(menuPatch).length > 0) {
-          const where2 = { id: id4, ...input.expectedUpdatedAt !== void 0 ? { updatedAt: input.expectedUpdatedAt } : {} };
+          const where2 = { id: id6, ...input.expectedUpdatedAt !== void 0 ? { updatedAt: input.expectedUpdatedAt } : {} };
           const result = await tx.navigationMenu.updateMany({ where: where2, data: menuPatch });
           if (result.count === 0) {
             throw new ConflictError("This navigation menu was changed by someone else since you loaded it. Reload and try again.");
@@ -27470,17 +28348,17 @@ var navigationMenuService = {
       actorType: "USER",
       action: "NAVIGATION_MENU_UPDATED",
       resourceType: "navigation_menu",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { name: existing.name, slug: existing.slug },
       afterData: { name: input.name, slug: input.slug },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
-    return loadMenuOrThrow(id4, organizationId);
+    return loadMenuOrThrow(id6, organizationId);
   },
-  async publishMenu(caller, id4, meta10 = {}) {
+  async publishMenu(caller, id6, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const existing = await loadMenuOrThrow(id4, organizationId);
+    const existing = await loadMenuOrThrow(id6, organizationId);
     assertNotSystem3(existing, "published");
     if (existing.status === "ARCHIVED") throw new ConflictError("An archived navigation menu must be restored before it can be published.");
     if (!existing.currentRevisionId) throw new ConflictError("This navigation menu has no revision to publish.");
@@ -27488,7 +28366,7 @@ var navigationMenuService = {
     const now = /* @__PURE__ */ new Date();
     await prisma.$transaction([
       prisma.navigationMenuRevision.update({ where: { id: existing.currentRevisionId }, data: { status: "PUBLISHED", publishedAt: now } }),
-      prisma.navigationMenu.update({ where: { id: id4 }, data: { status: "PUBLISHED" } })
+      prisma.navigationMenu.update({ where: { id: id6 }, data: { status: "PUBLISHED" } })
     ]);
     await auditLogRepository.record({
       organizationId,
@@ -27496,39 +28374,39 @@ var navigationMenuService = {
       actorType: "USER",
       action: "NAVIGATION_MENU_PUBLISHED",
       resourceType: "navigation_menu",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { status: existing.status },
       afterData: { status: "PUBLISHED" },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
-    return loadMenuOrThrow(id4, organizationId);
+    return loadMenuOrThrow(id6, organizationId);
   },
-  async archiveMenu(caller, id4, meta10 = {}) {
+  async archiveMenu(caller, id6, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const existing = await loadMenuOrThrow(id4, organizationId);
+    const existing = await loadMenuOrThrow(id6, organizationId);
     assertNotSystem3(existing, "archived");
     if (existing.status === "ARCHIVED") throw new ConflictError("This navigation menu is already archived.");
-    await prisma.navigationMenu.update({ where: { id: id4 }, data: { status: "ARCHIVED" } });
+    await prisma.navigationMenu.update({ where: { id: id6 }, data: { status: "ARCHIVED" } });
     await auditLogRepository.record({
       organizationId,
       actorUserId: caller.id,
       actorType: "USER",
       action: "NAVIGATION_MENU_ARCHIVED",
       resourceType: "navigation_menu",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { status: existing.status },
       afterData: { status: "ARCHIVED" },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
-    return loadMenuOrThrow(id4, organizationId);
+    return loadMenuOrThrow(id6, organizationId);
   },
-  async revertMenu(caller, id4, input, meta10 = {}) {
+  async revertMenu(caller, id6, input, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const existing = await loadMenuOrThrow(id4, organizationId);
+    const existing = await loadMenuOrThrow(id6, organizationId);
     assertNotSystem3(existing, "rolled back");
-    const target = await prisma.navigationMenuRevision.findFirst({ where: { id: input.revisionId, navigationMenuId: id4 } });
+    const target = await prisma.navigationMenuRevision.findFirst({ where: { id: input.revisionId, navigationMenuId: id6 } });
     if (!target) throw new NotFoundError("Revision not found on this navigation menu.");
     const current = existing.currentRevision;
     const nextVersion = (current?.version ?? 0) + 1;
@@ -27536,7 +28414,7 @@ var navigationMenuService = {
     await prisma.$transaction(async (tx) => {
       const newRevision = await tx.navigationMenuRevision.create({
         data: {
-          navigationMenuId: id4,
+          navigationMenuId: id6,
           version: nextVersion,
           status: wasPublished ? "PUBLISHED" : "DRAFT",
           name: target.name,
@@ -27545,7 +28423,7 @@ var navigationMenuService = {
           publishedAt: wasPublished ? /* @__PURE__ */ new Date() : null
         }
       });
-      await tx.navigationMenu.update({ where: { id: id4 }, data: { currentRevisionId: newRevision.id } });
+      await tx.navigationMenu.update({ where: { id: id6 }, data: { currentRevisionId: newRevision.id } });
     });
     await auditLogRepository.record({
       organizationId,
@@ -27553,17 +28431,17 @@ var navigationMenuService = {
       actorType: "USER",
       action: "NAVIGATION_MENU_REVERTED",
       resourceType: "navigation_menu",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { fromVersion: current?.version, revertedToRevisionId: target.id, revertedToVersion: target.version },
       afterData: { newVersion: nextVersion },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
-    return loadMenuOrThrow(id4, organizationId);
+    return loadMenuOrThrow(id6, organizationId);
   },
-  async duplicateMenu(caller, id4, input, meta10 = {}) {
+  async duplicateMenu(caller, id6, input, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const existing = await loadMenuOrThrow(id4, organizationId);
+    const existing = await loadMenuOrThrow(id6, organizationId);
     const baseName = input.name ?? `${existing.name} (Copy)`;
     const slug = await navigationMenuRepository.findUniqueSlugInOrg(organizationId, baseName);
     const sourceItems = existing.currentRevision?.items ?? [];
@@ -27584,34 +28462,34 @@ var navigationMenuService = {
       action: "NAVIGATION_MENU_DUPLICATED",
       resourceType: "navigation_menu",
       resourceId: createdId,
-      afterData: { duplicatedFromId: id4, name: baseName },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      afterData: { duplicatedFromId: id6, name: baseName },
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return loadMenuOrThrow(createdId, organizationId);
   },
-  async deleteMenu(caller, id4, meta10 = {}) {
+  async deleteMenu(caller, id6, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const existing = await loadMenuOrThrow(id4, organizationId);
+    const existing = await loadMenuOrThrow(id6, organizationId);
     assertNotSystem3(existing, "deleted");
-    const usage = await navigationMenuRepository.findUsage(id4, organizationId);
+    const usage = await navigationMenuRepository.findUsage(id6, organizationId);
     if (usage.templateParts.length > 0 || usage.pages.length > 0) {
       const names = [...usage.templateParts.map((p) => p.name), ...usage.pages.map((p) => p.title)];
       throw new ValidationError(
         `This navigation menu is still used by ${names.length} item(s) (${names.slice(0, 5).join(", ")}${names.length > 5 ? ", \u2026" : ""}). Remove those references before deleting it.`
       );
     }
-    await navigationMenuRepository.softDelete(id4);
+    await navigationMenuRepository.softDelete(id6);
     await auditLogRepository.record({
       organizationId,
       actorUserId: caller.id,
       actorType: "USER",
       action: "NAVIGATION_MENU_DELETED",
       resourceType: "navigation_menu",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { name: existing.name, status: existing.status },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
   }
 };
@@ -27620,63 +28498,63 @@ var navigationMenuService = {
 init_apiResponse();
 
 // server/schemas/navigationMenuSchemas.ts
-import { z as z42 } from "zod";
-var navigationMenuTypeSchema = z42.enum(["PRIMARY", "HEADER", "FOOTER", "MOBILE", "CUSTOM"]);
-var navigationMenuWorkflowStatusSchema = z42.enum(["DRAFT", "PUBLISHED", "ARCHIVED"]);
-var slugSchema6 = z42.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)");
+import { z as z43 } from "zod";
+var navigationMenuTypeSchema = z43.enum(["PRIMARY", "HEADER", "FOOTER", "MOBILE", "CUSTOM"]);
+var navigationMenuWorkflowStatusSchema = z43.enum(["DRAFT", "PUBLISHED", "ARCHIVED"]);
+var slugSchema6 = z43.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)");
 var SORT_FIELDS4 = ["name", "slug", "type", "status", "createdAt", "updatedAt"];
-var menuLinkTypeSchema = z42.enum(["page", "post", "category", "tag", "product", "custom"]);
+var menuLinkTypeSchema = z43.enum(["page", "post", "category", "tag", "product", "custom"]);
 var MAX_MENU_DEPTH = 4;
 function menuItemSchemaAtDepth(depth) {
-  return z42.object({
-    id: z42.string().trim().min(1).max(100),
-    label: z42.string().trim().min(1).max(150),
+  return z43.object({
+    id: z43.string().trim().min(1).max(100),
+    label: z43.string().trim().min(1).max(150),
     linkType: menuLinkTypeSchema,
-    targetId: z42.string().trim().uuid().optional(),
-    url: z42.string().trim().max(2e3).optional(),
-    openInNewTab: z42.boolean().default(false),
-    children: depth >= MAX_MENU_DEPTH ? z42.array(z42.never()).default([]) : z42.lazy(() => menuItemSchemaAtDepth(depth + 1).array()).default([])
+    targetId: z43.string().trim().uuid().optional(),
+    url: z43.string().trim().max(2e3).optional(),
+    openInNewTab: z43.boolean().default(false),
+    children: depth >= MAX_MENU_DEPTH ? z43.array(z43.never()).default([]) : z43.lazy(() => menuItemSchemaAtDepth(depth + 1).array()).default([])
   }).refine((item) => item.linkType === "custom" ? !!item.url : !!item.targetId, {
     message: "A custom link needs a url; any other link type needs a targetId."
   });
 }
 var menuItemSchema = menuItemSchemaAtDepth(0);
-var menuItemsSchema = z42.array(menuItemSchema).default([]);
-var listNavigationMenusQuerySchema = z42.object({
-  page: z42.coerce.number().int().positive().default(1),
-  limit: z42.coerce.number().int().positive().max(100).default(20),
-  search: z42.string().trim().max(200).optional(),
+var menuItemsSchema = z43.array(menuItemSchema).default([]);
+var listNavigationMenusQuerySchema = z43.object({
+  page: z43.coerce.number().int().positive().default(1),
+  limit: z43.coerce.number().int().positive().max(100).default(20),
+  search: z43.string().trim().max(200).optional(),
   status: navigationMenuWorkflowStatusSchema.optional(),
   type: navigationMenuTypeSchema.optional(),
-  sort: z42.enum(SORT_FIELDS4).default("updatedAt"),
-  order: z42.enum(["asc", "desc"]).default("desc")
+  sort: z43.enum(SORT_FIELDS4).default("updatedAt"),
+  order: z43.enum(["asc", "desc"]).default("desc")
 });
-var createNavigationMenuSchema = z42.object({
+var createNavigationMenuSchema = z43.object({
   type: navigationMenuTypeSchema,
-  name: z42.string().trim().min(1).max(150),
+  name: z43.string().trim().min(1).max(150),
   slug: slugSchema6.optional(),
   items: menuItemsSchema
 });
-var updateNavigationMenuSchema = z42.object({
-  name: z42.string().trim().min(1).max(150).optional(),
+var updateNavigationMenuSchema = z43.object({
+  name: z43.string().trim().min(1).max(150).optional(),
   slug: slugSchema6.optional(),
   items: menuItemsSchema.optional(),
   expectedUpdatedAt: expectedUpdatedAtSchema
 }).refine((v) => Object.keys(v).filter((k) => k !== "expectedUpdatedAt").length > 0, { message: "At least one field must be provided." });
-var duplicateNavigationMenuSchema = z42.object({
-  name: z42.string().trim().min(1).max(150).optional()
+var duplicateNavigationMenuSchema = z43.object({
+  name: z43.string().trim().min(1).max(150).optional()
 });
-var revertNavigationMenuSchema = z42.object({
-  revisionId: z42.string().trim().uuid()
+var revertNavigationMenuSchema = z43.object({
+  revisionId: z43.string().trim().uuid()
 });
 
 // server/routes/v1/navigationMenuRoutes.ts
-var router31 = Router37();
-router31.use(authenticateToken);
+var router32 = Router38();
+router32.use(authenticateToken);
 function requestMeta20(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router31.get(
+router32.get(
   "/",
   requirePermission("navigation_menus.read"),
   asyncHandler(async (req, res) => {
@@ -27692,7 +28570,7 @@ router31.get(
     sendSuccess(res, { navigationMenus: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router31.get(
+router32.get(
   "/:id",
   requirePermission("navigation_menus.read"),
   asyncHandler(async (req, res) => {
@@ -27700,7 +28578,7 @@ router31.get(
     sendSuccess(res, { navigationMenu });
   })
 );
-router31.get(
+router32.get(
   "/:id/revisions",
   requirePermission("navigation_menus.read"),
   asyncHandler(async (req, res) => {
@@ -27708,7 +28586,7 @@ router31.get(
     sendSuccess(res, { revisions });
   })
 );
-router31.get(
+router32.get(
   "/:id/usage",
   requirePermission("navigation_menus.read"),
   asyncHandler(async (req, res) => {
@@ -27716,7 +28594,7 @@ router31.get(
     sendSuccess(res, usage);
   })
 );
-router31.post(
+router32.post(
   "/",
   requirePermission("navigation_menus.create"),
   asyncHandler(async (req, res) => {
@@ -27725,7 +28603,7 @@ router31.post(
     sendSuccess(res, { navigationMenu }, 201);
   })
 );
-router31.post(
+router32.post(
   "/:id/duplicate",
   requirePermission("navigation_menus.create"),
   asyncHandler(async (req, res) => {
@@ -27734,7 +28612,7 @@ router31.post(
     sendSuccess(res, { navigationMenu }, 201);
   })
 );
-router31.patch(
+router32.patch(
   "/:id",
   requirePermission("navigation_menus.update"),
   asyncHandler(async (req, res) => {
@@ -27743,7 +28621,7 @@ router31.patch(
     sendSuccess(res, { navigationMenu });
   })
 );
-router31.post(
+router32.post(
   "/:id/publish",
   requirePermission("navigation_menus.publish"),
   asyncHandler(async (req, res) => {
@@ -27751,7 +28629,7 @@ router31.post(
     sendSuccess(res, { navigationMenu });
   })
 );
-router31.post(
+router32.post(
   "/:id/archive",
   requirePermission("navigation_menus.delete"),
   asyncHandler(async (req, res) => {
@@ -27759,7 +28637,7 @@ router31.post(
     sendSuccess(res, { navigationMenu });
   })
 );
-router31.post(
+router32.post(
   "/:id/revert",
   requirePermission("navigation_menus.update"),
   asyncHandler(async (req, res) => {
@@ -27768,7 +28646,7 @@ router31.post(
     sendSuccess(res, { navigationMenu });
   })
 );
-router31.delete(
+router32.delete(
   "/:id",
   requirePermission("navigation_menus.delete"),
   asyncHandler(async (req, res) => {
@@ -27776,66 +28654,66 @@ router31.delete(
     sendSuccess(res, { message: "Navigation menu deleted." });
   })
 );
-var navigationMenuRoutes_default = router31;
+var navigationMenuRoutes_default = router32;
 
 // server/routes/v1/postRoutes.ts
-import { Router as Router38 } from "express";
+import { Router as Router39 } from "express";
 init_apiResponse();
 
 // server/schemas/postSchemas.ts
-import { z as z43 } from "zod";
-var slugSchema7 = z43.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)");
-var createPostSchema = z43.object({
-  title: z43.string().trim().min(1).max(200),
+import { z as z44 } from "zod";
+var slugSchema7 = z44.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)");
+var createPostSchema = z44.object({
+  title: z44.string().trim().min(1).max(200),
   slug: slugSchema7.optional(),
-  body: z43.string().trim().max(5e5).default(""),
+  body: z44.string().trim().max(5e5).default(""),
   // Phase 7 — short author-written summary, distinct from SEO metaDescription.
-  excerpt: z43.string().trim().max(500).optional(),
+  excerpt: z44.string().trim().max(500).optional(),
   metadata: seoMetadataSchema.optional(),
-  categoryId: z43.string().trim().uuid().optional(),
-  authorId: z43.string().trim().uuid().optional(),
-  tagIds: z43.array(z43.string().trim().uuid()).max(50).optional(),
-  featuredMediaId: z43.string().trim().uuid().optional()
+  categoryId: z44.string().trim().uuid().optional(),
+  authorId: z44.string().trim().uuid().optional(),
+  tagIds: z44.array(z44.string().trim().uuid()).max(50).optional(),
+  featuredMediaId: z44.string().trim().uuid().optional()
 });
-var updatePostSchema = z43.object({
-  title: z43.string().trim().min(1).max(200).optional(),
+var updatePostSchema = z44.object({
+  title: z44.string().trim().min(1).max(200).optional(),
   slug: slugSchema7.optional(),
-  body: z43.string().trim().max(5e5).optional(),
-  excerpt: z43.string().trim().max(500).nullable().optional(),
+  body: z44.string().trim().max(5e5).optional(),
+  excerpt: z44.string().trim().max(500).nullable().optional(),
   metadata: seoMetadataSchema.optional(),
   status: patchableContentStatusSchema.optional(),
-  categoryId: z43.string().trim().uuid().nullable().optional(),
-  authorId: z43.string().trim().uuid().nullable().optional(),
-  tagIds: z43.array(z43.string().trim().uuid()).max(50).optional(),
-  featuredMediaId: z43.string().trim().uuid().nullable().optional(),
+  categoryId: z44.string().trim().uuid().nullable().optional(),
+  authorId: z44.string().trim().uuid().nullable().optional(),
+  tagIds: z44.array(z44.string().trim().uuid()).max(50).optional(),
+  featuredMediaId: z44.string().trim().uuid().nullable().optional(),
   expectedUpdatedAt: expectedUpdatedAtSchema
 }).refine((v) => Object.keys(v).filter((k) => k !== "expectedUpdatedAt").length > 0, { message: "At least one field must be provided." });
-var listPostsQuerySchema = z43.object({
-  page: z43.coerce.number().int().positive().default(1),
-  limit: z43.coerce.number().int().positive().max(100).default(20),
-  search: z43.string().trim().max(200).optional(),
-  status: z43.enum(["DRAFT", "IN_REVIEW", "SCHEDULED", "PUBLISHED", "ARCHIVED"]).optional(),
-  categoryId: z43.string().trim().uuid().optional(),
-  tagId: z43.string().trim().uuid().optional(),
+var listPostsQuerySchema = z44.object({
+  page: z44.coerce.number().int().positive().default(1),
+  limit: z44.coerce.number().int().positive().max(100).default(20),
+  search: z44.string().trim().max(200).optional(),
+  status: z44.enum(["DRAFT", "IN_REVIEW", "SCHEDULED", "PUBLISHED", "ARCHIVED"]).optional(),
+  categoryId: z44.string().trim().uuid().optional(),
+  tagId: z44.string().trim().uuid().optional(),
   // Phase 7 — Content Dashboard date filtering, inclusive range over createdAt.
-  fromDate: z43.coerce.date().optional(),
-  toDate: z43.coerce.date().optional(),
-  sort: z43.enum(["title", "slug", "status", "createdAt", "updatedAt", "publishedAt"]).default("updatedAt"),
-  order: z43.enum(["asc", "desc"]).default("desc")
+  fromDate: z44.coerce.date().optional(),
+  toDate: z44.coerce.date().optional(),
+  sort: z44.enum(["title", "slug", "status", "createdAt", "updatedAt", "publishedAt"]).default("updatedAt"),
+  order: z44.enum(["asc", "desc"]).default("desc")
 });
 
 // server/routes/v1/postRoutes.ts
-import { z as z44 } from "zod";
-var trashQuerySchema2 = z44.object({
-  page: z44.coerce.number().int().positive().default(1),
-  limit: z44.coerce.number().int().positive().max(100).default(20)
+import { z as z45 } from "zod";
+var trashQuerySchema2 = z45.object({
+  page: z45.coerce.number().int().positive().default(1),
+  limit: z45.coerce.number().int().positive().max(100).default(20)
 });
-var router32 = Router38();
-router32.use(authenticateToken);
+var router33 = Router39();
+router33.use(authenticateToken);
 function requestMeta21(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router32.get(
+router33.get(
   "/",
   requirePermission("content.read"),
   asyncHandler(async (req, res) => {
@@ -27851,7 +28729,7 @@ router32.get(
     sendSuccess(res, { posts: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router32.get(
+router33.get(
   "/trash",
   requirePermission("content.read"),
   asyncHandler(async (req, res) => {
@@ -27860,7 +28738,7 @@ router32.get(
     sendSuccess(res, { posts: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router32.post(
+router33.post(
   "/bulk/archive",
   requirePermission("content.delete"),
   asyncHandler(async (req, res) => {
@@ -27869,7 +28747,7 @@ router32.post(
     sendSuccess(res, result);
   })
 );
-router32.post(
+router33.post(
   "/bulk/trash",
   requirePermission("content.delete"),
   asyncHandler(async (req, res) => {
@@ -27878,7 +28756,7 @@ router32.post(
     sendSuccess(res, result);
   })
 );
-router32.post(
+router33.post(
   "/bulk/restore",
   requirePermission("content.delete"),
   asyncHandler(async (req, res) => {
@@ -27887,7 +28765,7 @@ router32.post(
     sendSuccess(res, result);
   })
 );
-router32.post(
+router33.post(
   "/:id/restore",
   requirePermission("content.delete"),
   asyncHandler(async (req, res) => {
@@ -27895,7 +28773,7 @@ router32.post(
     sendSuccess(res, { message: "Post restored from trash." });
   })
 );
-router32.get(
+router33.get(
   "/:id",
   requirePermission("content.read"),
   asyncHandler(async (req, res) => {
@@ -27903,7 +28781,7 @@ router32.get(
     sendSuccess(res, { post });
   })
 );
-router32.get(
+router33.get(
   "/:id/revisions",
   requirePermission("content.read"),
   asyncHandler(async (req, res) => {
@@ -27911,7 +28789,7 @@ router32.get(
     sendSuccess(res, { revisions });
   })
 );
-router32.post(
+router33.post(
   "/",
   requirePermission("content.create"),
   asyncHandler(async (req, res) => {
@@ -27920,7 +28798,7 @@ router32.post(
     sendSuccess(res, { post }, 201);
   })
 );
-router32.patch(
+router33.patch(
   "/:id",
   requirePermission("content.update"),
   asyncHandler(async (req, res) => {
@@ -27929,7 +28807,7 @@ router32.patch(
     sendSuccess(res, { post });
   })
 );
-router32.post(
+router33.post(
   "/:id/submit-review",
   requirePermission("content.update"),
   asyncHandler(async (req, res) => {
@@ -27937,7 +28815,7 @@ router32.post(
     sendSuccess(res, { post });
   })
 );
-router32.post(
+router33.post(
   "/:id/publish",
   requirePermission("content.publish"),
   asyncHandler(async (req, res) => {
@@ -27945,7 +28823,7 @@ router32.post(
     sendSuccess(res, { post });
   })
 );
-router32.post(
+router33.post(
   "/:id/schedule",
   requirePermission("content.publish"),
   asyncHandler(async (req, res) => {
@@ -27954,7 +28832,7 @@ router32.post(
     sendSuccess(res, { post });
   })
 );
-router32.post(
+router33.post(
   "/:id/archive",
   requirePermission("content.delete"),
   asyncHandler(async (req, res) => {
@@ -27962,7 +28840,7 @@ router32.post(
     sendSuccess(res, { post });
   })
 );
-router32.post(
+router33.post(
   "/:id/revert",
   requirePermission("content.update"),
   asyncHandler(async (req, res) => {
@@ -27971,7 +28849,7 @@ router32.post(
     sendSuccess(res, { post });
   })
 );
-router32.delete(
+router33.delete(
   "/:id",
   requirePermission("content.delete"),
   asyncHandler(async (req, res) => {
@@ -27979,10 +28857,10 @@ router32.delete(
     sendSuccess(res, { message: "Post deleted." });
   })
 );
-var postRoutes_default = router32;
+var postRoutes_default = router33;
 
 // server/routes/v1/caseStudyRoutes.ts
-import { Router as Router39 } from "express";
+import { Router as Router40 } from "express";
 
 // server/services/caseStudyService.ts
 init_errors();
@@ -27999,8 +28877,8 @@ function assertHasPublishableContent3(revision) {
     throw new ValidationError("This case study needs a title and body before it can be published or scheduled.");
   }
 }
-async function loadCaseStudyOrThrow(id4, organizationId) {
-  const caseStudy = await caseStudyRepository.findByIdInOrg(id4, organizationId);
+async function loadCaseStudyOrThrow(id6, organizationId) {
+  const caseStudy = await caseStudyRepository.findByIdInOrg(id6, organizationId);
   if (!caseStudy) throw new NotFoundError("Case study not found.");
   return caseStudy;
 }
@@ -28032,8 +28910,8 @@ async function assertRelatedPostsUsable2(postIds, organizationId) {
 }
 async function assertCtaFormUsable2(ctaFormId, organizationId) {
   if (!ctaFormId) return;
-  const form = await formRepository.findByIdInOrg(ctaFormId, organizationId);
-  if (!form) throw new ValidationError("content.ctaFormId must refer to a real form in this organization.");
+  const form2 = await formRepository.findByIdInOrg(ctaFormId, organizationId);
+  if (!form2) throw new ValidationError("content.ctaFormId must refer to a real form in this organization.");
 }
 async function assertGalleryMediaUsable(galleryMediaIds, organizationId) {
   if (!galleryMediaIds || galleryMediaIds.length === 0) return;
@@ -28055,14 +28933,14 @@ var caseStudyService = {
   async listCaseStudies(organizationId, filters, page, limit, sort, order) {
     return caseStudyRepository.list(organizationId, filters, page, limit, sort, order);
   },
-  async getCaseStudy(organizationId, id4) {
-    return loadCaseStudyOrThrow(id4, organizationId);
+  async getCaseStudy(organizationId, id6) {
+    return loadCaseStudyOrThrow(id6, organizationId);
   },
-  async listRevisions(organizationId, id4) {
-    await loadCaseStudyOrThrow(id4, organizationId);
-    return caseStudyRepository.listRevisions(id4);
+  async listRevisions(organizationId, id6) {
+    await loadCaseStudyOrThrow(id6, organizationId);
+    return caseStudyRepository.listRevisions(id6);
   },
-  async createCaseStudy(caller, input, meta10 = {}) {
+  async createCaseStudy(caller, input, meta11 = {}) {
     const organizationId = caller.organizationId;
     const body = sanitizeContentHtml(input.body);
     const editorBlocks = input.editorBlocks ? sanitizeEditorDocument(input.editorBlocks) : void 0;
@@ -28124,14 +29002,14 @@ var caseStudyService = {
       resourceType: "case_study",
       resourceId: createdId,
       afterData: { title: input.title, slug },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return loadCaseStudyOrThrow(createdId, organizationId);
   },
-  async updateCaseStudy(caller, id4, input, meta10 = {}) {
+  async updateCaseStudy(caller, id6, input, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const existing = await loadCaseStudyOrThrow(id4, organizationId);
+    const existing = await loadCaseStudyOrThrow(id6, organizationId);
     const sanitizedBody = input.body !== void 0 ? sanitizeContentHtml(input.body) : void 0;
     const sanitizedEditorBlocks = input.editorBlocks === void 0 ? void 0 : input.editorBlocks === null ? null : sanitizeEditorDocument(input.editorBlocks);
     const hasContentEdit = input.title !== void 0 || input.body !== void 0 || input.excerpt !== void 0 || input.content !== void 0 || input.slug !== void 0 || input.editorBlocks !== void 0;
@@ -28140,7 +29018,7 @@ var caseStudyService = {
     }
     if (input.slug !== void 0 && input.slug !== existing.slug) {
       const dup = await caseStudyRepository.findBySlugInOrg(organizationId, input.slug);
-      if (dup && dup.id !== id4) throw new ConflictError(`A case study with slug "${input.slug}" already exists.`, { existingCaseStudyId: dup.id });
+      if (dup && dup.id !== id6) throw new ConflictError(`A case study with slug "${input.slug}" already exists.`, { existingCaseStudyId: dup.id });
     }
     await assertRelationshipsUsable2(
       { content: input.content, productIds: input.productIds, relatedPageIds: input.relatedPageIds, relatedPostIds: input.relatedPostIds, industryId: input.industryId },
@@ -28167,7 +29045,7 @@ var caseStudyService = {
         if (currentRevision && (unpublishing || liveEditOfPublished || hasContentEdit && currentRevision.status === "PUBLISHED")) {
           const newRevision = await tx.contentRevision.create({
             data: {
-              caseStudyId: id4,
+              caseStudyId: id6,
               version: currentRevision.version + 1,
               status: liveEditOfPublished ? "PUBLISHED" : "DRAFT",
               title: input.title ?? currentRevision.title,
@@ -28196,28 +29074,28 @@ var caseStudyService = {
           patch.updatedAt = /* @__PURE__ */ new Date();
         }
         if (Object.keys(patch).length > 0) {
-          const where2 = { id: id4, ...input.expectedUpdatedAt !== void 0 ? { updatedAt: input.expectedUpdatedAt } : {} };
+          const where2 = { id: id6, ...input.expectedUpdatedAt !== void 0 ? { updatedAt: input.expectedUpdatedAt } : {} };
           const result = await tx.caseStudy.updateMany({ where: where2, data: patch });
           if (result.count === 0) {
             throw new ConflictError("This case study was changed by someone else since you loaded it. Reload and try again.");
           }
         }
         if (input.productIds !== void 0) {
-          await tx.caseStudyProduct.deleteMany({ where: { caseStudyId: id4 } });
+          await tx.caseStudyProduct.deleteMany({ where: { caseStudyId: id6 } });
           if (input.productIds.length > 0) {
-            await tx.caseStudyProduct.createMany({ data: input.productIds.map((productId) => ({ caseStudyId: id4, productId })) });
+            await tx.caseStudyProduct.createMany({ data: input.productIds.map((productId) => ({ caseStudyId: id6, productId })) });
           }
         }
         if (input.relatedPageIds !== void 0) {
-          await tx.caseStudyRelatedPage.deleteMany({ where: { caseStudyId: id4 } });
+          await tx.caseStudyRelatedPage.deleteMany({ where: { caseStudyId: id6 } });
           if (input.relatedPageIds.length > 0) {
-            await tx.caseStudyRelatedPage.createMany({ data: input.relatedPageIds.map((pageId) => ({ caseStudyId: id4, pageId })) });
+            await tx.caseStudyRelatedPage.createMany({ data: input.relatedPageIds.map((pageId) => ({ caseStudyId: id6, pageId })) });
           }
         }
         if (input.relatedPostIds !== void 0) {
-          await tx.caseStudyRelatedPost.deleteMany({ where: { caseStudyId: id4 } });
+          await tx.caseStudyRelatedPost.deleteMany({ where: { caseStudyId: id6 } });
           if (input.relatedPostIds.length > 0) {
-            await tx.caseStudyRelatedPost.createMany({ data: input.relatedPostIds.map((postId) => ({ caseStudyId: id4, postId })) });
+            await tx.caseStudyRelatedPost.createMany({ data: input.relatedPostIds.map((postId) => ({ caseStudyId: id6, postId })) });
           }
         }
       });
@@ -28230,11 +29108,11 @@ var caseStudyService = {
       actorType: "USER",
       action: "CASE_STUDY_UPDATED",
       resourceType: "case_study",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { status: existing.status, title: existing.title },
       afterData: { status: input.status, title: input.title, slug: input.slug },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     if (hasFeaturedMediaEdit && input.featuredMediaId !== existing.featuredMediaId) {
       await auditLogRepository.record({
@@ -28243,11 +29121,11 @@ var caseStudyService = {
         actorType: "USER",
         action: input.featuredMediaId ? "MEDIA_ATTACHED_TO_CONTENT" : "MEDIA_DETACHED_FROM_CONTENT",
         resourceType: "case_study",
-        resourceId: id4,
+        resourceId: id6,
         beforeData: { featuredMediaId: existing.featuredMediaId },
         afterData: { featuredMediaId: input.featuredMediaId ?? null },
-        ipAddress: meta10.ip,
-        userAgent: meta10.userAgent
+        ipAddress: meta11.ip,
+        userAgent: meta11.userAgent
       });
     }
     if (input.slug !== void 0 && input.slug !== existing.slug) {
@@ -28258,37 +29136,37 @@ var caseStudyService = {
           fromPath: `/case-studies/${existing.slug}`,
           toPath: `/case-studies/${input.slug}`,
           resourceType: "case_study",
-          resourceId: id4
+          resourceId: id6
         });
       }
     }
-    return loadCaseStudyOrThrow(id4, organizationId);
+    return loadCaseStudyOrThrow(id6, organizationId);
   },
-  async submitForReview(caller, id4, meta10 = {}) {
+  async submitForReview(caller, id6, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const existing = await loadCaseStudyOrThrow(id4, organizationId);
+    const existing = await loadCaseStudyOrThrow(id6, organizationId);
     if (existing.status !== "DRAFT") throw new ConflictError(`Only a DRAFT case study can be submitted for review (current status: ${existing.status}).`);
     if (!existing.currentRevision || !existing.currentRevision.body.trim()) {
       throw new ValidationError("This case study needs body content before it can be submitted for review.");
     }
-    await prisma.caseStudy.update({ where: { id: id4 }, data: { status: "IN_REVIEW" } });
+    await prisma.caseStudy.update({ where: { id: id6 }, data: { status: "IN_REVIEW" } });
     await auditLogRepository.record({
       organizationId,
       actorUserId: caller.id,
       actorType: "USER",
       action: "CASE_STUDY_SUBMITTED_FOR_REVIEW",
       resourceType: "case_study",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { status: existing.status },
       afterData: { status: "IN_REVIEW" },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
-    return loadCaseStudyOrThrow(id4, organizationId);
+    return loadCaseStudyOrThrow(id6, organizationId);
   },
-  async publishCaseStudy(caller, id4, meta10 = {}) {
+  async publishCaseStudy(caller, id6, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const existing = await loadCaseStudyOrThrow(id4, organizationId);
+    const existing = await loadCaseStudyOrThrow(id6, organizationId);
     if (existing.status === "ARCHIVED") throw new ConflictError("An archived case study must be restored before it can be published.");
     if (existing.status === "PUBLISHED") throw new ConflictError("This case study is already published.");
     if (!existing.currentRevisionId) throw new ConflictError("This case study has no content revision to publish.");
@@ -28296,7 +29174,7 @@ var caseStudyService = {
     const now = /* @__PURE__ */ new Date();
     await prisma.$transaction([
       prisma.contentRevision.update({ where: { id: existing.currentRevisionId }, data: { status: "PUBLISHED", publishedAt: now } }),
-      prisma.caseStudy.update({ where: { id: id4 }, data: { status: "PUBLISHED", publishedAt: now, scheduledAt: null } })
+      prisma.caseStudy.update({ where: { id: id6 }, data: { status: "PUBLISHED", publishedAt: now, scheduledAt: null } })
     ]);
     await auditLogRepository.record({
       organizationId,
@@ -28304,11 +29182,11 @@ var caseStudyService = {
       actorType: "USER",
       action: "CASE_STUDY_PUBLISHED",
       resourceType: "case_study",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { status: existing.status },
       afterData: { status: "PUBLISHED" },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     if (existing.createdById && existing.createdById !== caller.id) {
       await notificationService.notify({
@@ -28319,53 +29197,53 @@ var caseStudyService = {
         message: `"${existing.title}" is now live.`
       });
     }
-    return loadCaseStudyOrThrow(id4, organizationId);
+    return loadCaseStudyOrThrow(id6, organizationId);
   },
-  async scheduleCaseStudy(caller, id4, input, meta10 = {}) {
+  async scheduleCaseStudy(caller, id6, input, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const existing = await loadCaseStudyOrThrow(id4, organizationId);
+    const existing = await loadCaseStudyOrThrow(id6, organizationId);
     if (existing.status === "ARCHIVED") throw new ConflictError("An archived case study must be restored before it can be scheduled.");
     if (existing.status === "PUBLISHED") throw new ConflictError("This case study is already published.");
     assertHasPublishableContent3(existing.currentRevision);
-    await prisma.caseStudy.update({ where: { id: id4 }, data: { status: "SCHEDULED", scheduledAt: input.scheduledAt } });
+    await prisma.caseStudy.update({ where: { id: id6 }, data: { status: "SCHEDULED", scheduledAt: input.scheduledAt } });
     await auditLogRepository.record({
       organizationId,
       actorUserId: caller.id,
       actorType: "USER",
       action: "CASE_STUDY_SCHEDULED",
       resourceType: "case_study",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { status: existing.status },
       afterData: { status: "SCHEDULED", scheduledAt: input.scheduledAt },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
-    return loadCaseStudyOrThrow(id4, organizationId);
+    return loadCaseStudyOrThrow(id6, organizationId);
   },
-  async archiveCaseStudy(caller, id4, meta10 = {}) {
+  async archiveCaseStudy(caller, id6, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const existing = await loadCaseStudyOrThrow(id4, organizationId);
+    const existing = await loadCaseStudyOrThrow(id6, organizationId);
     if (existing.status === "ARCHIVED") throw new ConflictError("This case study is already archived.");
-    await prisma.caseStudy.update({ where: { id: id4 }, data: { status: "ARCHIVED" } });
+    await prisma.caseStudy.update({ where: { id: id6 }, data: { status: "ARCHIVED" } });
     await auditLogRepository.record({
       organizationId,
       actorUserId: caller.id,
       actorType: "USER",
       action: "CASE_STUDY_ARCHIVED",
       resourceType: "case_study",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { status: existing.status },
       afterData: { status: "ARCHIVED" },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
-    return loadCaseStudyOrThrow(id4, organizationId);
+    return loadCaseStudyOrThrow(id6, organizationId);
   },
-  async revertCaseStudy(caller, id4, input, meta10 = {}) {
+  async revertCaseStudy(caller, id6, input, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const existing = await loadCaseStudyOrThrow(id4, organizationId);
+    const existing = await loadCaseStudyOrThrow(id6, organizationId);
     if (existing.status === "ARCHIVED") throw new ConflictError("An archived case study must be restored before its content can be reverted.");
-    const target = await prisma.contentRevision.findFirst({ where: { id: input.revisionId, caseStudyId: id4 } });
+    const target = await prisma.contentRevision.findFirst({ where: { id: input.revisionId, caseStudyId: id6 } });
     if (!target) throw new NotFoundError("Revision not found on this case study.");
     const current = existing.currentRevision;
     const nextVersion = (current?.version ?? 0) + 1;
@@ -28373,7 +29251,7 @@ var caseStudyService = {
     await prisma.$transaction(async (tx) => {
       const newRevision = await tx.contentRevision.create({
         data: {
-          caseStudyId: id4,
+          caseStudyId: id6,
           version: nextVersion,
           status: wasPublished ? "PUBLISHED" : "DRAFT",
           title: target.title,
@@ -28385,7 +29263,7 @@ var caseStudyService = {
           publishedAt: wasPublished ? /* @__PURE__ */ new Date() : null
         }
       });
-      await tx.caseStudy.update({ where: { id: id4 }, data: { currentRevisionId: newRevision.id } });
+      await tx.caseStudy.update({ where: { id: id6 }, data: { currentRevisionId: newRevision.id } });
     });
     await auditLogRepository.record({
       organizationId,
@@ -28393,62 +29271,62 @@ var caseStudyService = {
       actorType: "USER",
       action: "CASE_STUDY_REVERTED",
       resourceType: "case_study",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { fromVersion: current?.version, revertedToRevisionId: target.id, revertedToVersion: target.version },
       afterData: { newVersion: nextVersion },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
-    return loadCaseStudyOrThrow(id4, organizationId);
+    return loadCaseStudyOrThrow(id6, organizationId);
   },
-  async deleteCaseStudy(caller, id4, meta10 = {}) {
+  async deleteCaseStudy(caller, id6, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const existing = await loadCaseStudyOrThrow(id4, organizationId);
-    await caseStudyRepository.softDelete(id4);
+    const existing = await loadCaseStudyOrThrow(id6, organizationId);
+    await caseStudyRepository.softDelete(id6);
     await auditLogRepository.record({
       organizationId,
       actorUserId: caller.id,
       actorType: "USER",
       action: "CASE_STUDY_DELETED",
       resourceType: "case_study",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { status: existing.status, title: existing.title },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
   },
   async listTrash(organizationId, page, limit) {
     return caseStudyRepository.listTrash(organizationId, page, limit);
   },
-  async restoreCaseStudy(caller, id4, meta10 = {}) {
+  async restoreCaseStudy(caller, id6, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const existing = await caseStudyRepository.findTrashedByIdInOrg(id4, organizationId);
+    const existing = await caseStudyRepository.findTrashedByIdInOrg(id6, organizationId);
     if (!existing) throw new NotFoundError("Case study not found in trash.");
-    await caseStudyRepository.restore(id4);
+    await caseStudyRepository.restore(id6);
     await auditLogRepository.record({
       organizationId,
       actorUserId: caller.id,
       actorType: "USER",
       action: "CASE_STUDY_RESTORED",
       resourceType: "case_study",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { status: existing.status, title: existing.title },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
   },
   /** Bulk workflow actions for the list view — same per-item isolation as postService.bulkAction/pageService.bulkAction. */
-  async bulkAction(caller, action, ids, meta10 = {}) {
+  async bulkAction(caller, action, ids, meta11 = {}) {
     const succeeded = [];
     const failed = [];
-    for (const id4 of ids) {
+    for (const id6 of ids) {
       try {
-        if (action === "archive") await this.archiveCaseStudy(caller, id4, meta10);
-        else if (action === "trash") await this.deleteCaseStudy(caller, id4, meta10);
-        else await this.restoreCaseStudy(caller, id4, meta10);
-        succeeded.push(id4);
+        if (action === "archive") await this.archiveCaseStudy(caller, id6, meta11);
+        else if (action === "trash") await this.deleteCaseStudy(caller, id6, meta11);
+        else await this.restoreCaseStudy(caller, id6, meta11);
+        succeeded.push(id6);
       } catch (err) {
-        failed.push({ id: id4, error: err instanceof Error ? err.message : "Action failed." });
+        failed.push({ id: id6, error: err instanceof Error ? err.message : "Action failed." });
       }
     }
     return { succeeded, failed };
@@ -28459,76 +29337,76 @@ var caseStudyService = {
 init_apiResponse();
 
 // server/schemas/caseStudySchemas.ts
-import { z as z45 } from "zod";
-var slugSchema8 = z45.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)");
-var uuidArray2 = (max) => z45.array(z45.string().trim().uuid()).max(max);
+import { z as z46 } from "zod";
+var slugSchema8 = z46.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)");
+var uuidArray2 = (max) => z46.array(z46.string().trim().uuid()).max(max);
 var caseStudyContentSchema = seoMetadataSchema.extend({
-  challenge: z45.string().trim().max(5e3).optional(),
-  solutionApproach: z45.string().trim().max(5e3).optional(),
-  implementation: z45.string().trim().max(5e3).optional(),
-  results: z45.string().trim().max(5e3).optional(),
-  testimonialQuote: z45.string().trim().max(2e3).optional(),
-  testimonialAuthorName: z45.string().trim().max(150).optional(),
-  testimonialAuthorTitle: z45.string().trim().max(150).optional(),
-  technologies: z45.array(z45.string().trim().min(1).max(80)).max(30).optional(),
+  challenge: z46.string().trim().max(5e3).optional(),
+  solutionApproach: z46.string().trim().max(5e3).optional(),
+  implementation: z46.string().trim().max(5e3).optional(),
+  results: z46.string().trim().max(5e3).optional(),
+  testimonialQuote: z46.string().trim().max(2e3).optional(),
+  testimonialAuthorName: z46.string().trim().max(150).optional(),
+  testimonialAuthorTitle: z46.string().trim().max(150).optional(),
+  technologies: z46.array(z46.string().trim().min(1).max(80)).max(30).optional(),
   galleryMediaIds: uuidArray2(30).optional(),
-  ctaFormId: z45.string().trim().uuid().optional()
+  ctaFormId: z46.string().trim().uuid().optional()
 });
-var createCaseStudySchema = z45.object({
-  title: z45.string().trim().min(1).max(200),
+var createCaseStudySchema = z46.object({
+  title: z46.string().trim().min(1).max(200),
   slug: slugSchema8.optional(),
-  body: z45.string().trim().max(5e5).default(""),
-  excerpt: z45.string().trim().max(500).optional(),
+  body: z46.string().trim().max(5e5).default(""),
+  excerpt: z46.string().trim().max(500).optional(),
   content: caseStudyContentSchema.optional(),
   editorBlocks: editorDocumentSchema.optional(),
-  clientName: z45.string().trim().min(1).max(200).optional(),
-  industryId: z45.string().trim().uuid().optional(),
-  featuredMediaId: z45.string().trim().uuid().optional(),
+  clientName: z46.string().trim().min(1).max(200).optional(),
+  industryId: z46.string().trim().uuid().optional(),
+  featuredMediaId: z46.string().trim().uuid().optional(),
   productIds: uuidArray2(50).optional(),
   relatedPageIds: uuidArray2(50).optional(),
   relatedPostIds: uuidArray2(50).optional()
 });
-var updateCaseStudySchema = z45.object({
-  title: z45.string().trim().min(1).max(200).optional(),
+var updateCaseStudySchema = z46.object({
+  title: z46.string().trim().min(1).max(200).optional(),
   slug: slugSchema8.optional(),
-  body: z45.string().trim().max(5e5).optional(),
-  excerpt: z45.string().trim().max(500).nullable().optional(),
+  body: z46.string().trim().max(5e5).optional(),
+  excerpt: z46.string().trim().max(500).nullable().optional(),
   content: caseStudyContentSchema.optional(),
   editorBlocks: editorDocumentSchema.nullable().optional(),
   status: patchableContentStatusSchema.optional(),
-  clientName: z45.string().trim().min(1).max(200).nullable().optional(),
-  industryId: z45.string().trim().uuid().nullable().optional(),
-  featuredMediaId: z45.string().trim().uuid().nullable().optional(),
+  clientName: z46.string().trim().min(1).max(200).nullable().optional(),
+  industryId: z46.string().trim().uuid().nullable().optional(),
+  featuredMediaId: z46.string().trim().uuid().nullable().optional(),
   productIds: uuidArray2(50).optional(),
   relatedPageIds: uuidArray2(50).optional(),
   relatedPostIds: uuidArray2(50).optional(),
   expectedUpdatedAt: expectedUpdatedAtSchema
 }).refine((v) => Object.keys(v).filter((k) => k !== "expectedUpdatedAt").length > 0, { message: "At least one field must be provided." });
-var listCaseStudiesQuerySchema = z45.object({
-  page: z45.coerce.number().int().positive().default(1),
-  limit: z45.coerce.number().int().positive().max(100).default(20),
-  search: z45.string().trim().max(200).optional(),
-  status: z45.enum(["DRAFT", "IN_REVIEW", "SCHEDULED", "PUBLISHED", "ARCHIVED"]).optional(),
-  industryId: z45.string().trim().uuid().optional(),
-  productId: z45.string().trim().uuid().optional(),
-  fromDate: z45.coerce.date().optional(),
-  toDate: z45.coerce.date().optional(),
-  sort: z45.enum(["title", "slug", "status", "createdAt", "updatedAt", "publishedAt"]).default("updatedAt"),
-  order: z45.enum(["asc", "desc"]).default("desc")
+var listCaseStudiesQuerySchema = z46.object({
+  page: z46.coerce.number().int().positive().default(1),
+  limit: z46.coerce.number().int().positive().max(100).default(20),
+  search: z46.string().trim().max(200).optional(),
+  status: z46.enum(["DRAFT", "IN_REVIEW", "SCHEDULED", "PUBLISHED", "ARCHIVED"]).optional(),
+  industryId: z46.string().trim().uuid().optional(),
+  productId: z46.string().trim().uuid().optional(),
+  fromDate: z46.coerce.date().optional(),
+  toDate: z46.coerce.date().optional(),
+  sort: z46.enum(["title", "slug", "status", "createdAt", "updatedAt", "publishedAt"]).default("updatedAt"),
+  order: z46.enum(["asc", "desc"]).default("desc")
 });
 
 // server/routes/v1/caseStudyRoutes.ts
-import { z as z46 } from "zod";
-var trashQuerySchema3 = z46.object({
-  page: z46.coerce.number().int().positive().default(1),
-  limit: z46.coerce.number().int().positive().max(100).default(20)
+import { z as z47 } from "zod";
+var trashQuerySchema3 = z47.object({
+  page: z47.coerce.number().int().positive().default(1),
+  limit: z47.coerce.number().int().positive().max(100).default(20)
 });
-var router33 = Router39();
-router33.use(authenticateToken);
+var router34 = Router40();
+router34.use(authenticateToken);
 function requestMeta22(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router33.get(
+router34.get(
   "/",
   requirePermission("content.read"),
   asyncHandler(async (req, res) => {
@@ -28544,7 +29422,7 @@ router33.get(
     sendSuccess(res, { caseStudies: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router33.get(
+router34.get(
   "/trash",
   requirePermission("content.read"),
   asyncHandler(async (req, res) => {
@@ -28553,7 +29431,7 @@ router33.get(
     sendSuccess(res, { caseStudies: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router33.post(
+router34.post(
   "/bulk/archive",
   requirePermission("content.delete"),
   asyncHandler(async (req, res) => {
@@ -28562,7 +29440,7 @@ router33.post(
     sendSuccess(res, result);
   })
 );
-router33.post(
+router34.post(
   "/bulk/trash",
   requirePermission("content.delete"),
   asyncHandler(async (req, res) => {
@@ -28571,7 +29449,7 @@ router33.post(
     sendSuccess(res, result);
   })
 );
-router33.post(
+router34.post(
   "/bulk/restore",
   requirePermission("content.delete"),
   asyncHandler(async (req, res) => {
@@ -28580,7 +29458,7 @@ router33.post(
     sendSuccess(res, result);
   })
 );
-router33.post(
+router34.post(
   "/:id/restore",
   requirePermission("content.delete"),
   asyncHandler(async (req, res) => {
@@ -28588,7 +29466,7 @@ router33.post(
     sendSuccess(res, { message: "Case study restored from trash." });
   })
 );
-router33.get(
+router34.get(
   "/:id",
   requirePermission("content.read"),
   asyncHandler(async (req, res) => {
@@ -28596,7 +29474,7 @@ router33.get(
     sendSuccess(res, { caseStudy });
   })
 );
-router33.get(
+router34.get(
   "/:id/revisions",
   requirePermission("content.read"),
   asyncHandler(async (req, res) => {
@@ -28604,7 +29482,7 @@ router33.get(
     sendSuccess(res, { revisions });
   })
 );
-router33.post(
+router34.post(
   "/",
   requirePermission("content.create"),
   asyncHandler(async (req, res) => {
@@ -28613,7 +29491,7 @@ router33.post(
     sendSuccess(res, { caseStudy }, 201);
   })
 );
-router33.patch(
+router34.patch(
   "/:id",
   requirePermission("content.update"),
   asyncHandler(async (req, res) => {
@@ -28622,7 +29500,7 @@ router33.patch(
     sendSuccess(res, { caseStudy });
   })
 );
-router33.post(
+router34.post(
   "/:id/submit-review",
   requirePermission("content.update"),
   asyncHandler(async (req, res) => {
@@ -28630,7 +29508,7 @@ router33.post(
     sendSuccess(res, { caseStudy });
   })
 );
-router33.post(
+router34.post(
   "/:id/publish",
   requirePermission("content.publish"),
   asyncHandler(async (req, res) => {
@@ -28638,7 +29516,7 @@ router33.post(
     sendSuccess(res, { caseStudy });
   })
 );
-router33.post(
+router34.post(
   "/:id/schedule",
   requirePermission("content.publish"),
   asyncHandler(async (req, res) => {
@@ -28647,7 +29525,7 @@ router33.post(
     sendSuccess(res, { caseStudy });
   })
 );
-router33.post(
+router34.post(
   "/:id/archive",
   requirePermission("content.delete"),
   asyncHandler(async (req, res) => {
@@ -28655,7 +29533,7 @@ router33.post(
     sendSuccess(res, { caseStudy });
   })
 );
-router33.post(
+router34.post(
   "/:id/revert",
   requirePermission("content.update"),
   asyncHandler(async (req, res) => {
@@ -28664,7 +29542,7 @@ router33.post(
     sendSuccess(res, { caseStudy });
   })
 );
-router33.delete(
+router34.delete(
   "/:id",
   requirePermission("content.delete"),
   asyncHandler(async (req, res) => {
@@ -28672,18 +29550,18 @@ router33.delete(
     sendSuccess(res, { message: "Case study deleted." });
   })
 );
-var caseStudyRoutes_default = router33;
+var caseStudyRoutes_default = router34;
 
 // server/routes/v1/categoryRoutes.ts
-import { Router as Router40 } from "express";
+import { Router as Router41 } from "express";
 
 // server/services/categoryService.ts
 init_errors();
 function isUniqueConstraintError12(err) {
   return !!err && typeof err === "object" && "code" in err && err.code === "P2002";
 }
-async function loadCategoryOrThrow(id4, organizationId) {
-  const category = await categoryRepository.findByIdInOrg(id4, organizationId);
+async function loadCategoryOrThrow(id6, organizationId) {
+  const category = await categoryRepository.findByIdInOrg(id6, organizationId);
   if (!category) throw new NotFoundError("Category not found.");
   return category;
 }
@@ -28706,10 +29584,10 @@ var categoryService = {
   async listCategories(organizationId) {
     return categoryRepository.list(organizationId);
   },
-  async getCategory(organizationId, id4) {
-    return loadCategoryOrThrow(id4, organizationId);
+  async getCategory(organizationId, id6) {
+    return loadCategoryOrThrow(id6, organizationId);
   },
-  async createCategory(caller, input, meta10 = {}) {
+  async createCategory(caller, input, meta11 = {}) {
     const organizationId = caller.organizationId;
     if (input.slug) {
       const dup = await categoryRepository.findBySlugInOrg(organizationId, input.slug);
@@ -28731,19 +29609,19 @@ var categoryService = {
       resourceType: "category",
       resourceId: category.id,
       afterData: { name: category.name, slug: category.slug },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return category;
   },
-  async updateCategory(caller, id4, input, meta10 = {}) {
+  async updateCategory(caller, id6, input, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const existing = await loadCategoryOrThrow(id4, organizationId);
+    const existing = await loadCategoryOrThrow(id6, organizationId);
     if (input.slug !== void 0 && input.slug !== existing.slug) {
       const dup = await categoryRepository.findBySlugInOrg(organizationId, input.slug);
-      if (dup && dup.id !== id4) throw new ConflictError(`A category with slug "${input.slug}" already exists.`, { existingCategoryId: dup.id });
+      if (dup && dup.id !== id6) throw new ConflictError(`A category with slug "${input.slug}" already exists.`, { existingCategoryId: dup.id });
     }
-    if (input.parentId !== void 0) await assertParentUsable2(input.parentId, organizationId, id4);
+    if (input.parentId !== void 0) await assertParentUsable2(input.parentId, organizationId, id6);
     const patch = {};
     if (input.name !== void 0) patch.name = input.name;
     if (input.slug !== void 0) patch.slug = input.slug;
@@ -28751,7 +29629,7 @@ var categoryService = {
     if (input.parentId !== void 0) patch.parentId = input.parentId;
     let updated;
     try {
-      updated = await categoryRepository.update(id4, patch);
+      updated = await categoryRepository.update(id6, patch);
     } catch (err) {
       throw isUniqueConstraintError12(err) ? new ConflictError("A category with this slug already exists.") : err;
     }
@@ -28761,44 +29639,44 @@ var categoryService = {
       actorType: "USER",
       action: "CATEGORY_UPDATED",
       resourceType: "category",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { name: existing.name, slug: existing.slug },
       afterData: patch,
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return updated;
   },
-  async deleteCategory(caller, id4, meta10 = {}) {
+  async deleteCategory(caller, id6, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const existing = await loadCategoryOrThrow(id4, organizationId);
-    const postCount = await categoryRepository.countPostsUsing(id4);
+    const existing = await loadCategoryOrThrow(id6, organizationId);
+    const postCount = await categoryRepository.countPostsUsing(id6);
     if (postCount > 0) {
       throw new ValidationError(`This category is still assigned to ${postCount} post(s). Reassign or remove them before deleting it.`);
     }
-    await categoryRepository.delete(id4);
+    await categoryRepository.delete(id6);
     await auditLogRepository.record({
       organizationId,
       actorUserId: caller.id,
       actorType: "USER",
       action: "CATEGORY_DELETED",
       resourceType: "category",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { name: existing.name, slug: existing.slug },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
   }
 };
 
 // server/routes/v1/categoryRoutes.ts
 init_apiResponse();
-var router34 = Router40();
-router34.use(authenticateToken);
+var router35 = Router41();
+router35.use(authenticateToken);
 function requestMeta23(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router34.get(
+router35.get(
   "/",
   requirePermission("content.read"),
   asyncHandler(async (req, res) => {
@@ -28806,7 +29684,7 @@ router34.get(
     sendSuccess(res, { categories });
   })
 );
-router34.get(
+router35.get(
   "/:id",
   requirePermission("content.read"),
   asyncHandler(async (req, res) => {
@@ -28814,7 +29692,7 @@ router34.get(
     sendSuccess(res, { category });
   })
 );
-router34.post(
+router35.post(
   "/",
   requirePermission("content.create"),
   asyncHandler(async (req, res) => {
@@ -28823,7 +29701,7 @@ router34.post(
     sendSuccess(res, { category }, 201);
   })
 );
-router34.patch(
+router35.patch(
   "/:id",
   requirePermission("content.update"),
   asyncHandler(async (req, res) => {
@@ -28832,7 +29710,7 @@ router34.patch(
     sendSuccess(res, { category });
   })
 );
-router34.delete(
+router35.delete(
   "/:id",
   requirePermission("content.delete"),
   asyncHandler(async (req, res) => {
@@ -28840,44 +29718,44 @@ router34.delete(
     sendSuccess(res, { message: "Category deleted." });
   })
 );
-var categoryRoutes_default = router34;
+var categoryRoutes_default = router35;
 
 // server/routes/v1/redirectRoutes.ts
-import { Router as Router41 } from "express";
+import { Router as Router42 } from "express";
 init_apiResponse();
 
 // server/schemas/redirectSchemas.ts
-import { z as z47 } from "zod";
-var sitePathSchema = z47.string().trim().min(1).max(2048).refine((v) => v.startsWith("/") && !v.startsWith("//"), { message: "Must be a site-relative path starting with a single /." }).refine((v) => !/[a-z][a-z0-9+.-]*:/i.test(v), { message: "Must not contain a URL scheme." });
-var listRedirectsQuerySchema = z47.object({
-  page: z47.coerce.number().int().positive().default(1),
-  limit: z47.coerce.number().int().positive().max(100).default(20),
-  search: z47.string().trim().max(200).optional(),
-  isActive: z47.enum(["true", "false"]).optional().transform((v) => v === void 0 ? void 0 : v === "true"),
-  sort: z47.enum(["createdAt", "updatedAt", "fromPath", "toPath"]).default("createdAt"),
-  order: z47.enum(["asc", "desc"]).default("desc")
+import { z as z48 } from "zod";
+var sitePathSchema = z48.string().trim().min(1).max(2048).refine((v) => v.startsWith("/") && !v.startsWith("//"), { message: "Must be a site-relative path starting with a single /." }).refine((v) => !/[a-z][a-z0-9+.-]*:/i.test(v), { message: "Must not contain a URL scheme." });
+var listRedirectsQuerySchema = z48.object({
+  page: z48.coerce.number().int().positive().default(1),
+  limit: z48.coerce.number().int().positive().max(100).default(20),
+  search: z48.string().trim().max(200).optional(),
+  isActive: z48.enum(["true", "false"]).optional().transform((v) => v === void 0 ? void 0 : v === "true"),
+  sort: z48.enum(["createdAt", "updatedAt", "fromPath", "toPath"]).default("createdAt"),
+  order: z48.enum(["asc", "desc"]).default("desc")
 });
-var createRedirectSchema = z47.object({
+var createRedirectSchema = z48.object({
   fromPath: sitePathSchema,
   toPath: sitePathSchema,
-  statusCode: z47.union([z47.literal(301), z47.literal(302), z47.literal(307), z47.literal(308)]).default(301),
-  isActive: z47.boolean().default(true),
-  notes: z47.string().trim().max(1e3).optional()
+  statusCode: z48.union([z48.literal(301), z48.literal(302), z48.literal(307), z48.literal(308)]).default(301),
+  isActive: z48.boolean().default(true),
+  notes: z48.string().trim().max(1e3).optional()
 }).strict().refine((v) => v.fromPath !== v.toPath, { message: "fromPath and toPath must differ.", path: ["toPath"] });
-var updateRedirectSchema = z47.object({
+var updateRedirectSchema = z48.object({
   toPath: sitePathSchema.optional(),
-  statusCode: z47.union([z47.literal(301), z47.literal(302), z47.literal(307), z47.literal(308)]).optional(),
-  isActive: z47.boolean().optional(),
-  notes: z47.string().trim().max(1e3).nullable().optional()
+  statusCode: z48.union([z48.literal(301), z48.literal(302), z48.literal(307), z48.literal(308)]).optional(),
+  isActive: z48.boolean().optional(),
+  notes: z48.string().trim().max(1e3).nullable().optional()
 }).strict().refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
 
 // server/routes/v1/redirectRoutes.ts
-var router35 = Router41();
-router35.use(authenticateToken);
+var router36 = Router42();
+router36.use(authenticateToken);
 function requestMeta24(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router35.get(
+router36.get(
   "/",
   requirePermission("seo.redirects.read"),
   asyncHandler(async (req, res) => {
@@ -28893,7 +29771,7 @@ router35.get(
     sendSuccess(res, { redirects: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router35.get(
+router36.get(
   "/:id",
   requirePermission("seo.redirects.read"),
   asyncHandler(async (req, res) => {
@@ -28901,7 +29779,7 @@ router35.get(
     sendSuccess(res, { redirect });
   })
 );
-router35.post(
+router36.post(
   "/",
   requirePermission("seo.redirects.create"),
   asyncHandler(async (req, res) => {
@@ -28910,7 +29788,7 @@ router35.post(
     sendSuccess(res, { redirect }, 201);
   })
 );
-router35.patch(
+router36.patch(
   "/:id",
   requirePermission("seo.redirects.update"),
   asyncHandler(async (req, res) => {
@@ -28919,7 +29797,7 @@ router35.patch(
     sendSuccess(res, { redirect });
   })
 );
-router35.delete(
+router36.delete(
   "/:id",
   requirePermission("seo.redirects.delete"),
   asyncHandler(async (req, res) => {
@@ -28927,10 +29805,10 @@ router35.delete(
     sendSuccess(res, { message: "Redirect deleted." });
   })
 );
-var redirectRoutes_default = router35;
+var redirectRoutes_default = router36;
 
 // server/routes/v1/seoRoutes.ts
-import { Router as Router42 } from "express";
+import { Router as Router43 } from "express";
 
 // server/services/seoAuditService.ts
 var LIVE_STATUSES = /* @__PURE__ */ new Set(["PUBLISHED", "SCHEDULED"]);
@@ -28941,27 +29819,27 @@ var VALID_SLUG_PATTERN = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 function checkRecord(resourceType, record2) {
   const issues = [];
   const isLive = LIVE_STATUSES.has(record2.status);
-  const meta10 = record2.currentRevision?.metadata ?? {};
+  const meta11 = record2.currentRevision?.metadata ?? {};
   const displayTitle = record2.currentRevision?.title || record2.title;
   function push(severity, code, message) {
     issues.push({ resourceType, resourceId: record2.id, resourceTitle: displayTitle, slug: record2.slug, status: record2.status, severity, code, message });
   }
-  if (!meta10.metaTitle) {
+  if (!meta11.metaTitle) {
     push(isLive ? "critical" : "warning", "missing_meta_title", "No SEO title set \u2014 search engines will fall back to the content title, which may not be optimized.");
-  } else if (meta10.metaTitle.length > META_TITLE_IDEAL_MAX) {
-    push("warning", "meta_title_too_long", `SEO title is ${meta10.metaTitle.length} characters \u2014 search engines typically truncate titles beyond ~${META_TITLE_IDEAL_MAX}.`);
+  } else if (meta11.metaTitle.length > META_TITLE_IDEAL_MAX) {
+    push("warning", "meta_title_too_long", `SEO title is ${meta11.metaTitle.length} characters \u2014 search engines typically truncate titles beyond ~${META_TITLE_IDEAL_MAX}.`);
   }
-  if (!meta10.metaDescription) {
+  if (!meta11.metaDescription) {
     push(isLive ? "critical" : "warning", "missing_meta_description", "No meta description set \u2014 search engines will auto-generate a snippet from the page content instead.");
-  } else if (meta10.metaDescription.length > META_DESCRIPTION_IDEAL_MAX) {
-    push("warning", "meta_description_too_long", `Meta description is ${meta10.metaDescription.length} characters \u2014 likely to be truncated beyond ~${META_DESCRIPTION_IDEAL_MAX}.`);
-  } else if (meta10.metaDescription.length < META_DESCRIPTION_IDEAL_MIN) {
-    push("warning", "meta_description_too_short", `Meta description is only ${meta10.metaDescription.length} characters \u2014 likely too short to be a useful search-result snippet.`);
+  } else if (meta11.metaDescription.length > META_DESCRIPTION_IDEAL_MAX) {
+    push("warning", "meta_description_too_long", `Meta description is ${meta11.metaDescription.length} characters \u2014 likely to be truncated beyond ~${META_DESCRIPTION_IDEAL_MAX}.`);
+  } else if (meta11.metaDescription.length < META_DESCRIPTION_IDEAL_MIN) {
+    push("warning", "meta_description_too_short", `Meta description is only ${meta11.metaDescription.length} characters \u2014 likely too short to be a useful search-result snippet.`);
   }
   if (record2.featuredMedia && !record2.featuredMedia.altText) {
     push("warning", "missing_featured_image_alt_text", "Featured image has no alt text \u2014 hurts accessibility and image search visibility.");
   }
-  if (isLive && !meta10.ogImage && !record2.featuredMedia) {
+  if (isLive && !meta11.ogImage && !record2.featuredMedia) {
     push("warning", "missing_social_image", "No social share image (Open Graph image or featured image) set \u2014 links shared on social platforms will show no preview image.");
   }
   if (!VALID_SLUG_PATTERN.test(record2.slug)) {
@@ -29006,11 +29884,11 @@ var seoAuditService = {
     const titleIndex = [];
     const descriptionIndex = [];
     function indexRecord(resourceType, record2) {
-      const meta10 = record2.currentRevision?.metadata ?? {};
+      const meta11 = record2.currentRevision?.metadata ?? {};
       const title = record2.currentRevision?.title || record2.title;
-      const base2 = { resourceType, id: record2.id, slug: record2.slug, title, status: record2.status };
-      if (meta10.metaTitle) titleIndex.push({ ...base2, value: meta10.metaTitle });
-      if (meta10.metaDescription) descriptionIndex.push({ ...base2, value: meta10.metaDescription });
+      const base3 = { resourceType, id: record2.id, slug: record2.slug, title, status: record2.status };
+      if (meta11.metaTitle) titleIndex.push({ ...base3, value: meta11.metaTitle });
+      if (meta11.metaDescription) descriptionIndex.push({ ...base3, value: meta11.metaDescription });
     }
     for (const post of posts) {
       issues.push(...checkRecord("post", post));
@@ -29032,9 +29910,9 @@ var seoAuditService = {
 
 // server/routes/v1/seoRoutes.ts
 init_apiResponse();
-var router36 = Router42();
-router36.use(authenticateToken);
-router36.get(
+var router37 = Router43();
+router37.use(authenticateToken);
+router37.get(
   "/issues",
   requirePermission("seo.audit.read"),
   asyncHandler(async (req, res) => {
@@ -29042,18 +29920,18 @@ router36.get(
     sendSuccess(res, { issues });
   })
 );
-var seoRoutes_default = router36;
+var seoRoutes_default = router37;
 
 // server/routes/v1/tagRoutes.ts
-import { Router as Router43 } from "express";
+import { Router as Router44 } from "express";
 
 // server/services/tagService.ts
 init_errors();
 function isUniqueConstraintError13(err) {
   return !!err && typeof err === "object" && "code" in err && err.code === "P2002";
 }
-async function loadTagOrThrow(id4, organizationId) {
-  const tag = await tagRepository.findByIdInOrg(id4, organizationId);
+async function loadTagOrThrow(id6, organizationId) {
+  const tag = await tagRepository.findByIdInOrg(id6, organizationId);
   if (!tag) throw new NotFoundError("Tag not found.");
   return tag;
 }
@@ -29061,10 +29939,10 @@ var tagService = {
   async listTags(organizationId) {
     return tagRepository.list(organizationId);
   },
-  async getTag(organizationId, id4) {
-    return loadTagOrThrow(id4, organizationId);
+  async getTag(organizationId, id6) {
+    return loadTagOrThrow(id6, organizationId);
   },
-  async createTag(caller, input, meta10 = {}) {
+  async createTag(caller, input, meta11 = {}) {
     const organizationId = caller.organizationId;
     if (input.slug) {
       const dup = await tagRepository.findBySlugInOrg(organizationId, input.slug);
@@ -29085,17 +29963,17 @@ var tagService = {
       resourceType: "tag",
       resourceId: tag.id,
       afterData: { name: tag.name, slug: tag.slug },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return tag;
   },
-  async updateTag(caller, id4, input, meta10 = {}) {
+  async updateTag(caller, id6, input, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const existing = await loadTagOrThrow(id4, organizationId);
+    const existing = await loadTagOrThrow(id6, organizationId);
     if (input.slug !== void 0 && input.slug !== existing.slug) {
       const dup = await tagRepository.findBySlugInOrg(organizationId, input.slug);
-      if (dup && dup.id !== id4) throw new ConflictError(`A tag with slug "${input.slug}" already exists.`, { existingTagId: dup.id });
+      if (dup && dup.id !== id6) throw new ConflictError(`A tag with slug "${input.slug}" already exists.`, { existingTagId: dup.id });
     }
     const patch = {};
     if (input.name !== void 0) patch.name = input.name;
@@ -29103,7 +29981,7 @@ var tagService = {
     if (input.description !== void 0) patch.description = input.description;
     let updated;
     try {
-      updated = await tagRepository.update(id4, patch);
+      updated = await tagRepository.update(id6, patch);
     } catch (err) {
       throw isUniqueConstraintError13(err) ? new ConflictError("A tag with this slug already exists.") : err;
     }
@@ -29113,44 +29991,44 @@ var tagService = {
       actorType: "USER",
       action: "TAG_UPDATED",
       resourceType: "tag",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { name: existing.name, slug: existing.slug },
       afterData: patch,
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return updated;
   },
-  async deleteTag(caller, id4, meta10 = {}) {
+  async deleteTag(caller, id6, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const existing = await loadTagOrThrow(id4, organizationId);
-    const postCount = await tagRepository.countPostsUsing(id4);
+    const existing = await loadTagOrThrow(id6, organizationId);
+    const postCount = await tagRepository.countPostsUsing(id6);
     if (postCount > 0) {
       throw new ValidationError(`This tag is still assigned to ${postCount} post(s). Remove it from them before deleting it.`);
     }
-    await tagRepository.delete(id4);
+    await tagRepository.delete(id6);
     await auditLogRepository.record({
       organizationId,
       actorUserId: caller.id,
       actorType: "USER",
       action: "TAG_DELETED",
       resourceType: "tag",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { name: existing.name, slug: existing.slug },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
   }
 };
 
 // server/routes/v1/tagRoutes.ts
 init_apiResponse();
-var router37 = Router43();
-router37.use(authenticateToken);
+var router38 = Router44();
+router38.use(authenticateToken);
 function requestMeta25(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router37.get(
+router38.get(
   "/",
   requirePermission("content.read"),
   asyncHandler(async (req, res) => {
@@ -29158,7 +30036,7 @@ router37.get(
     sendSuccess(res, { tags });
   })
 );
-router37.get(
+router38.get(
   "/:id",
   requirePermission("content.read"),
   asyncHandler(async (req, res) => {
@@ -29166,7 +30044,7 @@ router37.get(
     sendSuccess(res, { tag });
   })
 );
-router37.post(
+router38.post(
   "/",
   requirePermission("content.create"),
   asyncHandler(async (req, res) => {
@@ -29175,7 +30053,7 @@ router37.post(
     sendSuccess(res, { tag }, 201);
   })
 );
-router37.patch(
+router38.patch(
   "/:id",
   requirePermission("content.update"),
   asyncHandler(async (req, res) => {
@@ -29184,7 +30062,7 @@ router37.patch(
     sendSuccess(res, { tag });
   })
 );
-router37.delete(
+router38.delete(
   "/:id",
   requirePermission("content.delete"),
   asyncHandler(async (req, res) => {
@@ -29192,10 +30070,10 @@ router37.delete(
     sendSuccess(res, { message: "Tag deleted." });
   })
 );
-var tagRoutes_default = router37;
+var tagRoutes_default = router38;
 
 // server/routes/v1/authorRoutes.ts
-import { Router as Router44 } from "express";
+import { Router as Router45 } from "express";
 
 // server/repositories/authorRepository.ts
 var withUser = { include: { user: { select: { id: true, email: true, firstName: true, lastName: true, displayName: true, status: true } } } };
@@ -29208,8 +30086,8 @@ var authorRepository = {
     });
     return rows.map(({ _count, ...a }) => ({ ...a, postCount: _count.posts }));
   },
-  async findById(id4) {
-    return prisma.author.findUnique({ where: { id: id4 }, ...withUser });
+  async findById(id6) {
+    return prisma.author.findUnique({ where: { id: id6 }, ...withUser });
   },
   async findByUserId(userId) {
     return prisma.author.findUnique({ where: { userId } });
@@ -29217,15 +30095,15 @@ var authorRepository = {
   async create(data) {
     return prisma.author.create({ data, ...withUser });
   },
-  async update(id4, data) {
-    return prisma.author.update({ where: { id: id4 }, data, ...withUser });
+  async update(id6, data) {
+    return prisma.author.update({ where: { id: id6 }, data, ...withUser });
   }
 };
 
 // server/services/authorService.ts
 init_errors();
-async function loadAuthorOrThrow(id4) {
-  const author = await authorRepository.findById(id4);
+async function loadAuthorOrThrow(id6) {
+  const author = await authorRepository.findById(id6);
   if (!author) throw new NotFoundError("Author not found.");
   return author;
 }
@@ -29233,10 +30111,10 @@ var authorService = {
   async listAuthors() {
     return authorRepository.list();
   },
-  async getAuthor(id4) {
-    return loadAuthorOrThrow(id4);
+  async getAuthor(id6) {
+    return loadAuthorOrThrow(id6);
   },
-  async createAuthor(caller, input, meta10 = {}) {
+  async createAuthor(caller, input, meta11 = {}) {
     const user = await userRepository.findById(input.userId);
     if (!user) throw new ValidationError("userId does not refer to an existing user.");
     const existing = await authorRepository.findByUserId(input.userId);
@@ -29249,27 +30127,27 @@ var authorService = {
       resourceType: "author",
       resourceId: author.id,
       afterData: { userId: input.userId },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return author;
   },
-  async updateAuthor(caller, id4, input, meta10 = {}) {
-    const existing = await loadAuthorOrThrow(id4);
+  async updateAuthor(caller, id6, input, meta11 = {}) {
+    const existing = await loadAuthorOrThrow(id6);
     const patch = {};
     if (input.bio !== void 0) patch.bio = input.bio;
     if (input.avatarUrl !== void 0) patch.avatarUrl = input.avatarUrl;
-    const updated = await authorRepository.update(id4, patch);
+    const updated = await authorRepository.update(id6, patch);
     await auditLogRepository.record({
       actorUserId: caller.id,
       actorType: "USER",
       action: "AUTHOR_UPDATED",
       resourceType: "author",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { bio: existing.bio, avatarUrl: existing.avatarUrl },
       afterData: patch,
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return updated;
   }
@@ -29279,24 +30157,24 @@ var authorService = {
 init_apiResponse();
 
 // server/schemas/authorSchemas.ts
-import { z as z48 } from "zod";
-var createAuthorSchema = z48.object({
-  userId: z48.string().trim().uuid(),
-  bio: z48.string().trim().max(2e3).optional(),
-  avatarUrl: z48.string().trim().url().max(500).optional()
+import { z as z49 } from "zod";
+var createAuthorSchema = z49.object({
+  userId: z49.string().trim().uuid(),
+  bio: z49.string().trim().max(2e3).optional(),
+  avatarUrl: z49.string().trim().url().max(500).optional()
 });
-var updateAuthorSchema = z48.object({
-  bio: z48.string().trim().max(2e3).nullable().optional(),
-  avatarUrl: z48.string().trim().url().max(500).nullable().optional()
+var updateAuthorSchema = z49.object({
+  bio: z49.string().trim().max(2e3).nullable().optional(),
+  avatarUrl: z49.string().trim().url().max(500).nullable().optional()
 }).refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
 
 // server/routes/v1/authorRoutes.ts
-var router38 = Router44();
-router38.use(authenticateToken);
+var router39 = Router45();
+router39.use(authenticateToken);
 function requestMeta26(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router38.get(
+router39.get(
   "/",
   requirePermission("authors.read"),
   asyncHandler(async (_req, res) => {
@@ -29304,7 +30182,7 @@ router38.get(
     sendSuccess(res, { authors });
   })
 );
-router38.get(
+router39.get(
   "/:id",
   requirePermission("authors.read"),
   asyncHandler(async (req, res) => {
@@ -29312,7 +30190,7 @@ router38.get(
     sendSuccess(res, { author });
   })
 );
-router38.post(
+router39.post(
   "/",
   requirePermission("authors.create"),
   asyncHandler(async (req, res) => {
@@ -29321,7 +30199,7 @@ router38.post(
     sendSuccess(res, { author }, 201);
   })
 );
-router38.patch(
+router39.patch(
   "/:id",
   requirePermission("authors.update"),
   asyncHandler(async (req, res) => {
@@ -29330,65 +30208,65 @@ router38.patch(
     sendSuccess(res, { author });
   })
 );
-var authorRoutes_default = router38;
+var authorRoutes_default = router39;
 
 // server/routes/v1/mediaRoutes.ts
-import { Router as Router45 } from "express";
+import { Router as Router46 } from "express";
 import express2 from "express";
 init_apiResponse();
 init_errors();
 
 // server/schemas/mediaSchemas.ts
-import { z as z49 } from "zod";
+import { z as z50 } from "zod";
 var SORT_FIELDS5 = ["originalFilename", "displayName", "mimeType", "sizeBytes", "status", "createdAt", "updatedAt"];
-var listMediaQuerySchema = z49.object({
-  page: z49.coerce.number().int().positive().default(1),
-  limit: z49.coerce.number().int().positive().max(100).default(20),
-  search: z49.string().trim().max(200).optional(),
-  status: z49.enum(["PENDING", "ACTIVE", "FAILED", "ARCHIVED"]).optional(),
-  mimeType: z49.enum(ALLOWED_MIME_TYPES).optional(),
-  uploadedById: z49.string().trim().uuid().optional(),
-  dateFrom: z49.coerce.date().optional(),
-  dateTo: z49.coerce.date().optional(),
+var listMediaQuerySchema = z50.object({
+  page: z50.coerce.number().int().positive().default(1),
+  limit: z50.coerce.number().int().positive().max(100).default(20),
+  search: z50.string().trim().max(200).optional(),
+  status: z50.enum(["PENDING", "ACTIVE", "FAILED", "ARCHIVED"]).optional(),
+  mimeType: z50.enum(ALLOWED_MIME_TYPES).optional(),
+  uploadedById: z50.string().trim().uuid().optional(),
+  dateFrom: z50.coerce.date().optional(),
+  dateTo: z50.coerce.date().optional(),
   // Phase 13 — Client Documents: filter the same Media Library by the
   // client/onboarding record a document was uploaded against.
-  clientId: z49.string().trim().uuid().optional(),
-  onboardingId: z49.string().trim().uuid().optional(),
-  sort: z49.enum(SORT_FIELDS5).default("createdAt"),
-  order: z49.enum(["asc", "desc"]).default("desc")
+  clientId: z50.string().trim().uuid().optional(),
+  onboardingId: z50.string().trim().uuid().optional(),
+  sort: z50.enum(SORT_FIELDS5).default("createdAt"),
+  order: z50.enum(["asc", "desc"]).default("desc")
 });
-var createUploadSessionSchema = z49.object({
-  filename: z49.string().trim().min(1).max(255),
-  mimeType: z49.enum(ALLOWED_MIME_TYPES),
-  sizeBytes: z49.number().int().positive(),
-  displayName: z49.string().trim().max(255).optional(),
-  altText: z49.string().trim().max(500).optional(),
-  caption: z49.string().trim().max(1e3).optional(),
+var createUploadSessionSchema = z50.object({
+  filename: z50.string().trim().min(1).max(255),
+  mimeType: z50.enum(ALLOWED_MIME_TYPES),
+  sizeBytes: z50.number().int().positive(),
+  displayName: z50.string().trim().max(255).optional(),
+  altText: z50.string().trim().max(500).optional(),
+  caption: z50.string().trim().max(1e3).optional(),
   // Phase 13 — associates this upload with a Client (and optionally one
   // specific onboarding record) as a Client Document, reusing the same
   // signed-upload pipeline as every other media asset.
-  clientId: z49.string().trim().uuid().optional(),
-  onboardingId: z49.string().trim().uuid().optional(),
-  documentCategory: z49.string().trim().max(100).optional()
+  clientId: z50.string().trim().uuid().optional(),
+  onboardingId: z50.string().trim().uuid().optional(),
+  documentCategory: z50.string().trim().max(100).optional()
 });
-var completeUploadSchema = z49.object({
-  token: z49.string().trim().min(1)
+var completeUploadSchema = z50.object({
+  token: z50.string().trim().min(1)
 });
-var updateMediaSchema = z49.object({
-  displayName: z49.string().trim().max(255).nullable().optional(),
-  altText: z49.string().trim().max(500).nullable().optional(),
-  caption: z49.string().trim().max(1e3).nullable().optional(),
-  visibility: z49.enum(["PRIVATE", "PUBLIC"]).optional(),
-  documentCategory: z49.string().trim().max(100).nullable().optional(),
-  isClientVisible: z49.boolean().optional()
+var updateMediaSchema = z50.object({
+  displayName: z50.string().trim().max(255).nullable().optional(),
+  altText: z50.string().trim().max(500).nullable().optional(),
+  caption: z50.string().trim().max(1e3).nullable().optional(),
+  visibility: z50.enum(["PRIVATE", "PUBLIC"]).optional(),
+  documentCategory: z50.string().trim().max(100).nullable().optional(),
+  isClientVisible: z50.boolean().optional()
 }).refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
 
 // server/routes/v1/mediaRoutes.ts
-var router39 = Router45();
+var router40 = Router46();
 function requestMeta27(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router39.put(
+router40.put(
   "/local-object",
   express2.raw({ type: () => true, limit: Math.max(config.mediaMaxImageSizeBytes, config.mediaMaxDocumentSizeBytes) }),
   asyncHandler(async (req, res) => {
@@ -29408,7 +30286,7 @@ router39.put(
     res.status(200).json({ ok: true });
   })
 );
-router39.get(
+router40.get(
   "/local-object",
   asyncHandler(async (req, res) => {
     if (getStorageProvider().name !== "local") {
@@ -29430,8 +30308,8 @@ router39.get(
     }
   })
 );
-router39.use(authenticateToken);
-router39.get(
+router40.use(authenticateToken);
+router40.get(
   "/",
   requirePermission("media.read"),
   asyncHandler(async (req, res) => {
@@ -29456,7 +30334,7 @@ router39.get(
     sendSuccess(res, { media: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router39.get(
+router40.get(
   "/:id",
   requirePermission("media.read"),
   asyncHandler(async (req, res) => {
@@ -29464,7 +30342,7 @@ router39.get(
     sendSuccess(res, { media });
   })
 );
-router39.get(
+router40.get(
   "/:id/url",
   requirePermission("media.read"),
   asyncHandler(async (req, res) => {
@@ -29472,7 +30350,7 @@ router39.get(
     sendSuccess(res, result);
   })
 );
-router39.get(
+router40.get(
   "/:id/embed-url",
   requirePermission("media.update"),
   asyncHandler(async (req, res) => {
@@ -29480,7 +30358,7 @@ router39.get(
     sendSuccess(res, result);
   })
 );
-router39.post(
+router40.post(
   "/upload-session",
   requirePermission("media.upload"),
   asyncHandler(async (req, res) => {
@@ -29489,7 +30367,7 @@ router39.post(
     sendSuccess(res, result, 201);
   })
 );
-router39.post(
+router40.post(
   "/:id/complete",
   requirePermission("media.upload"),
   asyncHandler(async (req, res) => {
@@ -29499,7 +30377,7 @@ router39.post(
     sendSuccess(res, { media });
   })
 );
-router39.patch(
+router40.patch(
   "/:id",
   requirePermission("media.update"),
   asyncHandler(async (req, res) => {
@@ -29508,7 +30386,7 @@ router39.patch(
     sendSuccess(res, { media });
   })
 );
-router39.post(
+router40.post(
   "/:id/archive",
   requirePermission("media.delete"),
   asyncHandler(async (req, res) => {
@@ -29516,7 +30394,7 @@ router39.post(
     sendSuccess(res, { media });
   })
 );
-router39.delete(
+router40.delete(
   "/:id",
   requirePermission("media.delete"),
   asyncHandler(async (req, res) => {
@@ -29524,73 +30402,73 @@ router39.delete(
     sendSuccess(res, { message: "Media deleted." });
   })
 );
-var mediaRoutes_default = router39;
+var mediaRoutes_default = router40;
 
 // server/routes/v1/contractRoutes.ts
-import { Router as Router46 } from "express";
+import { Router as Router47 } from "express";
 init_apiResponse();
 
 // server/schemas/contractSchemas.ts
-import { z as z51 } from "zod";
+import { z as z52 } from "zod";
 
 // server/schemas/commercialSchemas.ts
-import { z as z50 } from "zod";
-var expectedUpdatedAtSchema2 = z50.coerce.date().optional();
-var currencyCodeSchema = z50.string().trim().toUpperCase().regex(/^[A-Z]{3}$/, "currency must be a 3-letter ISO 4217 code").default(DEFAULT_CURRENCY);
-var moneyAmountSchema = z50.union([z50.string(), z50.number()]).transform((v) => String(v).trim()).refine((v) => /^\d+(\.\d{1,3})?$/.test(v), { message: "amount must be a non-negative number with at most 3 decimal places" });
-var signedMoneyAmountSchema = z50.union([z50.string(), z50.number()]).transform((v) => String(v).trim()).refine((v) => /^-?\d+(\.\d{1,3})?$/.test(v), { message: "amount must be a number with at most 3 decimal places" });
+import { z as z51 } from "zod";
+var expectedUpdatedAtSchema2 = z51.coerce.date().optional();
+var currencyCodeSchema = z51.string().trim().toUpperCase().regex(/^[A-Z]{3}$/, "currency must be a 3-letter ISO 4217 code").default(DEFAULT_CURRENCY);
+var moneyAmountSchema = z51.union([z51.string(), z51.number()]).transform((v) => String(v).trim()).refine((v) => /^\d+(\.\d{1,3})?$/.test(v), { message: "amount must be a non-negative number with at most 3 decimal places" });
+var signedMoneyAmountSchema = z51.union([z51.string(), z51.number()]).transform((v) => String(v).trim()).refine((v) => /^-?\d+(\.\d{1,3})?$/.test(v), { message: "amount must be a number with at most 3 decimal places" });
 var SORT_ORDER = ["asc", "desc"];
 function paginationQuerySchema(sortFields, defaultSort, defaultOrder = "desc") {
   return {
-    page: z50.coerce.number().int().positive().default(1),
-    limit: z50.coerce.number().int().positive().max(100).default(20),
-    search: z50.string().trim().max(200).optional(),
-    sort: z50.enum(sortFields).default(defaultSort),
-    order: z50.enum(SORT_ORDER).default(defaultOrder)
+    page: z51.coerce.number().int().positive().default(1),
+    limit: z51.coerce.number().int().positive().max(100).default(20),
+    search: z51.string().trim().max(200).optional(),
+    sort: z51.enum(sortFields).default(defaultSort),
+    order: z51.enum(SORT_ORDER).default(defaultOrder)
   };
 }
 
 // server/schemas/contractSchemas.ts
-var contractStatusSchema = z51.enum(["DRAFT", "ACTIVE", "SUSPENDED", "EXPIRED", "TERMINATED"]);
+var contractStatusSchema = z52.enum(["DRAFT", "ACTIVE", "SUSPENDED", "EXPIRED", "TERMINATED"]);
 var SORT_FIELDS6 = ["contractNumber", "title", "status", "startDate", "endDate", "createdAt", "updatedAt"];
-var listContractsQuerySchema = z51.object({
+var listContractsQuerySchema = z52.object({
   ...paginationQuerySchema(SORT_FIELDS6, "createdAt"),
   status: contractStatusSchema.optional(),
-  clientId: z51.string().trim().uuid().optional()
+  clientId: z52.string().trim().uuid().optional()
 });
-var createContractSchema = z51.object({
-  clientId: z51.string().trim().uuid(),
-  title: z51.string().trim().min(1).max(200),
-  description: z51.string().trim().max(5e3).optional(),
-  startDate: z51.coerce.date(),
-  endDate: z51.coerce.date().optional(),
+var createContractSchema = z52.object({
+  clientId: z52.string().trim().uuid(),
+  title: z52.string().trim().min(1).max(200),
+  description: z52.string().trim().max(5e3).optional(),
+  startDate: z52.coerce.date(),
+  endDate: z52.coerce.date().optional(),
   contractValue: moneyAmountSchema,
   currency: currencyCodeSchema.optional(),
-  notes: z51.string().trim().max(5e3).optional()
+  notes: z52.string().trim().max(5e3).optional()
 });
-var updateContractSchema = z51.object({
-  title: z51.string().trim().min(1).max(200).optional(),
-  description: z51.string().trim().max(5e3).nullable().optional(),
-  endDate: z51.coerce.date().nullable().optional(),
-  notes: z51.string().trim().max(5e3).nullable().optional(),
+var updateContractSchema = z52.object({
+  title: z52.string().trim().min(1).max(200).optional(),
+  description: z52.string().trim().max(5e3).nullable().optional(),
+  endDate: z52.coerce.date().nullable().optional(),
+  notes: z52.string().trim().max(5e3).nullable().optional(),
   expectedUpdatedAt: expectedUpdatedAtSchema2
 }).refine((v) => Object.keys(v).some((k) => k !== "expectedUpdatedAt"), { message: "At least one field must be provided." });
-var terminateContractSchema = z51.object({
-  reason: z51.string().trim().min(1).max(1e3)
+var terminateContractSchema = z52.object({
+  reason: z52.string().trim().min(1).max(1e3)
 });
-var createContractVariationSchema = z51.object({
+var createContractVariationSchema = z52.object({
   amount: signedMoneyAmountSchema,
-  effectiveDate: z51.coerce.date(),
-  reason: z51.string().trim().min(1).max(1e3)
+  effectiveDate: z52.coerce.date(),
+  reason: z52.string().trim().min(1).max(1e3)
 });
 
 // server/routes/v1/contractRoutes.ts
-var router40 = Router46();
-router40.use(authenticateToken);
+var router41 = Router47();
+router41.use(authenticateToken);
 function requestMeta28(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router40.get(
+router41.get(
   "/",
   requirePermission("contracts.read"),
   asyncHandler(async (req, res) => {
@@ -29606,7 +30484,7 @@ router40.get(
     sendSuccess(res, { contracts: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router40.get(
+router41.get(
   "/:id",
   requirePermission("contracts.read"),
   asyncHandler(async (req, res) => {
@@ -29614,7 +30492,7 @@ router40.get(
     sendSuccess(res, { contract });
   })
 );
-router40.post(
+router41.post(
   "/",
   requirePermission("contracts.create"),
   asyncHandler(async (req, res) => {
@@ -29623,7 +30501,7 @@ router40.post(
     sendSuccess(res, { contract }, 201);
   })
 );
-router40.patch(
+router41.patch(
   "/:id",
   requirePermission("contracts.update"),
   asyncHandler(async (req, res) => {
@@ -29632,7 +30510,7 @@ router40.patch(
     sendSuccess(res, { contract });
   })
 );
-router40.post(
+router41.post(
   "/:id/activate",
   requirePermission("contracts.activate"),
   asyncHandler(async (req, res) => {
@@ -29640,7 +30518,7 @@ router40.post(
     sendSuccess(res, { contract });
   })
 );
-router40.post(
+router41.post(
   "/:id/suspend",
   requirePermission("contracts.suspend"),
   asyncHandler(async (req, res) => {
@@ -29648,7 +30526,7 @@ router40.post(
     sendSuccess(res, { contract });
   })
 );
-router40.post(
+router41.post(
   "/:id/terminate",
   requirePermission("contracts.terminate"),
   asyncHandler(async (req, res) => {
@@ -29657,7 +30535,7 @@ router40.post(
     sendSuccess(res, { contract });
   })
 );
-router40.post(
+router41.post(
   "/:id/variations",
   requirePermission("contracts.variations.create"),
   asyncHandler(async (req, res) => {
@@ -29666,18 +30544,18 @@ router40.post(
     sendSuccess(res, { contract }, 201);
   })
 );
-var contractRoutes_default = router40;
+var contractRoutes_default = router41;
 
 // server/routes/v1/subscriptionRoutes.ts
-import { Router as Router47 } from "express";
+import { Router as Router48 } from "express";
 
 // server/services/subscriptionService.ts
 init_errors();
 var ACTIVATABLE_FROM2 = ["DRAFT", "TRIALING", "PAUSED"];
 var PAUSABLE_FROM = ["ACTIVE", "PAST_DUE"];
 var CANCELLABLE_FROM = ["DRAFT", "TRIALING", "ACTIVE", "PAST_DUE", "PAUSED"];
-async function loadSubscriptionOrThrow(id4, organizationId) {
-  const subscription = await subscriptionRepository.findByIdInOrg(id4, organizationId);
+async function loadSubscriptionOrThrow(id6, organizationId) {
+  const subscription = await subscriptionRepository.findByIdInOrg(id6, organizationId);
   if (!subscription) throw new NotFoundError("Subscription not found.");
   return subscription;
 }
@@ -29685,10 +30563,10 @@ var subscriptionService = {
   async listSubscriptions(organizationId, filters, page, limit, sort, order) {
     return subscriptionRepository.list(organizationId, filters, page, limit, sort, order);
   },
-  async getSubscription(organizationId, id4) {
-    return loadSubscriptionOrThrow(id4, organizationId);
+  async getSubscription(organizationId, id6) {
+    return loadSubscriptionOrThrow(id6, organizationId);
   },
-  async createSubscription(caller, input, meta10 = {}) {
+  async createSubscription(caller, input, meta11 = {}) {
     const organizationId = caller.organizationId;
     const client3 = await clientRepository.findByIdInOrg(input.clientId, organizationId);
     if (!client3) throw new ValidationError("The specified client does not exist in this organization.");
@@ -29731,14 +30609,14 @@ var subscriptionService = {
       resourceType: "subscription",
       resourceId: subscription.id,
       afterData: { subscriptionNumber, clientId: input.clientId, productId: input.productId, price: subscription.price.toString(), currency },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return subscription;
   },
-  async updateSubscription(caller, id4, input, meta10 = {}) {
+  async updateSubscription(caller, id6, input, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const existing = await loadSubscriptionOrThrow(id4, organizationId);
+    const existing = await loadSubscriptionOrThrow(id6, organizationId);
     if (existing.status === "CANCELLED" || existing.status === "EXPIRED") {
       throw new ConflictError(`A ${existing.status.toLowerCase()} subscription can no longer be edited.`);
     }
@@ -29747,7 +30625,7 @@ var subscriptionService = {
     if (input.endDate !== void 0) patch.endDate = input.endDate;
     if (input.quantity !== void 0) patch.quantity = input.quantity;
     if (input.price !== void 0) patch.price = toMoney(input.price);
-    const where2 = { id: id4, ...input.expectedUpdatedAt !== void 0 ? { updatedAt: input.expectedUpdatedAt } : {} };
+    const where2 = { id: id6, ...input.expectedUpdatedAt !== void 0 ? { updatedAt: input.expectedUpdatedAt } : {} };
     const result = await prisma.subscription.updateMany({ where: where2, data: patch });
     if (result.count === 0) {
       throw new ConflictError("This subscription was changed by someone else since you loaded it. Reload and try again.");
@@ -29758,18 +30636,18 @@ var subscriptionService = {
       actorType: "USER",
       action: "SUBSCRIPTION_UPDATED",
       resourceType: "subscription",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { quantity: existing.quantity, price: existing.price.toString() },
       afterData: patch,
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
-    return loadSubscriptionOrThrow(id4, organizationId);
+    return loadSubscriptionOrThrow(id6, organizationId);
   },
-  async activateSubscription(caller, id4, meta10 = {}) {
+  async activateSubscription(caller, id6, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const existing = await loadSubscriptionOrThrow(id4, organizationId);
-    const count = await subscriptionRepository.transitionStatus(id4, ACTIVATABLE_FROM2, { status: "ACTIVE" });
+    const existing = await loadSubscriptionOrThrow(id6, organizationId);
+    const count = await subscriptionRepository.transitionStatus(id6, ACTIVATABLE_FROM2, { status: "ACTIVE" });
     if (count === 0) throw new ConflictError(`Subscription cannot move from ${existing.status} to ACTIVE.`);
     await auditLogRepository.record({
       organizationId,
@@ -29777,18 +30655,18 @@ var subscriptionService = {
       actorType: "USER",
       action: "SUBSCRIPTION_ACTIVATED",
       resourceType: "subscription",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { status: existing.status },
       afterData: { status: "ACTIVE" },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
-    return loadSubscriptionOrThrow(id4, organizationId);
+    return loadSubscriptionOrThrow(id6, organizationId);
   },
-  async pauseSubscription(caller, id4, meta10 = {}) {
+  async pauseSubscription(caller, id6, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const existing = await loadSubscriptionOrThrow(id4, organizationId);
-    const count = await subscriptionRepository.transitionStatus(id4, PAUSABLE_FROM, { status: "PAUSED" });
+    const existing = await loadSubscriptionOrThrow(id6, organizationId);
+    const count = await subscriptionRepository.transitionStatus(id6, PAUSABLE_FROM, { status: "PAUSED" });
     if (count === 0) throw new ConflictError(`Subscription cannot move from ${existing.status} to PAUSED.`);
     await auditLogRepository.record({
       organizationId,
@@ -29796,19 +30674,19 @@ var subscriptionService = {
       actorType: "USER",
       action: "SUBSCRIPTION_PAUSED",
       resourceType: "subscription",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { status: existing.status },
       afterData: { status: "PAUSED" },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
-    return loadSubscriptionOrThrow(id4, organizationId);
+    return loadSubscriptionOrThrow(id6, organizationId);
   },
-  async cancelSubscription(caller, id4, input, meta10 = {}) {
+  async cancelSubscription(caller, id6, input, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const existing = await loadSubscriptionOrThrow(id4, organizationId);
+    const existing = await loadSubscriptionOrThrow(id6, organizationId);
     const now = /* @__PURE__ */ new Date();
-    const count = await subscriptionRepository.transitionStatus(id4, CANCELLABLE_FROM, {
+    const count = await subscriptionRepository.transitionStatus(id6, CANCELLABLE_FROM, {
       status: "CANCELLED",
       cancelledAt: now,
       cancellationReason: input.reason,
@@ -29821,13 +30699,13 @@ var subscriptionService = {
       actorType: "USER",
       action: "SUBSCRIPTION_CANCELLED",
       resourceType: "subscription",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { status: existing.status },
       afterData: { status: "CANCELLED", reason: input.reason },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
-    return loadSubscriptionOrThrow(id4, organizationId);
+    return loadSubscriptionOrThrow(id6, organizationId);
   }
 };
 
@@ -29835,50 +30713,50 @@ var subscriptionService = {
 init_apiResponse();
 
 // server/schemas/subscriptionSchemas.ts
-import { z as z52 } from "zod";
-var subscriptionStatusSchema = z52.enum(["DRAFT", "TRIALING", "ACTIVE", "PAST_DUE", "PAUSED", "CANCELLED", "EXPIRED"]);
-var billingCycleSchema = z52.enum(["ONE_TIME", "MONTHLY", "QUARTERLY", "ANNUAL"]);
+import { z as z53 } from "zod";
+var subscriptionStatusSchema = z53.enum(["DRAFT", "TRIALING", "ACTIVE", "PAST_DUE", "PAUSED", "CANCELLED", "EXPIRED"]);
+var billingCycleSchema = z53.enum(["ONE_TIME", "MONTHLY", "QUARTERLY", "ANNUAL"]);
 var SORT_FIELDS7 = ["subscriptionNumber", "status", "startDate", "renewalDate", "createdAt", "updatedAt"];
-var listSubscriptionsQuerySchema = z52.object({
+var listSubscriptionsQuerySchema = z53.object({
   ...paginationQuerySchema(SORT_FIELDS7, "createdAt"),
   status: subscriptionStatusSchema.optional(),
-  clientId: z52.string().trim().uuid().optional(),
-  productId: z52.string().trim().uuid().optional()
+  clientId: z53.string().trim().uuid().optional(),
+  productId: z53.string().trim().uuid().optional()
 });
-var subscriptionItemInputSchema = z52.object({
-  productModuleId: z52.string().trim().uuid().optional(),
-  description: z52.string().trim().min(1).max(500),
-  quantity: z52.number().int().positive().default(1),
+var subscriptionItemInputSchema = z53.object({
+  productModuleId: z53.string().trim().uuid().optional(),
+  description: z53.string().trim().min(1).max(500),
+  quantity: z53.number().int().positive().default(1),
   unitPrice: moneyAmountSchema
 });
-var createSubscriptionSchema = z52.object({
-  clientId: z52.string().trim().uuid(),
-  productId: z52.string().trim().uuid(),
-  startDate: z52.coerce.date(),
+var createSubscriptionSchema = z53.object({
+  clientId: z53.string().trim().uuid(),
+  productId: z53.string().trim().uuid(),
+  startDate: z53.coerce.date(),
   billingCycle: billingCycleSchema,
-  quantity: z52.number().int().positive().default(1),
+  quantity: z53.number().int().positive().default(1),
   price: moneyAmountSchema,
   currency: currencyCodeSchema.optional(),
-  items: z52.array(subscriptionItemInputSchema).default([])
+  items: z53.array(subscriptionItemInputSchema).default([])
 });
-var updateSubscriptionSchema = z52.object({
-  renewalDate: z52.coerce.date().nullable().optional(),
-  endDate: z52.coerce.date().nullable().optional(),
-  quantity: z52.number().int().positive().optional(),
+var updateSubscriptionSchema = z53.object({
+  renewalDate: z53.coerce.date().nullable().optional(),
+  endDate: z53.coerce.date().nullable().optional(),
+  quantity: z53.number().int().positive().optional(),
   price: moneyAmountSchema.optional(),
   expectedUpdatedAt: expectedUpdatedAtSchema2
 }).refine((v) => Object.keys(v).some((k) => k !== "expectedUpdatedAt"), { message: "At least one field must be provided." });
-var cancelSubscriptionSchema = z52.object({
-  reason: z52.string().trim().min(1).max(1e3)
+var cancelSubscriptionSchema = z53.object({
+  reason: z53.string().trim().min(1).max(1e3)
 });
 
 // server/routes/v1/subscriptionRoutes.ts
-var router41 = Router47();
-router41.use(authenticateToken);
+var router42 = Router48();
+router42.use(authenticateToken);
 function requestMeta29(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router41.get(
+router42.get(
   "/",
   requirePermission("subscriptions.read"),
   asyncHandler(async (req, res) => {
@@ -29894,7 +30772,7 @@ router41.get(
     sendSuccess(res, { subscriptions: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router41.get(
+router42.get(
   "/:id",
   requirePermission("subscriptions.read"),
   asyncHandler(async (req, res) => {
@@ -29902,7 +30780,7 @@ router41.get(
     sendSuccess(res, { subscription });
   })
 );
-router41.post(
+router42.post(
   "/",
   requirePermission("subscriptions.create"),
   asyncHandler(async (req, res) => {
@@ -29911,7 +30789,7 @@ router41.post(
     sendSuccess(res, { subscription }, 201);
   })
 );
-router41.patch(
+router42.patch(
   "/:id",
   requirePermission("subscriptions.update"),
   asyncHandler(async (req, res) => {
@@ -29920,7 +30798,7 @@ router41.patch(
     sendSuccess(res, { subscription });
   })
 );
-router41.post(
+router42.post(
   "/:id/activate",
   requirePermission("subscriptions.activate"),
   asyncHandler(async (req, res) => {
@@ -29928,7 +30806,7 @@ router41.post(
     sendSuccess(res, { subscription });
   })
 );
-router41.post(
+router42.post(
   "/:id/pause",
   requirePermission("subscriptions.pause"),
   asyncHandler(async (req, res) => {
@@ -29936,7 +30814,7 @@ router41.post(
     sendSuccess(res, { subscription });
   })
 );
-router41.post(
+router42.post(
   "/:id/cancel",
   requirePermission("subscriptions.cancel"),
   asyncHandler(async (req, res) => {
@@ -29945,10 +30823,10 @@ router41.post(
     sendSuccess(res, { subscription });
   })
 );
-var subscriptionRoutes_default = router41;
+var subscriptionRoutes_default = router42;
 
 // server/routes/v1/invoiceRoutes.ts
-import { Router as Router48 } from "express";
+import { Router as Router49 } from "express";
 
 // server/services/paymentService.ts
 init_errors();
@@ -29957,8 +30835,8 @@ function statusForBalance2(amountPaid, amountDue) {
   if (amountPaid.isZero()) return "ISSUED";
   return "PARTIALLY_PAID";
 }
-async function loadPaymentOrThrow(id4, organizationId) {
-  const payment = await paymentRepository.findByIdInOrg(id4, organizationId);
+async function loadPaymentOrThrow(id6, organizationId) {
+  const payment = await paymentRepository.findByIdInOrg(id6, organizationId);
   if (!payment) throw new NotFoundError("Payment not found.");
   return payment;
 }
@@ -29966,12 +30844,12 @@ var paymentService = {
   async listPayments(organizationId, filters, page, limit, sort, order) {
     return paymentRepository.list(organizationId, filters, page, limit, sort, order);
   },
-  async getPayment(organizationId, id4) {
-    return loadPaymentOrThrow(id4, organizationId);
+  async getPayment(organizationId, id6) {
+    return loadPaymentOrThrow(id6, organizationId);
   },
-  async reversePayment(caller, id4, input, meta10 = {}) {
+  async reversePayment(caller, id6, input, meta11 = {}) {
     const organizationId = caller.organizationId;
-    const existing = await loadPaymentOrThrow(id4, organizationId);
+    const existing = await loadPaymentOrThrow(id6, organizationId);
     if (existing.status !== "COMPLETED") {
       throw new ConflictError(`Only a COMPLETED payment can be reversed (current status: ${existing.status}).`);
     }
@@ -29979,7 +30857,7 @@ var paymentService = {
     await prisma.$transaction(async (tx) => {
       await invoiceRepository.lockForPayment(tx, existing.invoiceId);
       const result = await tx.payment.updateMany({
-        where: { id: id4, status: "COMPLETED" },
+        where: { id: id6, status: "COMPLETED" },
         data: { status: "REVERSED", reversalReason: input.reason, reversedById: caller.id, reversedAt }
       });
       if (result.count === 0) throw new ConflictError("This payment was already reversed by someone else.");
@@ -29997,13 +30875,13 @@ var paymentService = {
       actorType: "USER",
       action: "PAYMENT_REVERSED",
       resourceType: "payment",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { status: "COMPLETED", amount: existing.amount.toString() },
       afterData: { status: "REVERSED", reason: input.reason },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
-    return loadPaymentOrThrow(id4, organizationId);
+    return loadPaymentOrThrow(id6, organizationId);
   }
 };
 
@@ -30011,68 +30889,68 @@ var paymentService = {
 init_apiResponse();
 
 // server/schemas/invoiceSchemas.ts
-import { z as z53 } from "zod";
-var invoiceStatusSchema = z53.enum(["DRAFT", "ISSUED", "PARTIALLY_PAID", "PAID", "OVERDUE", "VOID", "CANCELLED"]);
-var paymentMethodSchema = z53.enum(["BANK_TRANSFER", "CARD", "CASH", "CHEQUE", "ONLINE", "OTHER"]);
-var paymentStatusSchema = z53.enum(["PENDING", "COMPLETED", "FAILED", "REVERSED"]);
+import { z as z54 } from "zod";
+var invoiceStatusSchema = z54.enum(["DRAFT", "ISSUED", "PARTIALLY_PAID", "PAID", "OVERDUE", "VOID", "CANCELLED"]);
+var paymentMethodSchema = z54.enum(["BANK_TRANSFER", "CARD", "CASH", "CHEQUE", "ONLINE", "OTHER"]);
+var paymentStatusSchema = z54.enum(["PENDING", "COMPLETED", "FAILED", "REVERSED"]);
 var SORT_FIELDS8 = ["invoiceNumber", "status", "issueDate", "dueDate", "total", "amountDue", "createdAt", "updatedAt"];
-var listInvoicesQuerySchema = z53.object({
+var listInvoicesQuerySchema = z54.object({
   ...paginationQuerySchema(SORT_FIELDS8, "issueDate"),
   status: invoiceStatusSchema.optional(),
-  clientId: z53.string().trim().uuid().optional(),
-  contractId: z53.string().trim().uuid().optional(),
-  subscriptionId: z53.string().trim().uuid().optional(),
-  dateFrom: z53.coerce.date().optional(),
-  dateTo: z53.coerce.date().optional()
+  clientId: z54.string().trim().uuid().optional(),
+  contractId: z54.string().trim().uuid().optional(),
+  subscriptionId: z54.string().trim().uuid().optional(),
+  dateFrom: z54.coerce.date().optional(),
+  dateTo: z54.coerce.date().optional()
 });
-var invoiceItemInputSchema = z53.object({
-  productModuleId: z53.string().trim().uuid().optional(),
-  description: z53.string().trim().min(1).max(500),
-  quantity: z53.number().int().positive().default(1),
+var invoiceItemInputSchema = z54.object({
+  productModuleId: z54.string().trim().uuid().optional(),
+  description: z54.string().trim().min(1).max(500),
+  quantity: z54.number().int().positive().default(1),
   unitPrice: moneyAmountSchema,
   discount: moneyAmountSchema.default("0")
 });
-var createInvoiceSchema = z53.object({
-  clientId: z53.string().trim().uuid(),
-  contractId: z53.string().trim().uuid().optional(),
-  subscriptionId: z53.string().trim().uuid().optional(),
-  issueDate: z53.coerce.date(),
-  dueDate: z53.coerce.date(),
+var createInvoiceSchema = z54.object({
+  clientId: z54.string().trim().uuid(),
+  contractId: z54.string().trim().uuid().optional(),
+  subscriptionId: z54.string().trim().uuid().optional(),
+  issueDate: z54.coerce.date(),
+  dueDate: z54.coerce.date(),
   currency: currencyCodeSchema.optional(),
   discount: moneyAmountSchema.default("0"),
   tax: moneyAmountSchema.default("0"),
-  notes: z53.string().trim().max(5e3).optional(),
-  items: z53.array(invoiceItemInputSchema).min(1, "An invoice needs at least one line item.")
+  notes: z54.string().trim().max(5e3).optional(),
+  items: z54.array(invoiceItemInputSchema).min(1, "An invoice needs at least one line item.")
 });
-var updateInvoiceSchema = z53.object({
-  issueDate: z53.coerce.date().optional(),
-  dueDate: z53.coerce.date().optional(),
+var updateInvoiceSchema = z54.object({
+  issueDate: z54.coerce.date().optional(),
+  dueDate: z54.coerce.date().optional(),
   discount: moneyAmountSchema.optional(),
   tax: moneyAmountSchema.optional(),
-  notes: z53.string().trim().max(5e3).nullable().optional(),
-  items: z53.array(invoiceItemInputSchema).min(1).optional(),
+  notes: z54.string().trim().max(5e3).nullable().optional(),
+  items: z54.array(invoiceItemInputSchema).min(1).optional(),
   expectedUpdatedAt: expectedUpdatedAtSchema2
 }).refine((v) => Object.keys(v).some((k) => k !== "expectedUpdatedAt"), { message: "At least one field must be provided." });
-var issueInvoiceSchema = z53.object({ expectedUpdatedAt: expectedUpdatedAtSchema2 });
-var voidInvoiceSchema = z53.object({
-  reason: z53.string().trim().min(1).max(1e3)
+var issueInvoiceSchema = z54.object({ expectedUpdatedAt: expectedUpdatedAtSchema2 });
+var voidInvoiceSchema = z54.object({
+  reason: z54.string().trim().min(1).max(1e3)
 });
-var recordPaymentSchema = z53.object({
+var recordPaymentSchema = z54.object({
   amount: moneyAmountSchema,
   currency: currencyCodeSchema.optional(),
-  paymentDate: z53.coerce.date(),
+  paymentDate: z54.coerce.date(),
   method: paymentMethodSchema,
-  reference: z53.string().trim().max(200).optional(),
-  notes: z53.string().trim().max(2e3).optional()
+  reference: z54.string().trim().max(200).optional(),
+  notes: z54.string().trim().max(2e3).optional()
 });
 
 // server/routes/v1/invoiceRoutes.ts
-var router42 = Router48();
-router42.use(authenticateToken);
+var router43 = Router49();
+router43.use(authenticateToken);
 function requestMeta30(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router42.get(
+router43.get(
   "/",
   requirePermission("invoices.read"),
   asyncHandler(async (req, res) => {
@@ -30096,7 +30974,7 @@ router42.get(
     sendSuccess(res, { invoices: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router42.get(
+router43.get(
   "/:id",
   requirePermission("invoices.read"),
   asyncHandler(async (req, res) => {
@@ -30104,7 +30982,7 @@ router42.get(
     sendSuccess(res, { invoice });
   })
 );
-router42.post(
+router43.post(
   "/",
   requirePermission("invoices.create"),
   asyncHandler(async (req, res) => {
@@ -30113,7 +30991,7 @@ router42.post(
     sendSuccess(res, { invoice }, 201);
   })
 );
-router42.patch(
+router43.patch(
   "/:id",
   requirePermission("invoices.update"),
   asyncHandler(async (req, res) => {
@@ -30122,7 +31000,7 @@ router42.patch(
     sendSuccess(res, { invoice });
   })
 );
-router42.post(
+router43.post(
   "/:id/issue",
   requirePermission("invoices.issue"),
   asyncHandler(async (req, res) => {
@@ -30131,7 +31009,7 @@ router42.post(
     sendSuccess(res, { invoice });
   })
 );
-router42.post(
+router43.post(
   "/:id/void",
   requirePermission("invoices.void"),
   asyncHandler(async (req, res) => {
@@ -30140,7 +31018,7 @@ router42.post(
     sendSuccess(res, { invoice });
   })
 );
-router42.get(
+router43.get(
   "/:id/payments",
   requirePermission("payments.read"),
   asyncHandler(async (req, res) => {
@@ -30148,7 +31026,7 @@ router42.get(
     sendSuccess(res, { payments: rows }, 200, { page: 1, limit: 100, total });
   })
 );
-router42.post(
+router43.post(
   "/:id/payments",
   requirePermission("payments.create"),
   asyncHandler(async (req, res) => {
@@ -30157,35 +31035,35 @@ router42.post(
     sendSuccess(res, { payment }, 201);
   })
 );
-var invoiceRoutes_default = router42;
+var invoiceRoutes_default = router43;
 
 // server/routes/v1/paymentRoutes.ts
-import { Router as Router49 } from "express";
+import { Router as Router50 } from "express";
 init_apiResponse();
 
 // server/schemas/paymentSchemas.ts
-import { z as z54 } from "zod";
+import { z as z55 } from "zod";
 var SORT_FIELDS9 = ["paymentDate", "amount", "status", "createdAt"];
-var listPaymentsQuerySchema = z54.object({
+var listPaymentsQuerySchema = z55.object({
   ...paginationQuerySchema(SORT_FIELDS9, "paymentDate"),
   status: paymentStatusSchema.optional(),
   method: paymentMethodSchema.optional(),
-  invoiceId: z54.string().trim().uuid().optional(),
-  clientId: z54.string().trim().uuid().optional(),
-  dateFrom: z54.coerce.date().optional(),
-  dateTo: z54.coerce.date().optional()
+  invoiceId: z55.string().trim().uuid().optional(),
+  clientId: z55.string().trim().uuid().optional(),
+  dateFrom: z55.coerce.date().optional(),
+  dateTo: z55.coerce.date().optional()
 });
-var reversePaymentSchema = z54.object({
-  reason: z54.string().trim().min(1).max(1e3)
+var reversePaymentSchema = z55.object({
+  reason: z55.string().trim().min(1).max(1e3)
 });
 
 // server/routes/v1/paymentRoutes.ts
-var router43 = Router49();
-router43.use(authenticateToken);
+var router44 = Router50();
+router44.use(authenticateToken);
 function requestMeta31(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router43.get(
+router44.get(
   "/",
   requirePermission("payments.read"),
   asyncHandler(async (req, res) => {
@@ -30201,7 +31079,7 @@ router43.get(
     sendSuccess(res, { payments: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router43.get(
+router44.get(
   "/:id",
   requirePermission("payments.read"),
   asyncHandler(async (req, res) => {
@@ -30209,7 +31087,7 @@ router43.get(
     sendSuccess(res, { payment });
   })
 );
-router43.post(
+router44.post(
   "/:id/reverse",
   requirePermission("payments.reverse"),
   asyncHandler(async (req, res) => {
@@ -30218,11 +31096,11 @@ router43.post(
     sendSuccess(res, { payment });
   })
 );
-var paymentRoutes_default = router43;
+var paymentRoutes_default = router44;
 
 // server/routes/v1/portalRoutes.ts
-import { Router as Router50 } from "express";
-import { z as z55 } from "zod";
+import { Router as Router51 } from "express";
+import { z as z56 } from "zod";
 
 // server/services/clientPortalService.ts
 init_errors();
@@ -30257,9 +31135,9 @@ var clientPortalService = {
     const { rows, total } = await contractRepository.list(client3.organizationId, { clientId: client3.id }, page, limit, "createdAt", "desc");
     return { rows: rows.map((c) => ({ ...c, currentValue: calculateContractCurrentValue(c.contractValue, c.variations.map((v) => v.amount)) })), total };
   },
-  async getContract(caller, id4) {
+  async getContract(caller, id6) {
     const client3 = await resolveClientForCaller(caller);
-    const contract = await contractRepository.findByIdInOrg(id4, client3.organizationId);
+    const contract = await contractRepository.findByIdInOrg(id6, client3.organizationId);
     if (!contract || contract.clientId !== client3.id) throw new NotFoundError("Contract not found.");
     return { ...contract, currentValue: calculateContractCurrentValue(contract.contractValue, contract.variations.map((v) => v.amount)) };
   },
@@ -30267,9 +31145,9 @@ var clientPortalService = {
     const client3 = await resolveClientForCaller(caller);
     return subscriptionRepository.list(client3.organizationId, { clientId: client3.id }, page, limit, "createdAt", "desc");
   },
-  async getSubscription(caller, id4) {
+  async getSubscription(caller, id6) {
     const client3 = await resolveClientForCaller(caller);
-    const subscription = await subscriptionRepository.findByIdInOrg(id4, client3.organizationId);
+    const subscription = await subscriptionRepository.findByIdInOrg(id6, client3.organizationId);
     if (!subscription || subscription.clientId !== client3.id) throw new NotFoundError("Subscription not found.");
     return subscription;
   },
@@ -30278,9 +31156,9 @@ var clientPortalService = {
     const { rows, total } = await invoiceRepository.list(client3.organizationId, { clientId: client3.id, status }, page, limit, "issueDate", "desc");
     return { rows: rows.map((i) => ({ ...i, effectiveStatus: effectiveInvoiceStatus(i) })), total };
   },
-  async getInvoice(caller, id4) {
+  async getInvoice(caller, id6) {
     const client3 = await resolveClientForCaller(caller);
-    const invoice = await invoiceRepository.findByIdInOrg(id4, client3.organizationId);
+    const invoice = await invoiceRepository.findByIdInOrg(id6, client3.organizationId);
     if (!invoice || invoice.clientId !== client3.id) throw new NotFoundError("Invoice not found.");
     return { ...invoice, effectiveStatus: effectiveInvoiceStatus(invoice) };
   },
@@ -30333,13 +31211,13 @@ var clientPortalService = {
 
 // server/routes/v1/portalRoutes.ts
 init_apiResponse();
-var router44 = Router50();
-router44.use(authenticateToken);
-var pageQuerySchema2 = z55.object({
-  page: z55.coerce.number().int().positive().default(1),
-  limit: z55.coerce.number().int().positive().max(100).default(20)
+var router45 = Router51();
+router45.use(authenticateToken);
+var pageQuerySchema2 = z56.object({
+  page: z56.coerce.number().int().positive().default(1),
+  limit: z56.coerce.number().int().positive().max(100).default(20)
 });
-router44.get(
+router45.get(
   "/dashboard",
   requirePermission("portal.dashboard.read"),
   asyncHandler(async (req, res) => {
@@ -30347,7 +31225,7 @@ router44.get(
     sendSuccess(res, { dashboard });
   })
 );
-router44.get(
+router45.get(
   "/contracts",
   requirePermission("portal.contracts.read"),
   asyncHandler(async (req, res) => {
@@ -30356,7 +31234,7 @@ router44.get(
     sendSuccess(res, { contracts: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router44.get(
+router45.get(
   "/contracts/:id",
   requirePermission("portal.contracts.read"),
   asyncHandler(async (req, res) => {
@@ -30364,7 +31242,7 @@ router44.get(
     sendSuccess(res, { contract });
   })
 );
-router44.get(
+router45.get(
   "/subscriptions",
   requirePermission("portal.subscriptions.read"),
   asyncHandler(async (req, res) => {
@@ -30373,7 +31251,7 @@ router44.get(
     sendSuccess(res, { subscriptions: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router44.get(
+router45.get(
   "/subscriptions/:id",
   requirePermission("portal.subscriptions.read"),
   asyncHandler(async (req, res) => {
@@ -30381,7 +31259,7 @@ router44.get(
     sendSuccess(res, { subscription });
   })
 );
-router44.get(
+router45.get(
   "/invoices",
   requirePermission("portal.invoices.read"),
   asyncHandler(async (req, res) => {
@@ -30390,7 +31268,7 @@ router44.get(
     sendSuccess(res, { invoices: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router44.get(
+router45.get(
   "/invoices/:id",
   requirePermission("portal.invoices.read"),
   asyncHandler(async (req, res) => {
@@ -30398,7 +31276,7 @@ router44.get(
     sendSuccess(res, { invoice });
   })
 );
-router44.get(
+router45.get(
   "/payments",
   requirePermission("portal.payments.read"),
   asyncHandler(async (req, res) => {
@@ -30407,7 +31285,7 @@ router44.get(
     sendSuccess(res, { payments: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router44.get(
+router45.get(
   "/documents",
   requirePermission("portal.documents.read"),
   asyncHandler(async (req, res) => {
@@ -30416,7 +31294,7 @@ router44.get(
     sendSuccess(res, { documents: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router44.get(
+router45.get(
   "/onboarding",
   requirePermission("portal.onboarding.read"),
   asyncHandler(async (req, res) => {
@@ -30424,10 +31302,10 @@ router44.get(
     sendSuccess(res, { onboarding });
   })
 );
-var portalRoutes_default = router44;
+var portalRoutes_default = router45;
 
 // server/routes/v1/publicRoutes.ts
-import { Router as Router51 } from "express";
+import { Router as Router52 } from "express";
 
 // server/services/publicFormService.ts
 init_errors();
@@ -30440,8 +31318,8 @@ function valueToDisplay(value) {
   if (Array.isArray(value)) return value.join(", ");
   return value ?? "";
 }
-function buildNotes(form, fields, data, utm, consentGiven) {
-  const lines = [`Submitted via form: ${form.name}`, ""];
+function buildNotes(form2, fields, data, utm, consentGiven, firstTouch) {
+  const lines = [`Submitted via form: ${form2.name}`, ""];
   for (const field of fields) {
     const value = data[field.key];
     if (value !== void 0 && value !== "") lines.push(`${field.label}: ${valueToDisplay(value)}`);
@@ -30455,29 +31333,40 @@ function buildNotes(form, fields, data, utm, consentGiven) {
     utm.utmContent && `content=${utm.utmContent}`
   ].filter(Boolean);
   if (utmParts.length > 0) lines.push("", `UTM: ${utmParts.join(", ")}`);
+  if (firstTouch) {
+    const ft = [
+      firstTouch.utmSource && `source=${firstTouch.utmSource}`,
+      firstTouch.utmMedium && `medium=${firstTouch.utmMedium}`,
+      firstTouch.utmCampaign && `campaign=${firstTouch.utmCampaign}`,
+      firstTouch.utmTerm && `term=${firstTouch.utmTerm}`,
+      firstTouch.utmContent && `content=${firstTouch.utmContent}`,
+      firstTouch.referrer && `referrer=${firstTouch.referrer}`
+    ].filter(Boolean);
+    if (ft.length > 0) lines.push("", `First touch: ${ft.join(", ")}`);
+  }
   return lines.join("\n");
 }
-function projectFormForPublic(form) {
+function projectFormForPublic(form2) {
   return {
-    id: form.id,
-    name: form.name,
-    slug: form.slug,
-    fields: form.fields,
-    successMessage: form.successMessage || DEFAULT_SUCCESS_MESSAGE
+    id: form2.id,
+    name: form2.name,
+    slug: form2.slug,
+    fields: form2.fields,
+    successMessage: form2.successMessage || DEFAULT_SUCCESS_MESSAGE
   };
 }
 async function loadActiveFormOrThrow(where2, organizationId) {
-  const form = "id" in where2 ? await formRepository.findByIdInOrg(where2.id, organizationId) : await formRepository.findBySlugInOrg(organizationId, where2.slug);
-  if (!form || form.status !== "ACTIVE") throw new NotFoundError("Form not found.");
-  return form;
+  const form2 = "id" in where2 ? await formRepository.findByIdInOrg(where2.id, organizationId) : await formRepository.findBySlugInOrg(organizationId, where2.slug);
+  if (!form2 || form2.status !== "ACTIVE") throw new NotFoundError("Form not found.");
+  return form2;
 }
 var publicFormService = {
   /** Backs the public `GET /public/forms/:slug` (and by-id) read used by the public site's actual form renderer — the Control Center's authoring UI already has its own authenticated read via formService.getForm. */
   async getFormForRender(slugOrId) {
     const organizationId = config.publicWebsiteOrganizationId;
     if (!organizationId) throw new InfrastructureError("Public form intake is not configured.");
-    const form = await loadActiveFormOrThrow(slugOrId, organizationId);
-    return projectFormForPublic(form);
+    const form2 = await loadActiveFormOrThrow(slugOrId, organizationId);
+    return projectFormForPublic(form2);
   },
   /**
    * A non-empty `website` field (the honeypot) means the caller is almost
@@ -30485,21 +31374,21 @@ var publicFormService = {
    * successMessage (§8's "accepted-but-discarded" contract from
    * publicLeadService), but writes nothing.
    */
-  async submit(slug, input, meta10 = {}) {
+  async submit(slug, input, meta11 = {}, ctx = {}) {
     const organizationId = config.publicWebsiteOrganizationId;
     if (!organizationId) {
       throw new InfrastructureError("Public form intake is not configured.");
     }
-    const form = await formRepository.findBySlugInOrg(organizationId, slug);
-    if (!form || form.status !== "ACTIVE") {
+    const form2 = await formRepository.findBySlugInOrg(organizationId, slug);
+    if (!form2 || form2.status !== "ACTIVE") {
       throw new NotFoundError("Form not found.");
     }
-    const successMessage = form.successMessage || DEFAULT_SUCCESS_MESSAGE;
+    const successMessage = form2.successMessage || DEFAULT_SUCCESS_MESSAGE;
     if (input.website) {
       return { successMessage };
     }
     const data = input.data;
-    const fields = form.fields;
+    const fields = form2.fields;
     let consentGiven = null;
     for (const field of fields) {
       const value = data[field.key];
@@ -30528,14 +31417,18 @@ var publicFormService = {
       }
       if (field.type === "checkbox" && field.key === "consent") {
         consentGiven = typeof value === "string" && (value === "true" || value === "on" || value === "yes");
+        if (ctx.requireConsent && field.required && !consentGiven) throw new ValidationError("Please tick the consent box to continue.");
       }
     }
     const emailValue = typeof data.email === "string" ? data.email.trim() || void 0 : void 0;
     const nameValue = typeof data.name === "string" ? data.name.trim() || void 0 : void 0;
     const companyValue = typeof data.company === "string" ? data.company.trim() || void 0 : void 0;
     const phoneValue = typeof data.phone === "string" ? data.phone.trim() || void 0 : void 0;
-    const sourceTag = `form:${form.slug}${input.utmSource ? `:${input.utmSource}` : ""}`;
-    const notes = buildNotes(form, fields, data, input, consentGiven);
+    const sourceTag = ctx.sourceTag ?? `form:${form2.slug}${input.utmSource ? `:${input.utmSource}` : ""}`;
+    const firstTouch = ctx.firstTouch && Object.values(ctx.firstTouch).some(Boolean) ? ctx.firstTouch : void 0;
+    const landingPagePath = ctx.landingPagePath ?? input.landingPagePath;
+    const referrer = ctx.referrer ?? meta11.referrer;
+    const notes = buildNotes(form2, fields, data, input, consentGiven, ctx.firstTouch);
     const campaignId = await campaignAttributionService.resolveCampaignId(organizationId, input.utmCampaign);
     const attribution = {
       utmSource: input.utmSource,
@@ -30543,10 +31436,10 @@ var publicFormService = {
       utmCampaign: input.utmCampaign,
       utmTerm: input.utmTerm,
       utmContent: input.utmContent,
-      landingPagePath: input.landingPagePath,
-      referrer: meta10.referrer,
+      landingPagePath,
+      referrer,
       consentGiven: consentGiven ?? void 0,
-      formId: form.id,
+      formId: form2.id,
       campaignId
     };
     let leadId;
@@ -30563,7 +31456,9 @@ var publicFormService = {
 ---
 
 ${notes}` : notes,
-          ...attribution
+          ...attribution,
+          // First touch is kept from the lead's first contact; a later submission never replaces it.
+          ...existing.firstTouch ? {} : firstTouch ? { firstTouch } : {}
         });
         leadId = updated.id;
       } else {
@@ -30575,7 +31470,8 @@ ${notes}` : notes,
           phone: phoneValue,
           source: sourceTag,
           notes,
-          ...attribution
+          ...attribution,
+          firstTouch
         });
         leadId = lead.id;
       }
@@ -30587,12 +31483,13 @@ ${notes}` : notes,
         phone: phoneValue,
         source: sourceTag,
         notes,
-        ...attribution
+        ...attribution,
+        firstTouch
       });
       leadId = lead.id;
     }
     const submission = await formRepository.createSubmission({
-      formId: form.id,
+      formId: form2.id,
       organizationId,
       data: input.data,
       utmSource: input.utmSource,
@@ -30601,12 +31498,13 @@ ${notes}` : notes,
       utmTerm: input.utmTerm,
       utmContent: input.utmContent,
       leadId,
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent,
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent,
       consentGiven: consentGiven ?? void 0,
-      landingPagePath: input.landingPagePath,
-      referrer: meta10.referrer,
-      campaignId
+      landingPagePath,
+      referrer,
+      campaignId,
+      firstTouch
     });
     await auditLogRepository.record({
       organizationId,
@@ -30615,9 +31513,9 @@ ${notes}` : notes,
       action: "FORM_SUBMITTED",
       resourceType: "form_submission",
       resourceId: submission.id,
-      afterData: { formId: form.id, formSlug: form.slug, leadId },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      afterData: { formId: form2.id, formSlug: form2.slug, leadId },
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     try {
       await eventEngine.emit({
@@ -30627,7 +31525,7 @@ ${notes}` : notes,
         organizationId,
         actorType: "SYSTEM",
         sourceModule: "MARKETING",
-        payload: { formId: form.id, formSlug: form.slug, leadId, campaignId: campaignId ?? null }
+        payload: { formId: form2.id, formSlug: form2.slug, leadId, campaignId: campaignId ?? null }
       });
     } catch {
     }
@@ -30642,20 +31540,20 @@ ${notes}` : notes,
       utmTerm: input.utmTerm,
       utmContent: input.utmContent,
       campaignId,
-      path: input.landingPagePath,
-      referrer: meta10.referrer
+      path: landingPagePath,
+      referrer
     });
-    const notifyUserIds = form.notifyUserIds ?? [];
+    const notifyUserIds = form2.notifyUserIds ?? [];
     for (const userId of notifyUserIds) {
       await notificationService.notify({
         organizationId,
         userId,
         type: "FORM_SUBMITTED",
-        title: `New submission: ${form.name}`,
+        title: `New submission: ${form2.name}`,
         message: nameValue || emailValue ? `From ${nameValue ?? emailValue}` : "A new form submission was received."
       });
     }
-    return { successMessage };
+    return { successMessage, submissionId: submission.id };
   }
 };
 
@@ -30832,7 +31730,7 @@ async function projectCaseStudy(caseStudy) {
   const content = revision?.metadata ?? {};
   const [featuredMedia, gallery, ctaForm] = await Promise.all([
     projectPublicMedia(caseStudy.featuredMedia),
-    Promise.all((content.galleryMediaIds ?? []).map((id4) => mediaRepository.findByIdInOrg(id4, caseStudy.organizationId).then(projectPublicMedia))),
+    Promise.all((content.galleryMediaIds ?? []).map((id6) => mediaRepository.findByIdInOrg(id6, caseStudy.organizationId).then(projectPublicMedia))),
     projectCaseStudyCtaForm(content.ctaFormId)
   ]);
   return {
@@ -31037,9 +31935,9 @@ function projectRelatedProduct(p) {
 }
 async function projectFeaturedMedia(mediaId) {
   if (!mediaId) return null;
-  const orgId = config.publicWebsiteOrganizationId;
-  if (!orgId) return null;
-  const media = await mediaRepository.findByIdInOrg(mediaId, orgId);
+  const orgId2 = config.publicWebsiteOrganizationId;
+  if (!orgId2) return null;
+  const media = await mediaRepository.findByIdInOrg(mediaId, orgId2);
   return projectPublicMedia(media);
 }
 async function projectCtaForm(ctaFormId) {
@@ -31148,7 +32046,7 @@ var publicLeadService = {
    * like a real submission from the caller's point of view, so a bot
    * learns nothing about which field gave it away.
    */
-  async createLead(input, meta10 = {}) {
+  async createLead(input, meta11 = {}) {
     if (input.website) {
       return null;
     }
@@ -31171,7 +32069,7 @@ var publicLeadService = {
       utmTerm: input.utmTerm,
       utmContent: input.utmContent,
       landingPagePath: input.landingPagePath,
-      referrer: meta10.referrer,
+      referrer: meta11.referrer,
       consentGiven: true,
       campaignId
     });
@@ -31183,8 +32081,8 @@ var publicLeadService = {
       resourceType: "lead",
       resourceId: lead.id,
       afterData: { companyName: lead.companyName, source: lead.source },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     try {
       await eventEngine.emit({
@@ -31210,96 +32108,204 @@ var publicLeadService = {
       utmContent: input.utmContent,
       campaignId,
       path: input.landingPagePath,
-      referrer: meta10.referrer
+      referrer: meta11.referrer
     });
     return lead;
   }
 };
 
+// server/services/landing/publicLandingService.ts
+init_errors();
+var orgId = () => config.publicWebsiteOrganizationId;
+async function project4(page, rev, preview) {
+  const doc = readDocument({ editorBlocks: rev.editorBlocks });
+  const seo = readSeo(rev.metadata);
+  const ids = [...collectLandingMediaIds(doc), ...seo.ogImageMediaId ? [seo.ogImageMediaId] : []];
+  const assets = ids.length ? await prisma.mediaAsset.findMany({ where: { id: { in: ids }, organizationId: orgId() } }) : [];
+  const media = {};
+  let ogImageUrl = null;
+  for (const a of assets) {
+    const m = await projectPublicMedia(a);
+    if (!m) continue;
+    media[a.id] = { url: m.url, alt: m.altText ?? "", width: m.width ?? null, height: m.height ?? null };
+    if (a.id === seo.ogImageMediaId) ogImageUrl = m.url;
+  }
+  return {
+    slug: page.slug,
+    title: rev.title,
+    seo: { title: seo.metaTitle || rev.title, description: seo.metaDescription ?? null, noindex: preview ? true : seo.noindex, ogImageUrl },
+    blocks: doc.blocks,
+    media,
+    updatedAt: page.updatedAt.toISOString(),
+    preview
+  };
+}
+var publicLandingService = {
+  isConfigured: () => orgId().length > 0,
+  async getBySlug(slug) {
+    if (!orgId()) return { kind: "notfound" };
+    const page = await prisma.page.findFirst({ where: { organizationId: orgId(), slug, landingBuilder: true, deletedAt: null } });
+    if (!page) {
+      const redirect = await prisma.redirect.findFirst({ where: { organizationId: orgId(), fromPath: landingPath(slug), isActive: true } });
+      if (redirect?.toPath.startsWith("/lp/")) return { kind: "redirect", toPath: redirect.toPath };
+      return { kind: "notfound" };
+    }
+    if (page.status !== "ARCHIVED" && page.landingLiveRevisionId) {
+      const rev = await prisma.contentRevision.findUnique({ where: { id: page.landingLiveRevisionId } });
+      if (rev) return { kind: "ok", page: await project4(page, rev, false) };
+    }
+    if (page.landingUnpublishedAt || page.status === "ARCHIVED" && page.publishedAt) return { kind: "gone" };
+    return { kind: "notfound" };
+  },
+  /** Working draft for a valid, unexpired, unrevoked preview token. The token is only ever compared by hash. */
+  async getPreview(token) {
+    if (!orgId() || !/^[A-Za-z0-9_-]{20,100}$/.test(token)) throw new NotFoundError("Preview not found.");
+    const row = await prisma.landingPreviewToken.findUnique({ where: { tokenHash: hashToken(token) }, include: { page: { include: { currentRevision: true } } } });
+    if (!row || row.revokedAt || row.expiresAt <= /* @__PURE__ */ new Date() || row.page.deletedAt || !row.page.landingBuilder || row.page.organizationId !== orgId() || !row.page.currentRevision) {
+      throw new NotFoundError("Preview not found or expired.");
+    }
+    return project4(row.page, row.page.currentRevision, true);
+  },
+  /** For the sitemap: published AND indexable pages only. */
+  async listIndexable() {
+    if (!orgId()) return [];
+    const pages = await prisma.page.findMany({
+      where: { organizationId: orgId(), landingBuilder: true, deletedAt: null, status: { not: "ARCHIVED" }, landingLiveRevisionId: { not: null } },
+      orderBy: { slug: "asc" },
+      take: 500
+    });
+    if (pages.length === 0) return [];
+    const revs = await prisma.contentRevision.findMany({ where: { id: { in: pages.map((p) => p.landingLiveRevisionId) } }, select: { id: true, metadata: true, publishedAt: true } });
+    const byId = new Map(revs.map((r) => [r.id, r]));
+    return pages.filter((p) => !readSeo(byId.get(p.landingLiveRevisionId)?.metadata).noindex).map((p) => ({ slug: p.slug, path: landingPath(p.slug), updatedAt: (byId.get(p.landingLiveRevisionId)?.publishedAt ?? p.updatedAt).toISOString() }));
+  },
+  /**
+   * Lead form submit. Field keys and consent rules come from the LIVE form block (synced into the managed Form), never from the
+   * request. First touch / last touch attribution and the page path are recorded server-side on the lead.
+   */
+  async submit(slug, input, meta11 = {}) {
+    if (!orgId()) throw new NotFoundError("Landing page not found.");
+    const page = await prisma.page.findFirst({ where: { organizationId: orgId(), slug, landingBuilder: true, deletedAt: null, status: { not: "ARCHIVED" }, landingLiveRevisionId: { not: null } } });
+    if (!page) throw new NotFoundError("Landing page not found.");
+    const rev = await prisma.contentRevision.findUnique({ where: { id: page.landingLiveRevisionId } });
+    const block = readDocument(rev).blocks.find((b) => b.type === "lp_form");
+    if (!block || block.type !== "lp_form") throw new NotFoundError("This page has no form.");
+    const allowed = /* @__PURE__ */ new Set([...block.props.fields.map((f) => f.key), ...block.props.consent.enabled ? ["consent"] : []]);
+    const unknown = Object.keys(input.data).filter((k) => !allowed.has(k));
+    if (unknown.length > 0) throw new ValidationError("The form contains fields that this page does not have.");
+    const last = input.lastTouch ?? {};
+    const first = input.firstTouch ?? input.lastTouch ?? null;
+    const path = landingPath(slug);
+    const { successMessage } = await publicFormService.submit(
+      landingFormSlug(page.id),
+      {
+        data: input.data,
+        website: input.website,
+        utmSource: last.utmSource,
+        utmMedium: last.utmMedium,
+        utmCampaign: last.utmCampaign,
+        utmTerm: last.utmTerm,
+        utmContent: last.utmContent,
+        landingPagePath: path
+      },
+      meta11,
+      {
+        sourceTag: `landing:${slug}${last.utmSource ? `:${last.utmSource}` : ""}`.slice(0, 120),
+        landingPagePath: path,
+        referrer: last.referrer || meta11.referrer,
+        firstTouch: first ? { ...first, landingPath: first.landingPath || path } : null,
+        requireConsent: block.props.consent.enabled
+      }
+    );
+    return { message: successMessage, redirectUrl: block.props.redirectUrl ?? null };
+  }
+};
+
 // server/routes/v1/publicRoutes.ts
+init_errors();
 init_apiResponse();
 
 // server/schemas/publicSchemas.ts
-import { z as z56 } from "zod";
+import { z as z57 } from "zod";
 var SORT_FIELDS10 = ["publishedAt", "createdAt", "title"];
-var listPublicPostsQuerySchema = z56.object({
-  page: z56.coerce.number().int().positive().default(1),
-  limit: z56.coerce.number().int().positive().max(50).default(12),
-  search: z56.string().trim().max(200).optional(),
-  category: z56.string().trim().max(150).optional(),
-  tag: z56.string().trim().max(150).optional(),
-  sort: z56.enum(SORT_FIELDS10).default("publishedAt"),
-  order: z56.enum(["asc", "desc"]).default("desc")
+var listPublicPostsQuerySchema = z57.object({
+  page: z57.coerce.number().int().positive().default(1),
+  limit: z57.coerce.number().int().positive().max(50).default(12),
+  search: z57.string().trim().max(200).optional(),
+  category: z57.string().trim().max(150).optional(),
+  tag: z57.string().trim().max(150).optional(),
+  sort: z57.enum(SORT_FIELDS10).default("publishedAt"),
+  order: z57.enum(["asc", "desc"]).default("desc")
 });
-var listPublicProductsQuerySchema = z56.object({
-  page: z56.coerce.number().int().positive().default(1),
-  limit: z56.coerce.number().int().positive().max(50).default(20),
-  search: z56.string().trim().max(200).optional(),
-  type: z56.enum(["PRODUCT", "SERVICE", "SOLUTION"]).optional(),
+var listPublicProductsQuerySchema = z57.object({
+  page: z57.coerce.number().int().positive().default(1),
+  limit: z57.coerce.number().int().positive().max(50).default(20),
+  search: z57.string().trim().max(200).optional(),
+  type: z57.enum(["PRODUCT", "SERVICE", "SOLUTION"]).optional(),
   // Phase 10 — filter by the real category/industry taxonomy, by slug
   // (never an internal id crossing the public boundary).
-  categorySlug: z56.string().trim().max(100).optional(),
-  industrySlug: z56.string().trim().max(100).optional()
+  categorySlug: z57.string().trim().max(100).optional(),
+  industrySlug: z57.string().trim().max(100).optional()
 });
-var listPublicCaseStudiesQuerySchema = z56.object({
-  page: z56.coerce.number().int().positive().default(1),
-  limit: z56.coerce.number().int().positive().max(50).default(12),
-  search: z56.string().trim().max(200).optional(),
-  industrySlug: z56.string().trim().max(100).optional(),
-  productSlug: z56.string().trim().max(150).optional(),
-  sort: z56.enum(SORT_FIELDS10).default("publishedAt"),
-  order: z56.enum(["asc", "desc"]).default("desc")
+var listPublicCaseStudiesQuerySchema = z57.object({
+  page: z57.coerce.number().int().positive().default(1),
+  limit: z57.coerce.number().int().positive().max(50).default(12),
+  search: z57.string().trim().max(200).optional(),
+  industrySlug: z57.string().trim().max(100).optional(),
+  productSlug: z57.string().trim().max(150).optional(),
+  sort: z57.enum(SORT_FIELDS10).default("publishedAt"),
+  order: z57.enum(["asc", "desc"]).default("desc")
 });
-var publicNavigationMenuTypeSchema = z56.enum(["PRIMARY", "HEADER", "FOOTER", "MOBILE", "CUSTOM"]);
-var publicRedirectLookupQuerySchema = z56.object({
-  path: z56.string().trim().min(1).max(2048).refine((v) => v.startsWith("/") && !v.startsWith("//"), { message: "Must be a site-relative path starting with a single /." })
+var publicNavigationMenuTypeSchema = z57.enum(["PRIMARY", "HEADER", "FOOTER", "MOBILE", "CUSTOM"]);
+var publicRedirectLookupQuerySchema = z57.object({
+  path: z57.string().trim().min(1).max(2048).refine((v) => v.startsWith("/") && !v.startsWith("//"), { message: "Must be a site-relative path starting with a single /." })
 });
-var nonEmptyTrimmed = (max) => z56.string().trim().min(1).max(max);
-var createPublicLeadSchema = z56.object({
+var nonEmptyTrimmed = (max) => z57.string().trim().min(1).max(max);
+var createPublicLeadSchema = z57.object({
   name: nonEmptyTrimmed(200),
-  company: z56.string().trim().max(200).optional(),
-  email: z56.string().trim().email().max(320),
-  phone: z56.string().trim().max(50).optional(),
-  subject: z56.string().trim().max(200).optional(),
+  company: z57.string().trim().max(200).optional(),
+  email: z57.string().trim().email().max(320),
+  phone: z57.string().trim().max(50).optional(),
+  subject: z57.string().trim().max(200).optional(),
   message: nonEmptyTrimmed(5e3),
-  productInterest: z56.string().trim().max(200).optional(),
-  source: z56.enum(["contact_form", "product_inquiry", "project_brief", "other"]).default("contact_form"),
-  consent: z56.literal(true, { errorMap: () => ({ message: "Consent is required to submit this form." }) }),
-  website: z56.string().trim().max(200).optional(),
+  productInterest: z57.string().trim().max(200).optional(),
+  source: z57.enum(["contact_form", "product_inquiry", "project_brief", "other"]).default("contact_form"),
+  consent: z57.literal(true, { errorMap: () => ({ message: "Consent is required to submit this form." }) }),
+  website: z57.string().trim().max(200).optional(),
   // Phase 12 (CRM Integration) — same real attribution capture
   // publicFormSubmitSchema already has for Control-Center-authored
   // Forms, extended to this site's own hardcoded contact/brief form so
   // every lead-capture surface records real source data, not just free text.
-  utmSource: z56.string().trim().max(200).optional(),
-  utmMedium: z56.string().trim().max(200).optional(),
-  utmCampaign: z56.string().trim().max(200).optional(),
-  utmTerm: z56.string().trim().max(200).optional(),
-  utmContent: z56.string().trim().max(200).optional(),
-  landingPagePath: z56.string().trim().max(500).optional()
-});
-
-// server/schemas/analyticsSchemas.ts
-import { z as z57 } from "zod";
-var publicAnalyticsEventSchema = z57.object({
-  eventType: z57.enum(PUBLIC_EVENT_TYPES),
-  path: z57.string().trim().max(500).optional(),
-  referrer: z57.string().trim().max(2e3).optional(),
-  sessionId: z57.string().trim().max(100).optional(),
   utmSource: z57.string().trim().max(200).optional(),
   utmMedium: z57.string().trim().max(200).optional(),
   utmCampaign: z57.string().trim().max(200).optional(),
   utmTerm: z57.string().trim().max(200).optional(),
-  utmContent: z57.string().trim().max(200).optional()
+  utmContent: z57.string().trim().max(200).optional(),
+  landingPagePath: z57.string().trim().max(500).optional()
+});
+
+// server/schemas/analyticsSchemas.ts
+import { z as z58 } from "zod";
+var publicAnalyticsEventSchema = z58.object({
+  eventType: z58.enum(PUBLIC_EVENT_TYPES),
+  path: z58.string().trim().max(500).optional(),
+  referrer: z58.string().trim().max(2e3).optional(),
+  sessionId: z58.string().trim().max(100).optional(),
+  utmSource: z58.string().trim().max(200).optional(),
+  utmMedium: z58.string().trim().max(200).optional(),
+  utmCampaign: z58.string().trim().max(200).optional(),
+  utmTerm: z58.string().trim().max(200).optional(),
+  utmContent: z58.string().trim().max(200).optional()
 });
 var dateRangeShape = {
-  from: z57.coerce.date().optional(),
-  to: z57.coerce.date().optional(),
-  compare: z57.coerce.boolean().optional().default(false)
+  from: z58.coerce.date().optional(),
+  to: z58.coerce.date().optional(),
+  compare: z58.coerce.boolean().optional().default(false)
 };
-var analyticsOverviewQuerySchema = z57.object(dateRangeShape);
-var analyticsTopPagesQuerySchema = z57.object({
+var analyticsOverviewQuerySchema = z58.object(dateRangeShape);
+var analyticsTopPagesQuerySchema = z58.object({
   ...dateRangeShape,
-  limit: z57.coerce.number().int().positive().max(50).default(10)
+  limit: z58.coerce.number().int().positive().max(50).default(10)
 });
 var REPORT_TYPES = [
   "executive_summary",
@@ -31312,14 +32318,14 @@ var REPORT_TYPES = [
   "conversion_report",
   "client_acquisition"
 ];
-var reportQuerySchema = z57.object({
+var reportQuerySchema = z58.object({
   ...dateRangeShape,
-  format: z57.enum(["json", "csv"]).default("json")
+  format: z58.enum(["json", "csv"]).default("json")
 });
 
 // server/routes/v1/publicRoutes.ts
-var router45 = Router51();
-router45.use((req, res, next) => {
+var router46 = Router52();
+router46.use((req, res, next) => {
   if (req.method === "GET" || req.method === "HEAD") {
     res.setHeader("Cache-Control", "public, s-maxage=60, stale-while-revalidate=300");
   }
@@ -31333,34 +32339,34 @@ function requestMeta32(req) {
     referrer: typeof referrerHeader === "string" ? referrerHeader.slice(0, 2e3) : void 0
   };
 }
-router45.get(
+router46.get(
   "/site",
   asyncHandler(async (_req, res) => {
     sendSuccess(res, { configured: publicSiteService.isConfigured() });
   })
 );
-router45.get(
+router46.get(
   "/site-settings",
   asyncHandler(async (_req, res) => {
     const settings = await publicSiteService.getSiteSettings();
     sendSuccess(res, { settings });
   })
 );
-router45.get(
+router46.get(
   "/pages/:slug",
   asyncHandler(async (req, res) => {
     const page = await publicSiteService.getPageBySlug(req.params.slug);
     sendSuccess(res, { page });
   })
 );
-router45.get(
+router46.get(
   "/homepage",
   asyncHandler(async (_req, res) => {
     const page = await publicSiteService.getHomepage();
     sendSuccess(res, { page });
   })
 );
-router45.get(
+router46.get(
   "/navigation-menus/:type",
   asyncHandler(async (req, res) => {
     const type = publicNavigationMenuTypeSchema.parse(req.params.type);
@@ -31368,7 +32374,7 @@ router45.get(
     sendSuccess(res, { menu });
   })
 );
-router45.get(
+router46.get(
   "/posts",
   asyncHandler(async (req, res) => {
     const query = listPublicPostsQuerySchema.parse(req.query);
@@ -31382,14 +32388,14 @@ router45.get(
     sendSuccess(res, { posts: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router45.get(
+router46.get(
   "/posts/:slug",
   asyncHandler(async (req, res) => {
     const post = await publicSiteService.getPostBySlug(req.params.slug);
     sendSuccess(res, { post });
   })
 );
-router45.get(
+router46.get(
   "/case-studies",
   asyncHandler(async (req, res) => {
     const query = listPublicCaseStudiesQuerySchema.parse(req.query);
@@ -31403,28 +32409,28 @@ router45.get(
     sendSuccess(res, { caseStudies: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router45.get(
+router46.get(
   "/case-studies/:slug",
   asyncHandler(async (req, res) => {
     const caseStudy = await publicSiteService.getCaseStudyBySlug(req.params.slug);
     sendSuccess(res, { caseStudy });
   })
 );
-router45.get(
+router46.get(
   "/categories",
   asyncHandler(async (_req, res) => {
     const categories = await publicSiteService.listCategories();
     sendSuccess(res, { categories });
   })
 );
-router45.get(
+router46.get(
   "/tags",
   asyncHandler(async (_req, res) => {
     const tags = await publicSiteService.listTags();
     sendSuccess(res, { tags });
   })
 );
-router45.get(
+router46.get(
   "/products",
   asyncHandler(async (req, res) => {
     const query = listPublicProductsQuerySchema.parse(req.query);
@@ -31436,35 +32442,35 @@ router45.get(
     sendSuccess(res, { products: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router45.get(
+router46.get(
   "/product-categories",
   asyncHandler(async (_req, res) => {
     const categories = await publicProductService.listProductCategories();
     sendSuccess(res, { categories });
   })
 );
-router45.get(
+router46.get(
   "/industries",
   asyncHandler(async (_req, res) => {
     const industries = await publicProductService.listIndustries();
     sendSuccess(res, { industries });
   })
 );
-router45.get(
+router46.get(
   "/products/:slug",
   asyncHandler(async (req, res) => {
     const product = await publicProductService.getProductBySlug(req.params.slug);
     sendSuccess(res, { product });
   })
 );
-router45.get(
+router46.get(
   "/products/:slug/modules",
   asyncHandler(async (req, res) => {
     const modules = await publicProductService.getProductModules(req.params.slug);
     sendSuccess(res, { modules });
   })
 );
-router45.get(
+router46.get(
   "/redirects",
   asyncHandler(async (req, res) => {
     const query = publicRedirectLookupQuerySchema.parse(req.query);
@@ -31472,7 +32478,7 @@ router45.get(
     sendSuccess(res, { redirect });
   })
 );
-router45.post(
+router46.post(
   "/leads",
   publicLeadLimiter,
   asyncHandler(async (req, res) => {
@@ -31481,21 +32487,21 @@ router45.post(
     sendSuccess(res, { message: "Thank you \u2014 your message has been received. We'll be in touch shortly." }, 201);
   })
 );
-router45.get(
+router46.get(
   "/forms/by-id/:id",
   asyncHandler(async (req, res) => {
-    const form = await publicFormService.getFormForRender({ id: req.params.id });
-    sendSuccess(res, { form });
+    const form2 = await publicFormService.getFormForRender({ id: req.params.id });
+    sendSuccess(res, { form: form2 });
   })
 );
-router45.get(
+router46.get(
   "/forms/:slug",
   asyncHandler(async (req, res) => {
-    const form = await publicFormService.getFormForRender({ slug: req.params.slug });
-    sendSuccess(res, { form });
+    const form2 = await publicFormService.getFormForRender({ slug: req.params.slug });
+    sendSuccess(res, { form: form2 });
   })
 );
-router45.post(
+router46.post(
   "/forms/:slug/submit",
   publicLeadLimiter,
   asyncHandler(async (req, res) => {
@@ -31504,7 +32510,36 @@ router45.post(
     sendSuccess(res, { message: successMessage }, 201);
   })
 );
-router45.post(
+router46.get("/landing", asyncHandler(async (_req, res) => {
+  sendSuccess(res, { pages: await publicLandingService.listIndexable() });
+}));
+router46.get("/landing-preview/:token", asyncHandler(async (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("X-Robots-Tag", "noindex, nofollow");
+  sendSuccess(res, { page: await publicLandingService.getPreview(req.params.token) });
+}));
+router46.get("/landing/:slug", asyncHandler(async (req, res) => {
+  const found = await publicLandingService.getBySlug(req.params.slug);
+  if (found.kind === "ok") {
+    sendSuccess(res, { page: found.page });
+    return;
+  }
+  if (found.kind === "gone") {
+    res.status(410).json({ success: false, error: { code: "GONE", message: "This landing page is no longer available." } });
+    return;
+  }
+  if (found.kind === "redirect") {
+    sendSuccess(res, { redirect: { toPath: found.toPath } });
+    return;
+  }
+  throw new NotFoundError("Landing page not found.");
+}));
+router46.post("/landing/:slug/submit", publicLeadLimiter, asyncHandler(async (req, res) => {
+  const input = publicLandingSubmitSchema.parse(req.body);
+  const out = await publicLandingService.submit(req.params.slug, input, requestMeta32(req));
+  sendSuccess(res, out, 201);
+}));
+router46.post(
   "/analytics/events",
   publicAnalyticsLimiter,
   asyncHandler(async (req, res) => {
@@ -31513,18 +32548,18 @@ router45.post(
     sendSuccess(res, { recorded: true }, 201);
   })
 );
-var publicRoutes_default = router45;
+var publicRoutes_default = router46;
 
 // server/routes/v1/aiProviderRoutes.ts
-import { Router as Router52 } from "express";
+import { Router as Router53 } from "express";
 
 // server/repositories/aiProviderRepository.ts
 var aiProviderRepository = {
   async listProviders() {
     return prisma.aIProvider.findMany({ include: { models: true }, orderBy: { name: "asc" } });
   },
-  async getProvider(id4) {
-    return prisma.aIProvider.findUnique({ where: { id: id4 }, include: { models: true } });
+  async getProvider(id6) {
+    return prisma.aIProvider.findUnique({ where: { id: id6 }, include: { models: true } });
   },
   async findProviderByCode(code) {
     return prisma.aIProvider.findUnique({ where: { code } });
@@ -31534,8 +32569,8 @@ var aiProviderRepository = {
       data: { code: input.code, name: input.name, status: input.status ?? "INACTIVE", isDefault: input.isDefault ?? false }
     });
   },
-  async updateProvider(id4, input) {
-    return prisma.aIProvider.update({ where: { id: id4 }, data: input });
+  async updateProvider(id6, input) {
+    return prisma.aIProvider.update({ where: { id: id6 }, data: input });
   },
   async clearDefaultProviders() {
     await prisma.aIProvider.updateMany({ where: { isDefault: true }, data: { isDefault: false } });
@@ -31543,8 +32578,8 @@ var aiProviderRepository = {
   async listModels(providerId) {
     return prisma.aIModel.findMany({ where: providerId ? { providerId } : void 0, orderBy: { displayName: "asc" } });
   },
-  async getModel(id4) {
-    return prisma.aIModel.findUnique({ where: { id: id4 } });
+  async getModel(id6) {
+    return prisma.aIModel.findUnique({ where: { id: id6 } });
   },
   async createModel(input) {
     return prisma.aIModel.create({
@@ -31562,8 +32597,8 @@ var aiProviderRepository = {
       }
     });
   },
-  async updateModel(id4, input) {
-    return prisma.aIModel.update({ where: { id: id4 }, data: input });
+  async updateModel(id6, input) {
+    return prisma.aIModel.update({ where: { id: id6 }, data: input });
   },
   async clearDefaultModels(providerId) {
     await prisma.aIModel.updateMany({ where: { providerId, isDefault: true }, data: { isDefault: false } });
@@ -31576,12 +32611,12 @@ var aiProviderService = {
   async listProviders() {
     return aiProviderRepository.listProviders();
   },
-  async getProvider(id4) {
-    const provider = await aiProviderRepository.getProvider(id4);
+  async getProvider(id6) {
+    const provider = await aiProviderRepository.getProvider(id6);
     if (!provider) throw new NotFoundError("AI provider not found.");
     return provider;
   },
-  async createProvider(caller, input, meta10 = {}) {
+  async createProvider(caller, input, meta11 = {}) {
     const existing = await aiProviderRepository.findProviderByCode(input.code);
     if (existing) throw new ConflictError(`An AI provider with code "${input.code}" already exists.`);
     if (input.isDefault) await aiProviderRepository.clearDefaultProviders();
@@ -31594,32 +32629,32 @@ var aiProviderService = {
       resourceType: "ai_provider",
       resourceId: provider.id,
       afterData: { code: provider.code, status: provider.status },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return provider;
   },
-  async updateProvider(caller, id4, input, meta10 = {}) {
-    await this.getProvider(id4);
+  async updateProvider(caller, id6, input, meta11 = {}) {
+    await this.getProvider(id6);
     if (input.isDefault) await aiProviderRepository.clearDefaultProviders();
-    const provider = await aiProviderRepository.updateProvider(id4, input);
+    const provider = await aiProviderRepository.updateProvider(id6, input);
     await auditLogRepository.record({
       organizationId: caller.organizationId,
       actorUserId: caller.id,
       actorType: "USER",
       action: "AI_PROVIDER_UPDATED",
       resourceType: "ai_provider",
-      resourceId: id4,
+      resourceId: id6,
       afterData: input,
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return provider;
   },
   async listModels(providerId) {
     return aiProviderRepository.listModels(providerId);
   },
-  async createModel(caller, input, meta10 = {}) {
+  async createModel(caller, input, meta11 = {}) {
     await this.getProvider(input.providerId);
     if (input.isDefault) await aiProviderRepository.clearDefaultModels(input.providerId);
     const model = await aiProviderRepository.createModel(input);
@@ -31631,26 +32666,26 @@ var aiProviderService = {
       resourceType: "ai_model",
       resourceId: model.id,
       afterData: { providerId: model.providerId, modelId: model.modelId },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return model;
   },
-  async updateModel(caller, id4, input, meta10 = {}) {
-    const existing = await aiProviderRepository.getModel(id4);
+  async updateModel(caller, id6, input, meta11 = {}) {
+    const existing = await aiProviderRepository.getModel(id6);
     if (!existing) throw new NotFoundError("AI model not found.");
     if (input.isDefault) await aiProviderRepository.clearDefaultModels(existing.providerId);
-    const model = await aiProviderRepository.updateModel(id4, input);
+    const model = await aiProviderRepository.updateModel(id6, input);
     await auditLogRepository.record({
       organizationId: caller.organizationId,
       actorUserId: caller.id,
       actorType: "USER",
       action: "AI_MODEL_UPDATED",
       resourceType: "ai_model",
-      resourceId: id4,
+      resourceId: id6,
       afterData: input,
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return model;
   }
@@ -31660,116 +32695,116 @@ var aiProviderService = {
 init_apiResponse();
 
 // server/schemas/aiSchemas.ts
-import { z as z58 } from "zod";
-var createAiProviderSchema = z58.object({
-  code: z58.string().trim().min(1).max(50),
-  name: z58.string().trim().min(1).max(200),
-  status: z58.enum(["ACTIVE", "INACTIVE"]).optional(),
-  isDefault: z58.boolean().optional()
+import { z as z59 } from "zod";
+var createAiProviderSchema = z59.object({
+  code: z59.string().trim().min(1).max(50),
+  name: z59.string().trim().min(1).max(200),
+  status: z59.enum(["ACTIVE", "INACTIVE"]).optional(),
+  isDefault: z59.boolean().optional()
 });
-var updateAiProviderSchema = z58.object({
-  name: z58.string().trim().min(1).max(200).optional(),
-  status: z58.enum(["ACTIVE", "INACTIVE"]).optional(),
-  isDefault: z58.boolean().optional()
+var updateAiProviderSchema = z59.object({
+  name: z59.string().trim().min(1).max(200).optional(),
+  status: z59.enum(["ACTIVE", "INACTIVE"]).optional(),
+  isDefault: z59.boolean().optional()
 });
-var createAiModelSchema = z58.object({
-  providerId: z58.string().uuid(),
-  modelId: z58.string().trim().min(1).max(100),
-  displayName: z58.string().trim().min(1).max(200),
-  contextWindow: z58.number().int().positive().optional(),
-  supportsStructuredOutput: z58.boolean().optional(),
-  supportsToolCalling: z58.boolean().optional(),
-  inputPricePerMillionTokens: z58.number().nonnegative().optional(),
-  outputPricePerMillionTokens: z58.number().nonnegative().optional(),
-  isActive: z58.boolean().optional(),
-  isDefault: z58.boolean().optional()
+var createAiModelSchema = z59.object({
+  providerId: z59.string().uuid(),
+  modelId: z59.string().trim().min(1).max(100),
+  displayName: z59.string().trim().min(1).max(200),
+  contextWindow: z59.number().int().positive().optional(),
+  supportsStructuredOutput: z59.boolean().optional(),
+  supportsToolCalling: z59.boolean().optional(),
+  inputPricePerMillionTokens: z59.number().nonnegative().optional(),
+  outputPricePerMillionTokens: z59.number().nonnegative().optional(),
+  isActive: z59.boolean().optional(),
+  isDefault: z59.boolean().optional()
 });
 var updateAiModelSchema = createAiModelSchema.partial().omit({ providerId: true, modelId: true });
-var updateAiOrgToolSettingSchema = z58.object({
-  enabled: z58.boolean().optional(),
-  requireApprovalOverride: z58.boolean().nullable().optional()
+var updateAiOrgToolSettingSchema = z59.object({
+  enabled: z59.boolean().optional(),
+  requireApprovalOverride: z59.boolean().nullable().optional()
 });
 var PROMPT_SORT_FIELDS = ["key", "name", "status", "createdAt", "updatedAt"];
-var listAiPromptsQuerySchema = z58.object(paginationQuerySchema(PROMPT_SORT_FIELDS, "createdAt", "desc"));
-var createAiPromptTemplateSchema = z58.object({
-  key: z58.string().trim().min(1).max(100).regex(/^[a-z0-9._-]+$/, "key must be lowercase, URL-safe (letters, numbers, dots, hyphens, underscores)"),
-  name: z58.string().trim().min(1).max(200),
-  purpose: z58.string().trim().max(1e3).optional(),
-  systemInstructions: z58.string().trim().min(1).max(2e4),
-  userTemplate: z58.string().trim().min(1).max(2e4),
-  variablesSchema: z58.record(z58.unknown()).optional()
+var listAiPromptsQuerySchema = z59.object(paginationQuerySchema(PROMPT_SORT_FIELDS, "createdAt", "desc"));
+var createAiPromptTemplateSchema = z59.object({
+  key: z59.string().trim().min(1).max(100).regex(/^[a-z0-9._-]+$/, "key must be lowercase, URL-safe (letters, numbers, dots, hyphens, underscores)"),
+  name: z59.string().trim().min(1).max(200),
+  purpose: z59.string().trim().max(1e3).optional(),
+  systemInstructions: z59.string().trim().min(1).max(2e4),
+  userTemplate: z59.string().trim().min(1).max(2e4),
+  variablesSchema: z59.record(z59.unknown()).optional()
 });
-var createAiPromptVersionSchema = z58.object({
-  systemInstructions: z58.string().trim().min(1).max(2e4),
-  userTemplate: z58.string().trim().min(1).max(2e4),
-  variablesSchema: z58.record(z58.unknown()).optional()
+var createAiPromptVersionSchema = z59.object({
+  systemInstructions: z59.string().trim().min(1).max(2e4),
+  userTemplate: z59.string().trim().min(1).max(2e4),
+  variablesSchema: z59.record(z59.unknown()).optional()
 });
-var updateAiPromptTemplateSchema = z58.object({
-  name: z58.string().trim().min(1).max(200).optional(),
-  purpose: z58.string().trim().max(1e3).nullable().optional(),
-  status: z58.enum(["DRAFT", "ACTIVE", "ARCHIVED"]).optional()
+var updateAiPromptTemplateSchema = z59.object({
+  name: z59.string().trim().min(1).max(200).optional(),
+  purpose: z59.string().trim().max(1e3).nullable().optional(),
+  status: z59.enum(["DRAFT", "ACTIVE", "ARCHIVED"]).optional()
 });
-var publishAiPromptVersionSchema = z58.object({
-  versionId: z58.string().uuid()
+var publishAiPromptVersionSchema = z59.object({
+  versionId: z59.string().uuid()
 });
 var WORKFLOW_SORT_FIELDS = ["key", "name", "status", "createdAt", "updatedAt"];
-var listAiWorkflowsQuerySchema = z58.object(paginationQuerySchema(WORKFLOW_SORT_FIELDS, "createdAt", "desc"));
-var workflowStepSchema = z58.object({
-  order: z58.number().int().nonnegative(),
-  toolCode: z58.string().trim().min(1).max(100),
-  description: z58.string().trim().max(500).optional()
+var listAiWorkflowsQuerySchema = z59.object(paginationQuerySchema(WORKFLOW_SORT_FIELDS, "createdAt", "desc"));
+var workflowStepSchema = z59.object({
+  order: z59.number().int().nonnegative(),
+  toolCode: z59.string().trim().min(1).max(100),
+  description: z59.string().trim().max(500).optional()
 });
-var createAiWorkflowSchema = z58.object({
-  key: z58.string().trim().min(1).max(100).regex(/^[a-z0-9._-]+$/, "key must be lowercase, URL-safe (letters, numbers, dots, hyphens, underscores)"),
-  name: z58.string().trim().min(1).max(200),
-  description: z58.string().trim().max(2e3).optional(),
-  steps: z58.array(workflowStepSchema).min(1).max(10),
-  maxSteps: z58.number().int().positive().max(10).optional(),
-  timeoutMs: z58.number().int().positive().max(12e4).optional()
+var createAiWorkflowSchema = z59.object({
+  key: z59.string().trim().min(1).max(100).regex(/^[a-z0-9._-]+$/, "key must be lowercase, URL-safe (letters, numbers, dots, hyphens, underscores)"),
+  name: z59.string().trim().min(1).max(200),
+  description: z59.string().trim().max(2e3).optional(),
+  steps: z59.array(workflowStepSchema).min(1).max(10),
+  maxSteps: z59.number().int().positive().max(10).optional(),
+  timeoutMs: z59.number().int().positive().max(12e4).optional()
 });
-var updateAiWorkflowSchema = z58.object({
-  name: z58.string().trim().min(1).max(200).optional(),
-  description: z58.string().trim().max(2e3).nullable().optional(),
-  steps: z58.array(workflowStepSchema).min(1).max(10).optional(),
-  maxSteps: z58.number().int().positive().max(10).optional(),
-  timeoutMs: z58.number().int().positive().max(12e4).optional(),
+var updateAiWorkflowSchema = z59.object({
+  name: z59.string().trim().min(1).max(200).optional(),
+  description: z59.string().trim().max(2e3).nullable().optional(),
+  steps: z59.array(workflowStepSchema).min(1).max(10).optional(),
+  maxSteps: z59.number().int().positive().max(10).optional(),
+  timeoutMs: z59.number().int().positive().max(12e4).optional(),
   expectedUpdatedAt: expectedUpdatedAtSchema2
 });
-var executeAiWorkflowSchema = z58.object({
+var executeAiWorkflowSchema = z59.object({
   /** Keyed by step order — each step's tool input, supplied by the caller (Phase 12 has no autonomous planning, see AIWorkflow's schema.prisma doc comment). */
-  stepInputs: z58.record(z58.string(), z58.record(z58.unknown())).default({})
+  stepInputs: z59.record(z59.string(), z59.record(z59.unknown())).default({})
 });
-var executeAiToolSchema = z58.object({
-  toolCode: z58.string().trim().min(1).max(100),
-  input: z58.record(z58.unknown()).default({})
+var executeAiToolSchema = z59.object({
+  toolCode: z59.string().trim().min(1).max(100),
+  input: z59.record(z59.unknown()).default({})
 });
 var EXECUTION_SORT_FIELDS = ["createdAt", "startedAt", "status"];
-var listAiExecutionsQuerySchema = z58.object({
+var listAiExecutionsQuerySchema = z59.object({
   ...paginationQuerySchema(EXECUTION_SORT_FIELDS, "createdAt", "desc"),
-  kind: z58.enum(["TOOL_CALL", "WORKFLOW"]).optional(),
-  status: z58.enum(["PENDING", "RUNNING", "AWAITING_APPROVAL", "COMPLETED", "FAILED", "CANCELLED"]).optional()
+  kind: z59.enum(["TOOL_CALL", "WORKFLOW"]).optional(),
+  status: z59.enum(["PENDING", "RUNNING", "AWAITING_APPROVAL", "COMPLETED", "FAILED", "CANCELLED"]).optional()
 });
-var usageSummaryQuerySchema = z58.object({
-  dateFrom: z58.coerce.date().optional(),
-  dateTo: z58.coerce.date().optional()
+var usageSummaryQuerySchema = z59.object({
+  dateFrom: z59.coerce.date().optional(),
+  dateTo: z59.coerce.date().optional()
 });
 var APPROVAL_SORT_FIELDS = ["createdAt", "expiresAt", "status"];
-var listAiApprovalsQuerySchema = z58.object({
+var listAiApprovalsQuerySchema = z59.object({
   ...paginationQuerySchema(APPROVAL_SORT_FIELDS, "createdAt", "desc"),
-  status: z58.enum(["PENDING", "APPROVED", "REJECTED", "EXPIRED"]).optional()
+  status: z59.enum(["PENDING", "APPROVED", "REJECTED", "EXPIRED"]).optional()
 });
-var decideAiApprovalSchema = z58.object({
-  decision: z58.enum(["APPROVE", "REJECT"]),
-  rejectionReason: z58.string().trim().max(2e3).optional()
+var decideAiApprovalSchema = z59.object({
+  decision: z59.enum(["APPROVE", "REJECT"]),
+  rejectionReason: z59.string().trim().max(2e3).optional()
 });
 
 // server/routes/v1/aiProviderRoutes.ts
-var router46 = Router52();
-router46.use(authenticateToken);
+var router47 = Router53();
+router47.use(authenticateToken);
 function requestMeta33(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"], requestId: req.requestId };
 }
-router46.get(
+router47.get(
   "/",
   requirePermission("ai.providers.read"),
   asyncHandler(async (_req, res) => {
@@ -31777,7 +32812,7 @@ router46.get(
     sendSuccess(res, { providers });
   })
 );
-router46.post(
+router47.post(
   "/",
   requirePermission("ai.providers.manage"),
   asyncHandler(async (req, res) => {
@@ -31786,7 +32821,7 @@ router46.post(
     sendSuccess(res, { provider }, 201);
   })
 );
-router46.patch(
+router47.patch(
   "/:id",
   requirePermission("ai.providers.manage"),
   asyncHandler(async (req, res) => {
@@ -31795,7 +32830,7 @@ router46.patch(
     sendSuccess(res, { provider });
   })
 );
-router46.get(
+router47.get(
   "/models",
   requirePermission("ai.models.read"),
   asyncHandler(async (req, res) => {
@@ -31804,7 +32839,7 @@ router46.get(
     sendSuccess(res, { models });
   })
 );
-router46.post(
+router47.post(
   "/models",
   requirePermission("ai.models.manage"),
   asyncHandler(async (req, res) => {
@@ -31813,7 +32848,7 @@ router46.post(
     sendSuccess(res, { model }, 201);
   })
 );
-router46.patch(
+router47.patch(
   "/models/:id",
   requirePermission("ai.models.manage"),
   asyncHandler(async (req, res) => {
@@ -31822,10 +32857,10 @@ router46.patch(
     sendSuccess(res, { model });
   })
 );
-var aiProviderRoutes_default = router46;
+var aiProviderRoutes_default = router47;
 
 // server/routes/v1/aiToolRoutes.ts
-import { Router as Router53 } from "express";
+import { Router as Router54 } from "express";
 
 // server/repositories/aiToolRepository.ts
 var aiToolRepository = {
@@ -31867,7 +32902,7 @@ var aiToolService = {
       requireApprovalOverride: settingByCode.get(tool2.code)?.requireApprovalOverride ?? null
     }));
   },
-  async updateOrgSetting(caller, toolCode, input, meta10 = {}) {
+  async updateOrgSetting(caller, toolCode, input, meta11 = {}) {
     const tool2 = await aiToolRepository.getToolByCode(toolCode);
     if (!tool2) throw new NotFoundError(`AI tool "${toolCode}" not found.`);
     const setting = await aiToolRepository.upsertOrgSetting(caller.organizationId, toolCode, input);
@@ -31879,8 +32914,8 @@ var aiToolService = {
       resourceType: "ai_tool",
       resourceId: toolCode,
       afterData: { enabled: setting.enabled, requireApprovalOverride: setting.requireApprovalOverride },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return setting;
   }
@@ -31888,12 +32923,12 @@ var aiToolService = {
 
 // server/routes/v1/aiToolRoutes.ts
 init_apiResponse();
-var router47 = Router53();
-router47.use(authenticateToken);
+var router48 = Router54();
+router48.use(authenticateToken);
 function requestMeta34(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"], requestId: req.requestId };
 }
-router47.get(
+router48.get(
   "/",
   requirePermission("ai.tools.read"),
   asyncHandler(async (req, res) => {
@@ -31901,7 +32936,7 @@ router47.get(
     sendSuccess(res, { tools });
   })
 );
-router47.patch(
+router48.patch(
   "/:code/settings",
   requirePermission("ai.tools.manage"),
   asyncHandler(async (req, res) => {
@@ -31910,15 +32945,15 @@ router47.patch(
     sendSuccess(res, { setting });
   })
 );
-var aiToolRoutes_default = router47;
+var aiToolRoutes_default = router48;
 
 // server/routes/v1/aiPromptRoutes.ts
-import { Router as Router54 } from "express";
+import { Router as Router55 } from "express";
 
 // server/services/aiPromptService.ts
 init_errors();
-async function loadTemplateOrThrow2(id4, organizationId) {
-  const template = await aiPromptRepository.findByIdInOrg(id4, organizationId);
+async function loadTemplateOrThrow2(id6, organizationId) {
+  const template = await aiPromptRepository.findByIdInOrg(id6, organizationId);
   if (!template) throw new NotFoundError("Prompt template not found.");
   return template;
 }
@@ -31926,10 +32961,10 @@ var aiPromptService = {
   async listTemplates(organizationId, filters, page, limit, sort, order) {
     return aiPromptRepository.list(organizationId, filters, page, limit, sort, order);
   },
-  async getTemplate(organizationId, id4) {
-    return loadTemplateOrThrow2(id4, organizationId);
+  async getTemplate(organizationId, id6) {
+    return loadTemplateOrThrow2(id6, organizationId);
   },
-  async createTemplate(caller, input, meta10 = {}) {
+  async createTemplate(caller, input, meta11 = {}) {
     const existing = await aiPromptRepository.findByKeyInOrg(input.key, caller.organizationId);
     if (existing) throw new ConflictError(`A prompt template with key "${input.key}" already exists in this organization.`);
     const template = await aiPromptRepository.create(caller.organizationId, caller.id, input);
@@ -31941,12 +32976,12 @@ var aiPromptService = {
       resourceType: "ai_prompt_template",
       resourceId: template.id,
       afterData: { key: template.key, name: template.name },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return template;
   },
-  async createVersion(caller, templateId, input, meta10 = {}) {
+  async createVersion(caller, templateId, input, meta11 = {}) {
     await loadTemplateOrThrow2(templateId, caller.organizationId);
     const version = await aiPromptRepository.createVersion(templateId, caller.id, input);
     await auditLogRepository.record({
@@ -31957,28 +32992,28 @@ var aiPromptService = {
       resourceType: "ai_prompt_version",
       resourceId: version.id,
       afterData: { templateId, version: version.version },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return version;
   },
-  async updateTemplate(caller, id4, input, meta10 = {}) {
-    await loadTemplateOrThrow2(id4, caller.organizationId);
-    const template = await aiPromptRepository.update(id4, caller.id, input);
+  async updateTemplate(caller, id6, input, meta11 = {}) {
+    await loadTemplateOrThrow2(id6, caller.organizationId);
+    const template = await aiPromptRepository.update(id6, caller.id, input);
     await auditLogRepository.record({
       organizationId: caller.organizationId,
       actorUserId: caller.id,
       actorType: "USER",
       action: "AI_PROMPT_TEMPLATE_UPDATED",
       resourceType: "ai_prompt_template",
-      resourceId: id4,
+      resourceId: id6,
       afterData: input,
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return template;
   },
-  async publishVersion(caller, templateId, versionId, meta10 = {}) {
+  async publishVersion(caller, templateId, versionId, meta11 = {}) {
     await loadTemplateOrThrow2(templateId, caller.organizationId);
     const version = await aiPromptRepository.findVersionInTemplate(templateId, versionId);
     if (!version) throw new ValidationError("versionId does not refer to a version of this prompt template.");
@@ -31994,35 +33029,35 @@ var aiPromptService = {
       resourceType: "ai_prompt_template",
       resourceId: templateId,
       afterData: { versionId },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return aiPromptRepository.findByIdInOrg(templateId, caller.organizationId);
   },
-  async deleteTemplate(caller, id4, meta10 = {}) {
-    await loadTemplateOrThrow2(id4, caller.organizationId);
-    await aiPromptRepository.update(id4, caller.id, { status: "ARCHIVED" });
+  async deleteTemplate(caller, id6, meta11 = {}) {
+    await loadTemplateOrThrow2(id6, caller.organizationId);
+    await aiPromptRepository.update(id6, caller.id, { status: "ARCHIVED" });
     await auditLogRepository.record({
       organizationId: caller.organizationId,
       actorUserId: caller.id,
       actorType: "USER",
       action: "AI_PROMPT_TEMPLATE_ARCHIVED",
       resourceType: "ai_prompt_template",
-      resourceId: id4,
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      resourceId: id6,
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
   }
 };
 
 // server/routes/v1/aiPromptRoutes.ts
 init_apiResponse();
-var router48 = Router54();
-router48.use(authenticateToken);
+var router49 = Router55();
+router49.use(authenticateToken);
 function requestMeta35(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"], requestId: req.requestId };
 }
-router48.get(
+router49.get(
   "/",
   requirePermission("ai.prompts.read"),
   asyncHandler(async (req, res) => {
@@ -32038,7 +33073,7 @@ router48.get(
     sendSuccess(res, { promptTemplates: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router48.get(
+router49.get(
   "/:id",
   requirePermission("ai.prompts.read"),
   asyncHandler(async (req, res) => {
@@ -32046,7 +33081,7 @@ router48.get(
     sendSuccess(res, { promptTemplate });
   })
 );
-router48.post(
+router49.post(
   "/",
   requirePermission("ai.prompts.create"),
   asyncHandler(async (req, res) => {
@@ -32055,7 +33090,7 @@ router48.post(
     sendSuccess(res, { promptTemplate }, 201);
   })
 );
-router48.patch(
+router49.patch(
   "/:id",
   requirePermission("ai.prompts.update"),
   asyncHandler(async (req, res) => {
@@ -32064,7 +33099,7 @@ router48.patch(
     sendSuccess(res, { promptTemplate });
   })
 );
-router48.post(
+router49.post(
   "/:id/versions",
   requirePermission("ai.prompts.update"),
   asyncHandler(async (req, res) => {
@@ -32073,7 +33108,7 @@ router48.post(
     sendSuccess(res, { version }, 201);
   })
 );
-router48.post(
+router49.post(
   "/:id/publish",
   requirePermission("ai.prompts.publish"),
   asyncHandler(async (req, res) => {
@@ -32082,7 +33117,7 @@ router48.post(
     sendSuccess(res, { promptTemplate });
   })
 );
-router48.delete(
+router49.delete(
   "/:id",
   requirePermission("ai.prompts.delete"),
   asyncHandler(async (req, res) => {
@@ -32090,10 +33125,10 @@ router48.delete(
     sendSuccess(res, { archived: true });
   })
 );
-var aiPromptRoutes_default = router48;
+var aiPromptRoutes_default = router49;
 
 // server/routes/v1/aiWorkflowRoutes.ts
-import { Router as Router55 } from "express";
+import { Router as Router56 } from "express";
 
 // server/repositories/aiWorkflowRepository.ts
 var aiWorkflowRepository = {
@@ -32109,8 +33144,8 @@ var aiWorkflowRepository = {
     ]);
     return { rows, total };
   },
-  async findByIdInOrg(id4, organizationId) {
-    return prisma.aIWorkflow.findFirst({ where: { id: id4, organizationId } });
+  async findByIdInOrg(id6, organizationId) {
+    return prisma.aIWorkflow.findFirst({ where: { id: id6, organizationId } });
   },
   async findByKeyInOrg(key2, organizationId) {
     return prisma.aIWorkflow.findUnique({ where: { organizationId_key: { organizationId, key: key2 } } });
@@ -32132,14 +33167,14 @@ var aiWorkflowRepository = {
       }
     });
   },
-  async update(id4, updatedById, input) {
+  async update(id6, updatedById, input) {
     return prisma.aIWorkflow.update({
-      where: { id: id4 },
+      where: { id: id6 },
       data: { ...input, updatedById, ...input.steps ? { version: { increment: 1 } } : {} }
     });
   },
-  async setStatus(id4, status, updatedById) {
-    return prisma.aIWorkflow.update({ where: { id: id4 }, data: { status, updatedById } });
+  async setStatus(id6, status, updatedById) {
+    return prisma.aIWorkflow.update({ where: { id: id6 }, data: { status, updatedById } });
   }
 };
 
@@ -32155,8 +33190,8 @@ function assertStepsValid(steps, maxSteps) {
     }
   }
 }
-async function loadWorkflowOrThrow(id4, organizationId) {
-  const workflow = await aiWorkflowRepository.findByIdInOrg(id4, organizationId);
+async function loadWorkflowOrThrow(id6, organizationId) {
+  const workflow = await aiWorkflowRepository.findByIdInOrg(id6, organizationId);
   if (!workflow) throw new NotFoundError("AI workflow not found.");
   return workflow;
 }
@@ -32164,10 +33199,10 @@ var aiWorkflowService = {
   async listWorkflows(organizationId, filters, page, limit, sort, order) {
     return aiWorkflowRepository.list(organizationId, filters, page, limit, sort, order);
   },
-  async getWorkflow(organizationId, id4) {
-    return loadWorkflowOrThrow(id4, organizationId);
+  async getWorkflow(organizationId, id6) {
+    return loadWorkflowOrThrow(id6, organizationId);
   },
-  async createWorkflow(caller, input, meta10 = {}) {
+  async createWorkflow(caller, input, meta11 = {}) {
     const existing = await aiWorkflowRepository.findByKeyInOrg(input.key, caller.organizationId);
     if (existing) throw new ConflictError(`A workflow with key "${input.key}" already exists in this organization.`);
     assertStepsValid(input.steps, input.maxSteps ?? 10);
@@ -32180,13 +33215,13 @@ var aiWorkflowService = {
       resourceType: "ai_workflow",
       resourceId: workflow.id,
       afterData: { key: workflow.key, name: workflow.name },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return workflow;
   },
-  async updateWorkflow(caller, id4, input, meta10 = {}) {
-    const existing = await loadWorkflowOrThrow(id4, caller.organizationId);
+  async updateWorkflow(caller, id6, input, meta11 = {}) {
+    const existing = await loadWorkflowOrThrow(id6, caller.organizationId);
     if (input.expectedUpdatedAt && existing.updatedAt.getTime() !== input.expectedUpdatedAt.getTime()) {
       throw new ConflictError("This workflow was modified by someone else since you loaded it.");
     }
@@ -32194,47 +33229,47 @@ var aiWorkflowService = {
     if (patch.steps) {
       assertStepsValid(patch.steps, patch.maxSteps ?? existing.maxSteps);
     }
-    const workflow = await aiWorkflowRepository.update(id4, caller.id, patch);
+    const workflow = await aiWorkflowRepository.update(id6, caller.id, patch);
     await auditLogRepository.record({
       organizationId: caller.organizationId,
       actorUserId: caller.id,
       actorType: "USER",
       action: "AI_WORKFLOW_UPDATED",
       resourceType: "ai_workflow",
-      resourceId: id4,
+      resourceId: id6,
       afterData: patch,
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return workflow;
   },
-  async publishWorkflow(caller, id4, meta10 = {}) {
-    await loadWorkflowOrThrow(id4, caller.organizationId);
-    const workflow = await aiWorkflowRepository.setStatus(id4, "ACTIVE", caller.id);
+  async publishWorkflow(caller, id6, meta11 = {}) {
+    await loadWorkflowOrThrow(id6, caller.organizationId);
+    const workflow = await aiWorkflowRepository.setStatus(id6, "ACTIVE", caller.id);
     await auditLogRepository.record({
       organizationId: caller.organizationId,
       actorUserId: caller.id,
       actorType: "USER",
       action: "AI_WORKFLOW_PUBLISHED",
       resourceType: "ai_workflow",
-      resourceId: id4,
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      resourceId: id6,
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return workflow;
   },
-  async archiveWorkflow(caller, id4, meta10 = {}) {
-    await loadWorkflowOrThrow(id4, caller.organizationId);
-    const workflow = await aiWorkflowRepository.setStatus(id4, "ARCHIVED", caller.id);
+  async archiveWorkflow(caller, id6, meta11 = {}) {
+    await loadWorkflowOrThrow(id6, caller.organizationId);
+    const workflow = await aiWorkflowRepository.setStatus(id6, "ARCHIVED", caller.id);
     await auditLogRepository.record({
       organizationId: caller.organizationId,
       actorUserId: caller.id,
       actorType: "USER",
       action: "AI_WORKFLOW_ARCHIVED",
       resourceType: "ai_workflow",
-      resourceId: id4,
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      resourceId: id6,
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return workflow;
   },
@@ -32245,8 +33280,8 @@ var aiWorkflowService = {
    * territory); a workflow left AWAITING_APPROVAL is a terminal state here,
    * re-run from scratch once the approval is resolved.
    */
-  async executeWorkflow(caller, id4, input, meta10 = {}) {
-    const workflow = await loadWorkflowOrThrow(id4, caller.organizationId);
+  async executeWorkflow(caller, id6, input, meta11 = {}) {
+    const workflow = await loadWorkflowOrThrow(id6, caller.organizationId);
     if (workflow.status !== "ACTIVE") {
       throw new ValidationError("Only an ACTIVE workflow can be executed.");
     }
@@ -32257,7 +33292,7 @@ var aiWorkflowService = {
       userId: caller.id,
       kind: "WORKFLOW",
       workflowId: workflow.id,
-      requestId: meta10.requestId,
+      requestId: meta11.requestId,
       input: input.stepInputs
     });
     await auditLogRepository.record({
@@ -32268,8 +33303,8 @@ var aiWorkflowService = {
       resourceType: "ai_execution",
       resourceId: execution.id,
       afterData: { workflowId: workflow.id, workflowKey: workflow.key },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     const stepResults = [];
     const deadline = Date.now() + workflow.timeoutMs;
@@ -32285,7 +33320,7 @@ var aiWorkflowService = {
         input: stepInput,
         executionId: execution.id,
         stepOrder: step.order,
-        meta: meta10
+        meta: meta11
       });
       stepResults.push({ order: step.order, toolCode: step.toolCode, ...result });
       if (result.status === "AWAITING_APPROVAL") {
@@ -32301,12 +33336,12 @@ var aiWorkflowService = {
 
 // server/routes/v1/aiWorkflowRoutes.ts
 init_apiResponse();
-var router49 = Router55();
-router49.use(authenticateToken);
+var router50 = Router56();
+router50.use(authenticateToken);
 function requestMeta36(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"], requestId: req.requestId };
 }
-router49.get(
+router50.get(
   "/",
   requirePermission("ai.workflows.read"),
   asyncHandler(async (req, res) => {
@@ -32322,7 +33357,7 @@ router49.get(
     sendSuccess(res, { workflows: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router49.get(
+router50.get(
   "/:id",
   requirePermission("ai.workflows.read"),
   asyncHandler(async (req, res) => {
@@ -32330,7 +33365,7 @@ router49.get(
     sendSuccess(res, { workflow });
   })
 );
-router49.post(
+router50.post(
   "/",
   requirePermission("ai.workflows.create"),
   asyncHandler(async (req, res) => {
@@ -32339,7 +33374,7 @@ router49.post(
     sendSuccess(res, { workflow }, 201);
   })
 );
-router49.patch(
+router50.patch(
   "/:id",
   requirePermission("ai.workflows.update"),
   asyncHandler(async (req, res) => {
@@ -32348,7 +33383,7 @@ router49.patch(
     sendSuccess(res, { workflow });
   })
 );
-router49.post(
+router50.post(
   "/:id/publish",
   requirePermission("ai.workflows.publish"),
   asyncHandler(async (req, res) => {
@@ -32356,7 +33391,7 @@ router49.post(
     sendSuccess(res, { workflow });
   })
 );
-router49.delete(
+router50.delete(
   "/:id",
   requirePermission("ai.workflows.delete"),
   asyncHandler(async (req, res) => {
@@ -32364,7 +33399,7 @@ router49.delete(
     sendSuccess(res, { workflow });
   })
 );
-router49.post(
+router50.post(
   "/:id/execute",
   requirePermission("ai.workflows.execute"),
   aiExecutionLimiter,
@@ -32374,10 +33409,10 @@ router49.post(
     sendSuccess(res, { execution }, 202);
   })
 );
-var aiWorkflowRoutes_default = router49;
+var aiWorkflowRoutes_default = router50;
 
 // server/routes/v1/aiExecutionRoutes.ts
-import { Router as Router56 } from "express";
+import { Router as Router57 } from "express";
 
 // server/services/aiExecutionService.ts
 init_errors();
@@ -32385,19 +33420,19 @@ var aiExecutionService = {
   async listExecutions(organizationId, filters, page, limit, sort, order) {
     return aiExecutionRepository.list(organizationId, filters, page, limit, sort, order);
   },
-  async getExecution(organizationId, id4) {
-    const execution = await aiExecutionRepository.findByIdInOrg(id4, organizationId);
+  async getExecution(organizationId, id6) {
+    const execution = await aiExecutionRepository.findByIdInOrg(id6, organizationId);
     if (!execution) throw new NotFoundError("AI execution not found.");
     return execution;
   },
   /** A single governed tool call, outside of any workflow — e.g. a human coworker's assistant panel invoking one action directly. */
-  async executeTool(caller, input, meta10 = {}) {
+  async executeTool(caller, input, meta11 = {}) {
     const execution = await aiExecutionRepository.create({
       organizationId: caller.organizationId,
       userId: caller.id,
       kind: "TOOL_CALL",
       toolCode: input.toolCode,
-      requestId: meta10.requestId,
+      requestId: meta11.requestId,
       input: input.input
     });
     const result = await executeGovernedTool({
@@ -32405,7 +33440,7 @@ var aiExecutionService = {
       toolCode: input.toolCode,
       input: input.input,
       executionId: execution.id,
-      meta: meta10
+      meta: meta11
     });
     if (result.status === "AWAITING_APPROVAL") {
       return aiExecutionRepository.complete(execution.id, "AWAITING_APPROVAL", result);
@@ -32419,12 +33454,12 @@ var aiExecutionService = {
 
 // server/routes/v1/aiExecutionRoutes.ts
 init_apiResponse();
-var router50 = Router56();
-router50.use(authenticateToken);
+var router51 = Router57();
+router51.use(authenticateToken);
 function requestMeta37(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"], requestId: req.requestId };
 }
-router50.get(
+router51.get(
   "/",
   requirePermission("ai.executions.read"),
   asyncHandler(async (req, res) => {
@@ -32440,7 +33475,7 @@ router50.get(
     sendSuccess(res, { executions: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router50.get(
+router51.get(
   "/:id",
   requirePermission("ai.executions.read"),
   asyncHandler(async (req, res) => {
@@ -32448,7 +33483,7 @@ router50.get(
     sendSuccess(res, { execution });
   })
 );
-router50.post(
+router51.post(
   "/tool-call",
   // Reuses ai.workflows.execute — "can invoke governed AI actions" is one
   // capability whether the call is wrapped in a workflow or made directly;
@@ -32462,10 +33497,10 @@ router50.post(
     sendSuccess(res, { execution }, 202);
   })
 );
-var aiExecutionRoutes_default = router50;
+var aiExecutionRoutes_default = router51;
 
 // server/routes/v1/aiUsageRoutes.ts
-import { Router as Router57 } from "express";
+import { Router as Router58 } from "express";
 
 // server/services/aiUsageService.ts
 var aiUsageService = {
@@ -32479,10 +33514,10 @@ var aiUsageService = {
 
 // server/routes/v1/aiUsageRoutes.ts
 init_apiResponse();
-var router51 = Router57();
-router51.use(authenticateToken);
-router51.use(requirePermission("ai.usage.read"));
-router51.get(
+var router52 = Router58();
+router52.use(authenticateToken);
+router52.use(requirePermission("ai.usage.read"));
+router52.get(
   "/",
   asyncHandler(async (req, res) => {
     const query = usageSummaryQuerySchema.parse(req.query);
@@ -32490,7 +33525,7 @@ router51.get(
     sendSuccess(res, { usageRecords: records });
   })
 );
-router51.get(
+router52.get(
   "/summary",
   asyncHandler(async (req, res) => {
     const query = usageSummaryQuerySchema.parse(req.query);
@@ -32498,10 +33533,10 @@ router51.get(
     sendSuccess(res, { summary });
   })
 );
-var aiUsageRoutes_default = router51;
+var aiUsageRoutes_default = router52;
 
 // server/routes/v1/aiHealthRoutes.ts
-import { Router as Router58 } from "express";
+import { Router as Router59 } from "express";
 init_apiResponse();
 
 // server/services/aiHealthService.ts
@@ -32627,16 +33662,16 @@ var aiHealthService = {
 };
 
 // server/routes/v1/aiHealthRoutes.ts
-var router52 = Router58();
-router52.use(authenticateToken);
-router52.get(
+var router53 = Router59();
+router53.use(authenticateToken);
+router53.get(
   "/health",
   requirePermission("ai.usage.read"),
   asyncHandler(async (req, res) => {
     sendSuccess(res, { health: await aiHealthService.snapshot(req.user.organizationId) });
   })
 );
-router52.put(
+router53.put(
   "/limits",
   requirePermission("ai.providers.manage"),
   asyncHandler(async (req, res) => {
@@ -32648,11 +33683,11 @@ router52.put(
     sendSuccess(res, { limits });
   })
 );
-var aiHealthRoutes_default = router52;
+var aiHealthRoutes_default = router53;
 
 // server/routes/v1/portalRegistrationRoutes.ts
-import { Router as Router59 } from "express";
-import { z as z59 } from "zod";
+import { Router as Router60 } from "express";
+import { z as z60 } from "zod";
 init_apiResponse();
 
 // server/services/portalRegistrationService.ts
@@ -32696,7 +33731,7 @@ var portalRegistrationService = {
       };
     });
   },
-  async link(caller, organizationId, clientId, meta10 = {}) {
+  async link(caller, organizationId, clientId, meta11 = {}) {
     assertOperator(caller);
     const org = await prisma.organization.findFirst({ where: { id: organizationId, ...pendingWhere }, select: { id: true } });
     if (!org) throw new NotFoundError("Pending registration not found.");
@@ -32716,11 +33751,11 @@ var portalRegistrationService = {
       resourceType: "organization",
       resourceId: organizationId,
       afterData: { clientId },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
   },
-  async reject(caller, organizationId, meta10 = {}) {
+  async reject(caller, organizationId, meta11 = {}) {
     assertOperator(caller);
     const org = await prisma.organization.findFirst({ where: { id: organizationId, ...pendingWhere }, select: { id: true } });
     if (!org) throw new NotFoundError("Pending registration not found.");
@@ -32734,51 +33769,51 @@ var portalRegistrationService = {
       action: "PORTAL_REGISTRATION_REJECTED",
       resourceType: "organization",
       resourceId: organizationId,
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
   }
 };
 
 // server/routes/v1/portalRegistrationRoutes.ts
-var router53 = Router59();
-router53.use(authenticateToken);
-var meta8 = (req) => ({ ip: req.ip, userAgent: req.headers["user-agent"] });
-router53.get(
+var router54 = Router60();
+router54.use(authenticateToken);
+var meta9 = (req) => ({ ip: req.ip, userAgent: req.headers["user-agent"] });
+router54.get(
   "/",
   requirePermission("workspaces.read"),
   asyncHandler(async (req, res) => sendSuccess(res, { registrations: await portalRegistrationService.list(req.user) }))
 );
-router53.post(
+router54.post(
   "/:organizationId/link",
   requirePermission("workspaces.update"),
   sensitiveActionLimiter,
   asyncHandler(async (req, res) => {
-    const { clientId } = z59.object({ clientId: z59.string().uuid() }).parse(req.body);
-    await portalRegistrationService.link(req.user, req.params.organizationId, clientId, meta8(req));
+    const { clientId } = z60.object({ clientId: z60.string().uuid() }).parse(req.body);
+    await portalRegistrationService.link(req.user, req.params.organizationId, clientId, meta9(req));
     sendSuccess(res, { linked: true });
   })
 );
-router53.post(
+router54.post(
   "/:organizationId/reject",
   requirePermission("workspaces.suspend"),
   sensitiveActionLimiter,
   asyncHandler(async (req, res) => {
-    await portalRegistrationService.reject(req.user, req.params.organizationId, meta8(req));
+    await portalRegistrationService.reject(req.user, req.params.organizationId, meta9(req));
     sendSuccess(res, { rejected: true });
   })
 );
-var portalRegistrationRoutes_default = router53;
+var portalRegistrationRoutes_default = router54;
 
 // server/routes/v1/aiApprovalRoutes.ts
-import { Router as Router60 } from "express";
+import { Router as Router61 } from "express";
 init_apiResponse();
-var router54 = Router60();
-router54.use(authenticateToken);
+var router55 = Router61();
+router55.use(authenticateToken);
 function requestMeta38(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"], requestId: req.requestId };
 }
-router54.get(
+router55.get(
   "/",
   requirePermission("ai.approvals.read"),
   asyncHandler(async (req, res) => {
@@ -32794,7 +33829,7 @@ router54.get(
     sendSuccess(res, { approvals: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router54.get(
+router55.get(
   "/:id",
   requirePermission("ai.approvals.read"),
   asyncHandler(async (req, res) => {
@@ -32802,7 +33837,7 @@ router54.get(
     sendSuccess(res, { approval });
   })
 );
-router54.post(
+router55.post(
   "/:id/decide",
   requirePermission("ai.approvals.decide"),
   asyncHandler(async (req, res) => {
@@ -32811,12 +33846,12 @@ router54.post(
     sendSuccess(res, { approval });
   })
 );
-var aiApprovalRoutes_default = router54;
+var aiApprovalRoutes_default = router55;
 
 // server/routes/v1/automationRoutes.ts
 import { timingSafeEqual as timingSafeEqual5 } from "node:crypto";
-import { Router as Router61 } from "express";
-import { z as z60 } from "zod";
+import { Router as Router62 } from "express";
+import { z as z61 } from "zod";
 init_apiResponse();
 
 // server/services/social/listening/listeningJobs.ts
@@ -33005,8 +34040,8 @@ function constantTimeEquals2(a, b) {
   const bb = Buffer.from(b);
   return ab.length === bb.length && timingSafeEqual5(ab, bb);
 }
-var router55 = Router61();
-router55.get(
+var router56 = Router62();
+router56.get(
   "/internal/tick",
   asyncHandler(async (req, res) => {
     if (!config.cronSecret) {
@@ -33033,85 +34068,85 @@ router55.get(
     sendSuccess(res, { automation, content, webhookRetries, socialTokenHealth, socialPublish, socialInbox, socialAnalytics, socialListening });
   })
 );
-router55.use(authenticateToken);
-var CreateWorkflowSchema = z60.object({
-  name: z60.string().min(1).max(200),
-  description: z60.string().optional(),
-  category: z60.string().default("GENERAL"),
-  triggerType: z60.enum(["EVENT", "SCHEDULE", "MANUAL", "API", "CONDITIONAL"]).default("EVENT"),
-  triggerConfig: z60.record(z60.unknown()).default({}),
-  conditions: z60.unknown().default([]),
-  steps: z60.array(z60.record(z60.unknown())).default([]),
-  retryPolicy: z60.object({
-    maxRetries: z60.number().int().min(0).max(5).default(2),
-    backoffMs: z60.number().int().min(100).max(6e4).default(1e3),
-    exponential: z60.boolean().default(true)
+router56.use(authenticateToken);
+var CreateWorkflowSchema = z61.object({
+  name: z61.string().min(1).max(200),
+  description: z61.string().optional(),
+  category: z61.string().default("GENERAL"),
+  triggerType: z61.enum(["EVENT", "SCHEDULE", "MANUAL", "API", "CONDITIONAL"]).default("EVENT"),
+  triggerConfig: z61.record(z61.unknown()).default({}),
+  conditions: z61.unknown().default([]),
+  steps: z61.array(z61.record(z61.unknown())).default([]),
+  retryPolicy: z61.object({
+    maxRetries: z61.number().int().min(0).max(5).default(2),
+    backoffMs: z61.number().int().min(100).max(6e4).default(1e3),
+    exponential: z61.boolean().default(true)
   }).optional(),
-  limits: z60.object({
-    maxSteps: z60.number().int().min(1).max(100).default(50),
-    maxDurationMs: z60.number().int().min(5e3).max(6e5).default(3e5),
-    maxAiCalls: z60.number().int().min(0).max(50).default(10),
-    maxToolCalls: z60.number().int().min(0).max(50).default(15),
-    maxLoopIterations: z60.number().int().min(1).max(50).default(10)
+  limits: z61.object({
+    maxSteps: z61.number().int().min(1).max(100).default(50),
+    maxDurationMs: z61.number().int().min(5e3).max(6e5).default(3e5),
+    maxAiCalls: z61.number().int().min(0).max(50).default(10),
+    maxToolCalls: z61.number().int().min(0).max(50).default(15),
+    maxLoopIterations: z61.number().int().min(1).max(50).default(10)
   }).optional()
 });
 var UpdateWorkflowSchema = CreateWorkflowSchema.partial().extend({
-  status: z60.enum(["DRAFT", "ACTIVE", "PAUSED", "ARCHIVED"]).optional()
+  status: z61.enum(["DRAFT", "ACTIVE", "PAUSED", "ARCHIVED"]).optional()
 });
-var TriggerWorkflowSchema = z60.object({
-  input: z60.record(z60.unknown()).default({}),
-  correlationId: z60.string().optional()
+var TriggerWorkflowSchema = z61.object({
+  input: z61.record(z61.unknown()).default({}),
+  correlationId: z61.string().optional()
 });
-var DecideApprovalSchema = z60.object({
-  decision: z60.enum(["APPROVED", "REJECTED"]),
-  reason: z60.string().optional()
+var DecideApprovalSchema = z61.object({
+  decision: z61.enum(["APPROVED", "REJECTED"]),
+  reason: z61.string().optional()
 });
-var CreateTaskSchema = z60.object({
-  title: z60.string().min(1),
-  description: z60.string().optional(),
-  assignedUserId: z60.string().optional(),
-  assignedRole: z60.string().optional(),
-  priority: z60.enum(["LOW", "MEDIUM", "HIGH", "URGENT"]).default("MEDIUM"),
-  dueDate: z60.string().optional(),
-  sourceWorkflowId: z60.string().optional(),
-  sourceExecutionId: z60.string().optional(),
-  sourceEntityType: z60.string().optional(),
-  sourceEntityId: z60.string().optional(),
-  isAiGenerated: z60.boolean().default(false),
-  metadata: z60.record(z60.unknown()).optional()
+var CreateTaskSchema = z61.object({
+  title: z61.string().min(1),
+  description: z61.string().optional(),
+  assignedUserId: z61.string().optional(),
+  assignedRole: z61.string().optional(),
+  priority: z61.enum(["LOW", "MEDIUM", "HIGH", "URGENT"]).default("MEDIUM"),
+  dueDate: z61.string().optional(),
+  sourceWorkflowId: z61.string().optional(),
+  sourceExecutionId: z61.string().optional(),
+  sourceEntityType: z61.string().optional(),
+  sourceEntityId: z61.string().optional(),
+  isAiGenerated: z61.boolean().default(false),
+  metadata: z61.record(z61.unknown()).optional()
 });
-var UpdateTaskSchema = z60.object({
-  status: z60.enum(["PENDING", "IN_PROGRESS", "COMPLETED", "CANCELLED"]).optional(),
-  assignedUserId: z60.string().optional(),
-  priority: z60.enum(["LOW", "MEDIUM", "HIGH", "URGENT"]).optional(),
-  dueDate: z60.string().optional()
+var UpdateTaskSchema = z61.object({
+  status: z61.enum(["PENDING", "IN_PROGRESS", "COMPLETED", "CANCELLED"]).optional(),
+  assignedUserId: z61.string().optional(),
+  priority: z61.enum(["LOW", "MEDIUM", "HIGH", "URGENT"]).optional(),
+  dueDate: z61.string().optional()
 });
-var AddTaskCommentSchema = z60.object({
-  text: z60.string().trim().min(1).max(4e3)
+var AddTaskCommentSchema = z61.object({
+  text: z61.string().trim().min(1).max(4e3)
 });
-var CreateScheduleSchema = z60.object({
-  workflowId: z60.string().uuid(),
-  name: z60.string().min(1),
-  description: z60.string().optional(),
-  scheduleType: z60.enum(["ONE_TIME", "RECURRING", "CRON"]).default("RECURRING"),
-  cronExpression: z60.string().optional(),
-  timezone: z60.string().default("UTC"),
-  intervalSeconds: z60.number().int().positive().optional(),
-  config: z60.record(z60.unknown()).optional()
+var CreateScheduleSchema = z61.object({
+  workflowId: z61.string().uuid(),
+  name: z61.string().min(1),
+  description: z61.string().optional(),
+  scheduleType: z61.enum(["ONE_TIME", "RECURRING", "CRON"]).default("RECURRING"),
+  cronExpression: z61.string().optional(),
+  timezone: z61.string().default("UTC"),
+  intervalSeconds: z61.number().int().positive().optional(),
+  config: z61.record(z61.unknown()).optional()
 });
-var EmitEventSchema = z60.object({
-  eventType: z60.string().min(1),
-  entityType: z60.string().min(1),
-  entityId: z60.string().min(1),
-  sourceModule: z60.string().optional(),
-  payload: z60.record(z60.unknown()).default({}),
-  correlationId: z60.string().optional()
+var EmitEventSchema = z61.object({
+  eventType: z61.string().min(1),
+  entityType: z61.string().min(1),
+  entityId: z61.string().min(1),
+  sourceModule: z61.string().optional(),
+  payload: z61.record(z61.unknown()).default({}),
+  correlationId: z61.string().optional()
 });
-var ExecuteActionSchema = z60.object({
-  actionId: z60.string().min(1),
-  input: z60.record(z60.unknown()).default({})
+var ExecuteActionSchema = z61.object({
+  actionId: z61.string().min(1),
+  input: z61.record(z61.unknown()).default({})
 });
-router55.get(
+router56.get(
   "/dashboard",
   requirePermission("automation.read"),
   asyncHandler(async (req, res) => {
@@ -33119,7 +34154,7 @@ router55.get(
     sendSuccess(res, data);
   })
 );
-router55.get(
+router56.get(
   "/workflows",
   requirePermission("automation.read"),
   asyncHandler(async (req, res) => {
@@ -33135,7 +34170,7 @@ router55.get(
     sendSuccess(res, result);
   })
 );
-router55.post(
+router56.post(
   "/workflows",
   requirePermission("automation.create"),
   asyncHandler(async (req, res) => {
@@ -33156,7 +34191,7 @@ router55.post(
     sendSuccess(res, { workflow }, 201);
   })
 );
-router55.get(
+router56.get(
   "/workflows/:id",
   requirePermission("automation.read"),
   asyncHandler(async (req, res) => {
@@ -33164,7 +34199,7 @@ router55.get(
     sendSuccess(res, { workflow });
   })
 );
-router55.put(
+router56.put(
   "/workflows/:id",
   requirePermission("automation.edit"),
   asyncHandler(async (req, res) => {
@@ -33187,11 +34222,11 @@ router55.put(
     sendSuccess(res, { workflow: updated });
   })
 );
-router55.post(
+router56.post(
   "/workflows/:id/publish",
   requirePermission("automation.publish"),
   asyncHandler(async (req, res) => {
-    const body = z60.object({ changeSummary: z60.string().optional() }).parse(req.body || {});
+    const body = z61.object({ changeSummary: z61.string().optional() }).parse(req.body || {});
     const published = await automationService.publishWorkflow({
       id: req.params.id,
       organizationId: req.user.organizationId,
@@ -33201,7 +34236,7 @@ router55.post(
     sendSuccess(res, { workflow: published });
   })
 );
-router55.get(
+router56.get(
   "/workflows/:id/versions",
   requirePermission("automation.read"),
   asyncHandler(async (req, res) => {
@@ -33209,7 +34244,7 @@ router55.get(
     sendSuccess(res, { versions });
   })
 );
-router55.post(
+router56.post(
   "/workflows/:id/trigger",
   requirePermission("automation.execute"),
   asyncHandler(async (req, res) => {
@@ -33225,7 +34260,7 @@ router55.post(
     sendSuccess(res, result, 202);
   })
 );
-router55.get(
+router56.get(
   "/executions",
   requirePermission("automation.read"),
   asyncHandler(async (req, res) => {
@@ -33240,7 +34275,7 @@ router55.get(
     sendSuccess(res, result);
   })
 );
-router55.get(
+router56.get(
   "/executions/:id",
   requirePermission("automation.read"),
   asyncHandler(async (req, res) => {
@@ -33248,7 +34283,7 @@ router55.get(
     sendSuccess(res, { execution });
   })
 );
-router55.post(
+router56.post(
   "/executions/:id/retry",
   requirePermission("automation.execute"),
   asyncHandler(async (req, res) => {
@@ -33256,16 +34291,16 @@ router55.post(
     sendSuccess(res, { execution: result });
   })
 );
-router55.post(
+router56.post(
   "/executions/:id/cancel",
   requirePermission("automation.manage"),
   asyncHandler(async (req, res) => {
-    const body = z60.object({ reason: z60.string().optional() }).parse(req.body || {});
+    const body = z61.object({ reason: z61.string().optional() }).parse(req.body || {});
     const result = await automationService.cancelExecution(req.params.id, req.user.organizationId, body.reason);
     sendSuccess(res, { execution: result });
   })
 );
-router55.get(
+router56.get(
   "/approvals",
   requirePermission("automation.read"),
   asyncHandler(async (req, res) => {
@@ -33279,7 +34314,7 @@ router55.get(
     sendSuccess(res, result);
   })
 );
-router55.post(
+router56.post(
   "/approvals/:id/decide",
   requirePermission("automation.approve"),
   asyncHandler(async (req, res) => {
@@ -33295,7 +34330,7 @@ router55.post(
     sendSuccess(res, result);
   })
 );
-router55.get(
+router56.get(
   "/tasks",
   requirePermission("automation.read"),
   asyncHandler(async (req, res) => {
@@ -33311,7 +34346,7 @@ router55.get(
     sendSuccess(res, result);
   })
 );
-router55.post(
+router56.post(
   "/tasks",
   requirePermission("automation.execute"),
   asyncHandler(async (req, res) => {
@@ -33323,7 +34358,7 @@ router55.post(
     sendSuccess(res, { task }, 201);
   })
 );
-router55.patch(
+router56.patch(
   "/tasks/:id",
   requirePermission("automation.execute"),
   asyncHandler(async (req, res) => {
@@ -33337,7 +34372,7 @@ router55.patch(
     sendSuccess(res, { task: updated });
   })
 );
-router55.post(
+router56.post(
   "/tasks/:id/comments",
   requirePermission("automation.execute"),
   asyncHandler(async (req, res) => {
@@ -33351,7 +34386,7 @@ router55.post(
     sendSuccess(res, result, 201);
   })
 );
-router55.get(
+router56.get(
   "/my-work",
   requirePermission("automation.read"),
   asyncHandler(async (req, res) => {
@@ -33359,7 +34394,7 @@ router55.get(
     sendSuccess(res, result);
   })
 );
-router55.get(
+router56.get(
   "/schedules",
   requirePermission("automation.read"),
   asyncHandler(async (req, res) => {
@@ -33374,7 +34409,7 @@ router55.get(
     sendSuccess(res, result);
   })
 );
-router55.post(
+router56.post(
   "/schedules",
   requirePermission("automation.manage"),
   asyncHandler(async (req, res) => {
@@ -33386,16 +34421,16 @@ router55.post(
     sendSuccess(res, { schedule }, 201);
   })
 );
-router55.patch(
+router56.patch(
   "/schedules/:id/toggle",
   requirePermission("automation.manage"),
   asyncHandler(async (req, res) => {
-    const body = z60.object({ isActive: z60.boolean().optional() }).parse(req.body || {});
+    const body = z61.object({ isActive: z61.boolean().optional() }).parse(req.body || {});
     const schedule = await automationService.toggleSchedule(req.params.id, req.user.organizationId, body.isActive);
     sendSuccess(res, { schedule });
   })
 );
-router55.delete(
+router56.delete(
   "/schedules/:id",
   requirePermission("automation.manage"),
   asyncHandler(async (req, res) => {
@@ -33403,7 +34438,7 @@ router55.delete(
     sendSuccess(res, result);
   })
 );
-router55.get(
+router56.get(
   "/events/types",
   requirePermission("automation.read"),
   asyncHandler(async (_req, res) => {
@@ -33411,7 +34446,7 @@ router55.get(
     sendSuccess(res, { types });
   })
 );
-router55.get(
+router56.get(
   "/events",
   requirePermission("automation.read"),
   asyncHandler(async (req, res) => {
@@ -33425,7 +34460,7 @@ router55.get(
     sendSuccess(res, result);
   })
 );
-router55.post(
+router56.post(
   "/events",
   requirePermission("automation.execute"),
   asyncHandler(async (req, res) => {
@@ -33439,7 +34474,7 @@ router55.post(
     sendSuccess(res, { event }, 202);
   })
 );
-router55.get(
+router56.get(
   "/actions",
   requirePermission("automation.read"),
   asyncHandler(async (_req, res) => {
@@ -33447,7 +34482,7 @@ router55.get(
     sendSuccess(res, { actions });
   })
 );
-router55.post(
+router56.post(
   "/actions/execute",
   requirePermission("automation.execute"),
   asyncHandler(async (req, res) => {
@@ -33462,18 +34497,18 @@ router55.post(
     sendSuccess(res, { result });
   })
 );
-var automationRoutes_default = router55;
+var automationRoutes_default = router56;
 
 // server/routes/v1/knowledgeRoutes.ts
-import { Router as Router62 } from "express";
+import { Router as Router63 } from "express";
 import express3 from "express";
 init_apiResponse();
 init_errors();
 
 // server/schemas/knowledgeSchemas.ts
-import { z as z61 } from "zod";
-var knowledgeAccessPolicySchema = z61.enum(["PUBLIC", "RESTRICTED", "ROLE_BASED", "OWNER_ONLY"]);
-var knowledgeSourceTypeSchema = z61.enum([
+import { z as z62 } from "zod";
+var knowledgeAccessPolicySchema = z62.enum(["PUBLIC", "RESTRICTED", "ROLE_BASED", "OWNER_ONLY"]);
+var knowledgeSourceTypeSchema = z62.enum([
   "UPLOADED_DOCUMENT",
   "MEDIA_ASSET",
   "CMS_CONTENT",
@@ -33485,53 +34520,53 @@ var knowledgeSourceTypeSchema = z61.enum([
   "MANUAL_ENTRY",
   "EXTERNAL_CONNECTOR"
 ]);
-var createCollectionSchema = z61.object({
-  name: z61.string().trim().min(1).max(200),
-  description: z61.string().trim().max(2e3).optional(),
+var createCollectionSchema = z62.object({
+  name: z62.string().trim().min(1).max(200),
+  description: z62.string().trim().max(2e3).optional(),
   accessPolicy: knowledgeAccessPolicySchema.optional(),
-  allowedRoles: z61.array(z61.string().trim().min(1)).max(50).optional(),
-  metadata: z61.record(z61.unknown()).optional()
+  allowedRoles: z62.array(z62.string().trim().min(1)).max(50).optional(),
+  metadata: z62.record(z62.unknown()).optional()
 });
-var registerSourceSchema = z61.object({
-  collectionId: z61.string().trim().uuid().optional(),
-  name: z61.string().trim().min(1).max(200),
+var registerSourceSchema = z62.object({
+  collectionId: z62.string().trim().uuid().optional(),
+  name: z62.string().trim().min(1).max(200),
   sourceType: knowledgeSourceTypeSchema,
-  entityType: z61.string().trim().max(100).optional(),
-  entityId: z61.string().trim().max(200).optional(),
-  config: z61.record(z61.unknown()).optional()
+  entityType: z62.string().trim().max(100).optional(),
+  entityId: z62.string().trim().max(200).optional(),
+  config: z62.record(z62.unknown()).optional()
 });
-var listDocumentsQuerySchema = z61.object({
-  collectionId: z61.string().trim().uuid().optional(),
-  sourceId: z61.string().trim().uuid().optional(),
-  status: z61.enum(["UPLOADED", "PROCESSING", "EXTRACTED", "CHUNKED", "INDEXING", "INDEXED", "FAILED", "ARCHIVED"]).optional()
+var listDocumentsQuerySchema = z62.object({
+  collectionId: z62.string().trim().uuid().optional(),
+  sourceId: z62.string().trim().uuid().optional(),
+  status: z62.enum(["UPLOADED", "PROCESSING", "EXTRACTED", "CHUNKED", "INDEXING", "INDEXED", "FAILED", "ARCHIVED"]).optional()
 });
-var uploadDocumentSchema = z61.object({
-  text: z61.string().max(2e6).optional(),
-  contentBase64: z61.string().max(4e7).optional(),
-  mimeType: z61.string().trim().max(100).optional(),
-  filename: z61.string().trim().max(300).optional(),
-  title: z61.string().trim().max(300).optional(),
-  description: z61.string().trim().max(2e3).optional(),
-  collectionId: z61.string().trim().uuid().optional(),
-  sourceId: z61.string().trim().uuid().optional(),
-  securityScope: z61.string().trim().max(100).optional(),
-  requiredRole: z61.string().trim().max(100).optional(),
-  metadata: z61.record(z61.unknown()).optional()
+var uploadDocumentSchema = z62.object({
+  text: z62.string().max(2e6).optional(),
+  contentBase64: z62.string().max(4e7).optional(),
+  mimeType: z62.string().trim().max(100).optional(),
+  filename: z62.string().trim().max(300).optional(),
+  title: z62.string().trim().max(300).optional(),
+  description: z62.string().trim().max(2e3).optional(),
+  collectionId: z62.string().trim().uuid().optional(),
+  sourceId: z62.string().trim().uuid().optional(),
+  securityScope: z62.string().trim().max(100).optional(),
+  requiredRole: z62.string().trim().max(100).optional(),
+  metadata: z62.record(z62.unknown()).optional()
 }).refine((v) => v.contentBase64 !== void 0 || v.text !== void 0, {
   message: "Either text or contentBase64 is required."
 });
-var searchKnowledgeSchema = z61.object({
-  query: z61.string().trim().min(1).max(2e3),
-  mode: z61.enum(["KEYWORD", "SEMANTIC", "HYBRID"]).optional(),
-  limit: z61.coerce.number().int().positive().max(50).optional(),
-  minScore: z61.coerce.number().min(0).max(1).optional(),
-  filter: z61.record(z61.unknown()).optional()
+var searchKnowledgeSchema = z62.object({
+  query: z62.string().trim().min(1).max(2e3),
+  mode: z62.enum(["KEYWORD", "SEMANTIC", "HYBRID"]).optional(),
+  limit: z62.coerce.number().int().positive().max(50).optional(),
+  minScore: z62.coerce.number().min(0).max(1).optional(),
+  filter: z62.record(z62.unknown()).optional()
 });
 
 // server/routes/v1/knowledgeRoutes.ts
-var router56 = Router62();
-router56.use(authenticateToken);
-router56.get(
+var router57 = Router63();
+router57.use(authenticateToken);
+router57.get(
   "/collections",
   requirePermission("knowledge.read"),
   asyncHandler(async (req, res) => {
@@ -33539,7 +34574,7 @@ router56.get(
     sendSuccess(res, { collections });
   })
 );
-router56.post(
+router57.post(
   "/collections",
   requirePermission("knowledge.create"),
   asyncHandler(async (req, res) => {
@@ -33552,7 +34587,7 @@ router56.post(
     sendSuccess(res, { collection }, 201);
   })
 );
-router56.get(
+router57.get(
   "/collections/:id",
   requirePermission("knowledge.read"),
   asyncHandler(async (req, res) => {
@@ -33560,7 +34595,7 @@ router56.get(
     sendSuccess(res, { collection });
   })
 );
-router56.post(
+router57.post(
   "/sources",
   requirePermission("knowledge.create"),
   asyncHandler(async (req, res) => {
@@ -33572,7 +34607,7 @@ router56.post(
     sendSuccess(res, { source }, 201);
   })
 );
-router56.get(
+router57.get(
   "/sources",
   requirePermission("knowledge.read"),
   asyncHandler(async (req, res) => {
@@ -33586,7 +34621,7 @@ router56.get(
     sendSuccess(res, { sources });
   })
 );
-router56.get(
+router57.get(
   "/documents",
   requirePermission("knowledge.read"),
   asyncHandler(async (req, res) => {
@@ -33608,7 +34643,7 @@ router56.get(
     sendSuccess(res, { documents });
   })
 );
-router56.get(
+router57.get(
   "/documents/:id",
   requirePermission("knowledge.read"),
   asyncHandler(async (req, res) => {
@@ -33627,7 +34662,7 @@ router56.get(
     sendSuccess(res, { document });
   })
 );
-router56.post(
+router57.post(
   "/documents/upload",
   requirePermission("knowledge.upload"),
   express3.json({ limit: "25mb" }),
@@ -33659,7 +34694,7 @@ router56.post(
     sendSuccess(res, result, 201);
   })
 );
-router56.post(
+router57.post(
   "/documents/:id/reindex",
   requirePermission("knowledge.reindex"),
   asyncHandler(async (req, res) => {
@@ -33667,7 +34702,7 @@ router56.post(
     sendSuccess(res, result);
   })
 );
-router56.post(
+router57.post(
   "/search",
   requirePermission("knowledge.search"),
   asyncHandler(async (req, res) => {
@@ -33690,14 +34725,14 @@ router56.post(
     sendSuccess(res, { results, count: results.length });
   })
 );
-var knowledgeRoutes_default = router56;
+var knowledgeRoutes_default = router57;
 
 // server/routes/v1/copilotRoutes.ts
-import { Router as Router63 } from "express";
+import { Router as Router64 } from "express";
 
 // server/services/copilot/CopilotService.ts
 init_errors();
-import crypto13 from "crypto";
+import crypto15 from "crypto";
 var SYSTEM_WORKSPACES = [
   {
     slug: "general-assistant",
@@ -33789,19 +34824,19 @@ function checkRateLimit(userId) {
   entry.count += 1;
 }
 async function generateReportSnapshot(organizationId, userQuery, userPermissions) {
-  const can = (perm) => userPermissions.includes("*") || userPermissions.includes(perm);
-  if (can("invoices.read") && (userQuery.includes("invoice") || userQuery.includes("bill") || userQuery.includes("overdue"))) {
+  const can2 = (perm) => userPermissions.includes("*") || userPermissions.includes(perm);
+  if (can2("invoices.read") && (userQuery.includes("invoice") || userQuery.includes("bill") || userQuery.includes("overdue"))) {
     const [total, overdue] = await Promise.all([
       prisma.invoice.count({ where: { organizationId } }),
       prisma.invoice.count({ where: { organizationId, status: "ISSUED", dueDate: { lt: /* @__PURE__ */ new Date() } } })
     ]);
     return { entity: "INVOICES", summary: `${total} invoice(s) total, ${overdue} currently overdue.` };
   }
-  if (can("leads.read") && (userQuery.includes("lead") || userQuery.includes("prospect"))) {
+  if (can2("leads.read") && (userQuery.includes("lead") || userQuery.includes("prospect"))) {
     const total = await prisma.lead.count({ where: { organizationId } });
     return { entity: "LEADS", summary: `${total} lead(s) on file.` };
   }
-  if (can("clients.read") && (userQuery.includes("client") || userQuery.includes("account") || userQuery.includes("customer"))) {
+  if (can2("clients.read") && (userQuery.includes("client") || userQuery.includes("account") || userQuery.includes("customer"))) {
     const [total, active] = await Promise.all([
       prisma.client.count({ where: { organizationId } }),
       prisma.client.count({ where: { organizationId, status: "ACTIVE" } })
@@ -33858,10 +34893,10 @@ var CopilotService = class {
     });
   }
   /** Get workspace by ID with permission check. */
-  static async getWorkspace(id4, organizationId, userPermissions) {
-    const ws = await prisma.copilotWorkspace.findFirst({ where: { id: id4, organizationId } });
+  static async getWorkspace(id6, organizationId, userPermissions) {
+    const ws = await prisma.copilotWorkspace.findFirst({ where: { id: id6, organizationId } });
     if (!ws) {
-      throw new NotFoundError(`Workspace "${id4}" not found.`);
+      throw new NotFoundError(`Workspace "${id6}" not found.`);
     }
     const isSuperAdmin = userPermissions.includes("*");
     const reqPerms = ws.requiredPermissions || [];
@@ -34047,7 +35082,7 @@ ${transcript.slice(0, 600)}`;
     checkRateLimit(userContext.userId);
     await aiQuotaService.assertWithinLimits(userContext.organizationId);
     const startTime = Date.now();
-    const correlationId = `copilot-${crypto13.randomUUID()}`;
+    const correlationId = `copilot-${crypto15.randomUUID()}`;
     let conversation;
     if (options.conversationId) {
       conversation = await prisma.copilotConversation.findFirst({
@@ -34381,7 +35416,7 @@ ${assistantResponseText}`;
     if (!isSuperAdmin && !userContext.userPermissions.includes(requiredPermission)) {
       throw new AuthorizationError(`Permission "${requiredPermission}" required to confirm and execute this action.`);
     }
-    const correlationId = `copilot-action-${crypto13.randomUUID()}`;
+    const correlationId = `copilot-action-${crypto15.randomUUID()}`;
     const params = preview.parameters || {};
     let executionResult;
     try {
@@ -34510,54 +35545,54 @@ ${JSON.stringify(executionResult, null, 2)}
 init_apiResponse();
 
 // server/schemas/copilotSchemas.ts
-import { z as z62 } from "zod";
-var conversationModeSchema = z62.enum(["ANSWER", "EXPLAIN", "SUMMARIZE", "ANALYZE", "RECOMMEND", "DRAFT", "EXECUTE"]);
-var createWorkspaceSchema = z62.object({
-  name: z62.string().trim().min(1).max(200),
-  slug: z62.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)").optional(),
-  description: z62.string().trim().max(2e3).optional(),
-  icon: z62.string().trim().max(100).optional(),
-  allowedTools: z62.array(z62.string().trim().min(1)).max(100).optional(),
-  allowedModules: z62.array(z62.string().trim().min(1)).max(100).optional(),
-  requiredPermissions: z62.array(z62.string().trim().min(1)).max(100).optional(),
-  systemInstruction: z62.string().trim().max(1e4).optional(),
+import { z as z63 } from "zod";
+var conversationModeSchema = z63.enum(["ANSWER", "EXPLAIN", "SUMMARIZE", "ANALYZE", "RECOMMEND", "DRAFT", "EXECUTE"]);
+var createWorkspaceSchema = z63.object({
+  name: z63.string().trim().min(1).max(200),
+  slug: z63.string().trim().min(1).max(150).regex(/^[a-z0-9-]+$/, "slug must be lowercase, URL-safe (letters, numbers, hyphens)").optional(),
+  description: z63.string().trim().max(2e3).optional(),
+  icon: z63.string().trim().max(100).optional(),
+  allowedTools: z63.array(z63.string().trim().min(1)).max(100).optional(),
+  allowedModules: z63.array(z63.string().trim().min(1)).max(100).optional(),
+  requiredPermissions: z63.array(z63.string().trim().min(1)).max(100).optional(),
+  systemInstruction: z63.string().trim().max(1e4).optional(),
   defaultMode: conversationModeSchema.optional(),
-  temperature: z62.coerce.number().min(0).max(2).optional(),
-  maxTokens: z62.coerce.number().int().positive().max(32e3).optional(),
-  requireCitations: z62.coerce.boolean().optional()
+  temperature: z63.coerce.number().min(0).max(2).optional(),
+  maxTokens: z63.coerce.number().int().positive().max(32e3).optional(),
+  requireCitations: z63.coerce.boolean().optional()
 });
-var createConversationSchema = z62.object({
-  workspaceId: z62.string().trim().uuid().optional(),
-  title: z62.string().trim().max(300).optional(),
-  contextMetadata: z62.record(z62.unknown()).optional()
+var createConversationSchema = z63.object({
+  workspaceId: z63.string().trim().uuid().optional(),
+  title: z63.string().trim().max(300).optional(),
+  contextMetadata: z63.record(z63.unknown()).optional()
 });
-var listConversationsQuerySchema = z62.object({
-  workspaceId: z62.string().trim().uuid().optional(),
-  status: z62.string().trim().max(50).optional(),
-  search: z62.string().trim().max(300).optional(),
-  limit: z62.coerce.number().int().positive().max(100).optional(),
-  offset: z62.coerce.number().int().nonnegative().optional()
+var listConversationsQuerySchema = z63.object({
+  workspaceId: z63.string().trim().uuid().optional(),
+  status: z63.string().trim().max(50).optional(),
+  search: z63.string().trim().max(300).optional(),
+  limit: z63.coerce.number().int().positive().max(100).optional(),
+  offset: z63.coerce.number().int().nonnegative().optional()
 });
-var contextMetadataSchema = z62.object({
-  currentModule: z62.string().trim().max(200).optional(),
-  currentPage: z62.string().trim().max(200).optional(),
-  selectedClientId: z62.string().trim().uuid().optional(),
-  selectedInvoiceId: z62.string().trim().uuid().optional(),
-  selectedDocumentId: z62.string().trim().uuid().optional(),
-  selectedWorkflowId: z62.string().trim().uuid().optional()
-}).catchall(z62.unknown()).optional();
-var sendMessageSchema = z62.object({
-  conversationId: z62.string().trim().uuid().optional(),
-  workspaceId: z62.string().trim().uuid().optional(),
-  content: z62.string().trim().min(1).max(2e4),
+var contextMetadataSchema = z63.object({
+  currentModule: z63.string().trim().max(200).optional(),
+  currentPage: z63.string().trim().max(200).optional(),
+  selectedClientId: z63.string().trim().uuid().optional(),
+  selectedInvoiceId: z63.string().trim().uuid().optional(),
+  selectedDocumentId: z63.string().trim().uuid().optional(),
+  selectedWorkflowId: z63.string().trim().uuid().optional()
+}).catchall(z63.unknown()).optional();
+var sendMessageSchema = z63.object({
+  conversationId: z63.string().trim().uuid().optional(),
+  workspaceId: z63.string().trim().uuid().optional(),
+  content: z63.string().trim().min(1).max(2e4),
   mode: conversationModeSchema.optional(),
   contextMetadata: contextMetadataSchema
 });
 
 // server/routes/v1/copilotRoutes.ts
-var router57 = Router63();
-router57.use(authenticateToken);
-router57.get(
+var router58 = Router64();
+router58.use(authenticateToken);
+router58.get(
   "/workspaces",
   asyncHandler(async (req, res) => {
     const permissions = req.user.role.permissions || [];
@@ -34565,7 +35600,7 @@ router57.get(
     sendSuccess(res, { workspaces });
   })
 );
-router57.post(
+router58.post(
   "/workspaces",
   requirePermission("copilot.manage"),
   asyncHandler(async (req, res) => {
@@ -34574,7 +35609,7 @@ router57.post(
     sendSuccess(res, { workspace }, 201);
   })
 );
-router57.get(
+router58.get(
   "/workspaces/:id",
   asyncHandler(async (req, res) => {
     const permissions = req.user.role.permissions || [];
@@ -34582,7 +35617,7 @@ router57.get(
     sendSuccess(res, { workspace });
   })
 );
-router57.get(
+router58.get(
   "/conversations",
   requirePermission("copilot.read"),
   asyncHandler(async (req, res) => {
@@ -34597,7 +35632,7 @@ router57.get(
     sendSuccess(res, result);
   })
 );
-router57.post(
+router58.post(
   "/conversations",
   requirePermission("copilot.use"),
   asyncHandler(async (req, res) => {
@@ -34606,7 +35641,7 @@ router57.post(
     sendSuccess(res, { conversation }, 201);
   })
 );
-router57.get(
+router58.get(
   "/conversations/:id",
   requirePermission("copilot.read"),
   asyncHandler(async (req, res) => {
@@ -34614,7 +35649,7 @@ router57.get(
     sendSuccess(res, { conversation });
   })
 );
-router57.post(
+router58.post(
   "/conversations/:id/archive",
   requirePermission("copilot.use"),
   asyncHandler(async (req, res) => {
@@ -34622,7 +35657,7 @@ router57.post(
     sendSuccess(res, { conversation: updated });
   })
 );
-router57.delete(
+router58.delete(
   "/conversations/:id",
   requirePermission("copilot.use"),
   asyncHandler(async (req, res) => {
@@ -34630,7 +35665,7 @@ router57.delete(
     sendSuccess(res, result);
   })
 );
-router57.post(
+router58.post(
   "/messages",
   requirePermission("copilot.use"),
   asyncHandler(async (req, res) => {
@@ -34648,7 +35683,7 @@ router57.post(
     sendSuccess(res, result);
   })
 );
-router57.post(
+router58.post(
   "/messages/stream",
   requirePermission("copilot.use"),
   asyncHandler(async (req, res) => {
@@ -34701,7 +35736,7 @@ data: ${JSON.stringify(data)}
     }
   })
 );
-router57.post(
+router58.post(
   "/actions/:id/confirm",
   requirePermission("copilot.use"),
   asyncHandler(async (req, res) => {
@@ -34714,7 +35749,7 @@ router57.post(
     sendSuccess(res, result);
   })
 );
-router57.post(
+router58.post(
   "/actions/:id/reject",
   requirePermission("copilot.use"),
   asyncHandler(async (req, res) => {
@@ -34727,7 +35762,7 @@ router57.post(
     sendSuccess(res, result);
   })
 );
-router57.get(
+router58.get(
   "/dashboard",
   requirePermission("copilot.read"),
   asyncHandler(async (req, res) => {
@@ -34735,11 +35770,11 @@ router57.get(
     sendSuccess(res, stats);
   })
 );
-var copilotRoutes_default = router57;
+var copilotRoutes_default = router58;
 
 // server/routes/v1/adminRoutes.ts
-import { Router as Router64 } from "express";
-import { z as z63 } from "zod";
+import { Router as Router65 } from "express";
+import { z as z64 } from "zod";
 init_apiResponse();
 
 // server/services/admin/adminOverviewService.ts
@@ -34872,12 +35907,12 @@ var adminOverviewService = {
 };
 
 // server/routes/v1/adminRoutes.ts
-var router58 = Router64();
-router58.use(authenticateToken);
-router58.get("/overview", requirePermission("security.read"), asyncHandler(async (req, res) => sendSuccess(res, { overview: await adminOverviewService.overview(req.user) })));
-router58.get("/security/policy", requirePermission("security.read"), (_req, res) => sendSuccess(res, { policy: adminOverviewService.policy() }));
-var pageQuery = z63.object({ page: z63.coerce.number().int().positive().default(1), limit: z63.coerce.number().int().positive().max(100).default(20) });
-router58.get(
+var router59 = Router65();
+router59.use(authenticateToken);
+router59.get("/overview", requirePermission("security.read"), asyncHandler(async (req, res) => sendSuccess(res, { overview: await adminOverviewService.overview(req.user) })));
+router59.get("/security/policy", requirePermission("security.read"), (_req, res) => sendSuccess(res, { policy: adminOverviewService.policy() }));
+var pageQuery = z64.object({ page: z64.coerce.number().int().positive().default(1), limit: z64.coerce.number().int().positive().max(100).default(20) });
+router59.get(
   "/security/events",
   requirePermission("security.read"),
   asyncHandler(async (req, res) => {
@@ -34886,7 +35921,7 @@ router58.get(
     sendSuccess(res, { events: rows.map((r) => ({ ...r, severity: auditSeverity(r) })) }, 200, { page, limit, total });
   })
 );
-router58.get(
+router59.get(
   "/sessions",
   requirePermission("security.read"),
   asyncHandler(async (req, res) => {
@@ -34895,7 +35930,7 @@ router58.get(
     sendSuccess(res, { sessions }, 200, { page, limit, total });
   })
 );
-router58.post(
+router59.post(
   "/sessions/:id/revoke",
   requirePermission("security.manage"),
   sensitiveActionLimiter,
@@ -34904,10 +35939,10 @@ router58.post(
     sendSuccess(res, { message: "Session revoked." });
   })
 );
-var adminRoutes_default = router58;
+var adminRoutes_default = router59;
 
 // server/routes/v1/integrationRoutes.ts
-import { Router as Router65 } from "express";
+import { Router as Router66 } from "express";
 init_apiResponse();
 
 // server/services/admin/integrationService.ts
@@ -34946,7 +35981,7 @@ function projectIntegration(i) {
     updatedAt: i.updatedAt
   };
 }
-function deriveStatus(i) {
+function deriveStatus2(i) {
   const cfg = i.config ?? {};
   return i.secretCiphertext && typeof cfg.baseUrl === "string" && cfg.baseUrl ? "CONFIGURED" : "NOT_CONFIGURED";
 }
@@ -35091,7 +36126,7 @@ var integrationService = {
       encryption: { source: encryptionKeySource() }
     };
   },
-  async upsert(caller, provider, input, meta10 = {}) {
+  async upsert(caller, provider, input, meta11 = {}) {
     const entry = catalogEntry(provider);
     const existing = await prisma.integration.findUnique({ where: { organizationId_provider: { organizationId: caller.organizationId, provider } } });
     let cfg = existing?.config ?? {};
@@ -35112,10 +36147,10 @@ var integrationService = {
       config: cfg,
       ...secretChange,
       // Any change to credentials/target invalidates prior verification.
-      ...credentialsChanged ? { status: deriveStatus(merged), lastVerifiedAt: null, lastError: null } : {}
+      ...credentialsChanged ? { status: deriveStatus2(merged), lastVerifiedAt: null, lastError: null } : {}
     };
-    if (data.enabled && deriveStatus(merged) === "NOT_CONFIGURED") throw new ValidationError("Configure the base URL and credential before enabling this integration.");
-    const row = existing ? await prisma.integration.update({ where: { id: existing.id }, data }) : await prisma.integration.create({ data: { ...data, organizationId: caller.organizationId, provider, createdById: caller.id, status: deriveStatus(merged) } });
+    if (data.enabled && deriveStatus2(merged) === "NOT_CONFIGURED") throw new ValidationError("Configure the base URL and credential before enabling this integration.");
+    const row = existing ? await prisma.integration.update({ where: { id: existing.id }, data }) : await prisma.integration.create({ data: { ...data, organizationId: caller.organizationId, provider, createdById: caller.id, status: deriveStatus2(merged) } });
     await auditLogRepository.record({
       organizationId: caller.organizationId,
       actorUserId: caller.id,
@@ -35125,15 +36160,15 @@ var integrationService = {
       resourceId: row.id,
       afterData: { provider, enabled: row.enabled, configKeys: Object.keys(cfg), credentialRotated: input.secret !== void 0 },
       // never the secret
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return projectIntegration(row);
   },
-  async test(caller, provider, meta10 = {}) {
+  async test(caller, provider, meta11 = {}) {
     catalogEntry(provider);
     const row = await prisma.integration.findUnique({ where: { organizationId_provider: { organizationId: caller.organizationId, provider } } });
-    if (!row || deriveStatus(row) === "NOT_CONFIGURED") throw new ValidationError("Configure this integration before testing it.");
+    if (!row || deriveStatus2(row) === "NOT_CONFIGURED") throw new ValidationError("Configure this integration before testing it.");
     const result = await runTest(row);
     const now = /* @__PURE__ */ new Date();
     const updated = await prisma.integration.update({
@@ -35149,12 +36184,12 @@ var integrationService = {
       resourceId: row.id,
       result: result.ok ? "SUCCESS" : "FAILURE",
       afterData: { provider, ok: result.ok },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return projectIntegration(updated);
   },
-  async clearSecret(caller, provider, meta10 = {}) {
+  async clearSecret(caller, provider, meta11 = {}) {
     catalogEntry(provider);
     const row = await prisma.integration.findUnique({ where: { organizationId_provider: { organizationId: caller.organizationId, provider } } });
     if (!row) throw new NotFoundError("Integration not configured.");
@@ -35170,8 +36205,8 @@ var integrationService = {
       resourceType: "integration",
       resourceId: row.id,
       afterData: { provider },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return projectIntegration(updated);
   }
@@ -35219,7 +36254,7 @@ var apiKeyService = {
     const keys = await prisma.apiKey.findMany({ where: { organizationId }, orderBy: { createdAt: "desc" } });
     return keys.map(projectApiKey);
   },
-  async create(caller, input, meta10 = {}) {
+  async create(caller, input, meta11 = {}) {
     const active = await prisma.apiKey.count({ where: { organizationId: caller.organizationId, revokedAt: null } });
     if (active >= MAX_ACTIVE_KEYS) throw new ConflictError(`An organization can have at most ${MAX_ACTIVE_KEYS} active API keys.`);
     const scopes = validateScopes(caller, input.scopes);
@@ -35246,26 +36281,26 @@ var apiKeyService = {
       resourceType: "api_key",
       resourceId: record2.id,
       afterData: { name: record2.name, scopes, expiresAt: record2.expiresAt?.toISOString() ?? null },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return { apiKey: projectApiKey(record2), key: key2 };
   },
-  async revoke(caller, id4, meta10 = {}) {
-    const existing = await prisma.apiKey.findFirst({ where: { id: id4, organizationId: caller.organizationId } });
+  async revoke(caller, id6, meta11 = {}) {
+    const existing = await prisma.apiKey.findFirst({ where: { id: id6, organizationId: caller.organizationId } });
     if (!existing) throw new NotFoundError("API key not found.");
     if (existing.revokedAt) return projectApiKey(existing);
-    const updated = await prisma.apiKey.update({ where: { id: id4 }, data: { revokedAt: /* @__PURE__ */ new Date() } });
+    const updated = await prisma.apiKey.update({ where: { id: id6 }, data: { revokedAt: /* @__PURE__ */ new Date() } });
     await auditLogRepository.record({
       organizationId: caller.organizationId,
       actorUserId: caller.id,
       actorType: "USER",
       action: "API_KEY_REVOKED",
       resourceType: "api_key",
-      resourceId: id4,
+      resourceId: id6,
       beforeData: { name: existing.name },
-      ipAddress: meta10.ip,
-      userAgent: meta10.userAgent
+      ipAddress: meta11.ip,
+      userAgent: meta11.userAgent
     });
     return projectApiKey(updated);
   },
@@ -35283,9 +36318,9 @@ var apiKeyService = {
 };
 
 // server/routes/v1/integrationRoutes.ts
-var meta9 = (req) => ({ ip: req.ip, userAgent: req.headers["user-agent"] });
+var meta10 = (req) => ({ ip: req.ip, userAgent: req.headers["user-agent"] });
 var noStore2 = (res) => res.setHeader("Cache-Control", "no-store");
-var integrationsRouter = Router65();
+var integrationsRouter = Router66();
 integrationsRouter.use(authenticateToken);
 integrationsRouter.get("/", requirePermission("integrations.read"), asyncHandler(async (req, res) => sendSuccess(res, await integrationService.overview(req.user.organizationId))));
 integrationsRouter.put(
@@ -35294,22 +36329,22 @@ integrationsRouter.put(
   sensitiveActionLimiter,
   asyncHandler(async (req, res) => {
     const input = upsertIntegrationSchema.parse(req.body);
-    sendSuccess(res, { integration: await integrationService.upsert(req.user, req.params.provider, input, meta9(req)) });
+    sendSuccess(res, { integration: await integrationService.upsert(req.user, req.params.provider, input, meta10(req)) });
   })
 );
 integrationsRouter.post(
   "/:provider/test",
   requirePermission("integrations.manage"),
   sensitiveActionLimiter,
-  asyncHandler(async (req, res) => sendSuccess(res, { integration: await integrationService.test(req.user, req.params.provider, meta9(req)) }))
+  asyncHandler(async (req, res) => sendSuccess(res, { integration: await integrationService.test(req.user, req.params.provider, meta10(req)) }))
 );
 integrationsRouter.delete(
   "/:provider/secret",
   requirePermission("integrations.manage"),
   sensitiveActionLimiter,
-  asyncHandler(async (req, res) => sendSuccess(res, { integration: await integrationService.clearSecret(req.user, req.params.provider, meta9(req)) }))
+  asyncHandler(async (req, res) => sendSuccess(res, { integration: await integrationService.clearSecret(req.user, req.params.provider, meta10(req)) }))
 );
-var webhookEndpointsRouter = Router65();
+var webhookEndpointsRouter = Router66();
 webhookEndpointsRouter.use(authenticateToken);
 webhookEndpointsRouter.get("/events", requirePermission("webhooks.read"), (_req, res) => sendSuccess(res, { events: supportedEvents() }));
 webhookEndpointsRouter.get("/", requirePermission("webhooks.read"), asyncHandler(async (req, res) => sendSuccess(res, { endpoints: await webhookEndpointService.list(req.user.organizationId) })));
@@ -35320,13 +36355,13 @@ webhookEndpointsRouter.post(
   asyncHandler(async (req, res) => {
     const input = createWebhookEndpointSchema.parse(req.body);
     noStore2(res);
-    sendSuccess(res, await webhookEndpointService.create(req.user, input, meta9(req)), 201);
+    sendSuccess(res, await webhookEndpointService.create(req.user, input, meta10(req)), 201);
   })
 );
 webhookEndpointsRouter.patch(
   "/:id",
   requirePermission("webhooks.manage"),
-  asyncHandler(async (req, res) => sendSuccess(res, { endpoint: await webhookEndpointService.update(req.user, req.params.id, updateWebhookEndpointSchema.parse(req.body), meta9(req)) }))
+  asyncHandler(async (req, res) => sendSuccess(res, { endpoint: await webhookEndpointService.update(req.user, req.params.id, updateWebhookEndpointSchema.parse(req.body), meta10(req)) }))
 );
 webhookEndpointsRouter.post(
   "/:id/rotate-secret",
@@ -35334,7 +36369,7 @@ webhookEndpointsRouter.post(
   sensitiveActionLimiter,
   asyncHandler(async (req, res) => {
     noStore2(res);
-    sendSuccess(res, await webhookEndpointService.rotateSecret(req.user, req.params.id, meta9(req)));
+    sendSuccess(res, await webhookEndpointService.rotateSecret(req.user, req.params.id, meta10(req)));
   })
 );
 webhookEndpointsRouter.post(
@@ -35347,7 +36382,7 @@ webhookEndpointsRouter.delete(
   "/:id",
   requirePermission("webhooks.manage"),
   asyncHandler(async (req, res) => {
-    await webhookEndpointService.remove(req.user, req.params.id, meta9(req));
+    await webhookEndpointService.remove(req.user, req.params.id, meta10(req));
     sendSuccess(res, { message: "Webhook endpoint deleted." });
   })
 );
@@ -35366,7 +36401,7 @@ webhookEndpointsRouter.post(
   sensitiveActionLimiter,
   asyncHandler(async (req, res) => sendSuccess(res, { delivery: await webhookEndpointService.retryDelivery(req.user, req.params.deliveryId) }))
 );
-var apiKeysRouter = Router65();
+var apiKeysRouter = Router66();
 apiKeysRouter.use(authenticateToken);
 apiKeysRouter.get("/", requirePermission("api_keys.read"), asyncHandler(async (req, res) => sendSuccess(res, { apiKeys: await apiKeyService.list(req.user.organizationId) })));
 apiKeysRouter.post(
@@ -35376,18 +36411,18 @@ apiKeysRouter.post(
   asyncHandler(async (req, res) => {
     const input = createApiKeySchema.parse(req.body);
     noStore2(res);
-    sendSuccess(res, await apiKeyService.create(req.user, input, meta9(req)), 201);
+    sendSuccess(res, await apiKeyService.create(req.user, input, meta10(req)), 201);
   })
 );
 apiKeysRouter.post(
   "/:id/revoke",
   requirePermission("api_keys.manage"),
   sensitiveActionLimiter,
-  asyncHandler(async (req, res) => sendSuccess(res, { apiKey: await apiKeyService.revoke(req.user, req.params.id, meta9(req)) }))
+  asyncHandler(async (req, res) => sendSuccess(res, { apiKey: await apiKeyService.revoke(req.user, req.params.id, meta10(req)) }))
 );
 
 // server/routes/v1/externalRoutes.ts
-import { Router as Router66 } from "express";
+import { Router as Router67 } from "express";
 
 // server/middleware/apiKeyAuth.ts
 init_errors();
@@ -35402,19 +36437,19 @@ var authenticateApiKey = asyncHandler(async (req, _res, next) => {
 
 // server/routes/v1/externalRoutes.ts
 init_apiResponse();
-var router59 = Router66();
-router59.use(generalApiLimiter, authenticateApiKey);
-router59.get(
+var router60 = Router67();
+router60.use(generalApiLimiter, authenticateApiKey);
+router60.get(
   "/whoami",
   asyncHandler(async (req, res) => {
     const org = await prisma.organization.findUnique({ where: { id: req.apiKey.organizationId }, select: { id: true, name: true, slug: true } });
     sendSuccess(res, { organization: org, apiKey: { id: req.apiKey.id, scopes: req.apiKey.scopes } });
   })
 );
-var externalRoutes_default = router59;
+var externalRoutes_default = router60;
 
 // server/routes/v1/analyticsRoutes.ts
-import { Router as Router67 } from "express";
+import { Router as Router68 } from "express";
 
 // server/services/analyticsReportingService.ts
 init_errors();
@@ -35601,9 +36636,9 @@ var analyticsReportingService = {
 
 // server/routes/v1/analyticsRoutes.ts
 init_apiResponse();
-var router60 = Router67();
-router60.use(authenticateToken);
-router60.get(
+var router61 = Router68();
+router61.use(authenticateToken);
+router61.get(
   "/overview",
   requirePermission("analytics.read"),
   asyncHandler(async (req, res) => {
@@ -35612,7 +36647,7 @@ router60.get(
     sendSuccess(res, overview);
   })
 );
-router60.get(
+router61.get(
   "/content/top-pages",
   requirePermission("analytics.read"),
   asyncHandler(async (req, res) => {
@@ -35621,10 +36656,10 @@ router60.get(
     sendSuccess(res, { topPages });
   })
 );
-var analyticsRoutes_default = router60;
+var analyticsRoutes_default = router61;
 
 // server/routes/v1/reportsRoutes.ts
-import { Router as Router68 } from "express";
+import { Router as Router69 } from "express";
 init_apiResponse();
 
 // server/utils/csv.ts
@@ -35646,8 +36681,8 @@ function sendCsv(res, filename, csv) {
 
 // server/routes/v1/reportsRoutes.ts
 init_errors();
-var router61 = Router68();
-router61.use(authenticateToken);
+var router62 = Router69();
+router62.use(authenticateToken);
 function assertReportType(value) {
   if (REPORT_TYPES.includes(value)) return value;
   throw new NotFoundError("Unknown report type.");
@@ -35668,7 +36703,7 @@ function reportToCsvRows(data) {
   }
   return { header: ["value"], rows: [[data]] };
 }
-router61.get(
+router62.get(
   "/:type",
   requirePermission("reports.read"),
   asyncHandler(async (req, res) => {
@@ -35678,7 +36713,7 @@ router61.get(
     sendSuccess(res, { type, range: { from: query.from ?? null, to: query.to ?? null }, report });
   })
 );
-router61.get(
+router62.get(
   "/:type/export",
   requirePermission("reports.export"),
   asyncHandler(async (req, res) => {
@@ -35689,23 +36724,23 @@ router61.get(
     sendCsv(res, `${type}.csv`, toCsv2(header, rows));
   })
 );
-var reportsRoutes_default = router61;
+var reportsRoutes_default = router62;
 
 // server/routes/v1/contentApprovalRoutes.ts
-import { Router as Router69 } from "express";
-import { z as z64 } from "zod";
+import { Router as Router70 } from "express";
+import { z as z65 } from "zod";
 init_apiResponse();
-var router62 = Router69();
-router62.use(authenticateToken);
-var SubmitSchema = z64.object({
-  contentType: z64.enum(["page", "post"]),
-  contentId: z64.string().min(1)
+var router63 = Router70();
+router63.use(authenticateToken);
+var SubmitSchema = z65.object({
+  contentType: z65.enum(["page", "post"]),
+  contentId: z65.string().min(1)
 });
-var DecideSchema = z64.object({
-  decision: z64.enum(["APPROVED", "REJECTED", "CHANGES_REQUESTED"]),
-  reason: z64.string().max(2e3).optional()
+var DecideSchema = z65.object({
+  decision: z65.enum(["APPROVED", "REJECTED", "CHANGES_REQUESTED"]),
+  reason: z65.string().max(2e3).optional()
 });
-router62.get(
+router63.get(
   "/",
   requirePermission("content.update"),
   asyncHandler(async (req, res) => {
@@ -35718,7 +36753,7 @@ router62.get(
     sendSuccess(res, result);
   })
 );
-router62.post(
+router63.post(
   "/",
   requirePermission("content.update"),
   asyncHandler(async (req, res) => {
@@ -35727,7 +36762,7 @@ router62.post(
     sendSuccess(res, result, 201);
   })
 );
-router62.post(
+router63.post(
   "/:id/decide",
   requirePermission("content.publish"),
   asyncHandler(async (req, res) => {
@@ -35736,10 +36771,10 @@ router62.post(
     sendSuccess(res, result);
   })
 );
-var contentApprovalRoutes_default = router62;
+var contentApprovalRoutes_default = router63;
 
 // server/routes/v1/index.ts
-var v1Router = Router70();
+var v1Router = Router71();
 v1Router.use("/auth", authRoutes_default);
 v1Router.use("/webhooks", webhookRoutes_default);
 v1Router.use("/system", systemRoutes_default);
@@ -35769,6 +36804,7 @@ v1Router.use("/social", socialContentRouter);
 v1Router.use("/forms", formRoutes_default);
 v1Router.use("/crm", crmRoutes_default);
 v1Router.use("/campaigns", campaignRoutes_default);
+v1Router.use("/marketing/landing-pages", landingRoutes_default);
 v1Router.use("/marketing", marketingRoutes_default);
 v1Router.use("/onboarding", onboardingRoutes_default);
 v1Router.use("/workspaces", workspaceRoutes_default);
