@@ -37,7 +37,8 @@ export const facebookScopes = (): string[] => {
 };
 /** Without these the connector cannot do its core job (publish + moderate). pages_messaging is optional (Messenger only). */
 export const REQUIRED_SCOPES = ["pages_manage_posts", "pages_manage_engagement", "pages_read_engagement"] as const;
-export const SUBSCRIBED_FIELDS_FULL = "feed,messages,mention,ratings";
+// `ratings` is gone: Meta stopped sending Page ratings webhooks in v22.0 (docs/SOCIAL_LISTENING.md §1.3).
+export const SUBSCRIBED_FIELDS_FULL = "feed,messages,mention";
 export const SUBSCRIBED_FIELDS_CORE = "feed,messages";
 const MESSENGER_TEXT_LIMIT = 2000;
 
@@ -87,6 +88,28 @@ export function parseWebhookPayload(payload: WebhookPayload): InboundEvent[] {
         const parent = v.parent_id as string | undefined;
         const root = parent && parent !== postId ? parent : commentId; // replies stay in their parent comment's thread
         out.push({ type: "COMMENT", accountExternalId: pageId, providerThreadId: `c:${root}`, providerMessageId: commentId, participant: { externalId: from.id, name: from.name }, text: text || "[comment without text]", subjectRef: postId, createdAt: epochToIso(v.created_time as number | undefined) });
+      } else if (change.field === "feed" && v.verb === "add" && v.item !== "comment" && typeof v.post_id === "string") {
+        // A post by a visitor on the Page's own timeline. The Page's own posts (from.id === pageId) are not mentions.
+        const from = v.from as { id?: string; name?: string } | undefined;
+        const postId = v.post_id;
+        if (!from?.id || from.id === pageId) continue;
+        out.push({
+          type: "MENTION", accountExternalId: pageId, providerThreadId: `p:${postId}`, providerMessageId: postId, participant: { externalId: from.id, name: from.name },
+          text: typeof v.message === "string" && v.message ? v.message : `[${String(v.item ?? "post")} on your Page without text]`, subjectRef: postId, permalink: postUrl(postId),
+          createdAt: epochToIso(v.created_time as number | undefined),
+        });
+      } else if (change.field === "mention") {
+        // Payload not described by any current official page [ ]: accept a feed-like shape, skip anything else.
+        const from = v.from as { id?: string; name?: string } | undefined;
+        const commentId = typeof v.comment_id === "string" ? v.comment_id : undefined;
+        const postId = typeof v.post_id === "string" ? v.post_id : undefined;
+        const id = commentId ?? postId;
+        if (!id || (from?.id && from.id === pageId)) continue;
+        out.push({
+          type: "MENTION", accountExternalId: pageId, providerThreadId: `m:${id}`, providerMessageId: id, participant: { externalId: from?.id, name: from?.name },
+          text: typeof v.message === "string" && v.message ? v.message : "[mention without text]", subjectRef: postId, permalink: postId ? postUrl(postId) : undefined,
+          createdAt: epochToIso(v.created_time as number | undefined),
+        });
       } else if (change.field === "ratings" && (v.review_text || v.rating_text || v.recommendation_type)) {
         const reviewer = v.reviewer_id as string | undefined;
         const id = (v.open_graph_story_id as string | undefined) ?? (reviewer ? `${reviewer}:${v.created_time ?? ""}` : undefined);
@@ -261,7 +284,59 @@ export const facebookPageProvider: SocialConnector = {
     return { events, nextCursor: String(now - 60_000) }; // one-minute overlap; duplicates are dropped by message id
   },
 
+  // ---------------- listening (Step 10) ----------------
+  /** Polling fallback: posts that tag the Page (`/tagged`, public posts only) and visitor posts on its timeline (`/feed` entries by someone else). */
+  async fetchMentions(tokens, { accountExternalId, cursor }) {
+    const page = pageIdOf(tokens, accountExternalId);
+    const since = cursor ? Number(cursor) : Date.now() - 24 * 3600_000;
+    const now = Date.now();
+    type Row = { id: string; message?: string; from?: { id?: string; name?: string }; created_time?: string; permalink_url?: string };
+    const events: InboundEvent[] = [];
+    const add = (rows: Row[] | undefined, prefix: "t" | "p") => {
+      for (const r of rows ?? []) {
+        if (!r.id || !r.created_time || Date.parse(r.created_time) <= since || (r.from?.id && r.from.id === page)) continue;
+        events.push({
+          type: "MENTION", accountExternalId: page, providerThreadId: `${prefix}:${r.id}`, providerMessageId: r.id, participant: { externalId: r.from?.id, name: r.from?.name },
+          text: r.message || (prefix === "t" ? "[post that tags your Page]" : "[post on your Page without text]"), subjectRef: r.id, permalink: r.permalink_url ?? postUrl(r.id), createdAt: r.created_time,
+        });
+      }
+    };
+    const fields = "id,message,from,created_time,permalink_url";
+    const tagged = await graph<{ data?: Row[] }>({ method: "GET", path: `/${page}/tagged`, token: tokens.accessToken, phase: "read", query: { fields, limit: "25" } }).catch((err) => { if (err instanceof SocialPublishError && err.kind === "permanent") return { json: { data: [] as Row[] } }; throw err; });
+    add(tagged.json.data, "t");
+    const feed = await graph<{ data?: Row[] }>({ method: "GET", path: `/${page}/feed`, token: tokens.accessToken, phase: "read", query: { fields, limit: "25" } });
+    add(feed.json.data, "p");
+    return { events, nextCursor: String(now - 60_000) };
+  },
+
+  replyCapability: ({ type, providerThreadId }) => {
+    if (type === "MENTION" && providerThreadId.startsWith("p:")) return { mode: "api" };
+    if (type === "MENTION") return { mode: "platform", reason: "This item is on someone else's timeline or comment. Facebook does not let apps reply there. Reply on Facebook." };
+    return { mode: "platform", reason: "Facebook no longer provides reviews to apps (removed in API v22.0). Reply on Facebook." };
+  },
+
+  /** Average rating + count. The ratings edge is gone (v22.0); the Page node fields are read once and an absent value is reported as such, never as 0. [ ] */
+  async fetchReviewSummary(tokens, { accountExternalId }) {
+    const page = pageIdOf(tokens, accountExternalId);
+    try {
+      const r = await graph<{ overall_star_rating?: number; rating_count?: number }>({ method: "GET", path: `/${page}`, token: tokens.accessToken, phase: "read", query: { fields: "overall_star_rating,rating_count" } });
+      const avg = typeof r.json.overall_star_rating === "number" && r.json.overall_star_rating > 0 ? r.json.overall_star_rating : null;
+      const count = typeof r.json.rating_count === "number" && r.json.rating_count > 0 ? r.json.rating_count : null;
+      return { averageRating: avg, reviewCount: count, ...(avg === null && count === null ? { note: "Facebook returned no rating for this Page. Page recommendations were removed from the API in v22.0, so a missing value is expected." } : {}) };
+    } catch (err) {
+      if (err instanceof SocialPublishError && err.kind === "permanent") return { averageRating: null, reviewCount: null, note: "Facebook does not provide Page ratings to apps any more (recommendations were removed from the API in v22.0)." };
+      throw err;
+    }
+  },
+
   async sendReply(tokens: SocialTokenSet, input: SendReplyInput): Promise<SendReplyResult> {
+    if (input.conversationType === "MENTION") {
+      // Only a visitor post on the Page's own timeline can be answered (comment on that post). Tags/mentions on other timelines have no reply API.
+      if (!input.providerThreadId.startsWith("p:") || !input.inReplyToProviderMessageId) throw new SocialPublishError("permanent", "Facebook does not let apps reply there. Reply on Facebook.");
+      const r = await graph<{ id?: string }>({ method: "POST", path: `/${input.inReplyToProviderMessageId}/comments`, token: tokens.accessToken, phase: "write", body: { message: input.text } });
+      if (!r.json.id) throw new SocialPublishError("uncertain", "Meta answered without a comment id; the reply may have been posted.");
+      return { providerMessageId: r.json.id };
+    }
     if (input.conversationType === "COMMENT") {
       if (!input.inReplyToProviderMessageId) throw new SocialPublishError("permanent", "There is no comment to reply to.");
       const r = await graph<{ id?: string }>({ method: "POST", path: `/${input.inReplyToProviderMessageId}/comments`, token: tokens.accessToken, phase: "write", body: { message: input.text } });

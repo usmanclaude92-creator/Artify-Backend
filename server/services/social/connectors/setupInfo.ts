@@ -75,7 +75,7 @@ function instagramSetup(): ProviderSetup {
     notes: [
       "Instagram reuses the Facebook Login redirect URI above (Facebook Login → Valid OAuth Redirect URIs) and the same app secret.",
       "In the Meta app dashboard add the Instagram use case with instagram_basic, instagram_content_publish, instagram_manage_comments and instagram_manage_messages. Facebook rejects the whole login if one is not enabled; list only the enabled ones in META_INSTAGRAM_LOGIN_SCOPES.",
-      "Add the Webhooks product, choose the Instagram object, set the callback URL above and the verify token, then subscribe to comments and messages.",
+      "Add the Webhooks product, choose the Instagram object, set the callback URL above and the verify token, then subscribe to comments, messages and mentions (mentions feed Social Media → Listening).",
       "Publishing needs a JPEG image (up to 8 MB; ratio 4:5 to 1.91:1). Text-only posts and links in captions are not supported. Reels need a video library and are not available yet.",
       "Replies to direct messages are only possible within 24 hours of the person's last message. No message tags are used and auto-reply stays off.",
       "Going Live for other people requires App Review for the permissions above. This panel cannot detect the app mode; set META_APP_MODE to show it here.",

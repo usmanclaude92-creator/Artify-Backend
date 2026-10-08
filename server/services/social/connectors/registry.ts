@@ -2,9 +2,10 @@ import { mockProvider } from "./mockProvider";
 import { linkedinProvider } from "./linkedinProvider";
 import { facebookPageProvider } from "./facebookPageProvider";
 import { instagramProvider } from "./instagramProvider";
+import { googleBusinessProvider } from "./googleBusinessProvider";
 import { DEFAULT_CONSTRAINTS, type SocialConnector, type SocialConstraints } from "./types";
 
-const CONNECTORS: SocialConnector[] = [facebookPageProvider, instagramProvider, linkedinProvider, mockProvider];
+const CONNECTORS: SocialConnector[] = [facebookPageProvider, instagramProvider, linkedinProvider, googleBusinessProvider, mockProvider];
 
 export interface ProviderInfo {
   key: string;

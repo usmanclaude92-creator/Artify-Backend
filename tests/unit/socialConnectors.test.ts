@@ -20,9 +20,9 @@ afterEach(() => {
 });
 
 describe("connector registry", () => {
-  it("registers Facebook Pages, Instagram, linkedin and (in dev/test) mock; the Meta connectors/linkedin are 'not configured' without credentials", () => {
+  it("registers Facebook Pages, Instagram, linkedin, the Google Business Profile stub (never available) and (in dev/test) mock; the Meta connectors/linkedin are 'not configured' without credentials", () => {
     const list = connectorRegistry.list();
-    expect(list.map((p) => p.key).sort()).toEqual(["linkedin", "meta_facebook", "meta_instagram", "mock"]);
+    expect(list.map((p) => p.key).sort()).toEqual(["google_business", "linkedin", "meta_facebook", "meta_instagram", "mock"]);
     expect(list.find((p) => p.key === "meta_facebook")).toMatchObject({ label: "Facebook Pages", configured: false, available: false });
     expect(list.find((p) => p.key === "meta_instagram")).toMatchObject({ label: "Instagram", configured: false, available: false });
     expect(list.find((p) => p.key === "mock")).toMatchObject({ configured: true, available: true });

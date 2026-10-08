@@ -19,6 +19,7 @@ import { socialAccountService } from "../../services/social/socialAccountService
 import { publisher } from "../../services/social/publishing/publisher";
 import { inboxTick } from "../../services/social/inbox/inboxPipeline";
 import { analyticsIngest } from "../../services/social/analytics/analyticsIngest";
+import { listeningJobs } from "../../services/social/listening/listeningJobs";
 import { contentSchedulingService } from "../../services/contentSchedulingService";
 import { config } from "../../config/env";
 import { AuthenticationError, NotFoundError } from "../../core/errors";
@@ -61,7 +62,7 @@ router.get(
     if (!constantTimeEquals(req.headers.authorization ?? "", `Bearer ${config.cronSecret}`)) {
       throw new AuthenticationError("Invalid cron credentials.");
     }
-    const [automation, content, webhookRetries, socialTokenHealth, socialPublish, socialInbox, socialAnalytics] = await Promise.all([
+    const [automation, content, webhookRetries, socialTokenHealth, socialPublish, socialInbox, socialAnalytics, socialListening] = await Promise.all([
       automationService.runCronTick(),
       contentSchedulingService.publishDueScheduled(),
       webhookEndpointService.processDueRetries(),
@@ -73,8 +74,10 @@ router.get(
       inboxTick().catch(() => ({ error: true })),
       // Analytics: READ-ONLY insights snapshots, one successful run per account per UTC day, kill-switch gated; counts only; never throws.
       analyticsIngest.tick().catch(() => ({ error: true })),
+      // Listening: mention/tag polling fallback (flag, default OFF) and the daily review-rating snapshot. READ-ONLY; counts only; never throws.
+      listeningJobs.tick().catch(() => ({ error: true })),
     ]);
-    sendSuccess(res, { automation, content, webhookRetries, socialTokenHealth, socialPublish, socialInbox, socialAnalytics });
+    sendSuccess(res, { automation, content, webhookRetries, socialTokenHealth, socialPublish, socialInbox, socialAnalytics, socialListening });
   })
 );
 

@@ -70,8 +70,8 @@ describe("webhook parsing", () => {
     const [e] = parseWebhookPayload(webhooks.commentReply);
     expect(e).toMatchObject({ providerThreadId: "c:POST1_C1", providerMessageId: "POST1_C2" });
   });
-  it("ignores edits, removals, non-comment items, the Page's own comments and non-page objects", () => {
-    expect(parseWebhookPayload(webhooks.commentEditAndRemove)).toEqual([]);
+  it("ignores edits, removals, the Page's own comments and non-page objects; a visitor's new post is a MENTION (Step 10), not a comment", () => {
+    expect(parseWebhookPayload(webhooks.commentEditAndRemove)).toEqual([expect.objectContaining({ type: "MENTION", providerThreadId: "p:PAGE1_POST9", providerMessageId: "PAGE1_POST9", text: "a post" })]);
     expect(parseWebhookPayload(webhooks.pageOwnComment)).toEqual([]);
     expect(parseWebhookPayload(webhooks.notAPage)).toEqual([]);
     expect(parseWebhookPayload({} as never)).toEqual([]);
@@ -290,12 +290,12 @@ describe("requests", () => {
     reply([{ success: true }]);
     expect(await facebookPageProvider.onConnected!(tokens, { externalAccountId: "PAGE1", displayName: "A" })).toEqual({});
     expect(calls[0]!.url).toBe("https://graph.facebook.com/v25.0/PAGE1/subscribed_apps");
-    expect(calls[0]!.body).toMatchObject({ subscribed_fields: "feed,messages,mention,ratings" });
+    expect(calls[0]!.body).toMatchObject({ subscribed_fields: "feed,messages,mention" }); // `ratings` webhooks were removed by Meta in v22.0
     reply([{ error: { message: "bad field", code: 100 } }, { success: true }], 400);
     metaHttp.fetch = (async (url: string, init: RequestInit) => { calls.push({ url, method: init.method!, body: JSON.parse(String(init.body)) }); return new Response(JSON.stringify(calls.length === 1 ? { error: { message: "bad field", code: 100 } } : { success: true }), { status: calls.length === 1 ? 400 : 200 }); }) as typeof fetch;
     calls = [];
     expect(await facebookPageProvider.onConnected!(tokens, { externalAccountId: "PAGE1", displayName: "A" })).toEqual({});
-    expect(calls.map((c) => c.body!.subscribed_fields)).toEqual(["feed,messages,mention,ratings", "feed,messages"]);
+    expect(calls.map((c) => c.body!.subscribed_fields)).toEqual(["feed,messages,mention", "feed,messages"]);
     reply([{ error: { message: "nope", code: 100 } }, { error: { message: "nope", code: 100 } }], 400);
     metaHttp.fetch = (async () => new Response(JSON.stringify({ error: { message: "nope", code: 100 } }), { status: 400 })) as typeof fetch;
     expect((await facebookPageProvider.onConnected!(tokens, { externalAccountId: "PAGE1", displayName: "A" })).warnings![0]).toMatch(/webhooks/);

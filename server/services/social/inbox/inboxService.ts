@@ -13,6 +13,12 @@ import type { SanitizedUser } from "../../../types/domain";
 import type { RequestMeta } from "../../authService";
 
 const isAdmin = (u: SanitizedUser) => u.role.key === "ADMIN" || u.role.key === "SUPER_ADMIN";
+const canRespondToReviews = (u: SanitizedUser) => u.role.key === "SUPER_ADMIN" || u.role.permissions.includes("social.reviews.respond");
+/** Reviews have their own permission on top of social.reply: drafting/sending/editing a review reply needs social.reviews.respond. */
+async function assertReviewAccess(caller: SanitizedUser, conversationId: string) {
+  const conv = await prisma.socialConversation.findFirst({ where: { id: conversationId, organizationId: caller.organizationId }, select: { type: true } });
+  if (conv?.type === "REVIEW" && !canRespondToReviews(caller)) throw new AuthorizationError('Permission denied. Required privilege: "social.reviews.respond"');
+}
 const CONV_INCLUDE = { account: { select: { id: true, provider: true, displayName: true, handle: true, accountType: true, status: true, avatarUrl: true } } } satisfies Prisma.SocialConversationInclude;
 type ConvRow = Prisma.SocialConversationGetPayload<{ include: typeof CONV_INCLUDE }>;
 
@@ -32,7 +38,7 @@ export const inboxService = {
     const now = new Date();
     const where: Prisma.SocialConversationWhereInput = {
       organizationId: caller.organizationId,
-      ...(q.status ? { status: q.status } : {}), ...(q.accountId ? { socialAccountId: q.accountId } : {}), ...(q.type ? { type: q.type } : {}),
+      ...(q.status ? { status: q.status } : {}), ...(q.accountId ? { socialAccountId: q.accountId } : {}), type: q.type ?? { in: ["COMMENT", "DM"] as SocialConversationType[] },
       ...(q.priority ? { priority: q.priority } : {}), ...(q.sentiment ? { sentiment: q.sentiment } : {}), ...(q.unread ? { isRead: false } : {}),
       ...(q.assignee === "me" ? { assigneeId: caller.id } : q.assignee === "unassigned" ? { assigneeId: null } : q.assignee ? { assigneeId: q.assignee } : {}),
       ...(q.overdue ? { status: { in: ["OPEN", "PENDING"] as SocialConversationStatus[] }, firstResponseAt: null, slaDueAt: { lt: now } } : {}),
@@ -58,8 +64,13 @@ export const inboxService = {
       prisma.socialMessage.findMany({ where: { conversationId: id }, orderBy: { createdAt: "asc" }, take: 300 }),
       prisma.socialTriage.findFirst({ where: { conversationId: id }, orderBy: { createdAt: "desc" } }),
     ]);
-    const win = connectorRegistry.get(conv.account.provider)?.replyWindow?.({ type: conv.type, lastInboundAt: conv.lastInboundAt, now: new Date() }) ?? { open: true, closesAt: null };
+    const connector = connectorRegistry.get(conv.account.provider);
+    const win = connector?.replyWindow?.({ type: conv.type, lastInboundAt: conv.lastInboundAt, now: new Date() }) ?? { open: true, closesAt: null };
+    const cap = conv.type === "MENTION" || conv.type === "REVIEW" ? (connector?.replyCapability?.({ type: conv.type, providerThreadId: conv.providerThreadId }) ?? { mode: "platform" as const, reason: "This network does not let apps reply here. Reply on the platform." }) : { mode: "api" as const };
+    const ref = messages.map((m) => m.mediaRefs as { permalink?: string } | null).find((r) => r && typeof r.permalink === "string");
     return {
+      permalink: ref?.permalink ?? null,
+      reply: { mode: cap.mode, reason: "reason" in cap ? cap.reason ?? null : null },
       replyWindow: { open: win.open, closesAt: win.closesAt, reason: win.reason ?? null },
       conversation: project(conv, new Date(), { failedSend: messages.some((m) => (m.sendStatus === "FAILED" || m.sendStatus === "UNCERTAIN") && m.authorKind !== "NOTE") }),
       messages: messages.map((m) => ({
@@ -94,6 +105,7 @@ export const inboxService = {
   // ---- drafts & replies ----
   async draft(caller: SanitizedUser, id: string, meta: RequestMeta = {}) {
     void meta;
+    await assertReviewAccess(caller, id);
     const r = await generateDraft({ id: caller.id, organizationId: caller.organizationId }, caller.organizationId, id);
     return r;
   },
@@ -101,12 +113,14 @@ export const inboxService = {
   async editDraft(caller: SanitizedUser, messageId: string, body: string) {
     const msg = await prisma.socialMessage.findFirst({ where: { id: messageId, organizationId: caller.organizationId, direction: "OUTBOUND", authorKind: { in: ["AI_DRAFT", "PAGE"] }, sendStatus: { in: ["DRAFT", "FAILED"] } }, include: { conversation: { include: { account: true } } } });
     if (!msg) throw new NotFoundError("Draft not found.");
+    if (msg.conversation.type === "REVIEW" && !canRespondToReviews(caller)) throw new AuthorizationError('Permission denied. Required privilege: "social.reviews.respond"');
     const guard = await replyGuardrails(caller.organizationId, msg.conversation.account, body);
     const updated = await prisma.socialMessage.update({ where: { id: messageId }, data: { body, guardrailResult: guard as unknown as Prisma.InputJsonValue, sentById: caller.id } });
     return { id: updated.id, body: updated.body, guardrailResult: guard };
   },
 
   async send(caller: SanitizedUser, conversationId: string, input: { messageId?: string; body?: string; resolve?: boolean; confirmNotSent?: boolean }, meta: RequestMeta = {}) {
+    await assertReviewAccess(caller, conversationId);
     const m = await sendReply(caller.organizationId, conversationId, { actor: caller, ...input, meta });
     return { message: { id: m.id, sendStatus: m.sendStatus, sendError: m.sendError, sentAt: m.sentAt } };
   },

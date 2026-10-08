@@ -140,7 +140,7 @@ describe("meta instagram", () => {
     expect(list.body.data.providers.find((p: { key: string }) => p.key === "meta_instagram")).toMatchObject({ label: "Instagram", configured: true, available: true });
     const setup = await api("get", "/social/accounts/providers/meta_instagram/setup", adminToken);
     expect(setup.status).toBe(200);
-    expect(setup.body.data.setup).toMatchObject({ webhookObject: "instagram", webhookFields: ["comments", "messages"], dailyPublishLimit: 3 });
+    expect(setup.body.data.setup).toMatchObject({ webhookObject: "instagram", webhookFields: ["comments", "messages", "mentions"], dailyPublishLimit: 3 });
     expect(JSON.stringify(setup.body)).not.toContain(SECRET);
     expect((await api("get", "/social/accounts/providers/meta_instagram/setup", agentToken)).status).toBe(403);
   });

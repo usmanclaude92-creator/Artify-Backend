@@ -1,7 +1,7 @@
 /** Unified Inbox: comments, DMs, mentions and reviews. Two panes on desktop, one column on phones. AI drafts are always reviewed and sent by a person. */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, Bot, EyeOff, Inbox, Send, Settings2, ShieldAlert, Sparkles, UserPlus } from "lucide-react";
-import { socialApi, socialInboxApi, type InboxConversation, type InboxListParams, type InboxMessage, type InboxMetrics, type InboxPriority, type InboxStatus, type InboxTriage, type InboxCannedReply, type SocialAccountSummary } from "../../lib/api";
+import { socialApi, socialInboxApi, socialReviewsApi, type InboxConversation, type InboxListParams, type InboxMessage, type InboxMetrics, type InboxPriority, type InboxStatus, type InboxTriage, type InboxCannedReply, type SocialAccountSummary } from "../../lib/api";
 import { ApiClientError } from "../../lib/apiClient";
 import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
@@ -11,6 +11,7 @@ import { Badge, Button, Card, EmptyState, ErrorState, Input, LoadingState, Selec
 import { ProviderAvatar } from "./socialShared";
 import { ConversationBadges, PRIORITY_LABEL, STATUS_LABEL, TYPE_LABEL, displayName, formatDuration, shortAgo } from "./socialInboxShared";
 import { InboxSettingsPanel } from "./SocialInboxSettings";
+import { providerLabel } from "./socialAnalyticsShared";
 
 const errMsg = (e: unknown) => (e instanceof ApiClientError || e instanceof Error ? e.message : "Something went wrong.");
 const PRIORITIES: InboxPriority[] = ["LOW", "NORMAL", "HIGH", "URGENT"];
@@ -65,9 +66,10 @@ const TriageSummary: React.FC<{ t: InboxTriage }> = ({ t }) => (
   </div>
 );
 
-interface DetailProps { id: string; canReply: boolean; people: Array<{ id: string; name: string }>; canned: InboxCannedReply[]; onChanged: () => void; onBack: () => void; narrow: boolean }
+/** `reviewMode`: drafts and replies go through the reviews endpoints (social.reviews.respond); the inbox endpoints stay for comments, DMs and mentions. */
+export interface DetailProps { id: string; canReply: boolean; people: Array<{ id: string; name: string }>; canned: InboxCannedReply[]; onChanged: () => void; onBack: () => void; narrow: boolean; reviewMode?: boolean }
 
-const ConversationView: React.FC<DetailProps> = ({ id, canReply, people, canned, onChanged, onBack, narrow }) => {
+export const ConversationView: React.FC<DetailProps> = ({ id, canReply, people, canned, onChanged, onBack, narrow, reviewMode }) => {
   const { notify } = useToast();
   const [data, setData] = useState<Awaited<ReturnType<typeof socialInboxApi.get>> | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -100,20 +102,21 @@ const ConversationView: React.FC<DetailProps> = ({ id, canReply, people, canned,
   const c = data.conversation;
   const uncertain = data.messages.find((m) => m.sendStatus === "UNCERTAIN");
   const windowClosed = data.replyWindow ? !data.replyWindow.open : false;
+  const platformOnly = data.reply?.mode === "platform";
   const closesSoon = data.replyWindow?.open && data.replyWindow.closesAt && new Date(data.replyWindow.closesAt).getTime() - Date.now() < 6 * 3600_000 ? data.replyWindow.closesAt : null;
 
   const generate = () => act(async () => {
-    const d = await socialInboxApi.draft(id);
+    const d = await (reviewMode ? socialReviewsApi.draft(id) : socialInboxApi.draft(id));
     setDraftId(d.messageId); setText(d.body); setDraftInfo({ confidence: d.confidence, issues: d.guardrail.issues, passed: d.guardrail.passed });
   }, "Draft ready — review it before sending.");
   const send = (resolve: boolean) => act(async () => {
     if (noteMode) { await socialInboxApi.note(id, text); setText(""); setNoteMode(false); return; }
     if (draftId) await socialInboxApi.editDraft(draftId, text);
-    const m = await socialInboxApi.reply(id, { ...(draftId ? { messageId: draftId } : { body: text }), resolve });
+    const m = await (reviewMode ? socialReviewsApi.reply : socialInboxApi.reply)(id, { ...(draftId ? { messageId: draftId } : { body: text }), resolve });
     if (m.sendStatus === "SENT") { setText(""); setDraftId(null); setDraftInfo(null); } else throw new Error(m.sendError?.replace(/^[a-z_]+: /, "") ?? "The reply was not sent.");
   }, noteMode ? "Note added." : "Reply sent.");
   const retry = (m: InboxMessage) => act(async () => {
-    const res = await socialInboxApi.reply(id, { messageId: m.id, confirmNotSent: m.sendStatus === "UNCERTAIN" ? confirmNotSent : undefined });
+    const res = await (reviewMode ? socialReviewsApi.reply : socialInboxApi.reply)(id, { messageId: m.id, confirmNotSent: m.sendStatus === "UNCERTAIN" ? confirmNotSent : undefined });
     if (res.sendStatus !== "SENT") throw new Error(res.sendError?.replace(/^[a-z_]+: /, "") ?? "The reply was not sent.");
   }, "Reply sent.");
   const lead = () => act(async () => {
@@ -130,6 +133,7 @@ const ConversationView: React.FC<DetailProps> = ({ id, canReply, people, canned,
           <p className="text-sm font-bold truncate" style={{ color: "var(--text-primary)" }}>{displayName(c)}</p>
           <p className="text-[11px] truncate" style={{ color: "var(--text-muted)" }}>{c.participant.handle ?? ""} · {TYPE_LABEL[c.type]} on {c.account.displayName}</p>
           <ConversationBadges c={c} />
+          {data.permalink && <a href={data.permalink} target="_blank" rel="noopener noreferrer" className="text-[11px] underline" style={{ color: "var(--accent)" }}>Open on {providerLabel(c.account.provider)}</a>}
         </div>
       </div>
 
@@ -150,7 +154,14 @@ const ConversationView: React.FC<DetailProps> = ({ id, canReply, people, canned,
         </label>
       )}
 
-      {canReply && c.status !== "SPAM" && (
+      {platformOnly && (
+        <Card className="p-3 space-y-2" aria-label="Reply on the platform">
+          <p className="text-xs font-bold" style={{ color: "var(--text-primary)" }}>Reply on the platform</p>
+          <p className="text-[11px]" style={{ color: "var(--text-secondary)" }}>{data.reply?.reason ?? "This network does not let apps reply here."}</p>
+          {data.permalink ? <a href={data.permalink} target="_blank" rel="noopener noreferrer" className="inline-block text-xs font-semibold underline" style={{ color: "var(--accent)" }}>Open on {providerLabel(c.account.provider)} to reply</a> : <p className="text-[11px]" style={{ color: "var(--text-muted)" }}>No link was provided for this item; find it in the {providerLabel(c.account.provider)} app.</p>}
+        </Card>
+      )}
+      {canReply && c.status !== "SPAM" && !platformOnly && (
         <Card className="p-3 space-y-2" aria-label="Reply">
           {windowClosed && (
             <p className="text-[11px] rounded-lg p-2" role="alert" style={{ background: "rgba(225,29,72,0.1)", color: "#e11d48" }}>

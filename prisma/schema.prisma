@@ -468,6 +468,8 @@ model SocialAccount {
   accountMetrics   SocialAccountMetric[]
   postMetrics      SocialPostMetric[]
   audienceSnapshots SocialAudienceSnapshot[]
+  listeningCursor   SocialListeningCursor?
+  reviewSnapshots   SocialReviewSnapshot[]
 
   @@unique([organizationId, provider, externalAccountId])
   @@index([organizationId, status])
@@ -4409,4 +4411,36 @@ model SocialAudienceSnapshot {
   @@unique([socialAccountId, capturedOn, dimension])
   @@index([organizationId, capturedOn])
   @@map("social_audience_snapshots")
+}
+
+// Listening polling fallback bookkeeping (Step 10): separate from the inbox cursor because it is behind its own flag.
+model SocialListeningCursor {
+  id              String   @id @default(uuid())
+  socialAccountId String   @unique @map("social_account_id")
+  cursor          String?
+  polledAt        DateTime @default(now()) @map("polled_at")
+  lastError       String?  @map("last_error")
+
+  account SocialAccount @relation(fields: [socialAccountId], references: [id], onDelete: Cascade)
+
+  @@map("social_listening_cursors")
+}
+
+// Average rating and review count of an account's reviews on one day. Append-only, one row per account per day. NULL (never 0) with a reason when the network does not provide a value.
+model SocialReviewSnapshot {
+  id              String   @id @default(uuid())
+  organizationId  String   @map("organization_id")
+  socialAccountId String   @map("social_account_id")
+  capturedOn      DateTime @map("captured_on") @db.Date
+  averageRating   Float?   @map("average_rating")
+  reviewCount     Int?     @map("review_count")
+  status          String   @default("OK")
+  note            String?
+  capturedAt      DateTime @default(now()) @map("captured_at")
+
+  account SocialAccount @relation(fields: [socialAccountId], references: [id], onDelete: Cascade)
+
+  @@unique([socialAccountId, capturedOn])
+  @@index([organizationId, capturedOn])
+  @@map("social_review_snapshots")
 }

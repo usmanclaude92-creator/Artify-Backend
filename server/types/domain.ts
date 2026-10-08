@@ -151,6 +151,8 @@ export const PERMISSION_KEYS = [
   "social.approve",
   "social.reply",
   "social.analytics.read",
+  "social.listening.read",
+  "social.reviews.respond",
   // Step 2 redesign — global Approvals center front door (each source still needs its own permission).
   "approvals.read",
   "settings.read",

@@ -17,6 +17,10 @@ import {
   applyRules, autoReplyKind, fallbackTriage, maxPriority, prefilter, retentionCutoff, slaDueAt, spamTriage, type InboxRule, type Priority, type Triage,
 } from "./inboxPolicy";
 import { auditInbox, getInboxSettings, handoffToCrm, handoffToCrmSafe, notifyInbox, repliers, safeText, sendReply, type InboxSettings } from "./inboxCore";
+import { config } from "../../../config/env";
+import { afterListeningIngest, resolveMentionEvent } from "../listening/listeningIngest";
+import { alertReason, CRISIS_TAG } from "../listening/listeningPolicy";
+import { raiseListeningAlert } from "../listening/listeningAlerts";
 
 const MAX_EVENTS_PER_DELIVERY = 100;
 const TRIAGE_MAX_ATTEMPTS = 3;
@@ -27,6 +31,12 @@ export interface IngestResult { duplicate: boolean; conversationId: string; mess
 
 /** Stores one inbound event for one of OUR accounts. Idempotent: the same provider message id is stored once per account. Fast: no AI here. */
 export async function ingestEvent(account: Pick<SocialAccount, "id" | "organizationId" | "provider">, ev: InboundEvent, settings?: InboxSettings): Promise<IngestResult> {
+  const result = await ingestEventCore(account, ev, settings);
+  if (!result.duplicate) await afterListeningIngest(account, ev, result).catch((err) => logger.warn({ err: safeText(err) }, "[social-listening] crisis check skipped"));
+  return result;
+}
+
+async function ingestEventCore(account: Pick<SocialAccount, "id" | "organizationId" | "provider">, ev: InboundEvent, settings?: InboxSettings): Promise<IngestResult> {
   const s = settings ?? (await getInboxSettings(account.organizationId));
   const existing = await prisma.socialMessage.findUnique({ where: { socialAccountId_providerMessageId: { socialAccountId: account.id, providerMessageId: ev.providerMessageId } }, select: { id: true, conversationId: true } });
   if (existing) return { duplicate: true, conversationId: existing.conversationId, messageId: existing.id };
@@ -62,6 +72,7 @@ export async function ingestEvent(account: Pick<SocialAccount, "id" | "organizat
         data: {
           conversationId: conv.id, organizationId: account.organizationId, socialAccountId: account.id, direction: "INBOUND", authorKind: "CUSTOMER", providerMessageId: ev.providerMessageId,
           body: text, sendStatus: "RECEIVED", createdAt: at, triageStatus: pre.spam ? "DONE" : s.autoTriage ? "PENDING" : "SKIPPED",
+          ...(ev.permalink ? { mediaRefs: { permalink: ev.permalink } } : {}),
         },
       });
       if (pre.spam) {
@@ -99,7 +110,10 @@ export async function ingestWebhook(provider: string, rawBody: Buffer | undefine
     const accounts = await prisma.socialAccount.findMany({ where: { provider, externalAccountId: ev.accountExternalId, status: { not: "DISCONNECTED" } } });
     if (accounts.length === 0) { ignored += 1; continue; }
     for (const account of accounts) {
-      const r = await ingestEvent(account, ev);
+      if (ev.type === "MENTION" && config.socialListeningDisabled) { ignored += 1; continue; }
+      if (ev.lookup && (await prisma.socialMessage.findUnique({ where: { socialAccountId_providerMessageId: { socialAccountId: account.id, providerMessageId: ev.providerMessageId } }, select: { id: true } }))) { duplicates += 1; continue; }
+      const full = ev.lookup ? await resolveMentionEvent(account, ev) : ev;
+      const r = await ingestEvent(account, full);
       if (r.duplicate) duplicates += 1; else accepted += 1;
     }
   }
@@ -166,17 +180,24 @@ async function applyTriage(messageId: string, conversationId: string, organizati
   });
   if (outcome.matchedRuleIds.length) await auditInbox(organizationId, "SOCIAL_INBOX_RULES_APPLIED", conversationId, { rules: outcome.matchedRuleIds, assigned: !!newAssignee, tags: outcome.tags }, null);
   if (newAssignee) await notifyInbox(organizationId, [newAssignee], "social_inbox_assigned", "Inbox conversation assigned to you", conversationId, msg.body);
-  else if (triage.flaggedForHuman && !conv.assigneeId && triage.intent !== "spam") {
+  else if (triage.flaggedForHuman && !conv.assigneeId && triage.intent !== "spam" && conv.type !== "MENTION" && conv.type !== "REVIEW") {
     await notifyInbox(organizationId, await repliers(organizationId), "social_inbox_attention", triage.intent === "complaint" ? "Complaint needs attention" : "Inbox item needs a human", conversationId, msg.body);
   }
   if (triage.intent === "spam") return;
 
+  // Mentions and reviews: negative sentiment or a complaint raises ONE grouped alert (crisis words were already alerted at ingest).
+  if ((conv.type === "MENTION" || conv.type === "REVIEW") && !conv.tags.includes(CRISIS_TAG)) {
+    const reason = alertReason({ crisis: false, sentiment: triage.sentiment, intent: triage.intent });
+    if (reason) await raiseListeningAlert(organizationId, conversationId, reason, msg.body);
+  }
+
   if (settings.autoLead && triage.intent === "lead" && !conv.leadId && !conv.contactId) await handoffToCrmSafe(conv, null);
 
-  if (conv.type === "REVIEW") return;
-  const needsDraft = settings.autoDraft || settings.autoReply;
+  // Public mentions and reviews are ALWAYS answered by a human: a draft may be prepared (autoDraft), but nothing is auto-sent, whatever the workspace setting.
+  const humanOnly = conv.type === "REVIEW" || conv.type === "MENTION";
+  const needsDraft = settings.autoDraft || (settings.autoReply && !humanOnly);
   if (!needsDraft || conv.status === "RESOLVED") return;
-  const auto = settings.autoReply ? autoReplyKind(triage, msg.body, await prisma.socialCannedReply.findMany({ where: { organizationId, approvedForAuto: true }, take: 100 })) : null;
+  const auto = settings.autoReply && !humanOnly ? autoReplyKind(triage, msg.body, await prisma.socialCannedReply.findMany({ where: { organizationId, approvedForAuto: true }, take: 100 })) : null;
   try {
     if (auto?.kind === "faq" && auto.reply) {
       await autoSend(organizationId, conversationId, auto.reply.body);

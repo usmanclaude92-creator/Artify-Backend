@@ -1,0 +1,15 @@
+{
+  "visitorPost": { "object": "page", "entry": [{ "id": "PAGE1", "time": 1760000000, "changes": [{ "field": "feed", "value": { "item": "post", "verb": "add", "post_id": "PAGE1_5001", "from": { "id": "U300", "name": "Grace Hopper" }, "message": "Your support never answered me", "created_time": 1760000000 } }] }] },
+  "ownPost": { "object": "page", "entry": [{ "id": "PAGE1", "time": 1760000010, "changes": [{ "field": "feed", "value": { "item": "post", "verb": "add", "post_id": "PAGE1_5002", "from": { "id": "PAGE1", "name": "Artify" }, "message": "Our own post", "created_time": 1760000010 } }] }] },
+  "photoNoText": { "object": "page", "entry": [{ "id": "PAGE1", "time": 1760000020, "changes": [{ "field": "feed", "value": { "item": "photo", "verb": "add", "post_id": "PAGE1_5003", "from": { "id": "U301", "name": "Ada" }, "created_time": 1760000020 } }] }] },
+  "editedPost": { "object": "page", "entry": [{ "id": "PAGE1", "time": 1760000030, "changes": [{ "field": "feed", "value": { "item": "post", "verb": "edited", "post_id": "PAGE1_5001", "from": { "id": "U300" }, "message": "edited" } }] }] },
+  "mention": { "object": "page", "entry": [{ "id": "PAGE1", "time": 1760000040, "changes": [{ "field": "mention", "value": { "item": "post", "verb": "add", "post_id": "U400_6001", "from": { "id": "U400", "name": "Alan Turing" }, "message": "Try @Artify Solutions for this", "created_time": 1760000040 } }] }] },
+  "mentionNoIds": { "object": "page", "entry": [{ "id": "PAGE1", "time": 1760000050, "changes": [{ "field": "mention", "value": { "message": "no ids" } }] }] },
+  "tagged": { "data": [{ "id": "U400_6001", "message": "Great service from the Artify team", "from": { "id": "U400", "name": "Alan Turing" }, "created_time": "2026-10-08T09:00:00+0000", "permalink_url": "https://www.facebook.com/U400/posts/6001" }, { "id": "U401_6002", "from": { "id": "U401", "name": "Old Poster" }, "created_time": "2026-09-01T09:00:00+0000" }] },
+  "feed": { "data": [{ "id": "PAGE1_7001", "message": "Our own post", "from": { "id": "PAGE1", "name": "Artify" }, "created_time": "2026-10-08T09:30:00+0000" }, { "id": "PAGE1_7002", "message": "Hello from a visitor", "from": { "id": "U500", "name": "Visitor" }, "created_time": "2026-10-08T09:40:00+0000", "permalink_url": "https://www.facebook.com/PAGE1/posts/7002" }] },
+  "rating": { "overall_star_rating": 4.6, "rating_count": 18, "id": "PAGE1" },
+  "ratingNone": { "id": "PAGE1" },
+  "ratingZero": { "overall_star_rating": 0, "rating_count": 0, "id": "PAGE1" },
+  "errorNonexistingField": { "error": { "message": "(#100) Tried accessing nonexisting field (overall_star_rating) on node type (Page)", "type": "OAuthException", "code": 100, "fbtrace_id": "T9" } },
+  "errorRecommendationsRemoved": { "error": { "message": "(#12) Page recommendations are deprecated for this version.", "type": "OAuthException", "code": 12, "fbtrace_id": "T10" } }
+}
