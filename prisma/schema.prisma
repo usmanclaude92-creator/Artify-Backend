@@ -464,6 +464,10 @@ model SocialAccount {
   credentials  SocialAccountCredential?
   postTargets  SocialPostTarget[]
   conversations SocialConversation[]
+  analyticsState   SocialAnalyticsState?
+  accountMetrics   SocialAccountMetric[]
+  postMetrics      SocialPostMetric[]
+  audienceSnapshots SocialAudienceSnapshot[]
 
   @@unique([organizationId, provider, externalAccountId])
   @@index([organizationId, status])
@@ -647,6 +651,7 @@ model SocialPostTarget {
   post    SocialPost    @relation(fields: [postId], references: [id], onDelete: Cascade)
   account SocialAccount @relation(fields: [socialAccountId], references: [id], onDelete: Cascade)
   publishAttempts SocialPublishAttempt[]
+  metrics         SocialPostMetric[]
 
   @@unique([postId, socialAccountId])
   @@index([socialAccountId])
@@ -4321,4 +4326,87 @@ model SocialConnectSession {
   @@index([expiresAt])
   @@index([organizationId, userId])
   @@map("social_connect_sessions")
+}
+
+// ---- Social analytics (Step 9b). Read-only snapshots of what the networks report. Narrow tables: one row per metric so a deprecated,
+// missing or rejected metric is a NULL value with a status + reason (never 0), and history is never overwritten. ----
+
+// Per connected account: when the job last ran, how far back data really goes, and what the network said it cannot provide.
+model SocialAnalyticsState {
+  id               String    @id @default(uuid())
+  socialAccountId  String    @unique @map("social_account_id")
+  firstSyncAt      DateTime? @map("first_sync_at")
+  lastRunAt        DateTime? @map("last_run_at")
+  lastSuccessAt    DateTime? @map("last_success_at")
+  lastError        String?   @map("last_error")
+  // First day with daily data after the initial backfill, and the most days the network lets us read back (null = unknown).
+  backfillFrom     DateTime? @map("backfill_from") @db.Date
+  historyLimitDays Int?      @map("history_limit_days")
+  // { metric: { status, reason } } as last observed; drives the "not available yet" messages in the UI.
+  capabilities     Json?
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  account SocialAccount @relation(fields: [socialAccountId], references: [id], onDelete: Cascade)
+
+  @@map("social_analytics_state")
+}
+
+// One value of one account-level metric for one UTC day. UNIQUE per account/day/metric makes the job idempotent; a stored number is never replaced.
+model SocialAccountMetric {
+  id              String   @id @default(uuid())
+  organizationId  String   @map("organization_id")
+  socialAccountId String   @map("social_account_id")
+  metricDate      DateTime @map("metric_date") @db.Date
+  metric          String
+  value           Float?
+  status          String   @default("OK")
+  note            String?
+  capturedAt      DateTime @default(now()) @map("captured_at")
+
+  account SocialAccount @relation(fields: [socialAccountId], references: [id], onDelete: Cascade)
+
+  @@unique([socialAccountId, metricDate, metric])
+  @@index([organizationId, metricDate])
+  @@map("social_account_metrics")
+}
+
+// Lifetime totals of a published post as seen on `capturedOn` (UTC). One snapshot per target/day/metric keeps the growth curve without rewriting history.
+model SocialPostMetric {
+  id              String   @id @default(uuid())
+  organizationId  String   @map("organization_id")
+  socialAccountId String   @map("social_account_id")
+  targetId        String   @map("target_id")
+  capturedOn      DateTime @map("captured_on") @db.Date
+  metric          String
+  value           Float?
+  status          String   @default("OK")
+  note            String?
+  capturedAt      DateTime @default(now()) @map("captured_at")
+
+  account SocialAccount    @relation(fields: [socialAccountId], references: [id], onDelete: Cascade)
+  target  SocialPostTarget @relation(fields: [targetId], references: [id], onDelete: Cascade)
+
+  @@unique([targetId, capturedOn, metric])
+  @@index([socialAccountId, capturedOn])
+  @@index([organizationId, capturedOn])
+  @@map("social_post_metrics")
+}
+
+// Audience demographics as returned for one dimension on one day. `buckets` is [{ key, value }]; status UNAVAILABLE carries the reason (e.g. under the follower threshold).
+model SocialAudienceSnapshot {
+  id              String   @id @default(uuid())
+  organizationId  String   @map("organization_id")
+  socialAccountId String   @map("social_account_id")
+  capturedOn      DateTime @map("captured_on") @db.Date
+  dimension       String
+  buckets         Json?
+  status          String   @default("OK")
+  reason          String?
+  capturedAt      DateTime @default(now()) @map("captured_at")
+
+  account SocialAccount @relation(fields: [socialAccountId], references: [id], onDelete: Cascade)
+
+  @@unique([socialAccountId, capturedOn, dimension])
+  @@index([organizationId, capturedOn])
+  @@map("social_audience_snapshots")
 }

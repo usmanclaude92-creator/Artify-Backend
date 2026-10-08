@@ -21,6 +21,9 @@ import { redactSecrets } from "./tokenVault";
 import { SOCIAL_PROMPTS, fill, type SocialPromptDef } from "./socialAiPrompts";
 import { socialPostService } from "./socialPostService";
 import { CONTENT_EDITABLE } from "./postTransitions";
+import { config } from "../../config/env";
+import { analyticsQueries, type Kpi } from "./analytics/analyticsQueries";
+import { collectAllowedNumbers, unknownNumbers } from "./analytics/numberGuard";
 import type { SanitizedUser } from "../../types/domain";
 import type { RequestMeta } from "../authService";
 
@@ -158,8 +161,58 @@ function planSlots(start: Date, end: Date, perWeek: number): Date[] {
 const draftSchema = z.object({ title: z.string().trim().max(200).optional(), posts: z.array(z.object({ accountId: z.string(), body: z.string().min(1).max(10000) })).min(1) });
 const planSchema = z.object({ posts: z.array(z.object({ title: z.string().trim().max(200).default("Planned post"), body: z.string().min(1).max(10000) })).min(1) });
 const rewriteSchema = z.object({ body: z.string().min(1).max(10000) });
+const summarySchema = z.object({ headline: z.string().trim().min(1).max(300), bullets: z.array(z.string().trim().min(1).max(400)).min(1).max(6) });
+
+/** True when a model can actually be reached (a Gemini key, or a mock provider outside production). Used to HIDE the analytics summary otherwise. */
+export function aiConfigured(): boolean {
+  return config.aiProvider === "gemini" && config.geminiApiKey.length > 0;
+}
+
+const kpiForAi = (k: Kpi) => ({ metric: k.label, current: k.current, previousPeriod: k.previous, changePercent: k.changePct, daysWithData: k.daysWithData, daysInPeriod: k.daysInRange, netChange: k.netChange?.value ?? null });
 
 export const socialAiService = {
+  /**
+   * "What worked this period" for one account. The model receives ONLY numbers read from stored snapshots (nulls are omitted, not zeroed) and its text is
+   * rejected unless every figure in it exists in that data. Output is advisory text; nothing is saved or published.
+   */
+  async analyticsSummary(caller: SanitizedUser, accountId: string, q: { from?: string; to?: string }, meta: RequestMeta = {}) {
+    if (!aiConfigured()) throw new ValidationError("AI summaries are not available: no AI provider is configured.");
+    const detail = await analyticsQueries.accountDetail(caller.organizationId, accountId, q);
+    if (detail.account.analytics !== "supported") throw new ValidationError(detail.account.unsupportedReason ?? "This account has no analytics.");
+    const posts = await analyticsQueries.topPosts(caller.organizationId, accountId, { from: detail.range.from, to: detail.range.to, sort: "interactions", limit: 5 });
+    const best = await analyticsQueries.bestTimes(caller.organizationId, accountId, { metric: "interactions" });
+    const kpis = detail.kpis.filter((k) => k.current !== null).map(kpiForAi);
+    const topPosts = posts.rows.filter((p) => p.capturedOn).map((p) => ({
+      title: p.title.slice(0, 80), publishedOn: p.publishedAt?.slice(0, 10) ?? null,
+      ...Object.fromEntries(Object.entries(p.metrics).filter(([, v]) => v.value !== null).map(([k, v]) => [k, v.value])),
+    }));
+    if (kpis.length === 0 && topPosts.length === 0) throw new ValidationError("There is not enough stored data for this period to summarise yet.");
+    const data = {
+      account: { name: detail.account.displayName, network: detail.account.provider === "meta_instagram" ? "Instagram" : detail.account.provider === "meta_facebook" ? "Facebook Page" : detail.account.provider },
+      period: { from: detail.range.from, to: detail.range.to, days: detail.days },
+      note: "A value that is missing was not provided by the network. Totals cover only the days that have data.",
+      metrics: kpis, topPosts,
+      bestTimes: best.enough ? best.slots.slice(0, 3).map((x) => ({ weekday: x.weekday, hour: x.hour, postsInSlot: x.posts, averageInteractions: x.average, timeZone: best.timeZone })) : [],
+    };
+    const allowed = collectAllowedNumbers(data);
+    let verified: z.infer<typeof summarySchema> | null = null;
+    let executionId = "";
+    for (let attempt = 0; attempt < 2 && !verified; attempt++) {
+      const { result, executionId: id } = await run({
+        caller, def: SOCIAL_PROMPTS.analytics, toolCode: "social_analytics_summary", meta, schema: summarySchema,
+        inputSummary: { accountId, from: detail.range.from, to: detail.range.to, metrics: kpis.length, posts: topPosts.length },
+        variables: { data: JSON.stringify(data, null, 2) },
+      });
+      if (unknownNumbers([result.headline, ...result.bullets].join("\n"), allowed).length === 0) { verified = result; executionId = id; }
+    }
+    if (!verified) throw new ValidationError("The AI wrote figures that are not in your stored data, so the summary was discarded. Please try again.");
+    await auditLogRepository.record({
+      organizationId: caller.organizationId, actorUserId: caller.id, actorType: "USER", action: "SOCIAL_ANALYTICS_AI_SUMMARY", resourceType: "social_account", resourceId: accountId,
+      metadata: { from: detail.range.from, to: detail.range.to, aiExecutionId: executionId }, ipAddress: meta.ip, userAgent: meta.userAgent,
+    });
+    return { headline: verified.headline, bullets: verified.bullets, executionId, generatedAt: new Date().toISOString(), range: detail.range, aiGenerated: true as const };
+  },
+
   async listPlans(organizationId: string) {
     const plans = await prisma.socialContentPlan.findMany({ where: { organizationId }, orderBy: { createdAt: "desc" }, take: 50, include: { _count: { select: { posts: true } } } });
     return plans.map((p) => ({ id: p.id, brief: p.brief, cadencePerWeek: p.cadencePerWeek, startDate: p.startDate, endDate: p.endDate, status: p.status, createdAt: p.createdAt, postCount: p._count.posts }));

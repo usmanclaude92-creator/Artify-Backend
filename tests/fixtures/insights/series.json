@@ -1,0 +1,19 @@
+{
+  "igReachTimeSeries": { "data": [{ "name": "reach", "period": "day", "title": "Reach", "id": "IG1/insights/reach/day", "values": [
+    { "value": 120, "end_time": "2026-10-05T07:00:00+0000" },
+    { "value": 0, "end_time": "2026-10-06T07:00:00+0000" },
+    { "value": 98, "end_time": "2026-10-07T07:00:00+0000" } ] }] },
+  "igProfileViewsTotal": { "data": [{ "name": "profile_views", "period": "day", "title": "Profile views", "total_value": { "value": 14 }, "id": "IG1/insights/profile_views/day" }] },
+  "emptyData": { "data": [] },
+  "valueMissingOrObject": { "data": [{ "name": "page_media_view", "period": "day", "values": [
+    { "value": 5, "end_time": "2026-10-05T08:00:00+0000" },
+    { "end_time": "2026-10-06T08:00:00+0000" },
+    { "value": { "ads": 1, "organic": 2 }, "end_time": "2026-10-07T08:00:00+0000" } ] }] },
+  "fbPageMediaView": { "data": [{ "name": "page_media_view", "period": "day", "values": [
+    { "value": 310, "end_time": "2026-10-05T07:00:00+0000" },
+    { "value": 280, "end_time": "2026-10-06T07:00:00+0000" } ] }] },
+  "singleLifetime": { "data": [{ "name": "reach", "period": "lifetime", "values": [{ "value": 77 }] }] },
+  "demographicsBreakdown": { "data": [{ "name": "follower_demographics", "period": "lifetime", "total_value": { "breakdowns": [{ "dimension_keys": ["country"], "results": [
+    { "dimension_values": ["GB"], "value": 40 }, { "dimension_values": ["US"], "value": 90 }, { "dimension_values": ["PK"], "value": 12 }] }] } }] },
+  "demographicsLegacy": { "data": [{ "name": "audience_country", "period": "lifetime", "values": [{ "value": { "US": 90, "GB": 40, "bad": "x" } }] }] }
+}
