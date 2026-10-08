@@ -111,6 +111,13 @@ Permission `social.analytics.read` gates every analytics route, page, the CSV ex
 | No data for yesterday | The job stores yesterday only after 06:00 UTC. |
 | Nothing updates | Check `SOCIAL_ANALYTICS_DISABLED`, the kill switch, `social_analytics_state.lastError`, and that pg_cron pings the tick. |
 
-## 8. Live test and unverified items
+## 8. Live test (8 Oct 2026, production) and unverified items
 
-Filled in after the live run (see the Step 9b report). Items marked **[ ]** in section 1 remain unverified until the live run confirms them.
+Confirmed against the live Graph API (v25.0) with the connected Page "Artify Solutions" and @artifysols:
+
+- **Facebook Page.** All six daily metrics returned data for 90 days (10 Jul – 7 Oct): `page_media_view` (views), `page_total_media_view_unique` (reach), `page_post_engagements`, `page_daily_follows_unique`, `page_daily_unfollows_unique`, `page_views_total` (profile views). 540 rows, none null. Link clicks is not offered for Pages and shows "—". Demographics for Pages are not ingested.
+- **Before `read_insights` was granted**, Meta answered the Page insights calls with an *empty set* instead of a permission error. The job stored them as UNAVAILABLE ("returned no data"). The job now re-checks cached UNAVAILABLE metrics as soon as the account is reconnected.
+- **Instagram.** `views`, `reach`, `total_interactions` (engagement), `profile_views` and `website_clicks` returned 30 days of daily values (some via the per-day `metric_type=total_value` fallback); `follower_count` (new followers) was refused and is shown as unavailable. Demographics are refused below 100 followers; the UI says so with the account's follower count.
+- **Instagram per-day fallback** costs one request per day; requests run 6 at a time so a metric fits the job budget. A full first sync of one Instagram account needs about three job runs (about 15 minutes); a "Refresh now" click can time out in the browser while the server continues.
+
+Not verified live: per-post metrics (no posts have been published through Control Center, and production publishing is dry-run), demographics with 100+ followers, rate-limit behaviour, the AI summary (no analytics numbers worth summarising yet), LinkedIn, whether `end_time` maps to the UTC day before it (the **[ ]** in section 1), and the June 2026 Page metric removals beyond the six names above.
