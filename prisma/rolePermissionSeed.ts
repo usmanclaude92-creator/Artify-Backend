@@ -353,6 +353,7 @@ const ROLE_PERMISSION_SETS: Record<RoleKey, readonly string[] | "*"> = {
     "campaigns.publish",
     "approvals.read",
     "social.read",
+    "social.analytics.read",
   ],
   USER: [
     "clients.read",
@@ -492,6 +493,7 @@ const ROLE_PERMISSION_SETS: Record<RoleKey, readonly string[] | "*"> = {
     "campaigns.read",
     "approvals.read",
     "social.read",
+    "social.analytics.read",
   ],
   CLIENT_PORTAL: [
     "portal.dashboard.read",

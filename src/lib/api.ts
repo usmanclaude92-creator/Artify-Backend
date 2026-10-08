@@ -3185,6 +3185,130 @@ export interface PublishingMetrics {
   last24h: { published: number; failed: number; retried: number; uncertain: number; dryRun: number };
 }
 
+// ---- Social analytics & audience (Step 9b). Read-only snapshots; a null number means "not provided", never 0. ----
+export interface AnalyticsRange { from: string; to: string }
+export interface AnalyticsKpi {
+  metric: string;
+  label: string;
+  kind: "level" | "flow";
+  description: string;
+  current: number | null;
+  previous: number | null;
+  daysWithData: number;
+  daysInRange: number;
+  previousDaysWithData: number;
+  changePct: number | null;
+  compareNote: string | null;
+  netChange: { value: number; fromDate: string; toDate: string } | null;
+  series: Array<{ date: string; value: number | null }>;
+  unavailableReason: string | null;
+}
+export interface AnalyticsSyncInfo { firstSyncAt: string | null; lastRunAt: string | null; lastSuccessAt: string | null; lastError: string | null; backfillFrom: string | null; historyLimitDays: number | null }
+export interface AnalyticsAccountMeta {
+  id: string;
+  provider: string;
+  displayName: string;
+  handle: string | null;
+  avatarUrl: string | null;
+  accountType: string;
+  status: SocialAccountStatus;
+  analytics: "supported" | "unsupported";
+  unsupportedReason: string | null;
+  historyDays: number | null;
+  sync: AnalyticsSyncInfo;
+}
+export interface AnalyticsSummary {
+  range: AnalyticsRange;
+  previous: AnalyticsRange;
+  days: number;
+  accounts: Array<AnalyticsAccountMeta & { headline: AnalyticsKpi[] }>;
+  aiAvailable: boolean;
+}
+export interface AnalyticsAccountDetail {
+  range: AnalyticsRange;
+  previous: AnalyticsRange;
+  days: number;
+  account: AnalyticsAccountMeta;
+  kpis: AnalyticsKpi[];
+  coverage: { firstDataDate: string | null; lastDataDate: string | null };
+  aiAvailable: boolean;
+}
+export interface AnalyticsPostMetric { value: number | null; status: string; note: string | null }
+export interface AnalyticsPostRow {
+  targetId: string;
+  postId: string;
+  title: string;
+  excerpt: string;
+  publishedAt: string | null;
+  externalUrl: string | null;
+  capturedOn: string | null;
+  metrics: Record<string, AnalyticsPostMetric>;
+}
+export interface AnalyticsTopPosts { range: AnalyticsRange; sort: string; total: number; withMetrics: number; rows: AnalyticsPostRow[] }
+export interface AnalyticsPostDetail {
+  targetId: string;
+  composerPostId: string;
+  title: string;
+  body: string;
+  postStatus: string;
+  account: { id: string; provider: string; displayName: string };
+  publishedAt: string | null;
+  externalUrl: string | null;
+  history: Array<{ capturedOn: string; metrics: Record<string, AnalyticsPostMetric> }>;
+  latest: { capturedOn: string; metrics: Record<string, AnalyticsPostMetric> } | null;
+}
+export interface AnalyticsAudience {
+  range: AnalyticsRange;
+  account: AnalyticsAccountMeta;
+  followers: {
+    series: Array<{ date: string; value: number }>;
+    current: { date: string; value: number } | null;
+    first: { date: string; value: number } | null;
+    netChange: { value: number; fromDate: string; toDate: string } | null;
+    newFollows: { total: number; days: number } | null;
+    unfollows: { total: number; days: number } | null;
+    historyNote: string;
+  };
+  demographics: Array<{ dimension: string; label: string; status: "OK" | "UNAVAILABLE" | "PENDING"; reason: string | null; capturedOn: string | null; buckets: Array<{ key: string; value: number }> }>;
+  demographicsSupported: boolean;
+  demographicsReason: string | null;
+}
+export interface AnalyticsBestTimes {
+  metric: string;
+  timeZone: string;
+  postsWithData: number;
+  minPosts: number;
+  minPerSlot: number;
+  enough: boolean;
+  slots: Array<{ weekday: string; hour: number; posts: number; average: number }>;
+  reason: string | null;
+  note: string;
+}
+export interface AnalyticsAiSummary { headline: string; bullets: string[]; executionId: string; generatedAt: string; range: AnalyticsRange; aiGenerated: true }
+export interface AnalyticsRefreshResult { accountId: string; outcome: "completed" | "partial" | "skipped" | "error"; reason?: string; daysStored: number; postsSnapshotted: number; audienceStored: number }
+
+export const socialAnalyticsApi = {
+  summary: (range: Partial<AnalyticsRange> = {}) => apiClient.get<AnalyticsSummary>(`/social/analytics/summary${toQuery(range)}`),
+  account: (id: string, range: Partial<AnalyticsRange> = {}) => apiClient.get<AnalyticsAccountDetail>(`/social/analytics/accounts/${id}${toQuery(range)}`),
+  posts: (id: string, q: Partial<AnalyticsRange> & { sort?: string; limit?: number } = {}) => apiClient.get<AnalyticsTopPosts>(`/social/analytics/accounts/${id}/posts${toQuery(q)}`),
+  audience: (id: string, range: Partial<AnalyticsRange> = {}) => apiClient.get<AnalyticsAudience>(`/social/analytics/accounts/${id}/audience${toQuery(range)}`),
+  bestTimes: (id: string, q: { metric?: string; tz?: string } = {}) => apiClient.get<AnalyticsBestTimes>(`/social/analytics/accounts/${id}/best-times${toQuery(q)}`),
+  post: (targetId: string) => apiClient.get<AnalyticsPostDetail>(`/social/analytics/posts/${targetId}`),
+  aiSummary: (id: string, range: Partial<AnalyticsRange> = {}) => apiClient.post<AnalyticsAiSummary>(`/social/analytics/accounts/${id}/summary`, range),
+  refresh: (id: string) => apiClient.post<AnalyticsRefreshResult>(`/social/analytics/accounts/${id}/refresh`),
+  downloadCsv: async (id: string, kind: "account" | "posts", range: Partial<AnalyticsRange>, filename: string): Promise<void> => {
+    const blob = await apiClient.getBlob(`/social/analytics/accounts/${id}/export${toQuery({ kind, ...range })}`);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  },
+};
+
 export const socialPublishingApi = {
   queue: () => apiClient.get<{ items: PublishingTarget[]; now: string }>("/social/publishing/queue"),
   failures: (status?: "FAILED" | "UNCERTAIN" | "MISSED") => apiClient.get<{ items: PublishingTarget[] }>(`/social/publishing/failures${toQuery({ status })}`).then((r) => r.items),

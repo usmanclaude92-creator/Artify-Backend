@@ -17,6 +17,7 @@ import { SocialPublishError } from "../publishing/publishErrors";
 import {
   MESSAGING_WINDOW_MS, dialogUrl, graph, verifySignature, webhookChallenge,
 } from "./metaGraph";
+import { facebookAnalytics } from "./facebookInsights";
 import {
   DEFAULT_CONSTRAINTS, type ConnectResult, type HealthResult, type InboundEvent, type PublishInput, type PublishResult, type ReplyWindow, type SelectableAccount,
   type SendReplyInput, type SendReplyResult, type SocialConnector, type SocialProfile,
@@ -28,7 +29,12 @@ import {
  * `pages_read_user_content` (read other people's comments) is useful but only works once added in the dashboard: opt in with META_LOGIN_SCOPES.
  */
 export const DEFAULT_FACEBOOK_SCOPES = ["pages_show_list", "pages_manage_metadata", "pages_manage_posts", "pages_manage_engagement", "pages_read_engagement", "pages_messaging"] as const;
-export const facebookScopes = (): string[] => (config.metaLoginScopes ? config.metaLoginScopes.split(",") : [...DEFAULT_FACEBOOK_SCOPES]);
+/** Insights need `read_insights` (docs/SOCIAL_ANALYTICS.md §1.1). Added only when SOCIAL_ANALYTICS_SCOPES=true, so login keeps working until the permission is enabled in the Meta app. */
+export const ANALYTICS_SCOPE = "read_insights";
+export const facebookScopes = (): string[] => {
+  const base = config.metaLoginScopes ? config.metaLoginScopes.split(",") : [...DEFAULT_FACEBOOK_SCOPES];
+  return config.socialAnalyticsScopes && !base.includes(ANALYTICS_SCOPE) ? [...base, ANALYTICS_SCOPE] : base;
+};
 /** Without these the connector cannot do its core job (publish + moderate). pages_messaging is optional (Messenger only). */
 export const REQUIRED_SCOPES = ["pages_manage_posts", "pages_manage_engagement", "pages_read_engagement"] as const;
 export const SUBSCRIBED_FIELDS_FULL = "feed,messages,mention,ratings";
@@ -130,6 +136,7 @@ export const facebookPageProvider: SocialConnector = {
   key: "meta_facebook",
   label: "Facebook Pages",
   implemented: true,
+  analytics: facebookAnalytics,
   get defaultScopes() { return facebookScopes(); },
   isConfigured: () => !!config.metaAppId && !!config.metaAppSecret,
   get pollsInbox() { return config.metaInboxPolling; },

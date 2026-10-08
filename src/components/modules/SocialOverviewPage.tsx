@@ -1,7 +1,7 @@
 /** Social Media → Overview: connected accounts, status counts and warnings for the active workspace. */
 import React, { useEffect, useState } from "react";
 import { Share2, AlertTriangle, CheckCircle2, ArrowRight } from "lucide-react";
-import { socialApi, socialInboxApi, socialPublishingApi, type InboxMetrics, type PublishingMetrics, type SocialAccountSummary } from "../../lib/api";
+import { socialAnalyticsApi, socialApi, socialInboxApi, socialPublishingApi, type AnalyticsSummary, type InboxMetrics, type PublishingMetrics, type SocialAccountSummary } from "../../lib/api";
 import { useRouter } from "../../lib/router";
 import { useAuth } from "../../context/AuthContext";
 import { useActiveWorkspace } from "../../context/ActiveWorkspaceContext";
@@ -9,6 +9,7 @@ import { hasPermission } from "../../lib/permissions";
 import { Card, Button, LoadingState, ErrorState, EmptyState } from "./../ui/ui";
 import { ProviderAvatar, StatusBadge, expiresSoon, timeAgo } from "./socialShared";
 import { formatDuration } from "./socialInboxShared";
+import { fmtNumber, providerLabel } from "./socialAnalyticsShared";
 
 const Stat: React.FC<{ label: string; value: number; tone?: "danger" | "warning" | "success" }> = ({ label, value, tone }) => (
   <div>
@@ -26,16 +27,21 @@ export const SocialOverviewPage: React.FC = () => {
   const { navigate } = useRouter();
   const { current } = useActiveWorkspace();
   const canSeeAccounts = hasPermission(user?.role.permissions, "social.read");
+  const canSeeAnalytics = hasPermission(user?.role.permissions, "social.analytics.read");
   const [accounts, setAccounts] = useState<SocialAccountSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [metrics, setMetrics] = useState<PublishingMetrics | null>(null);
   const [inbox, setInbox] = useState<InboxMetrics | null>(null);
+  const [analytics, setAnalytics] = useState<AnalyticsSummary | null | "failed">(null);
 
   useEffect(() => {
     // Publishing health is optional context: a failure here must never break the page.
     socialPublishingApi.metrics().then(setMetrics).catch(() => setMetrics(null));
     socialInboxApi.metrics().then(setInbox).catch(() => setInbox(null));
-  }, [current?.organizationId]);
+    // Analytics is optional context too, and only requested for people who may see it.
+    setAnalytics(null);
+    if (canSeeAnalytics) socialAnalyticsApi.summary().then(setAnalytics).catch(() => setAnalytics("failed"));
+  }, [current?.organizationId, canSeeAnalytics]);
 
   useEffect(() => {
     let cancelled = false;
@@ -61,7 +67,7 @@ export const SocialOverviewPage: React.FC = () => {
             <Share2 className="w-5 h-5" style={{ color: "var(--accent)" }} /> Social Overview
           </h1>
           <p className="text-xs" style={{ color: "var(--text-muted)" }}>
-            {current?.organizationName ? `${current.organizationName} · ` : ""}Publishing, inbox and analytics arrive in later phases. Connect your accounts first.
+            {current?.organizationName ? `${current.organizationName} · ` : ""}Accounts, publishing, inbox and performance for this workspace.
           </p>
         </div>
         {canSeeAccounts && (
@@ -103,6 +109,37 @@ export const SocialOverviewPage: React.FC = () => {
               <Button variant="secondary" className="mt-3" onClick={() => navigate("/social/inbox")}>Open inbox <ArrowRight className="w-3.5 h-3.5" /></Button>
             </Card>
           )}
+
+          {canSeeAnalytics && analytics && analytics !== "failed" && (() => {
+            const supported = analytics.accounts.filter((a) => a.analytics === "supported");
+            const withData = supported.filter((a) => a.headline.some((k) => k.current !== null));
+            return (
+              <Card className="p-4 space-y-3" aria-label="Performance">
+                <h2 className="text-sm font-bold" style={{ color: "var(--text-primary)" }}>Performance · last {analytics.days} days</h2>
+                {withData.length === 0 ? (
+                  <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+                    {supported.length === 0 ? "None of the connected networks provides analytics to this app." : "No analytics have been collected yet. The daily job takes the first snapshot after an account is connected with the Insights permission; nothing is shown until Meta provides numbers."}
+                  </p>
+                ) : (
+                  <ul className="divide-y" style={{ borderColor: "var(--border)" }}>
+                    {withData.map((a) => (
+                      <li key={a.id} className="py-2 grid grid-cols-2 sm:grid-cols-5 gap-2 items-center text-xs">
+                        <span className="font-bold truncate" style={{ color: "var(--text-primary)" }}>{a.displayName}<span className="block font-normal" style={{ color: "var(--text-muted)" }}>{providerLabel(a.provider)}</span></span>
+                        {a.headline.map((k) => (
+                          <span key={k.metric} title={k.current === null ? (k.unavailableReason ?? "Not available yet") : k.kind === "flow" && k.daysWithData < k.daysInRange ? `${k.daysWithData} of ${k.daysInRange} days have data` : undefined}>
+                            <span className="block text-[10px] uppercase font-bold" style={{ color: "var(--text-muted)" }}>{k.label}</span>
+                            <span className="font-bold" style={{ color: k.current === null ? "var(--text-muted)" : "var(--text-primary)" }}>{fmtNumber(k.current)}</span>
+                            {k.kind === "flow" && k.current !== null && k.daysWithData < k.daysInRange && <span className="block text-[10px]" style={{ color: "var(--text-muted)" }}>{k.daysWithData}/{k.daysInRange} days</span>}
+                          </span>
+                        ))}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                <Button variant="secondary" onClick={() => navigate("/social/analytics")}>Open analytics <ArrowRight className="w-3.5 h-3.5" /></Button>
+              </Card>
+            );
+          })()}
 
           {metrics && (
             <Card className="p-4" aria-label="Publishing health">

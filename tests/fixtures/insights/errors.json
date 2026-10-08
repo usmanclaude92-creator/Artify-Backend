@@ -1,0 +1,8 @@
+{
+  "needsTotalValue": { "error": { "message": "(#100) The following metrics should be specified with parameter metric_type=total_value: profile_views", "type": "OAuthException", "code": 100, "fbtrace_id": "T1" } },
+  "invalidMetric": { "error": { "message": "(#100) The value must be a valid insights metric", "type": "OAuthException", "code": 100, "fbtrace_id": "T2" } },
+  "deprecatedImpressions": { "error": { "message": "(#100) metric[0] must be one of the following values: reach, views, ... (impressions is deprecated)", "type": "OAuthException", "code": 100, "error_user_msg": "impressions is no longer supported for media created after July 2, 2024", "fbtrace_id": "T3" } },
+  "under100": { "error": { "message": "(#100) Not enough followers", "type": "OAuthException", "code": 100, "error_user_msg": "This metric is not available for accounts with fewer than 100 followers.", "fbtrace_id": "T4" } },
+  "permission": { "error": { "message": "(#10) Application does not have permission for this action", "type": "OAuthException", "code": 10, "fbtrace_id": "T5" } },
+  "rateLimit": { "error": { "message": "(#4) Application request limit reached", "type": "OAuthException", "code": 4, "fbtrace_id": "T6" } }
+}

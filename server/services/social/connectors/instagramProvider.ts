@@ -15,13 +15,19 @@ import { config } from "../../../config/env";
 import { redactSecrets, type SocialTokenSet } from "../tokenVault";
 import { SocialPublishError } from "../publishing/publishErrors";
 import { MESSAGING_WINDOW_MS, dialogUrl, graph, verifySignature, webhookChallenge } from "./metaGraph";
+import { instagramAnalytics } from "./instagramInsights";
 import {
   ConnectorUserError, DEFAULT_CONSTRAINTS, type ConnectResult, type HealthResult, type InboundEvent, type PublishInput, type PublishMedia, type PublishResult, type ReplyWindow,
   type SelectableAccount, type SendReplyInput, type SendReplyResult, type SocialConnector, type SocialConstraints, type SocialProfile,
 } from "./types";
 
 export const DEFAULT_INSTAGRAM_SCOPES = ["instagram_basic", "instagram_content_publish", "instagram_manage_comments", "instagram_manage_messages", "pages_show_list", "pages_read_engagement", "business_management"] as const;
-export const instagramScopes = (): string[] => (config.metaInstagramLoginScopes ? config.metaInstagramLoginScopes.split(",") : [...DEFAULT_INSTAGRAM_SCOPES]);
+/** Insights need `instagram_manage_insights` (docs/SOCIAL_ANALYTICS.md §1.2). Added only when SOCIAL_ANALYTICS_SCOPES=true. */
+export const INSIGHTS_SCOPE = "instagram_manage_insights";
+export const instagramScopes = (): string[] => {
+  const base = config.metaInstagramLoginScopes ? config.metaInstagramLoginScopes.split(",") : [...DEFAULT_INSTAGRAM_SCOPES];
+  return config.socialAnalyticsScopes && !base.includes(INSIGHTS_SCOPE) ? [...base, INSIGHTS_SCOPE] : base;
+};
 /** Without these the connector cannot publish or moderate. instagram_manage_messages is optional (DMs only). */
 export const REQUIRED_SCOPES = ["instagram_basic", "instagram_content_publish", "instagram_manage_comments"] as const;
 export const WEBHOOK_OBJECT = "instagram";
@@ -207,6 +213,7 @@ export const instagramProvider: SocialConnector = {
   key: "meta_instagram",
   label: "Instagram",
   implemented: true,
+  analytics: instagramAnalytics,
   get defaultScopes() { return instagramScopes(); },
   get dailyPublishCap() { return config.instagramDailyPublishLimit; },
   isConfigured: () => !!config.metaAppId && !!config.metaAppSecret,

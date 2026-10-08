@@ -40,6 +40,7 @@ import { socialAccountsRouter } from "./socialRoutes";
 import { socialContentRouter } from "./socialContentRoutes";
 import { socialInternalRouter, socialPublishingRouter } from "./socialPublishingRoutes";
 import { socialInboxRouter, socialWebhookRouter } from "./socialInboxRoutes";
+import { socialAnalyticsRouter } from "./socialAnalyticsRoutes";
 import formRoutes from "./formRoutes";
 import crmRoutes from "./crmRoutes";
 import campaignRoutes from "./campaignRoutes";
@@ -112,6 +113,7 @@ v1Router.use("/social/webhooks", socialWebhookRouter); // provider-signed, no se
 v1Router.use("/social/publishing", socialPublishingRouter);
 v1Router.use("/social/inbox", socialInboxRouter);
 v1Router.use("/social/accounts", socialAccountsRouter);
+v1Router.use("/social/analytics", socialAnalyticsRouter);
 v1Router.use("/social", socialContentRouter);
 v1Router.use("/forms", formRoutes);
 v1Router.use("/crm", crmRoutes);

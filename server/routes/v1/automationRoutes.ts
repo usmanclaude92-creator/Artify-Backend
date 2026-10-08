@@ -18,6 +18,7 @@ import { automationService } from "../../services/automation/AutomationService";
 import { socialAccountService } from "../../services/social/socialAccountService";
 import { publisher } from "../../services/social/publishing/publisher";
 import { inboxTick } from "../../services/social/inbox/inboxPipeline";
+import { analyticsIngest } from "../../services/social/analytics/analyticsIngest";
 import { contentSchedulingService } from "../../services/contentSchedulingService";
 import { config } from "../../config/env";
 import { AuthenticationError, NotFoundError } from "../../core/errors";
@@ -60,7 +61,7 @@ router.get(
     if (!constantTimeEquals(req.headers.authorization ?? "", `Bearer ${config.cronSecret}`)) {
       throw new AuthenticationError("Invalid cron credentials.");
     }
-    const [automation, content, webhookRetries, socialTokenHealth, socialPublish, socialInbox] = await Promise.all([
+    const [automation, content, webhookRetries, socialTokenHealth, socialPublish, socialInbox, socialAnalytics] = await Promise.all([
       automationService.runCronTick(),
       contentSchedulingService.publishDueScheduled(),
       webhookEndpointService.processDueRetries(),
@@ -70,8 +71,10 @@ router.get(
       publisher.tick().then((r) => ({ considered: r.considered, outcomes: r.outcomes, missed: r.missed })).catch(() => ({ error: true })),
       // Inbox: polling fallback, AI triage, SLA notifications, retention purge (02–04 UTC). Counts only; never throws.
       inboxTick().catch(() => ({ error: true })),
+      // Analytics: READ-ONLY insights snapshots, one successful run per account per UTC day, kill-switch gated; counts only; never throws.
+      analyticsIngest.tick().catch(() => ({ error: true })),
     ]);
-    sendSuccess(res, { automation, content, webhookRetries, socialTokenHealth, socialPublish, socialInbox });
+    sendSuccess(res, { automation, content, webhookRetries, socialTokenHealth, socialPublish, socialInbox, socialAnalytics });
   })
 );
 

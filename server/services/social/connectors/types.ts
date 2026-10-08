@@ -151,6 +151,53 @@ export class ConnectorNotImplementedError extends Error {
   }
 }
 
+// ---- Analytics (Step 9b). READ-ONLY. A value is `null` when the network did not provide it (deprecated, rejected, empty, under a threshold): never 0. ----
+export type AnalyticsStatus = "OK" | "UNAVAILABLE";
+
+export interface DailyPoint {
+  /** UTC calendar day, YYYY-MM-DD. */
+  date: string;
+  value: number | null;
+}
+
+export interface DailySeries {
+  status: AnalyticsStatus;
+  points: DailyPoint[];
+  /** Why the series is unavailable (safe to show; secrets already redacted). */
+  note?: string;
+}
+
+export interface PostMetricValue {
+  metric: string;
+  value: number | null;
+  status: AnalyticsStatus;
+  note?: string;
+}
+
+export interface AudienceBucket { key: string; value: number }
+export type AudienceDimension = "age_gender" | "country" | "city" | "locale";
+export interface AudienceResult {
+  dimension: AudienceDimension;
+  status: AnalyticsStatus;
+  buckets?: AudienceBucket[];
+  reason?: string;
+}
+
+/** What a network connector can read for analytics. Throws `SocialPublishError` for auth (missing permission) and transient (rate limit) failures. */
+export interface ConnectorAnalytics {
+  /** Canonical daily metric keys this connector attempts (see analytics/metrics.ts). */
+  readonly dailyMetrics: readonly string[];
+  /** Most days of daily history the API lets us read back (used to bound the first backfill and shown in the UI). */
+  readonly historyDays: number;
+  /** Audience dimensions this connector can ever return (empty: demographics not supported). */
+  readonly audienceDimensions: readonly AudienceDimension[];
+  /** Total followers/fans right now (a plain field, no Insights permission). null when not returned. */
+  fetchFollowers(tokens: SocialTokenSet, ctx: { accountExternalId: string }): Promise<number | null>;
+  fetchDailyMetric(tokens: SocialTokenSet, ctx: { accountExternalId: string; metric: string; from: Date; to: Date }): Promise<DailySeries>;
+  fetchPostMetrics(tokens: SocialTokenSet, ctx: { accountExternalId: string; externalPostId: string }): Promise<PostMetricValue[]>;
+  fetchAudience(tokens: SocialTokenSet, ctx: { accountExternalId: string; followers: number | null }): Promise<AudienceResult[]>;
+}
+
 export interface SocialConnector {
   readonly key: string;
   readonly label: string;
@@ -198,4 +245,6 @@ export interface SocialConnector {
   markRead?(tokens: SocialTokenSet, input: { providerThreadId: string; providerMessageId?: string }): Promise<void>;
 
   fetchMetrics?(tokens: SocialTokenSet, range: { from: Date; to: Date }): Promise<unknown>;
+  /** Read-only insights (Step 9b). Absent for providers that expose none (LinkedIn without Community Management API access). */
+  readonly analytics?: ConnectorAnalytics;
 }
