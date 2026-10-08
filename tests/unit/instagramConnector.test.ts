@@ -348,11 +348,18 @@ describe("connect", () => {
     expect(r.selectable![0]).toMatchObject({ profile: { externalAccountId: "IG1", handle: "artify", accountType: "BUSINESS" }, tokens: { accessToken: "PT1", pageId: "P1", igId: "IG1" } });
     expect(r.selectable![0]!.warnings!.join(" ")).toMatch(/Direct messages are unavailable/);
   });
+  it("falls back to connected_instagram_account when instagram_business_account is absent", async () => {
+    behaviour = pagesResponse([{ id: "P1", name: "Page One", access_token: "PT1", connected_instagram_account: { id: "IG7", username: "viaconnected" } }]);
+    const r = await instagramProvider.handleCallback({ code: "c", redirectUri: "https://x/cb" });
+    expect(r.selectable![0]).toMatchObject({ profile: { externalAccountId: "IG7", handle: "viaconnected" }, tokens: { igId: "IG7" } });
+  });
   it("explains what to do when no Page has an Instagram account, or no Page exists", async () => {
     behaviour = pagesResponse([{ id: "P2", name: "No Instagram", access_token: "PT2" }]);
     const none = await rejection(instagramProvider.handleCallback({ code: "c", redirectUri: "https://x/cb" }));
     expect(none).toBeInstanceOf(ConnectorUserError);
     expect(none.message).toMatch(/Business or Creator/);
+    expect(none.message).toMatch(/shared 1 Page \(No Instagram\)/);
+    expect(none.message).toMatch(/Edit settings/);
     behaviour = pagesResponse([]);
     expect(await rejection(instagramProvider.handleCallback({ code: "c", redirectUri: "https://x/cb" }))).toBeInstanceOf(ConnectorUserError);
   });

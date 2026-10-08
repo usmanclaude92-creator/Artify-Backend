@@ -17899,7 +17899,7 @@ async function listPagesWithInstagram(userToken) {
       path: "/me/accounts",
       token: userToken,
       phase: "read",
-      query: { fields: "id,name,access_token,tasks,instagram_business_account{id,username,name,profile_picture_url}", limit: "100", after }
+      query: { fields: "id,name,access_token,tasks,instagram_business_account{id,username,name,profile_picture_url},connected_instagram_account{id,username,name,profile_picture_url}", limit: "100", after }
     });
     pages.push(...r.json.data ?? []);
     after = r.json.paging?.next ? r.json.paging.cursors?.after : void 0;
@@ -17941,7 +17941,7 @@ var instagramProvider = {
     if (pages.length === 0) throw new ConnectorUserError("This Facebook account does not manage any Pages. Instagram connects through a Facebook Page: link your Instagram professional account to a Page you manage, then try again.");
     const selectable = [];
     for (const p of pages) {
-      const ig = p.instagram_business_account;
+      const ig = p.instagram_business_account ?? p.connected_instagram_account;
       if (!ig?.id || !p.access_token) continue;
       const warnings = [];
       const missing = REQUIRED_SCOPES2.filter((s) => !scopes.includes(s));
@@ -17956,7 +17956,9 @@ var instagramProvider = {
       });
     }
     if (selectable.length === 0) {
-      throw new ConnectorUserError("None of your Facebook Pages has an Instagram professional account linked. In Instagram switch the account to Business or Creator, then link it to a Page you manage (Instagram \u2192 Settings \u2192 Account type and tools / Page), and try again.");
+      const seen = pages.map((p) => p.name ?? p.id).slice(0, 5).join(", ");
+      const missingScopes = ["instagram_basic", "pages_show_list"].filter((x) => !scopes.includes(x));
+      throw new ConnectorUserError(`Facebook shared ${pages.length} Page${pages.length === 1 ? "" : "s"} (${seen}) but no linked Instagram account.${missingScopes.length ? ` Permissions missing: ${missingScopes.join(", ")}.` : ""} Check that the Instagram account is a Business or Creator account linked to one of these Pages, and that on the Facebook screen you tapped "Edit settings" and selected both the Page and the Instagram account. Then try again.`);
     }
     return { profile: { externalAccountId: me.json.id ?? "user", displayName: me.json.name ?? "Facebook user", accountType: "USER" }, tokens: { accessToken: "" }, selectable };
   },

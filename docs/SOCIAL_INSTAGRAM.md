@@ -81,7 +81,7 @@ Database: migration `20261015090000_social_provider_state` (additive: `social_po
 | Symptom | Cause / fix |
 |---|---|
 | "Invalid Scope" on the Facebook dialog | A listed permission is not enabled for the app. Set `META_INSTAGRAM_LOGIN_SCOPES` to the enabled ones. |
-| "None of your Facebook Pages has an Instagram professional account linked" | Switch the account to Business/Creator and link it to a Page you manage; the logged-in Facebook user must manage that Page. |
+| "Facebook shared N Page(s) (…) but no linked Instagram account" | The Instagram account must be Business/Creator and linked to one of the listed Pages. In the Facebook dialog tap **Edit settings** and select both the Page and the Instagram account (the "continue with previous settings" shortcut can omit the Instagram account). The connector also accepts `connected_instagram_account`. |
 | Post stays "scheduled" for minutes | The container is still processing (pending); it is rechecked every minute. |
 | `Instagram could not process the media: … 2207xxx` | Image URL not fetchable, wrong format, or bad ratio. Use a JPEG within the limits; the signed media URL must be reachable by Meta. |
 | Post is UNCERTAIN | `media_publish` got no clear answer. Check the Instagram profile, then *Mark published* or *Retry now* (after confirming it is not there). |
