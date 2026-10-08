@@ -137,11 +137,10 @@ describe("social analytics", () => {
   beforeEach(() => { calls.length = 0; handler = igDefault; mutable.socialAnalyticsDisabled = false; mutable.geminiApiKey = ""; });
 
   // ---------- permission ----------
-  it("seeds social.analytics.read for every role that can read Social (never CLIENT_PORTAL)", async () => {
+  it("keeps social.analytics.read admin-only (SUPER_ADMIN and ADMIN)", async () => {
     const rows = await prisma.rolePermission.findMany({ where: { permission: { key: "social.analytics.read" } }, include: { role: { select: { key: true } } } });
     const keys = rows.map((r) => r.role.key);
-    for (const k of ["SUPER_ADMIN", "ADMIN", "MANAGER", "VIEWER"]) expect(keys).toContain(k);
-    expect(keys).not.toContain("CLIENT_PORTAL");
+    expect([...new Set(keys.filter((k) => !k.startsWith("QA_TEST_2026_")))].sort()).toEqual(["ADMIN", "SUPER_ADMIN"]); // the QA analyst role below is test-only
   });
   it("requires social.analytics.read (social.read alone is not enough) and is workspace scoped", async () => {
     expect((await api("get", "/social/analytics/summary", readerToken)).status).toBe(403);

@@ -50,7 +50,7 @@ Code: `server/services/social/analytics/*`, connectors' `fetchInsights`, routes 
 
 ## 2. Where the docs contradict earlier docs / assumptions
 
-1. **`social.analytics.read` is not new.** `SOCIAL_FOUNDATION.md` (Step 4) already created it and granted it to **SUPER_ADMIN and ADMIN only**. MANAGER and VIEWER can read the Social module but not analytics. Step 9b adds a migration granting it to every role that holds `social.read` (excluding CLIENT_PORTAL), as requested; this *widens it from admin-only to all Social-module readers*.
+1. **`social.analytics.read` is not new.** `SOCIAL_FOUNDATION.md` (Step 4) already created it and granted it to **SUPER_ADMIN and ADMIN only**. Step 9b first widened it to every role with `social.read`; by the owner's decision it is **admin-only again** (migration `20261017090000_social_analytics_admin_only` revokes the extra grants). MANAGER and VIEWER can read the Social module but not analytics.
 2. **Two new Meta permissions are required**, contradicting the "no new Meta permissions" stance of Steps 8/9a: `read_insights` (Pages) and `instagram_manage_insights` (Instagram). Neither is in the current login scopes (`SOCIAL_META_FACEBOOK.md`, `SOCIAL_INSTAGRAM.md`). They are added **only when `SOCIAL_ANALYTICS_SCOPES=true`** so nothing changes until the owner has enabled them in the Meta dashboard.
 3. **Metric names in older Meta material are deprecated** (`impressions`, `page fans`, `plays`); `views` is the replacement. This release never stores a metric called impressions.
 4. **`SOCIAL_FOUNDATION.md` says the daily job runs in the daily cron tick.** In production the tick is pinged every 5 minutes; analytics is self-gated to once per account per UTC day.
@@ -72,7 +72,7 @@ Code: `server/services/social/analytics/*`, connectors' `fetchInsights`, routes 
 1. In the Meta app dashboard (*Use cases → Permissions and features*) add **`read_insights`** (Facebook Pages) and **`instagram_manage_insights`** (Instagram). For accounts you own or manage and have added to the app these work with Standard access; App Review is only needed for other people's accounts.
 2. In Vercel set `SOCIAL_ANALYTICS_SCOPES=true` and redeploy. Login dialogs then ask for the two permissions.
 3. In *Social Media → Accounts* reconnect each Facebook Page / Instagram account once so the stored token includes them. Until then the UI says "reconnect to grant analytics access" and shows no numbers.
-4. Apply migration `20261016090000_social_analytics` (adds the four tables and grants `social.analytics.read` to roles with `social.read`, except CLIENT_PORTAL).
+4. Apply migration `20261016090000_social_analytics` (adds the four tables), then `20261017090000_social_analytics_admin_only` (keeps `social.analytics.read` admin-only).
 
 | Env var | Default | Meaning |
 |---|---|---|
