@@ -299,6 +299,8 @@ export const analyticsIngest = {
         ...(finished ? { lastSuccessAt: now } : {}),
       },
     });
+    // An unfinished run must stay due for the next tick even when an earlier run succeeded today (e.g. a manual refresh after a reconnect).
+    if (!finished) await prisma.socialAnalyticsState.updateMany({ where: { socialAccountId: accountId, lastSuccessAt: { gte: today } }, data: { lastSuccessAt: new Date(today.getTime() - 1) } });
     if (result.outcome !== "error") result.outcome = finished ? "completed" : "partial";
     return result;
   },

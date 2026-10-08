@@ -17943,11 +17943,17 @@ var DEMOGRAPHICS = [
   { dimension: "locale", breakdown: "locale", legacy: "audience_locale" }
 ];
 var wantsTotalValue = (err) => err instanceof Error && /metric_type|total_value/i.test(err.message);
+var PER_DAY_PARALLEL = 6;
 async function perDayTotals(token, ig, metric, from, to) {
+  const days = [];
+  for (let d = from; d.getTime() <= to.getTime(); d = addDays(d, 1)) days.push(d);
   const out = [];
-  for (let d = from; d.getTime() <= to.getTime(); d = addDays(d, 1)) {
-    const r = await graph({ method: "GET", path: `/${ig}/insights`, token, phase: "read", query: { metric, metric_type: "total_value", period: "day", since: String(unixSeconds(d)), until: String(unixSeconds(addDays(d, 1))) } });
-    out.push({ date: dayString(d), value: parseTotalValue(r.json) });
+  for (let i = 0; i < days.length; i += PER_DAY_PARALLEL) {
+    const batch = await Promise.all(days.slice(i, i + PER_DAY_PARALLEL).map(async (d) => {
+      const r = await graph({ method: "GET", path: `/${ig}/insights`, token, phase: "read", query: { metric, metric_type: "total_value", period: "day", since: String(unixSeconds(d)), until: String(unixSeconds(addDays(d, 1))) } });
+      return { date: dayString(d), value: parseTotalValue(r.json) };
+    }));
+    out.push(...batch);
   }
   return out;
 }
@@ -22943,6 +22949,7 @@ var analyticsIngest = {
         ...finished ? { lastSuccessAt: now } : {}
       }
     });
+    if (!finished) await prisma.socialAnalyticsState.updateMany({ where: { socialAccountId: accountId, lastSuccessAt: { gte: today } }, data: { lastSuccessAt: new Date(today.getTime() - 1) } });
     if (result.outcome !== "error") result.outcome = finished ? "completed" : "partial";
     return result;
   },

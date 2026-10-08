@@ -32,11 +32,18 @@ const DEMOGRAPHICS: Array<{ dimension: AudienceDimension; breakdown: string; leg
 
 const wantsTotalValue = (err: unknown): boolean => err instanceof Error && /metric_type|total_value/i.test(err.message);
 
+/** One request per day (Meta only offers `total_value` for some metrics). Six at a time so 30 days fit the job's time budget; results keep day order. */
+const PER_DAY_PARALLEL = 6;
 async function perDayTotals(token: string, ig: string, metric: string, from: Date, to: Date): Promise<DailyPoint[]> {
+  const days: Date[] = [];
+  for (let d = from; d.getTime() <= to.getTime(); d = addDays(d, 1)) days.push(d);
   const out: DailyPoint[] = [];
-  for (let d = from; d.getTime() <= to.getTime(); d = addDays(d, 1)) {
-    const r = await graph({ method: "GET", path: `/${ig}/insights`, token, phase: "read", query: { metric, metric_type: "total_value", period: "day", since: String(unixSeconds(d)), until: String(unixSeconds(addDays(d, 1))) } });
-    out.push({ date: dayString(d), value: parseTotalValue(r.json) });
+  for (let i = 0; i < days.length; i += PER_DAY_PARALLEL) {
+    const batch = await Promise.all(days.slice(i, i + PER_DAY_PARALLEL).map(async (d): Promise<DailyPoint> => {
+      const r = await graph({ method: "GET", path: `/${ig}/insights`, token, phase: "read", query: { metric, metric_type: "total_value", period: "day", since: String(unixSeconds(d)), until: String(unixSeconds(addDays(d, 1))) } });
+      return { date: dayString(d), value: parseTotalValue(r.json) };
+    }));
+    out.push(...batch);
   }
   return out;
 }
