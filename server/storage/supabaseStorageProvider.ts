@@ -27,6 +27,15 @@ function getClient(): SupabaseClient {
   return client;
 }
 
+/**
+ * Current storage-js returns an absolute `signedUrl` (older versions returned a path relative to /storage/v1).
+ * Prefixing an absolute URL produced a malformed address (HTTP 404 on upload), so only relative paths are prefixed.
+ */
+export function absoluteUploadUrl(baseUrl: string, signedUrl: string): string {
+  if (/^https?:\/\//i.test(signedUrl)) return signedUrl;
+  return `${baseUrl}/storage/v1${signedUrl.startsWith("/") ? "" : "/"}${signedUrl}`;
+}
+
 export class SupabaseStorageProvider implements StorageProvider {
   readonly name = "supabase";
 
@@ -35,7 +44,7 @@ export class SupabaseStorageProvider implements StorageProvider {
     if (error || !data) throw new Error(`Supabase Storage: failed to create a signed upload URL (${error?.message ?? "unknown error"})`);
 
     return {
-      url: `${config.supabaseStorageUrl}/storage/v1${data.signedUrl.startsWith("/") ? "" : "/"}${data.signedUrl}`,
+      url: absoluteUploadUrl(config.supabaseStorageUrl, data.signedUrl),
       method: "PUT",
       headers: { "Content-Type": params.contentType },
       expiresAt: new Date(Date.now() + config.mediaSignedUrlTtlSeconds * 1000),

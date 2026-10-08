@@ -5936,6 +5936,10 @@ function getClient2() {
   }
   return client2;
 }
+function absoluteUploadUrl(baseUrl, signedUrl) {
+  if (/^https?:\/\//i.test(signedUrl)) return signedUrl;
+  return `${baseUrl}/storage/v1${signedUrl.startsWith("/") ? "" : "/"}${signedUrl}`;
+}
 var SupabaseStorageProvider = class {
   constructor() {
     this.name = "supabase";
@@ -5944,7 +5948,7 @@ var SupabaseStorageProvider = class {
     const { data, error } = await getClient2().storage.from(config.objectStorageBucket).createSignedUploadUrl(params.key);
     if (error || !data) throw new Error(`Supabase Storage: failed to create a signed upload URL (${error?.message ?? "unknown error"})`);
     return {
-      url: `${config.supabaseStorageUrl}/storage/v1${data.signedUrl.startsWith("/") ? "" : "/"}${data.signedUrl}`,
+      url: absoluteUploadUrl(config.supabaseStorageUrl, data.signedUrl),
       method: "PUT",
       headers: { "Content-Type": params.contentType },
       expiresAt: new Date(Date.now() + config.mediaSignedUrlTtlSeconds * 1e3)
