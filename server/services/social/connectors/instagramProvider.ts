@@ -20,7 +20,7 @@ import {
   type SelectableAccount, type SendReplyInput, type SendReplyResult, type SocialConnector, type SocialConstraints, type SocialProfile,
 } from "./types";
 
-export const DEFAULT_INSTAGRAM_SCOPES = ["instagram_basic", "instagram_content_publish", "instagram_manage_comments", "instagram_manage_messages", "pages_show_list", "pages_read_engagement"] as const;
+export const DEFAULT_INSTAGRAM_SCOPES = ["instagram_basic", "instagram_content_publish", "instagram_manage_comments", "instagram_manage_messages", "pages_show_list", "pages_read_engagement", "business_management"] as const;
 export const instagramScopes = (): string[] => (config.metaInstagramLoginScopes ? config.metaInstagramLoginScopes.split(",") : [...DEFAULT_INSTAGRAM_SCOPES]);
 /** Without these the connector cannot publish or moderate. instagram_manage_messages is optional (DMs only). */
 export const REQUIRED_SCOPES = ["instagram_basic", "instagram_content_publish", "instagram_manage_comments"] as const;

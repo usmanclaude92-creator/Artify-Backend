@@ -150,7 +150,7 @@ describe("meta instagram", () => {
     expect(start.status).toBe(200);
     const authUrl = new URL(start.body.data.authUrl);
     expect(`${authUrl.origin}${authUrl.pathname}`).toBe("https://www.facebook.com/v25.0/dialog/oauth");
-    expect(authUrl.searchParams.get("scope")).toBe("instagram_basic,instagram_content_publish,instagram_manage_comments,instagram_manage_messages,pages_show_list,pages_read_engagement");
+    expect(authUrl.searchParams.get("scope")).toBe("instagram_basic,instagram_content_publish,instagram_manage_comments,instagram_manage_messages,pages_show_list,pages_read_engagement,business_management");
     const state = authUrl.searchParams.get("state")!;
     const cb = await api("post", "/social/accounts/callback", adminToken, { state, code: "QA_CODE" });
     expect(cb.status).toBe(200);

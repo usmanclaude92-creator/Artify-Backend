@@ -17750,7 +17750,7 @@ ${input.linkUrl}`.trim() : input.text;
 };
 
 // server/services/social/connectors/instagramProvider.ts
-var DEFAULT_INSTAGRAM_SCOPES = ["instagram_basic", "instagram_content_publish", "instagram_manage_comments", "instagram_manage_messages", "pages_show_list", "pages_read_engagement"];
+var DEFAULT_INSTAGRAM_SCOPES = ["instagram_basic", "instagram_content_publish", "instagram_manage_comments", "instagram_manage_messages", "pages_show_list", "pages_read_engagement", "business_management"];
 var instagramScopes = () => config.metaInstagramLoginScopes ? config.metaInstagramLoginScopes.split(",") : [...DEFAULT_INSTAGRAM_SCOPES];
 var REQUIRED_SCOPES2 = ["instagram_basic", "instagram_content_publish", "instagram_manage_comments"];
 var WEBHOOK_OBJECT = "instagram";
