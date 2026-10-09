@@ -301,11 +301,14 @@ export const socialAccountService = {
       }
       const health = await connector.healthCheck(tokens);
       if (!health.ok) return fail("NEEDS_REAUTH", safeError(health.error ?? "The provider rejected the credentials.", [tokens.accessToken, tokens.refreshToken]));
-      return prisma.socialAccount.update({
+      const updated = await prisma.socialAccount.update({
         where: { id: account.id },
         data: { status: "CONNECTED", lastSyncAt: new Date(), lastError: null, tokenExpiresAt: health.expiresAt ? new Date(health.expiresAt) : expiresAt },
         select: ACCOUNT_SELECT,
       });
+      // Accounts connected before Step 15 have no Meta user id yet; fill it once so deauthorize / data-deletion callbacks can find them.
+      if (health.providerUserId) await prisma.socialAccount.updateMany({ where: { id: account.id, metaUserId: null }, data: { metaUserId: health.providerUserId } });
+      return updated;
     } catch (err) {
       return fail("ERROR", safeError(err, [tokens?.accessToken, tokens?.refreshToken]));
     }

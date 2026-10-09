@@ -33,6 +33,8 @@ export interface HealthResult {
   error?: string;
   /** Authoritative expiry if the provider reports one. */
   expiresAt?: string | null;
+  /** App-scoped id of the person who authorised the token (Meta debug_token `user_id`). Lets accounts connected before Step 15 be linked to Meta's callbacks. */
+  providerUserId?: string | null;
 }
 
 /** Per-network publishing rules the Composer and guardrails validate against. */

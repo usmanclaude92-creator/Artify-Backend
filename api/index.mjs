@@ -19349,7 +19349,7 @@ var facebookPageProvider = {
     const missing = REQUIRED_SCOPES.filter((s) => d.scopes && !granted.has(s));
     if (missing.length) return { ok: false, error: `Missing permissions: ${missing.join(", ")}. Reconnect the Page and approve them.` };
     const times = [d.expires_at, d.data_access_expires_at].filter((t) => typeof t === "number" && t > 0);
-    return { ok: true, expiresAt: times.length ? new Date(Math.min(...times) * 1e3).toISOString() : null };
+    return { ok: true, expiresAt: times.length ? new Date(Math.min(...times) * 1e3).toISOString() : null, providerUserId: typeof d.user_id === "string" ? d.user_id : null };
   },
   async publish(tokens2, input) {
     const page = pageIdOf(tokens2, input.accountExternalId);
@@ -19630,7 +19630,7 @@ var instagramAnalytics = {
 };
 
 // server/services/social/connectors/instagramProvider.ts
-var DEFAULT_INSTAGRAM_SCOPES = ["instagram_basic", "instagram_content_publish", "instagram_manage_comments", "instagram_manage_messages", "pages_show_list", "pages_read_engagement", "business_management"];
+var DEFAULT_INSTAGRAM_SCOPES = ["instagram_basic", "instagram_content_publish", "instagram_manage_comments", "instagram_manage_messages", "pages_show_list", "pages_read_engagement"];
 var INSIGHTS_SCOPE = "instagram_manage_insights";
 var instagramScopes = () => {
   const base3 = config.metaInstagramLoginScopes ? config.metaInstagramLoginScopes.split(",") : [...DEFAULT_INSTAGRAM_SCOPES];
@@ -19888,7 +19888,7 @@ var instagramProvider = {
     const missing = REQUIRED_SCOPES2.filter((s) => d.scopes && !granted.has(s));
     if (missing.length) return { ok: false, error: `Missing permissions: ${missing.join(", ")}. Reconnect the account and approve them.` };
     const times = [d.expires_at, d.data_access_expires_at].filter((t) => typeof t === "number" && t > 0);
-    return { ok: true, expiresAt: times.length ? new Date(Math.min(...times) * 1e3).toISOString() : null };
+    return { ok: true, expiresAt: times.length ? new Date(Math.min(...times) * 1e3).toISOString() : null, providerUserId: typeof d.user_id === "string" ? d.user_id : null };
   },
   async publish(tokens2, input) {
     const ig = input.accountExternalId;
@@ -21231,11 +21231,13 @@ var socialAccountService = {
       }
       const health = await connector.healthCheck(tokens2);
       if (!health.ok) return fail("NEEDS_REAUTH", safeError(health.error ?? "The provider rejected the credentials.", [tokens2.accessToken, tokens2.refreshToken]));
-      return prisma.socialAccount.update({
+      const updated = await prisma.socialAccount.update({
         where: { id: account.id },
         data: { status: "CONNECTED", lastSyncAt: /* @__PURE__ */ new Date(), lastError: null, tokenExpiresAt: health.expiresAt ? new Date(health.expiresAt) : expiresAt },
         select: ACCOUNT_SELECT
       });
+      if (health.providerUserId) await prisma.socialAccount.updateMany({ where: { id: account.id, metaUserId: null }, data: { metaUserId: health.providerUserId } });
+      return updated;
     } catch (err) {
       return fail("ERROR", safeError(err, [tokens2?.accessToken, tokens2?.refreshToken]));
     }

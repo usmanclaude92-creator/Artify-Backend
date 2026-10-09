@@ -199,7 +199,7 @@ export const facebookPageProvider: SocialConnector = {
   },
 
   async healthCheck(tokens: SocialTokenSet): Promise<HealthResult> {
-    const r = await graph<{ data?: { is_valid?: boolean; expires_at?: number; data_access_expires_at?: number; scopes?: string[]; error?: { message?: string } } }>({
+    const r = await graph<{ data?: { is_valid?: boolean; user_id?: string; expires_at?: number; data_access_expires_at?: number; scopes?: string[]; error?: { message?: string } } }>({
       method: "GET", path: "/debug_token", token: appToken(), phase: "read", query: { input_token: tokens.accessToken },
     });
     const d = r.json.data;
@@ -209,7 +209,7 @@ export const facebookPageProvider: SocialConnector = {
     if (missing.length) return { ok: false, error: `Missing permissions: ${missing.join(", ")}. Reconnect the Page and approve them.` };
     // 0 means "never". The earliest non-zero of token expiry / data-access expiry is what the 7-day warning should track.
     const times = [d.expires_at, d.data_access_expires_at].filter((t): t is number => typeof t === "number" && t > 0);
-    return { ok: true, expiresAt: times.length ? new Date(Math.min(...times) * 1000).toISOString() : null };
+    return { ok: true, expiresAt: times.length ? new Date(Math.min(...times) * 1000).toISOString() : null, providerUserId: typeof d.user_id === "string" ? d.user_id : null };
   },
 
   async publish(tokens: SocialTokenSet, input: PublishInput): Promise<PublishResult> {

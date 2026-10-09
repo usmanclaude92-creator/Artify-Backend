@@ -57,7 +57,7 @@ describe("constraints (from the documentation)", () => {
     expect(instagramProvider.dailyPublishCap).toBe(50);
   });
   it("requests only the documented permissions by default; META_INSTAGRAM_LOGIN_SCOPES overrides", () => {
-    expect(instagramScopes()).toEqual(["instagram_basic", "instagram_content_publish", "instagram_manage_comments", "instagram_manage_messages", "pages_show_list", "pages_read_engagement", "business_management"]);
+    expect(instagramScopes()).toEqual(["instagram_basic", "instagram_content_publish", "instagram_manage_comments", "instagram_manage_messages", "pages_show_list", "pages_read_engagement"]);
     mutable.metaInstagramLoginScopes = "instagram_basic,pages_show_list";
     expect(instagramScopes()).toEqual(["instagram_basic", "pages_show_list"]);
     expect(new URL(instagramProvider.getAuthUrl({ state: "s", redirectUri: "https://x/cb" })).searchParams.get("scope")).toBe("instagram_basic,pages_show_list");
