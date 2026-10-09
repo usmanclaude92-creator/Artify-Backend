@@ -39,7 +39,7 @@ export const ScheduledReportsPage: React.FC = () => {
     <div className="space-y-4">
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div>
-          <h2 className="text-lg font-bold flex items-center gap-2" style={{ color: "var(--text-primary)" }}><FileText className="w-5 h-5" /> Scheduled reports</h2>
+          <h1 className="text-lg font-bold flex items-center gap-2" style={{ color: "var(--text-primary)" }}><FileText className="w-5 h-5" /> Scheduled reports</h1>
           <p className="text-xs max-w-2xl" style={{ color: "var(--text-muted)" }}>Weekly or monthly summaries of the dashboard. Each recipient gets only the sections their role may read. New schedules start in dry-run mode: reports are rendered and stored, nothing is delivered until you switch dry run off.</p>
         </div>
         <Button variant="primary" onClick={() => { setForm((f) => ({ ...f, recipientIds: [] })); setFormError(null); setOpen(true); }}><Plus className="w-3.5 h-3.5" /> New schedule</Button>
