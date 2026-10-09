@@ -6,6 +6,7 @@ import { healthService } from "./healthService";
 import { heartbeat } from "./heartbeat";
 import { retentionService, purgeEnabled } from "./retentionService";
 import { backupService } from "./backupService";
+import { reportService } from "../dashboard/reportService";
 
 const inWindow = (now: Date) => now.getUTCHours() >= 2 && now.getUTCHours() <= 4;
 
@@ -19,6 +20,8 @@ export async function opsTick(now = new Date()) {
     out.health.red = checks.filter((c) => c.status === "red").length;
     out.health.alerted = (await healthService.alertIfNeeded(orgId, now)).alerted;
   } catch (err) { logger.warn({ err: err instanceof Error ? err.message : "unknown" }, "[ops] health pass failed"); }
+
+  try { await reportService.tick(now); } catch (err) { logger.warn({ err: err instanceof Error ? err.message : "unknown" }, "[ops] report tick failed"); }
 
   if (inWindow(now)) {
     const lastPurge = await prisma.jobHeartbeat.findUnique({ where: { key: "retention_purge" } }).catch(() => null);

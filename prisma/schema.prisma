@@ -931,6 +931,7 @@ model Lead {
   @@index([email])
   @@index([formId])
   @@index([campaignId])
+  @@index([organizationId, createdAt])
   @@map("leads")
 }
 
@@ -1018,6 +1019,7 @@ model Opportunity {
   @@index([campaignId])
   @@index([assignedTo])
   @@index([createdAt])
+  @@index([organizationId, stage])
   @@map("opportunities")
 }
 
@@ -1118,6 +1120,7 @@ model FormSubmission {
   @@index([formId])
   @@index([createdAt])
   @@index([campaignId])
+  @@index([organizationId, createdAt])
   @@map("form_submissions")
 }
 
@@ -4575,4 +4578,90 @@ model ConsentRecord {
   @@index([organizationId, capturedAt])
   @@index([leadId])
   @@map("consent_records")
+}
+
+/// Step 14: a user's saved Dashboard view (period + name). Personal; never shared across users.
+model DashboardView {
+  id             String   @id @default(uuid())
+  organizationId String   @map("organization_id")
+  userId         String   @map("user_id")
+  name           String
+  period         Int
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  @@index([organizationId, userId])
+  @@map("dashboard_views")
+}
+
+/// Step 14: per-organization report controls. kill_switch stops every scheduled and test delivery.
+model DashboardReportSetting {
+  organizationId String   @id @map("organization_id")
+  killSwitch     Boolean  @default(false) @map("kill_switch")
+  updatedBy      String?  @map("updated_by")
+  updatedAt      DateTime @default(now()) @map("updated_at")
+
+  @@map("dashboard_report_settings")
+}
+
+/// Step 14: a scheduled dashboard summary. dry_run defaults to true: runs render but deliver nothing.
+model DashboardReportSchedule {
+  id             String    @id @default(uuid())
+  organizationId String    @map("organization_id")
+  name           String
+  cadence        String
+  sections       String[]  @default([])
+  recipientIds   String[]  @default([]) @map("recipient_ids")
+  periodDays     Int       @default(7) @map("period_days")
+  enabled        Boolean   @default(true)
+  dryRun         Boolean   @default(true) @map("dry_run")
+  nextRunAt      DateTime? @map("next_run_at")
+  lastRunAt      DateTime? @map("last_run_at")
+  createdBy      String?   @map("created_by")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  runs DashboardReportRun[]
+
+  @@index([organizationId])
+  @@index([enabled, nextRunAt])
+  @@map("dashboard_report_schedules")
+}
+
+model DashboardReportRun {
+  id             String   @id @default(uuid())
+  organizationId String   @map("organization_id")
+  scheduleId     String   @map("schedule_id")
+  trigger        String
+  status         String
+  dryRun         Boolean  @map("dry_run")
+  periodFrom     String   @map("period_from")
+  periodTo       String   @map("period_to")
+  summary        Json?
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  schedule   DashboardReportSchedule     @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+  deliveries DashboardReportDelivery[]
+
+  @@index([scheduleId, createdAt])
+  @@index([organizationId, createdAt])
+  @@map("dashboard_report_runs")
+}
+
+/// One rendered report for one recipient. `html` contains only the sections that recipient may read.
+model DashboardReportDelivery {
+  id             String   @id @default(uuid())
+  organizationId String   @map("organization_id")
+  runId          String   @map("run_id")
+  userId         String   @map("user_id")
+  sections       String[] @default([])
+  outcome        String
+  channels       String[] @default([])
+  html           String?
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  run DashboardReportRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@index([runId])
+  @@index([userId, createdAt])
+  @@map("dashboard_report_deliveries")
 }

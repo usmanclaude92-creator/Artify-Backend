@@ -154,6 +154,7 @@ const AiUsagePage = lazyPage(() => import("../components/modules/ai/AiUsagePage"
 const AiApprovalsPage = lazyPage(() => import("../components/modules/ai/AiApprovalsPage"), "AiApprovalsPage");
 const AiCopilotPage = lazyPage(() => import("../components/modules/ai/AiCopilotPage"), "AiCopilotPage");
 const MarketingDashboardPage = lazyPage(() => import("../components/modules/MarketingDashboardPage"), "MarketingDashboardPage");
+const ScheduledReportsPage = lazyPage(() => import("../components/modules/ScheduledReportsPage"), "ScheduledReportsPage");
 const SystemHealthPage = lazyPage(() => import("../components/modules/SystemHealthPage"), "SystemHealthPage");
 const BackupsPage = lazyPage(() => import("../components/modules/BackupsPage"), "BackupsPage");
 const DataPrivacyPage = lazyPage(() => import("../components/modules/DataPrivacyPage"), "DataPrivacyPage");
@@ -175,7 +176,7 @@ export type NavSection = "Dashboard" | "Website Management" | "CRM" | "Social Me
 export const NAV_SECTIONS: NavSection[] = ["Dashboard", "Website Management", "CRM", "Social Media", "Marketing", "Catalog", "Commercial", "Automation & AI", "Administration", "Client Portal"];
 
 /** Display order of items inside the sidebar (section + group are on each item; this only orders them). */
-export const NAV_ORDER: string[] = ["dashboard", "my-work", "notification-center", "approvals", "analytics-dashboard", "analytics-reports", "website-templates", "website-template-parts", "website-navigation-menus", "website-homepage", "website-site-identity", "website-global-styles", "website-site-editor", "cms-pages", "cms-posts", "cms-case-studies", "cms-taxonomy", "cms-authors", "cms-media", "seo-issues", "seo-redirects", "crm-dashboard", "crm-leads", "crm-clients", "crm-contacts", "crm-opportunities", "onboarding-overview", "onboarding-pending", "marketing-forms", "social-overview", "social-calendar", "social-posts", "social-compose", "social-inbox", "social-listening", "social-reviews", "social-queue", "social-failures", "social-analytics", "social-audience", "social-brand-voice", "social-accounts", "marketing-dashboard", "marketing-campaigns", "marketing-landing-pages", "products-all", "products-modules", "services-all", "solutions-all", "products-taxonomy", "commercial-contracts", "commercial-subscriptions", "commercial-invoices", "commercial-payments", "automation", "ai-overview", "ai-providers", "ai-tools", "ai-prompts", "ai-workflows", "ai-executions", "ai-usage", "ai-approvals", "ai-copilot", "users", "roles", "permissions", "organizations", "workspaces-all", "workspaces-members", "security-center", "ops-health", "ops-backups", "privacy", "audit-log", "security", "administration", "integrations", "settings", "client-portal"];
+export const NAV_ORDER: string[] = ["dashboard", "my-work", "notification-center", "approvals", "analytics-dashboard", "analytics-reports", "website-templates", "website-template-parts", "website-navigation-menus", "website-homepage", "website-site-identity", "website-global-styles", "website-site-editor", "cms-pages", "cms-posts", "cms-case-studies", "cms-taxonomy", "cms-authors", "cms-media", "seo-issues", "seo-redirects", "crm-dashboard", "crm-leads", "crm-clients", "crm-contacts", "crm-opportunities", "onboarding-overview", "onboarding-pending", "marketing-forms", "social-overview", "social-calendar", "social-posts", "social-compose", "social-inbox", "social-listening", "social-reviews", "social-queue", "social-failures", "social-analytics", "social-audience", "social-brand-voice", "social-accounts", "marketing-dashboard", "marketing-campaigns", "marketing-landing-pages", "products-all", "products-modules", "services-all", "solutions-all", "products-taxonomy", "commercial-contracts", "commercial-subscriptions", "commercial-invoices", "commercial-payments", "automation", "ai-overview", "ai-providers", "ai-tools", "ai-prompts", "ai-workflows", "ai-executions", "ai-usage", "ai-approvals", "ai-copilot", "users", "roles", "permissions", "organizations", "workspaces-all", "workspaces-members", "security-center", "ops-health", "ops-reports", "ops-backups", "privacy", "audit-log", "security", "administration", "integrations", "settings", "client-portal"];
 
 export interface NavItem {
   id: string;
@@ -308,6 +309,16 @@ export const NAV_ITEMS: NavItem[] = [
     group: "Operations",
   },
   {
+    id: "ops-reports",
+    label: "Scheduled Reports",
+    path: "/scheduled-reports",
+    icon: FileText,
+    requiresAnyPermission: ["reports.manage"],
+    component: ScheduledReportsPage,
+    section: "Administration",
+    group: "Operations",
+  },
+  {
     id: "ops-backups",
     label: "Backups",
     path: "/backups",
@@ -352,6 +363,7 @@ export const NAV_ITEMS: NavItem[] = [
     label: "CRM Dashboard",
     path: "/crm",
     icon: TrendingUp,
+    requiresAnyPermission: ["leads.read", "clients.read", "opportunities.read", "onboarding.read"],
     component: CrmDashboardPage,
     section: "CRM",
   },
@@ -630,6 +642,7 @@ export const NAV_ITEMS: NavItem[] = [
     path: "/marketing",
     icon: Rocket,
     section: "Marketing",
+    requiresAnyPermission: ["campaigns.read", "leads.read", "forms.read", "opportunities.read", "clients.read"],
     component: MarketingDashboardPage,
   },
   {

@@ -69,6 +69,7 @@ const ROLE_PERMISSION_SETS: Record<RoleKey, readonly string[] | "*"> = {
     "content.update",
     "marketing.landing.edit",
     "marketing.landing.publish",
+    "reports.manage",
     "ops.health.read",
     "ops.backups.read",
     "privacy.read",
