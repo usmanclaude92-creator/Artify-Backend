@@ -21,7 +21,8 @@ import {
   type SelectableAccount, type SendReplyInput, type SendReplyResult, type SocialConnector, type SocialConstraints, type SocialProfile,
 } from "./types";
 
-export const DEFAULT_INSTAGRAM_SCOPES = ["instagram_basic", "instagram_content_publish", "instagram_manage_comments", "instagram_manage_messages", "pages_show_list", "pages_read_engagement", "business_management"] as const;
+/** `business_management` was removed in Step 15: no call in this connector uses it. If a Page owned by a Business portfolio is missing from /me/accounts, add it back through META_INSTAGRAM_LOGIN_SCOPES (it then needs App Review + Business Verification). */
+export const DEFAULT_INSTAGRAM_SCOPES = ["instagram_basic", "instagram_content_publish", "instagram_manage_comments", "instagram_manage_messages", "pages_show_list", "pages_read_engagement"] as const;
 /** Insights need `instagram_manage_insights` (docs/SOCIAL_ANALYTICS.md §1.2). Added only when SOCIAL_ANALYTICS_SCOPES=true. */
 export const INSIGHTS_SCOPE = "instagram_manage_insights";
 export const instagramScopes = (): string[] => {
@@ -260,7 +261,7 @@ export const instagramProvider: SocialConnector = {
       if (!scopes.includes("instagram_manage_messages")) warnings.push("Direct messages are unavailable (instagram_manage_messages was not granted).");
       if (p.tasks?.length && !p.tasks.includes("CREATE_CONTENT")) warnings.push("You can't publish for this Page's Instagram account (needs the Create content task on the linked Page).");
       selectable.push({
-        profile: { externalAccountId: ig.id, displayName: ig.name ? `${ig.name} (@${ig.username ?? ig.id})` : `@${ig.username ?? ig.id}`, handle: ig.username ?? null, avatarUrl: ig.profile_picture_url ?? null, accountType: "BUSINESS" },
+        profile: { externalAccountId: ig.id, displayName: ig.name ? `${ig.name} (@${ig.username ?? ig.id})` : `@${ig.username ?? ig.id}`, handle: ig.username ?? null, avatarUrl: ig.profile_picture_url ?? null, accountType: "BUSINESS", providerUserId: me.json.id ?? null },
         tokens: { accessToken: p.access_token, pageId: p.id, igId: ig.id, scopes }, tasks: p.tasks, warnings: [...warnings, `Linked Facebook Page: ${p.name ?? p.id}.`],
       });
     }
@@ -284,7 +285,7 @@ export const instagramProvider: SocialConnector = {
   },
 
   async healthCheck(tokens: SocialTokenSet): Promise<HealthResult> {
-    const r = await graph<{ data?: { is_valid?: boolean; expires_at?: number; data_access_expires_at?: number; scopes?: string[]; error?: { message?: string } } }>({
+    const r = await graph<{ data?: { is_valid?: boolean; user_id?: string; expires_at?: number; data_access_expires_at?: number; scopes?: string[]; error?: { message?: string } } }>({
       method: "GET", path: "/debug_token", token: `${config.metaAppId}|${config.metaAppSecret}`, phase: "read", query: { input_token: tokens.accessToken },
     });
     const d = r.json.data;
@@ -293,7 +294,7 @@ export const instagramProvider: SocialConnector = {
     const missing = REQUIRED_SCOPES.filter((s) => d.scopes && !granted.has(s));
     if (missing.length) return { ok: false, error: `Missing permissions: ${missing.join(", ")}. Reconnect the account and approve them.` };
     const times = [d.expires_at, d.data_access_expires_at].filter((t): t is number => typeof t === "number" && t > 0);
-    return { ok: true, expiresAt: times.length ? new Date(Math.min(...times) * 1000).toISOString() : null };
+    return { ok: true, expiresAt: times.length ? new Date(Math.min(...times) * 1000).toISOString() : null, providerUserId: typeof d.user_id === "string" ? d.user_id : null };
   },
 
   async publish(tokens: SocialTokenSet, input: PublishInput): Promise<PublishResult> {

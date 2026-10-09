@@ -68,7 +68,7 @@ describe("sidebar structure (Step 1 redesign)", () => {
     Catalog: ["/products", "/products/modules", "/services", "/solutions", "/products/taxonomy"],
     Commercial: ["/commercial/contracts", "/commercial/subscriptions", "/commercial/invoices", "/commercial/payments"],
     "Automation & AI": ["/automation", "/ai", "/ai/providers", "/ai/tools", "/ai/prompts", "/ai/workflows", "/ai/executions", "/ai/usage", "/ai/approvals", "/ai/copilot"],
-    Administration: ["/users", "/roles", "/permissions", "/organizations", "/workspaces", "/workspaces/members", "/security-center", "/system-health", "/scheduled-reports", "/backups", "/privacy", "/audit-log", "/security", "/administration", "/integrations", "/settings"],
+    Administration: ["/users", "/roles", "/permissions", "/organizations", "/workspaces", "/workspaces/members", "/security-center", "/system-health", "/scheduled-reports", "/meta-review", "/backups", "/privacy", "/audit-log", "/security", "/administration", "/integrations", "/settings"],
     "Client Portal": ["/portal"],
   };
 
@@ -83,10 +83,10 @@ describe("sidebar structure (Step 1 redesign)", () => {
 
   it("keeps every one of the 62 existing pages plus the new /social and /approvals pages, with unique ids and paths", () => {
     const all = Object.values(EXPECTED).flat();
-    expect(all).toHaveLength(81);
-    expect(NAV_ITEMS).toHaveLength(81);
-    expect(new Set(NAV_ITEMS.map((i) => i.path)).size).toBe(81);
-    expect(new Set(NAV_ITEMS.map((i) => i.id)).size).toBe(81);
+    expect(all).toHaveLength(82);
+    expect(NAV_ITEMS).toHaveLength(82);
+    expect(new Set(NAV_ITEMS.map((i) => i.path)).size).toBe(82);
+    expect(new Set(NAV_ITEMS.map((i) => i.id)).size).toBe(82);
     expect(NAV_ITEMS.map((i) => i.path).sort()).toEqual([...all].sort());
   });
 

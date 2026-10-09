@@ -71,6 +71,16 @@ async function audit(orgId: string, actor: SanitizedUser | null, action: string,
   await auditLogRepository.record({ organizationId: orgId, actorUserId: actor?.id, actorType: actor ? "USER" : "SYSTEM", action, resourceType: "privacy_request", resourceId, afterData, ipAddress: meta.ip, userAgent: meta.userAgent });
 }
 
+/** Creates the approval (Approvals center source `privacy`) that gates a privacy request, and links it. `requesterId` is null for requests that come from Meta's callback, not from a person. */
+export async function createPrivacyApproval(orgId: string, requestId: string, requesterId: string | null, description: string, ref: string) {
+  const workflow = (await prisma.automationWorkflow.findFirst({ where: { organizationId: orgId, category: "CONTENT_APPROVAL" } })) ??
+    (await prisma.automationWorkflow.create({ data: { organizationId: orgId, name: "Content Approval", description: "System workflow anchoring approval requests.", category: "CONTENT_APPROVAL", status: "ACTIVE", triggerType: "MANUAL", steps: [] } }));
+  const execution = await prisma.automationExecution.create({ data: { organizationId: orgId, workflowId: workflow.id, workflowVersion: workflow.currentVersion, status: "WAITING_APPROVAL", triggerType: "MANUAL", entityType: "privacy_erasure", entityId: requestId, correlationId: requestId, initiatedById: requesterId } });
+  const approval = await prisma.automationApproval.create({ data: { organizationId: orgId, executionId: execution.id, workflowId: workflow.id, stepId: "privacy-erasure", action: "erase_personal_data", description, entityType: "privacy_erasure", entityId: requestId, requesterId, status: "PENDING", payload: { requestId, subjectRef: ref } } });
+  await prisma.privacyRequest.update({ where: { id: requestId }, data: { approvalId: approval.id } });
+  return approval;
+}
+
 export const privacyService = {
   /** Everything held about a person. Viewing personal data is itself audited (pseudonym + counts only). */
   async lookup(caller: SanitizedUser, rawEmail: string, meta: RequestMeta = {}) {
@@ -133,12 +143,8 @@ export const privacyService = {
     const ref = subjectRef(orgId, email);
     if (await prisma.privacyRequest.findFirst({ where: { organizationId: orgId, subjectRef: ref, kind: "ERASURE", status: "PENDING_APPROVAL" } })) throw new ConflictError("An erasure request for this person is already waiting for approval.");
 
-    const workflow = (await prisma.automationWorkflow.findFirst({ where: { organizationId: orgId, category: "CONTENT_APPROVAL" } })) ??
-      (await prisma.automationWorkflow.create({ data: { organizationId: orgId, name: "Content Approval", description: "System workflow anchoring approval requests.", category: "CONTENT_APPROVAL", status: "ACTIVE", triggerType: "MANUAL", steps: [] } }));
     const req = await prisma.privacyRequest.create({ data: { organizationId: orgId, kind: "ERASURE", status: "PENDING_APPROVAL", subjectRef: ref, reason: why.slice(0, 500), requestedById: caller.id, targetIds: ids as unknown as Prisma.InputJsonValue, previewCounts: counts(records) } });
-    const execution = await prisma.automationExecution.create({ data: { organizationId: orgId, workflowId: workflow.id, workflowVersion: workflow.currentVersion, status: "WAITING_APPROVAL", triggerType: "MANUAL", entityType: "privacy_erasure", entityId: req.id, correlationId: req.id, initiatedById: caller.id } });
-    const approval = await prisma.automationApproval.create({ data: { organizationId: orgId, executionId: execution.id, workflowId: workflow.id, stepId: "privacy-erasure", action: "erase_personal_data", description: `Erase personal data (subject ${ref})`, entityType: "privacy_erasure", entityId: req.id, requesterId: caller.id, status: "PENDING", payload: { requestId: req.id, subjectRef: ref } } });
-    await prisma.privacyRequest.update({ where: { id: req.id }, data: { approvalId: approval.id } });
+    const approval = await createPrivacyApproval(orgId, req.id, caller.id, `Erase personal data (subject ${ref})`, ref);
     await audit(orgId, caller, "PRIVACY_ERASURE_REQUESTED", req.id, { subjectRef: ref, counts: counts(records) }, meta);
     return { requestId: req.id, approvalId: approval.id, subjectRef: ref, counts: counts(records) };
   },
@@ -151,6 +157,7 @@ export const privacyService = {
   async describeRequest(orgId: string, requestId: string) {
     const r = await prisma.privacyRequest.findFirst({ where: { id: requestId, organizationId: orgId } });
     if (!r) throw new ConflictError("Request not found.");
+    if (r.kind === "META_DELETION") return { id: r.id, status: r.status, reason: r.reason, subjectRef: r.subjectRef, counts: r.previewCounts, maskedEmails: [] as Array<string | null> };
     const ids = (r.targetIds as unknown as TargetIds | null) ?? EMPTY;
     const [leads, contacts] = await Promise.all([
       ids.leads.length ? prisma.lead.findMany({ where: { id: { in: ids.leads }, organizationId: orgId }, select: { id: true, email: true, source: true, createdAt: true } }) : [],

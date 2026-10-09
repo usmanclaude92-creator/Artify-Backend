@@ -143,7 +143,7 @@ async function listPages(userToken: string): Promise<PageRow[]> {
   return pages;
 }
 
-const toSelectable = (p: PageRow, scopes: string[]): SelectableAccount | null => {
+const toSelectable = (p: PageRow, scopes: string[], userId?: string): SelectableAccount | null => {
   if (!p.access_token) return null;
   const tasks = p.tasks ?? [];
   const warnings: string[] = [];
@@ -152,7 +152,7 @@ const toSelectable = (p: PageRow, scopes: string[]): SelectableAccount | null =>
     if (!tasks.includes("MODERATE")) warnings.push("You can't moderate comments on this Page (needs the Moderate task).");
     if (!tasks.includes("MESSAGING")) warnings.push("You can't read or send Messenger messages for this Page (needs the Messages task).");
   }
-  return { profile: { externalAccountId: p.id, displayName: p.name ?? p.id, handle: null, avatarUrl: p.picture?.data?.url ?? null, accountType: "PAGE" }, tokens: { accessToken: p.access_token, pageId: p.id, scopes }, tasks, warnings };
+  return { profile: { externalAccountId: p.id, displayName: p.name ?? p.id, handle: null, avatarUrl: p.picture?.data?.url ?? null, accountType: "PAGE", providerUserId: userId ?? null }, tokens: { accessToken: p.access_token, pageId: p.id, scopes }, tasks, warnings };
 };
 
 export const facebookPageProvider: SocialConnector = {
@@ -182,7 +182,7 @@ export const facebookPageProvider: SocialConnector = {
       listPages(userToken),
     ]);
     const scopes = (perms.json.data ?? []).filter((p) => p.status === "granted").map((p) => p.permission);
-    const selectable = pages.map((p) => toSelectable(p, scopes)).filter((x): x is SelectableAccount => !!x);
+    const selectable = pages.map((p) => toSelectable(p, scopes, me.json.id)).filter((x): x is SelectableAccount => !!x);
     if (selectable.length === 0) throw new Error("This Facebook account does not manage any Pages (or no Page access was granted).");
     // The user token is NOT returned for storage: only per-Page tokens are persisted, after the person picks which Pages to connect.
     return { profile: { externalAccountId: me.json.id ?? "user", displayName: me.json.name ?? "Facebook user", accountType: "USER" }, tokens: { accessToken: "" }, selectable };
@@ -199,7 +199,7 @@ export const facebookPageProvider: SocialConnector = {
   },
 
   async healthCheck(tokens: SocialTokenSet): Promise<HealthResult> {
-    const r = await graph<{ data?: { is_valid?: boolean; expires_at?: number; data_access_expires_at?: number; scopes?: string[]; error?: { message?: string } } }>({
+    const r = await graph<{ data?: { is_valid?: boolean; user_id?: string; expires_at?: number; data_access_expires_at?: number; scopes?: string[]; error?: { message?: string } } }>({
       method: "GET", path: "/debug_token", token: appToken(), phase: "read", query: { input_token: tokens.accessToken },
     });
     const d = r.json.data;
@@ -209,7 +209,7 @@ export const facebookPageProvider: SocialConnector = {
     if (missing.length) return { ok: false, error: `Missing permissions: ${missing.join(", ")}. Reconnect the Page and approve them.` };
     // 0 means "never". The earliest non-zero of token expiry / data-access expiry is what the 7-day warning should track.
     const times = [d.expires_at, d.data_access_expires_at].filter((t): t is number => typeof t === "number" && t > 0);
-    return { ok: true, expiresAt: times.length ? new Date(Math.min(...times) * 1000).toISOString() : null };
+    return { ok: true, expiresAt: times.length ? new Date(Math.min(...times) * 1000).toISOString() : null, providerUserId: typeof d.user_id === "string" ? d.user_id : null };
   },
 
   async publish(tokens: SocialTokenSet, input: PublishInput): Promise<PublishResult> {

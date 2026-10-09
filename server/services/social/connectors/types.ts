@@ -7,6 +7,8 @@ export interface SocialProfile {
   handle?: string | null;
   avatarUrl?: string | null;
   accountType?: string;
+  /** App-scoped id of the person who signed in (Meta). Stored so deauthorize / data-deletion callbacks can find the accounts they concern. */
+  providerUserId?: string | null;
 }
 
 /** One connectable asset (e.g. a Facebook Page) discovered during OAuth. Its tokens are encrypted server-side and never sent to the browser. */
@@ -31,6 +33,8 @@ export interface HealthResult {
   error?: string;
   /** Authoritative expiry if the provider reports one. */
   expiresAt?: string | null;
+  /** App-scoped id of the person who authorised the token (Meta debug_token `user_id`). Lets accounts connected before Step 15 be linked to Meta's callbacks. */
+  providerUserId?: string | null;
 }
 
 /** Per-network publishing rules the Composer and guardrails validate against. */

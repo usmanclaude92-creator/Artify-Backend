@@ -198,6 +198,9 @@ describe("meta facebook", () => {
     expect(chosen.body.data.accounts[0]).toMatchObject({ provider: "meta_facebook", externalAccountId: "QA_PAGE_1", displayName: "QA_TEST_2026_ Page One", accountType: "PAGE", status: "CONNECTED", tokenExpiresAt: null });
     const resBody = JSON.stringify(chosen.body);
     for (const secret of [PAGE_TOKEN, PAGE2_TOKEN, USER_TOKEN]) expect(resBody).not.toContain(secret);
+    // Step 15: the app-scoped id of the person who connected is stored (for Meta's deauthorize / deletion callbacks) and never returned by the API.
+    expect((await prisma.socialAccount.findMany({ where: { externalAccountId: { in: ["QA_PAGE_1", "QA_PAGE_2"] } } })).map((a) => a.metaUserId)).toEqual(["QA_USER", "QA_USER"]);
+    expect(resBody).not.toContain("QA_USER");
     page1 = chosen.body.data.accounts[0].id; page2 = chosen.body.data.accounts[1].id;
 
     // Page tokens are stored encrypted, bound to their account; the user token is never stored
@@ -218,7 +221,13 @@ describe("meta facebook", () => {
   });
 
   it("health check validates the token and permissions through /debug_token; missing permissions or an invalid token need re-auth", async () => {
+    // Step 15: accounts connected before the Meta user id was stored are linked on their next health check (debug_token user_id).
+    await prisma.socialAccount.update({ where: { id: page1 }, data: { metaUserId: null } });
+    const baseline = behaviour;
+    behaviour = (p, c) => (p.endsWith("/debug_token") ? { body: { data: { is_valid: true, user_id: "QA_BACKFILLED_USER", expires_at: 0, data_access_expires_at: 0, scopes: ["pages_manage_posts", "pages_manage_engagement", "pages_read_engagement", "pages_messaging"] } } } : baseline(p, c));
     expect((await api("post", `/social/accounts/${page1}/health`, adminToken)).body.data.account.status).toBe("CONNECTED");
+    expect((await prisma.socialAccount.findUniqueOrThrow({ where: { id: page1 } })).metaUserId).toBe("QA_BACKFILLED_USER");
+    behaviour = baseline;
     behaviour = (p) => (p.endsWith("/debug_token") ? { body: { data: { is_valid: true, scopes: ["pages_manage_posts"] } } } : { body: {} });
     const missing = await api("post", `/social/accounts/${page1}/health`, adminToken);
     expect(missing.body.data.account).toMatchObject({ status: "NEEDS_REAUTH" });

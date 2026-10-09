@@ -120,6 +120,17 @@ export const webhookLimiter = rateLimit({
   passOnStoreError: true,
 });
 
+/** Meta deauthorize / data-deletion callbacks and the public deletion-status lookup (Step 15). Anonymous, IP-keyed. */
+export const metaCallbackLimiter = rateLimit({
+  windowMs: 5 * 60 * 1000,
+  limit: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: rateLimitHandler,
+  store: makeStore("meta-callback"),
+  passOnStoreError: true,
+});
+
 /** Password-reset request/confirm — prevents token-guessing and reset-spam against a single account, keyed the same way as authLimiter. */
 export const passwordResetLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,

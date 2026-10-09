@@ -50,6 +50,7 @@ import landingRoutes from "./landingRoutes";
 import opsRoutes from "./opsRoutes";
 import privacyRoutes from "./privacyRoutes";
 import dashboardRoutes from "./dashboardRoutes";
+import metaCallbackRoutes from "./metaCallbackRoutes";
 import onboardingRoutes from "./onboardingRoutes";
 import workspaceRoutes from "./workspaceRoutes";
 import invitationRoutes from "./invitationRoutes";
@@ -129,6 +130,7 @@ v1Router.use("/marketing/landing-pages", landingRoutes);
 v1Router.use("/ops", opsRoutes);
 v1Router.use("/privacy", privacyRoutes);
 v1Router.use("/dashboard", dashboardRoutes);
+v1Router.use("/meta", metaCallbackRoutes); // Step 15: signed_request-protected, no session
 v1Router.use("/marketing", marketingRoutes);
 v1Router.use("/onboarding", onboardingRoutes);
 v1Router.use("/workspaces", workspaceRoutes);

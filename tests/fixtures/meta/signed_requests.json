@@ -1,0 +1,27 @@
+{
+ "_comment": "Hand-built from the documented format: signed_request = base64url(HMAC-SHA256(payloadPart, appSecret)) + '.' + payloadPart. Signatures computed with `openssl dgst -sha256 -hmac`, independent of the application code. Secret is a test value.",
+ "appSecret": "meta-test-app-secret-not-real",
+ "validAt": 1791540060,
+ "valid": {
+  "signed_request": "7nG80tLsl-yhE_j9pT0qyqYj3aTrhsjHlyi2wfdKdQ8.eyJhbGdvcml0aG0iOiJITUFDLVNIQTI1NiIsImlzc3VlZF9hdCI6MTc5MTU0MDAwMCwidXNlcl9pZCI6IjEyMzQ1Njc4OTAxMjM0NTYifQ",
+  "user_id": "1234567890123456"
+ },
+ "tamperedPayload": {
+  "signed_request": "7nG80tLsl-yhE_j9pT0qyqYj3aTrhsjHlyi2wfdKdQ8.eyJhbGdvcml0aG0iOiJITUFDLVNIQTI1NiIsImlzc3VlZF9hdCI6MTc5MTU0MDAwMCwidXNlcl9pZCI6Ijk5OTk5OTk5OTk5OTk5OTkifQ"
+ },
+ "wrongSecret": {
+  "signed_request": "OyL_wLbqbNX9rioUlKBhqvGrsGPGumi_wwuLX8Ud8Eg.eyJhbGdvcml0aG0iOiJITUFDLVNIQTI1NiIsImlzc3VlZF9hdCI6MTc5MTU0MDAwMCwidXNlcl9pZCI6IjEyMzQ1Njc4OTAxMjM0NTYifQ"
+ },
+ "expired": {
+  "signed_request": "k5naZ9yj4WM0rhTmv-e1fc5QpPmOvu_iS4mcUcdJbZo.eyJhbGdvcml0aG0iOiJITUFDLVNIQTI1NiIsImlzc3VlZF9hdCI6MTcwMDAwMDAwMCwidXNlcl9pZCI6IjEyMzQ1Njc4OTAxMjM0NTYifQ"
+ },
+ "wrongAlgorithm": {
+  "signed_request": "FBH-99ySIjv8GOCYTRPO1MqwkUtactx2WEmrQgW_i04.eyJhbGdvcml0aG0iOiJITUFDLVNIQTEiLCJpc3N1ZWRfYXQiOjE3OTE1NDAwMDAsInVzZXJfaWQiOiIxMjM0NTY3ODkwMTIzNDU2In0"
+ },
+ "noUser": {
+  "signed_request": "2JH7n1DPYVp9wcpGM2F93z1SDfEdue95oGKTcHWTfeE.eyJhbGdvcml0aG0iOiJITUFDLVNIQTI1NiIsImlzc3VlZF9hdCI6MTc5MTU0MDAwMH0"
+ },
+ "notJson": {
+  "signed_request": "1-NEoqrpDjX3plrl9OJQeNIypcxRr8wb7WSA0LmZJig.bm90IGpzb24"
+ }
+}

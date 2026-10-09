@@ -1024,7 +1024,7 @@ var webhookEndpointService = {
       }
     }));
   },
-  async create(caller, input, meta13 = {}) {
+  async create(caller, input, meta14 = {}) {
     const count = await prisma.webhookEndpoint.count({ where: { organizationId: caller.organizationId, deletedAt: null } });
     if (count >= MAX_ENDPOINTS_PER_ORG) throw new ConflictError(`An organization can have at most ${MAX_ENDPOINTS_PER_ORG} webhook endpoints.`);
     await assertSafeOutboundUrl(input.url);
@@ -1049,12 +1049,12 @@ var webhookEndpointService = {
       resourceType: "webhook_endpoint",
       resourceId: endpoint.id,
       afterData: { name: endpoint.name, url: endpoint.url, events },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return { endpoint: projectEndpoint(endpoint), secret };
   },
-  async update(caller, id6, input, meta13 = {}) {
+  async update(caller, id6, input, meta14 = {}) {
     const existing = await loadInOrg(id6, caller.organizationId);
     if (input.url !== void 0) await assertSafeOutboundUrl(input.url);
     const endpoint = await prisma.webhookEndpoint.update({
@@ -1075,12 +1075,12 @@ var webhookEndpointService = {
       resourceId: id6,
       beforeData: { url: existing.url, events: existing.events, enabled: existing.enabled },
       afterData: { url: endpoint.url, events: endpoint.events, enabled: endpoint.enabled },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return projectEndpoint(endpoint);
   },
-  async rotateSecret(caller, id6, meta13 = {}) {
+  async rotateSecret(caller, id6, meta14 = {}) {
     const existing = await loadInOrg(id6, caller.organizationId);
     const secret = newSigningSecret();
     const endpoint = await prisma.webhookEndpoint.update({ where: { id: existing.id }, data: { secretCiphertext: encryptSecret(secret), secretLast4: last4(secret) } });
@@ -1091,12 +1091,12 @@ var webhookEndpointService = {
       action: "WEBHOOK_SECRET_ROTATED",
       resourceType: "webhook_endpoint",
       resourceId: id6,
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return { endpoint: projectEndpoint(endpoint), secret };
   },
-  async remove(caller, id6, meta13 = {}) {
+  async remove(caller, id6, meta14 = {}) {
     const existing = await loadInOrg(id6, caller.organizationId);
     await prisma.webhookEndpoint.update({ where: { id: existing.id }, data: { deletedAt: /* @__PURE__ */ new Date(), enabled: false } });
     await auditLogRepository.record({
@@ -1107,8 +1107,8 @@ var webhookEndpointService = {
       resourceType: "webhook_endpoint",
       resourceId: id6,
       beforeData: { name: existing.name, url: existing.url },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
   },
   async test(caller, id6) {
@@ -1417,6 +1417,15 @@ var webhookLimiter = rateLimit({
   store: makeStore("webhook"),
   passOnStoreError: true
 });
+var metaCallbackLimiter = rateLimit({
+  windowMs: 5 * 60 * 1e3,
+  limit: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: rateLimitHandler,
+  store: makeStore("meta-callback"),
+  passOnStoreError: true
+});
 var passwordResetLimiter = rateLimit({
   windowMs: 60 * 60 * 1e3,
   limit: 5,
@@ -1482,7 +1491,7 @@ var aiExecutionLimiter = rateLimit({
 });
 
 // server/routes/v1/index.ts
-import { Router as Router74 } from "express";
+import { Router as Router75 } from "express";
 
 // server/routes/v1/authRoutes.ts
 import { Router } from "express";
@@ -2335,7 +2344,7 @@ var authService = {
    * Issues a single-use code that lets the caller's CURRENT, already-authenticated session continue
    * on the Control Center origin. Client-portal accounts never get one — they have nothing to open there.
    */
-  async issueHandoffCode(user, meta13 = {}) {
+  async issueHandoffCode(user, meta14 = {}) {
     if (user.role.key === PORTAL_REGISTRATION_ROLE_KEY) {
       throw new AuthorizationError("This account does not have Control Center access.");
     }
@@ -2349,13 +2358,13 @@ var authService = {
       action: "AUTH_HANDOFF_ISSUED",
       resourceType: "session",
       resourceId: user.id,
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return { code, expiresAt };
   },
   /** Exchanges a handoff code for a brand-new session (the originating session/token is never shared). */
-  async exchangeHandoffCode(code, meta13 = {}) {
+  async exchangeHandoffCode(code, meta14 = {}) {
     const claimed = await authHandoffRepository.consume(code);
     const failure = () => new AuthenticationError("This sign-in link is invalid or has expired. Please sign in again.");
     if (!claimed) throw failure();
@@ -2370,8 +2379,8 @@ var authService = {
       userId: user.id,
       organizationId: claimed.organizationId,
       expiresAt,
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     await auditLogRepository.record({
       organizationId: claimed.organizationId,
@@ -2381,12 +2390,12 @@ var authService = {
       action: "AUTH_HANDOFF_EXCHANGED",
       resourceType: "session",
       resourceId: user.id,
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return { session: { token, expiresAt }, user: sanitized };
   },
-  async login(email, password, meta13 = {}, targetOrganizationId) {
+  async login(email, password, meta14 = {}, targetOrganizationId) {
     const user = await userRepository.findByEmail(email);
     const genericFailure = () => new AuthenticationError("Invalid email or password credentials.");
     if (!user) throw genericFailure();
@@ -2406,8 +2415,8 @@ var authService = {
         resourceType: "session",
         resourceId: user.id,
         result: "FAILURE",
-        ipAddress: meta13.ip,
-        userAgent: meta13.userAgent
+        ipAddress: meta14.ip,
+        userAgent: meta14.userAgent
       });
       if (nowLocked) {
         logger.warn({ event: "account_locked", userId: user.id }, "Account locked after repeated failed logins");
@@ -2419,8 +2428,8 @@ var authService = {
           resourceType: "user",
           resourceId: user.id,
           result: "FAILURE",
-          ipAddress: meta13.ip,
-          userAgent: meta13.userAgent
+          ipAddress: meta14.ip,
+          userAgent: meta14.userAgent
         });
       }
       throw genericFailure();
@@ -2444,8 +2453,8 @@ var authService = {
       userId: user.id,
       organizationId,
       expiresAt,
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     await auditLogRepository.record({
       organizationId,
@@ -2455,8 +2464,8 @@ var authService = {
       action: "AUTH_LOGIN",
       resourceType: "session",
       resourceId: user.id,
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return { session: { token, expiresAt }, user: sanitized };
   },
@@ -2522,7 +2531,7 @@ var authService = {
    * link it to a CRM client. Without email delivery it falls back to the
    * degraded mode: immediate sign-in, and a duplicate address returns 409.
    */
-  async registerPortalAccount(payload, meta13 = {}) {
+  async registerPortalAccount(payload, meta14 = {}) {
     const emailOn = emailService.isEnabled();
     const email = payload.email.trim().toLowerCase();
     const existing = await userRepository.findByEmail(email);
@@ -2566,8 +2575,8 @@ var authService = {
       action: "AUTH_PORTAL_REGISTERED",
       resourceType: "user",
       resourceId: created.user.id,
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     void this.notifyOperatorsOfRegistration(created.organization.id, created.organization.name, `${payload.firstName} ${payload.lastName}`.trim());
     if (emailOn) {
@@ -2576,7 +2585,7 @@ var authService = {
       );
       return { status: "verification_required" };
     }
-    const login = await this.login(email, payload.password, meta13);
+    const login = await this.login(email, payload.password, meta14);
     return { status: "registered", ...login };
   },
   /** Tells the agency's own admins (the public website organization) that a new client account is waiting to be linked. Best-effort. */
@@ -2612,7 +2621,7 @@ var authService = {
     await emailVerificationRepository.create({ token, userId, expiresAt: new Date(Date.now() + config.emailVerificationTtlHours * 60 * 60 * 1e3) });
     await emailService.sendVerification(email, firstName, token);
   },
-  async verifyEmail(token, meta13 = {}) {
+  async verifyEmail(token, meta14 = {}) {
     const row = await emailVerificationRepository.findValidByToken(token);
     if (!row) throw new AuthenticationError("This verification link is invalid or has expired.");
     const user = await userRepository.findById(row.userId);
@@ -2627,8 +2636,8 @@ var authService = {
       action: "AUTH_EMAIL_VERIFIED",
       resourceType: "user",
       resourceId: user.id,
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
   },
   /** Always resolves silently — never reveals whether the address exists or is already verified. */
@@ -2650,7 +2659,7 @@ var authService = {
     void sessionRepository.touchLastUsed(session.id);
     return sanitized;
   },
-  async logout(token, actor, meta13 = {}) {
+  async logout(token, actor, meta14 = {}) {
     await sessionRepository.revoke(token);
     if (actor) {
       await auditLogRepository.record({
@@ -2659,13 +2668,13 @@ var authService = {
         actorType: "USER",
         action: "AUTH_LOGOUT",
         resourceType: "session",
-        ipAddress: meta13.ip,
-        userAgent: meta13.userAgent
+        ipAddress: meta14.ip,
+        userAgent: meta14.userAgent
       });
     }
   },
   /** Revokes every active session for the user (all devices/tabs) — a broader action than logout(), which only revokes the caller's current session. */
-  async logoutAll(user, meta13 = {}) {
+  async logoutAll(user, meta14 = {}) {
     await sessionRepository.revokeAllForUser(user.id);
     await auditLogRepository.record({
       organizationId: user.organizationId,
@@ -2674,11 +2683,11 @@ var authService = {
       action: "AUTH_LOGOUT_ALL",
       resourceType: "user",
       resourceId: user.id,
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
   },
-  async changePassword(user, currentSessionToken, currentPassword, newPassword, meta13 = {}) {
+  async changePassword(user, currentSessionToken, currentPassword, newPassword, meta14 = {}) {
     const fullUser = await userRepository.findById(user.id);
     if (!fullUser) throw new InternalError("User record could not be loaded.");
     const validCurrent = await verifyPassword(currentPassword, fullUser.passwordHash);
@@ -2695,8 +2704,8 @@ var authService = {
       action: "AUTH_PASSWORD_CHANGE",
       resourceType: "user",
       resourceId: user.id,
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
   },
   /**
@@ -2707,7 +2716,7 @@ var authService = {
    * undefined; the raw token is never logged, never included in a
    * production response, and never persisted anywhere but as a hash.
    */
-  async requestPasswordReset(email, meta13 = {}) {
+  async requestPasswordReset(email, meta14 = {}) {
     const user = await userRepository.findByEmail(email);
     if (!user || user.status !== "ACTIVE") {
       return {};
@@ -2719,8 +2728,8 @@ var authService = {
       token,
       userId: user.id,
       expiresAt,
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     await auditLogRepository.record({
       organizationId: user.organizationId,
@@ -2729,8 +2738,8 @@ var authService = {
       action: "AUTH_PASSWORD_RESET_REQUESTED",
       resourceType: "user",
       resourceId: user.id,
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     if (emailService.isEnabled()) {
       await emailService.sendPasswordReset(user.email, user.firstName, token).catch(
@@ -2740,7 +2749,7 @@ var authService = {
     }
     return config.isProduction ? {} : { devToken: token };
   },
-  async confirmPasswordReset(token, newPassword, meta13 = {}) {
+  async confirmPasswordReset(token, newPassword, meta14 = {}) {
     const resetRow = await passwordResetRepository.findValidByToken(token);
     if (!resetRow) {
       throw new AuthenticationError("This password reset link is invalid or has expired.");
@@ -2762,8 +2771,8 @@ var authService = {
       action: "AUTH_PASSWORD_RESET_COMPLETED",
       resourceType: "user",
       resourceId: user.id,
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
   },
   /**
@@ -2774,7 +2783,7 @@ var authService = {
    * rotation (new token issued, old one revoked) rather than mutating the
    * existing session row in place.
    */
-  async switchOrganization(user, currentSessionToken, targetOrganizationId, meta13 = {}) {
+  async switchOrganization(user, currentSessionToken, targetOrganizationId, meta14 = {}) {
     const fullUser = await userRepository.findById(user.id);
     if (!fullUser) throw new InternalError("User record could not be loaded.");
     const sanitized = await resolveSanitizedUserForOrganization(fullUser, targetOrganizationId);
@@ -2788,8 +2797,8 @@ var authService = {
       userId: user.id,
       organizationId: targetOrganizationId,
       expiresAt,
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     await sessionRepository.revoke(currentSessionToken);
     await auditLogRepository.record({
@@ -2801,8 +2810,8 @@ var authService = {
       resourceId: user.id,
       beforeData: { organizationId: user.organizationId },
       afterData: { organizationId: targetOrganizationId },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return { session: { token, expiresAt }, user: sanitized };
   },
@@ -4412,7 +4421,7 @@ var userService = {
   async getUser(organizationId, userId) {
     return loadUserInOrgOrThrow(userId, organizationId);
   },
-  async createUser(caller, input, meta13 = {}) {
+  async createUser(caller, input, meta14 = {}) {
     const existing = await userRepository.findByEmail(input.email);
     if (existing) throw new ConflictError("An account with this email address already exists.");
     const role = await resolveRoleOrThrow(input.roleKey);
@@ -4441,12 +4450,12 @@ var userService = {
       resourceType: "user",
       resourceId: user.id,
       afterData: { email: user.email, roleKey: role.key },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return sanitizeUser({ ...user, organizationId: caller.organizationId }, { id: role.id, key: role.key, name: role.name, permissions: [] });
   },
-  async updateUser(caller, targetUserId, input, callerPermissions, meta13 = {}) {
+  async updateUser(caller, targetUserId, input, callerPermissions, meta14 = {}) {
     const membership = await organizationMembershipRepository.findByUserAndOrg(targetUserId, caller.organizationId);
     if (!membership) throw new NotFoundError("User not found.");
     const beforeRoleKey = membership.role.key;
@@ -4473,8 +4482,8 @@ var userService = {
         resourceId: targetUserId,
         beforeData: { roleKey: beforeRoleKey },
         afterData: { roleKey: newRole.key },
-        ipAddress: meta13.ip,
-        userAgent: meta13.userAgent
+        ipAddress: meta14.ip,
+        userAgent: meta14.userAgent
       });
     }
     const profilePatch = {};
@@ -4494,8 +4503,8 @@ var userService = {
           resourceType: "user",
           resourceId: targetUserId,
           afterData: { status: input.status },
-          ipAddress: meta13.ip,
-          userAgent: meta13.userAgent
+          ipAddress: meta14.ip,
+          userAgent: meta14.userAgent
         });
         if (input.status === "DISABLED") {
           await sessionRepository.revokeAllForUser(targetUserId);
@@ -4509,8 +4518,8 @@ var userService = {
           resourceType: "user",
           resourceId: targetUserId,
           afterData: profilePatch,
-          ipAddress: meta13.ip,
-          userAgent: meta13.userAgent
+          ipAddress: meta14.ip,
+          userAgent: meta14.userAgent
         });
       }
     }
@@ -4538,7 +4547,7 @@ var userSecurityService = {
       orderBy: { createdAt: "desc" }
     });
   },
-  async revokeAllForUser(caller, userId, meta13 = {}) {
+  async revokeAllForUser(caller, userId, meta14 = {}) {
     const membership = await loadMember(caller, userId);
     assertCallerMayManageTarget(caller, membership.role.key);
     const result = await prisma.session.updateMany({ where: { userId, revokedAt: null }, data: { revokedAt: /* @__PURE__ */ new Date() } });
@@ -4550,13 +4559,13 @@ var userSecurityService = {
       resourceType: "user",
       resourceId: userId,
       afterData: { revoked: result.count },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return { revoked: result.count };
   },
   /** Clears a lockout caused by repeated failed sign-ins. */
-  async unlock(caller, userId, meta13 = {}) {
+  async unlock(caller, userId, meta14 = {}) {
     const membership = await loadMember(caller, userId);
     assertCallerMayManageTarget(caller, membership.role.key);
     await prisma.user.update({ where: { id: userId }, data: { failedLoginAttempts: 0, lockedUntil: null } });
@@ -4567,8 +4576,8 @@ var userSecurityService = {
       action: "USER_UNLOCKED",
       resourceType: "user",
       resourceId: userId,
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
   },
   /** Active sessions across the caller's organization (security.read). */
@@ -4586,7 +4595,7 @@ var userSecurityService = {
     ]);
     return { sessions: rows, total };
   },
-  async revokeOrganizationSession(caller, sessionId, meta13 = {}) {
+  async revokeOrganizationSession(caller, sessionId, meta14 = {}) {
     const session = await prisma.session.findFirst({ where: { id: sessionId, organizationId: caller.organizationId, revokedAt: null } });
     if (!session) throw new NotFoundError("Session not found.");
     if (session.userId !== caller.id) {
@@ -4602,8 +4611,8 @@ var userSecurityService = {
       resourceType: "session",
       resourceId: sessionId,
       afterData: { userId: session.userId },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
   }
 };
@@ -4773,7 +4782,7 @@ var roleAdminService = {
       permissions: r.rolePermissions.map((rp) => rp.permission.key).sort()
     }));
   },
-  async create(caller, input, meta13 = {}) {
+  async create(caller, input, meta14 = {}) {
     requireSuperAdmin(caller);
     const key2 = slugKey(input.name);
     if (key2 === "CUSTOM_") throw new ValidationError("Role name must contain letters or digits.");
@@ -4796,12 +4805,12 @@ var roleAdminService = {
       resourceType: "role",
       resourceId: role.id,
       afterData: { key: key2, permissions: perms.map((p) => p.key).sort() },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return role;
   },
-  async update(caller, id6, input, meta13 = {}) {
+  async update(caller, id6, input, meta14 = {}) {
     requireSuperAdmin(caller);
     const role = await loadCustomRole(id6);
     const updated = await prisma.role.update({ where: { id: id6 }, data: { name: input.name, description: input.description } });
@@ -4814,12 +4823,12 @@ var roleAdminService = {
       resourceId: id6,
       beforeData: { name: role.name, description: role.description },
       afterData: { name: updated.name, description: updated.description },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return updated;
   },
-  async setPermissions(caller, id6, permissionKeys2, confirmCritical, meta13 = {}) {
+  async setPermissions(caller, id6, permissionKeys2, confirmCritical, meta14 = {}) {
     requireSuperAdmin(caller);
     const role = await loadCustomRole(id6);
     const perms = await resolvePermissionIds(permissionKeys2, confirmCritical);
@@ -4838,12 +4847,12 @@ var roleAdminService = {
       resourceId: id6,
       beforeData: { permissions: before },
       afterData: { permissions: after, added: after.filter((k) => !before.includes(k)), removed: before.filter((k) => !after.includes(k)) },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return { id: id6, key: role.key, permissions: after };
   },
-  async remove(caller, id6, meta13 = {}) {
+  async remove(caller, id6, meta14 = {}) {
     requireSuperAdmin(caller);
     const role = await loadCustomRole(id6);
     const [memberships, invitations] = await Promise.all([
@@ -4868,8 +4877,8 @@ var roleAdminService = {
       resourceType: "role",
       resourceId: id6,
       beforeData: { key: role.key, name: role.name },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
   }
 };
@@ -5026,7 +5035,7 @@ var organizationService = {
     if (!org) throw new NotFoundError("Organization not found.");
     return org;
   },
-  async addMember(caller, organizationId, input, meta13 = {}) {
+  async addMember(caller, organizationId, input, meta14 = {}) {
     if (caller.role.key !== "SUPER_ADMIN" && organizationId !== caller.organizationId) {
       throw new AuthorizationError("Access denied: resource belongs to a different organization");
     }
@@ -5049,12 +5058,12 @@ var organizationService = {
       resourceType: "organization_membership",
       resourceId: membership.id,
       afterData: { userId: input.userId, roleKey: role.key },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return membership;
   },
-  async updateMember(caller, organizationId, targetUserId, input, callerPermissions, meta13 = {}) {
+  async updateMember(caller, organizationId, targetUserId, input, callerPermissions, meta14 = {}) {
     if (caller.role.key !== "SUPER_ADMIN" && organizationId !== caller.organizationId) {
       throw new AuthorizationError("Access denied: resource belongs to a different organization");
     }
@@ -5079,8 +5088,8 @@ var organizationService = {
         resourceId: membership.id,
         beforeData: { roleKey: membership.role.key },
         afterData: { roleKey: role.key },
-        ipAddress: meta13.ip,
-        userAgent: meta13.userAgent
+        ipAddress: meta14.ip,
+        userAgent: meta14.userAgent
       });
     }
     if (input.status !== void 0) {
@@ -5093,13 +5102,13 @@ var organizationService = {
         resourceType: "organization_membership",
         resourceId: membership.id,
         afterData: { status: input.status },
-        ipAddress: meta13.ip,
-        userAgent: meta13.userAgent
+        ipAddress: meta14.ip,
+        userAgent: meta14.userAgent
       });
     }
     return organizationMembershipRepository.findById(membership.id);
   },
-  async removeMember(caller, organizationId, targetUserId, meta13 = {}) {
+  async removeMember(caller, organizationId, targetUserId, meta14 = {}) {
     if (caller.role.key !== "SUPER_ADMIN" && organizationId !== caller.organizationId) {
       throw new AuthorizationError("Access denied: resource belongs to a different organization");
     }
@@ -5117,8 +5126,8 @@ var organizationService = {
       resourceType: "organization_membership",
       resourceId: targetUserId,
       beforeData: { roleKey: membership.role.key },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
   }
 };
@@ -6217,7 +6226,7 @@ var mediaService = {
   async getMedia(organizationId, id6) {
     return toApiMedia(await loadMediaOrThrow(id6, organizationId));
   },
-  async createUploadSession(caller, input, meta13 = {}) {
+  async createUploadSession(caller, input, meta14 = {}) {
     const organizationId = caller.organizationId;
     if (!extensionMatchesMimeType(input.filename, input.mimeType)) {
       throw new ValidationError(`The file extension does not match the declared type (${input.mimeType}).`);
@@ -6274,12 +6283,12 @@ var mediaService = {
       resourceType: "media",
       resourceId: mediaId,
       afterData: { originalFilename: input.filename, mimeType: input.mimeType, sizeBytes: input.sizeBytes },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return { media: toApiMedia(media), upload, uploadToken: rawToken };
   },
-  async completeUpload(caller, id6, token, meta13 = {}) {
+  async completeUpload(caller, id6, token, meta14 = {}) {
     const organizationId = caller.organizationId;
     const media = await loadMediaOrThrow(id6, organizationId);
     if (media.status !== "PENDING") {
@@ -6322,8 +6331,8 @@ var mediaService = {
       resourceType: "media",
       resourceId: id6,
       afterData: { sizeBytes: verifiedSize },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return toApiMedia(activated);
   },
@@ -6338,7 +6347,7 @@ var mediaService = {
    * caller with media.update can choose to make this specific image
    * public by embedding it, audited like any other visibility change.
    */
-  async getEmbedUrl(caller, id6, meta13 = {}) {
+  async getEmbedUrl(caller, id6, meta14 = {}) {
     const organizationId = caller.organizationId;
     const media = await loadMediaOrThrow(id6, organizationId);
     if (media.status !== "ACTIVE") throw new ConflictError("This media has no readable object yet.");
@@ -6354,15 +6363,15 @@ var mediaService = {
         resourceId: id6,
         beforeData: { visibility: media.visibility },
         afterData: { visibility: "PUBLIC" },
-        ipAddress: meta13.ip,
-        userAgent: meta13.userAgent
+        ipAddress: meta14.ip,
+        userAgent: meta14.userAgent
       });
     }
     const provider = getStorageProvider();
     const url = provider.getPublicUrl(media.storageKey) ?? await provider.createSignedReadUrl({ key: media.storageKey, expiresInSeconds: config.mediaPublicSignedUrlTtlSeconds });
     return { url };
   },
-  async getReadUrl(caller, id6, meta13 = {}) {
+  async getReadUrl(caller, id6, meta14 = {}) {
     const organizationId = caller.organizationId;
     const media = await loadMediaOrThrow(id6, organizationId);
     if (media.status !== "ACTIVE" && media.status !== "ARCHIVED") {
@@ -6379,12 +6388,12 @@ var mediaService = {
       resourceType: "media",
       resourceId: id6,
       afterData: { expiresAt: expiresAt.toISOString() },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return { url, expiresAt: expiresAt.toISOString() };
   },
-  async updateMedia(caller, id6, input, meta13 = {}) {
+  async updateMedia(caller, id6, input, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadMediaOrThrow(id6, organizationId);
     const patch = {};
@@ -6409,12 +6418,12 @@ var mediaService = {
       resourceId: id6,
       beforeData: { displayName: existing.displayName, altText: existing.altText, caption: existing.caption, visibility: existing.visibility },
       afterData: patch,
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return toApiMedia(updated);
   },
-  async archiveMedia(caller, id6, meta13 = {}) {
+  async archiveMedia(caller, id6, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadMediaOrThrow(id6, organizationId);
     if (existing.status === "ARCHIVED") throw new ConflictError("This media is already archived.");
@@ -6429,12 +6438,12 @@ var mediaService = {
       resourceType: "media",
       resourceId: id6,
       beforeData: { status: existing.status },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return toApiMedia(updated);
   },
-  async deleteMedia(caller, id6, meta13 = {}) {
+  async deleteMedia(caller, id6, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadMediaOrThrow(id6, organizationId);
     const referenceCount = await mediaRepository.countContentReferences(id6);
@@ -6452,8 +6461,8 @@ var mediaService = {
       resourceType: "media",
       resourceId: id6,
       beforeData: { status: existing.status, originalFilename: existing.originalFilename },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
   }
 };
@@ -6614,7 +6623,7 @@ async function assertSiteIdentityMediaUsable(input, organizationId) {
     if (mediaId) await assertFeaturedMediaUsable(mediaId, organizationId);
   }
 }
-async function publishGroup(caller, publishedKey, draftKey, schema, revalidate, auditResourceType, meta13) {
+async function publishGroup(caller, publishedKey, draftKey, schema, revalidate, auditResourceType, meta14) {
   const organizationId = caller.organizationId;
   const draftRow = await systemSettingRepository.findByKey(organizationId, draftKey);
   const value = schema.parse(draftRow?.value ?? {});
@@ -6630,12 +6639,12 @@ async function publishGroup(caller, publishedKey, draftKey, schema, revalidate, 
     action: "SETTINGS_PUBLISHED",
     resourceType: auditResourceType,
     resourceId: publishedKey,
-    ipAddress: meta13.ip,
-    userAgent: meta13.userAgent
+    ipAddress: meta14.ip,
+    userAgent: meta14.userAgent
   });
   return value;
 }
-async function revertGroup(caller, publishedKey, draftKey, schema, auditResourceType, meta13) {
+async function revertGroup(caller, publishedKey, draftKey, schema, auditResourceType, meta14) {
   const organizationId = caller.organizationId;
   const publishedRow = await systemSettingRepository.findByKey(organizationId, publishedKey);
   const value = schema.parse(publishedRow?.value ?? {});
@@ -6647,8 +6656,8 @@ async function revertGroup(caller, publishedKey, draftKey, schema, auditResource
     action: "SETTINGS_REVERTED",
     resourceType: auditResourceType,
     resourceId: draftKey,
-    ipAddress: meta13.ip,
-    userAgent: meta13.userAgent
+    ipAddress: meta14.ip,
+    userAgent: meta14.userAgent
   });
   return value;
 }
@@ -6668,7 +6677,7 @@ var siteSettingsService = {
     const row = await systemSettingRepository.findByKey(organizationId, GLOBAL_STYLES_KEY);
     return globalStylesSchema.parse(row?.value ?? {});
   },
-  async saveSiteIdentityDraft(caller, input, meta13 = {}) {
+  async saveSiteIdentityDraft(caller, input, meta14 = {}) {
     const organizationId = caller.organizationId;
     await assertSiteIdentityMediaUsable(input, organizationId);
     await saveDraft(organizationId, SITE_IDENTITY_DRAFT_KEY, input, caller.id);
@@ -6679,12 +6688,12 @@ var siteSettingsService = {
       action: "SETTINGS_UPDATED",
       resourceType: "site_identity",
       resourceId: SITE_IDENTITY_DRAFT_KEY,
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return input;
   },
-  async saveGlobalStylesDraft(caller, input, meta13 = {}) {
+  async saveGlobalStylesDraft(caller, input, meta14 = {}) {
     const organizationId = caller.organizationId;
     await saveDraft(organizationId, GLOBAL_STYLES_DRAFT_KEY, input, caller.id);
     await auditLogRepository.record({
@@ -6694,12 +6703,12 @@ var siteSettingsService = {
       action: "SETTINGS_UPDATED",
       resourceType: "global_styles",
       resourceId: GLOBAL_STYLES_DRAFT_KEY,
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return input;
   },
-  async publishSiteIdentity(caller, meta13 = {}) {
+  async publishSiteIdentity(caller, meta14 = {}) {
     return publishGroup(
       caller,
       SITE_IDENTITY_KEY,
@@ -6707,17 +6716,17 @@ var siteSettingsService = {
       siteIdentitySchema,
       (value) => assertSiteIdentityMediaUsable(value, caller.organizationId),
       "site_identity",
-      meta13
+      meta14
     );
   },
-  async publishGlobalStyles(caller, meta13 = {}) {
-    return publishGroup(caller, GLOBAL_STYLES_KEY, GLOBAL_STYLES_DRAFT_KEY, globalStylesSchema, async () => void 0, "global_styles", meta13);
+  async publishGlobalStyles(caller, meta14 = {}) {
+    return publishGroup(caller, GLOBAL_STYLES_KEY, GLOBAL_STYLES_DRAFT_KEY, globalStylesSchema, async () => void 0, "global_styles", meta14);
   },
-  async revertSiteIdentityDraft(caller, meta13 = {}) {
-    return revertGroup(caller, SITE_IDENTITY_KEY, SITE_IDENTITY_DRAFT_KEY, siteIdentitySchema, "site_identity", meta13);
+  async revertSiteIdentityDraft(caller, meta14 = {}) {
+    return revertGroup(caller, SITE_IDENTITY_KEY, SITE_IDENTITY_DRAFT_KEY, siteIdentitySchema, "site_identity", meta14);
   },
-  async revertGlobalStylesDraft(caller, meta13 = {}) {
-    return revertGroup(caller, GLOBAL_STYLES_KEY, GLOBAL_STYLES_DRAFT_KEY, globalStylesSchema, "global_styles", meta13);
+  async revertGlobalStylesDraft(caller, meta14 = {}) {
+    return revertGroup(caller, GLOBAL_STYLES_KEY, GLOBAL_STYLES_DRAFT_KEY, globalStylesSchema, "global_styles", meta14);
   }
 };
 
@@ -7333,7 +7342,7 @@ var leadService = {
   async getLead(organizationId, id6) {
     return loadLeadInOrgOrThrow(id6, organizationId);
   },
-  async createLead(caller, input, meta13 = {}) {
+  async createLead(caller, input, meta14 = {}) {
     const email = input.email || void 0;
     if (email) {
       const duplicates = await leadRepository.findByEmailInOrg(caller.organizationId, email);
@@ -7362,8 +7371,8 @@ var leadService = {
       resourceType: "lead",
       resourceId: lead.id,
       afterData: { companyName: lead.companyName, status: lead.status },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     if (lead.assignedTo && lead.assignedTo !== caller.id) {
       await notificationService.notify({
@@ -7389,7 +7398,7 @@ var leadService = {
     }
     return lead;
   },
-  async updateLead(caller, id6, input, meta13 = {}) {
+  async updateLead(caller, id6, input, meta14 = {}) {
     const existing = await loadLeadInOrgOrThrow(id6, caller.organizationId);
     if (input.status !== void 0) {
       assertValidTransition(existing.status, input.status);
@@ -7415,8 +7424,8 @@ var leadService = {
       resourceId: id6,
       beforeData: { status: existing.status },
       afterData: patch,
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     if (input.status !== void 0 && input.status !== existing.status) {
       try {
@@ -7444,7 +7453,7 @@ var leadService = {
     }
     return updated;
   },
-  async deleteLead(caller, id6, meta13 = {}) {
+  async deleteLead(caller, id6, meta14 = {}) {
     await loadLeadInOrgOrThrow(id6, caller.organizationId);
     await leadRepository.softDelete(id6);
     await auditLogRepository.record({
@@ -7454,8 +7463,8 @@ var leadService = {
       action: "LEAD_ARCHIVED",
       resourceType: "lead",
       resourceId: id6,
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
   },
   /**
@@ -7466,7 +7475,7 @@ var leadService = {
    * rolls back the whole transaction (including the client/contact rows
    * already created in it), rather than racing on a read-then-write.
    */
-  async convertLead(caller, id6, input, meta13 = {}) {
+  async convertLead(caller, id6, input, meta14 = {}) {
     const lead = await loadLeadInOrgOrThrow(id6, caller.organizationId);
     if (lead.status === "CONVERTED") {
       throw new ConflictError("This lead has already been converted.", { convertedClientId: lead.convertedClientId });
@@ -7539,8 +7548,8 @@ var leadService = {
       resourceType: "client",
       resourceId: result.client.id,
       afterData: { clientCode: result.client.clientCode, name: result.client.name, convertedFromLeadId: id6 },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     await auditLogRepository.record({
       organizationId: caller.organizationId,
@@ -7550,8 +7559,8 @@ var leadService = {
       resourceType: "lead",
       resourceId: id6,
       afterData: { clientId: result.client.id, clientCode: result.client.clientCode },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     await analyticsEventService.recordBusinessEvent({
       organizationId: caller.organizationId,
@@ -7732,7 +7741,7 @@ var clientService = {
     const client3 = await loadClientInOrgOrThrow(id6, organizationId);
     return withProvisioningStatus(client3);
   },
-  async createClient(caller, input, meta13 = {}) {
+  async createClient(caller, input, meta14 = {}) {
     const [byCode, byName] = await Promise.all([
       clientRepository.findByCodeInOrg(caller.organizationId, input.clientCode),
       clientRepository.findByNameInOrg(caller.organizationId, input.name)
@@ -7767,8 +7776,8 @@ var clientService = {
       resourceType: "client",
       resourceId: client3.id,
       afterData: { clientCode: client3.clientCode, name: client3.name, status: client3.status },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     try {
       await eventEngine.emit({
@@ -7785,7 +7794,7 @@ var clientService = {
     }
     return client3;
   },
-  async updateClient(caller, id6, input, meta13 = {}) {
+  async updateClient(caller, id6, input, meta14 = {}) {
     const existing = await loadClientInOrgOrThrow(id6, caller.organizationId);
     if (input.name !== void 0 && input.name.toLowerCase() !== existing.name.toLowerCase()) {
       const dup = await clientRepository.findByNameInOrg(caller.organizationId, input.name);
@@ -7818,12 +7827,12 @@ var clientService = {
       resourceId: id6,
       beforeData: { status: existing.status },
       afterData: patch,
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return updated;
   },
-  async deleteClient(caller, id6, meta13 = {}) {
+  async deleteClient(caller, id6, meta14 = {}) {
     await loadClientInOrgOrThrow(id6, caller.organizationId);
     await clientRepository.softDelete(id6);
     await auditLogRepository.record({
@@ -7833,8 +7842,8 @@ var clientService = {
       action: "CLIENT_ARCHIVED",
       resourceType: "client",
       resourceId: id6,
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
   },
   async dashboardCounts(organizationId) {
@@ -7949,7 +7958,7 @@ var contactService = {
   async getContact(organizationId, id6) {
     return loadContactInOrgOrThrow(id6, organizationId);
   },
-  async createForClient(caller, clientId, input, meta13 = {}) {
+  async createForClient(caller, clientId, input, meta14 = {}) {
     await assertClientInOrg(clientId, caller.organizationId);
     const email = input.email || void 0;
     if (email) {
@@ -7981,12 +7990,12 @@ var contactService = {
       resourceType: "contact",
       resourceId: contact.id,
       afterData: { clientId, firstName: contact.firstName, lastName: contact.lastName },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return contact;
   },
-  async updateContact(caller, id6, input, meta13 = {}) {
+  async updateContact(caller, id6, input, meta14 = {}) {
     const existing = await loadContactInOrgOrThrow(id6, caller.organizationId);
     if (input.email) {
       const dup = existing.clientId ? await contactRepository.findByEmailForClient(existing.clientId, caller.organizationId, input.email) : null;
@@ -8019,12 +8028,12 @@ var contactService = {
       resourceType: "contact",
       resourceId: id6,
       afterData: patch,
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return updated;
   },
-  async deleteContact(caller, id6, meta13 = {}) {
+  async deleteContact(caller, id6, meta14 = {}) {
     await loadContactInOrgOrThrow(id6, caller.organizationId);
     await contactRepository.softDelete(id6);
     await auditLogRepository.record({
@@ -8034,8 +8043,8 @@ var contactService = {
       action: "CONTACT_DELETED",
       resourceType: "contact",
       resourceId: id6,
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
   }
 };
@@ -8076,7 +8085,7 @@ var onboardingService = {
     const steps = await getCustomTemplateSteps(organizationId);
     return { steps: steps ?? defaultOnboardingTemplateSteps(), isCustom: !!steps };
   },
-  async updateTemplate(caller, steps, meta13 = {}) {
+  async updateTemplate(caller, steps, meta14 = {}) {
     await systemSettingRepository.upsert({
       organizationId: caller.organizationId,
       key: TEMPLATE_SETTING_KEY,
@@ -8093,12 +8102,12 @@ var onboardingService = {
       resourceType: "system_setting",
       resourceId: TEMPLATE_SETTING_KEY,
       afterData: { stepCount: steps.length },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return { steps, isCustom: true };
   },
-  async startOnboarding(caller, clientId, input = {}, meta13 = {}) {
+  async startOnboarding(caller, clientId, input = {}, meta14 = {}) {
     await loadClientInOrgOrThrow2(clientId, caller.organizationId);
     const existing = await clientOnboardingRepository.findByClientId(clientId);
     if (existing) {
@@ -8121,8 +8130,8 @@ var onboardingService = {
       resourceType: "client_onboarding",
       resourceId: record2.id,
       afterData: { clientId, status: record2.status },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     if (record2.ownerId && record2.ownerId !== caller.id) {
       await notificationService.notify({
@@ -8148,7 +8157,7 @@ var onboardingService = {
     }
     return record2;
   },
-  async updateOnboarding(caller, id6, input, meta13 = {}) {
+  async updateOnboarding(caller, id6, input, meta14 = {}) {
     const existing = await loadOnboardingInOrgOrThrow(id6, caller.organizationId);
     if (TERMINAL_STATUSES2.has(existing.status)) {
       throw new ConflictError(`This onboarding is already ${existing.status.toLowerCase()} and can no longer be changed.`);
@@ -8164,13 +8173,13 @@ var onboardingService = {
         resourceId: id6,
         beforeData: { status: existing.status },
         afterData: { status: "CANCELLED" },
-        ipAddress: meta13.ip,
-        userAgent: meta13.userAgent
+        ipAddress: meta14.ip,
+        userAgent: meta14.userAgent
       });
       return updated;
     }
     if (input.completeStep) {
-      return this.completeStep(caller, id6, input.completeStep, meta13);
+      return this.completeStep(caller, id6, input.completeStep, meta14);
     }
     if (input.ownerId !== void 0 || input.dueDate !== void 0) {
       const patch = {};
@@ -8185,8 +8194,8 @@ var onboardingService = {
         resourceType: "client_onboarding",
         resourceId: id6,
         afterData: patch,
-        ipAddress: meta13.ip,
-        userAgent: meta13.userAgent
+        ipAddress: meta14.ip,
+        userAgent: meta14.userAgent
       });
       if (input.ownerId && input.ownerId !== existing.ownerId && input.ownerId !== caller.id) {
         await notificationService.notify({
@@ -8208,7 +8217,7 @@ var onboardingService = {
    * ignored, since this is an explicit staff action (unlike
    * completeStepForClient's system-triggered no-op).
    */
-  async updateStep(caller, onboardingId, step, input, meta13 = {}) {
+  async updateStep(caller, onboardingId, step, input, meta14 = {}) {
     const record2 = await loadOnboardingInOrgOrThrow(onboardingId, caller.organizationId);
     if (TERMINAL_STATUSES2.has(record2.status)) {
       throw new ConflictError(`This onboarding is already ${record2.status.toLowerCase()} and can no longer be changed.`);
@@ -8233,8 +8242,8 @@ var onboardingService = {
       resourceType: "client_onboarding",
       resourceId: record2.id,
       afterData: { step, ...input, dueDate: input.dueDate ? input.dueDate.toISOString() : input.dueDate },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     if (input.assignedTo && input.assignedTo !== caller.id) {
       await notificationService.notify({
@@ -8255,7 +8264,7 @@ var onboardingService = {
    * READY once every step is done — completion itself is a separate,
    * explicit action (completeOnboarding), never inferred (§7).
    */
-  async completeStep(caller, onboardingId, step, meta13 = {}) {
+  async completeStep(caller, onboardingId, step, meta14 = {}) {
     const record2 = await loadOnboardingInOrgOrThrow(onboardingId, caller.organizationId);
     if (TERMINAL_STATUSES2.has(record2.status)) return record2;
     const checklist = record2.checklist ?? freshChecklist();
@@ -8279,8 +8288,8 @@ var onboardingService = {
       resourceType: "client_onboarding",
       resourceId: record2.id,
       afterData: { step, status: updated.status },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     if (record2.ownerId && record2.ownerId !== caller.id) {
       await notificationService.notify({
@@ -8319,7 +8328,7 @@ var onboardingService = {
       afterData: { step }
     });
   },
-  async completeOnboarding(caller, id6, meta13 = {}) {
+  async completeOnboarding(caller, id6, meta14 = {}) {
     const existing = await loadOnboardingInOrgOrThrow(id6, caller.organizationId);
     if (existing.status === "COMPLETED") {
       throw new ConflictError("This onboarding has already been completed.");
@@ -8340,8 +8349,8 @@ var onboardingService = {
       resourceType: "client_onboarding",
       resourceId: id6,
       afterData: { status: "COMPLETED" },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     if (existing.ownerId && existing.ownerId !== caller.id) {
       await notificationService.notify({
@@ -8474,7 +8483,7 @@ var workspaceService = {
    * client both succeeding — the loser's transaction rolls back entirely,
    * including the Organization row it just created.
    */
-  async provisionWorkspace(caller, clientId, input, meta13 = {}) {
+  async provisionWorkspace(caller, clientId, input, meta14 = {}) {
     const client3 = await loadClientInOrgOrThrow3(clientId, caller.organizationId);
     if (client3.workspaceOrganizationId) {
       throw new ConflictError("This client has already been provisioned into a workspace.", {
@@ -8538,13 +8547,13 @@ var workspaceService = {
       resourceType: "organization",
       resourceId: result.workspace.id,
       afterData: { clientId, name: result.workspace.name, status: result.workspace.status },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     await onboardingService.completeStepForClient(clientId, "WORKSPACE_CREATED", caller.id);
     return result.workspace;
   },
-  async updateWorkspace(caller, id6, input, callerPermissions, meta13 = {}) {
+  async updateWorkspace(caller, id6, input, callerPermissions, meta14 = {}) {
     const existing = await loadWorkspaceForOwnerOrThrow(id6, caller.organizationId);
     if (input.status !== void 0) {
       assertValidWorkspaceTransition(existing.status, input.status);
@@ -8573,8 +8582,8 @@ var workspaceService = {
       resourceId: id6,
       beforeData: { status: existing.status },
       afterData: patch,
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     if (input.name !== void 0 || Object.keys(patch).some((k) => ["timezone", "currency", "locale", "email", "phone", "address"].includes(k))) {
       await onboardingService.completeStepForClient(existing.provisionedForClient.id, "WORKSPACE_CONFIGURED", caller.id);
@@ -9172,7 +9181,7 @@ var opportunityService = {
   async getOpportunity(organizationId, id6) {
     return loadOpportunityOrThrow(id6, organizationId);
   },
-  async createOpportunity(caller, input, meta13 = {}) {
+  async createOpportunity(caller, input, meta14 = {}) {
     const organizationId = caller.organizationId;
     if (input.clientId) {
       const client3 = await clientRepository.findByIdInOrg(input.clientId, organizationId);
@@ -9213,8 +9222,8 @@ var opportunityService = {
       resourceType: "opportunity",
       resourceId: opportunity.id,
       afterData: { name: opportunity.name, stage: opportunity.stage, clientId: opportunity.clientId, leadId: opportunity.leadId, value: opportunity.value.toString() },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     await analyticsEventService.recordBusinessEvent({
       organizationId,
@@ -9248,7 +9257,7 @@ var opportunityService = {
     }
     return opportunity;
   },
-  async updateOpportunity(caller, id6, input, meta13 = {}) {
+  async updateOpportunity(caller, id6, input, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadOpportunityOrThrow(id6, organizationId);
     if (input.stage !== void 0) {
@@ -9281,15 +9290,15 @@ var opportunityService = {
       resourceId: id6,
       beforeData: { stage: existing.stage, value: existing.value.toString() },
       afterData: { ...patch, value: patch.value !== void 0 ? patch.value.toString() : void 0 },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     if (input.stage !== void 0 && input.stage !== existing.stage) {
       await emitStageChangedEvent(organizationId, id6, caller.id, existing.stage, input.stage);
     }
     return updated;
   },
-  async deleteOpportunity(caller, id6, meta13 = {}) {
+  async deleteOpportunity(caller, id6, meta14 = {}) {
     const organizationId = caller.organizationId;
     await loadOpportunityOrThrow(id6, organizationId);
     await opportunityRepository.softDelete(id6);
@@ -9300,11 +9309,11 @@ var opportunityService = {
       action: "OPPORTUNITY_DELETED",
       resourceType: "opportunity",
       resourceId: id6,
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
   },
-  async winOpportunity(caller, id6, meta13 = {}) {
+  async winOpportunity(caller, id6, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadOpportunityOrThrow(id6, organizationId);
     if (TERMINAL_STAGES.has(existing.stage)) {
@@ -9323,8 +9332,8 @@ var opportunityService = {
       resourceId: id6,
       beforeData: { stage: existing.stage },
       afterData: { stage: "CLOSED_WON", value: existing.value.toString() },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     await notifyClose({
       organizationId,
@@ -9338,7 +9347,7 @@ var opportunityService = {
     await emitStageChangedEvent(organizationId, id6, caller.id, existing.stage, "CLOSED_WON");
     return updated;
   },
-  async loseOpportunity(caller, id6, input, meta13 = {}) {
+  async loseOpportunity(caller, id6, input, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadOpportunityOrThrow(id6, organizationId);
     if (TERMINAL_STAGES.has(existing.stage)) {
@@ -9358,8 +9367,8 @@ var opportunityService = {
       resourceId: id6,
       beforeData: { stage: existing.stage },
       afterData: { stage: "CLOSED_LOST", lostReason: input.lostReason ?? null },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     await notifyClose({
       organizationId,
@@ -9387,7 +9396,7 @@ var opportunityService = {
    * converts anything itself (reuse leadService.convertLead for that) —
    * this only links two already-real records together.
    */
-  async linkClient(caller, id6, input, meta13 = {}) {
+  async linkClient(caller, id6, input, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadOpportunityOrThrow(id6, organizationId);
     if (TERMINAL_STAGES.has(existing.stage)) {
@@ -9408,8 +9417,8 @@ var opportunityService = {
       resourceId: id6,
       beforeData: { clientId: null },
       afterData: { clientId: input.clientId },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return updated;
   },
@@ -10059,7 +10068,7 @@ var redirectService = {
   async getRedirect(organizationId, id6) {
     return loadRedirectOrThrow(id6, organizationId);
   },
-  async createRedirect(caller, input, meta13 = {}) {
+  async createRedirect(caller, input, meta14 = {}) {
     const organizationId = caller.organizationId;
     const dup = await redirectRepository.findByFromPathInOrg(organizationId, input.fromPath);
     if (dup) throw new ConflictError(`A redirect from "${input.fromPath}" already exists.`, { existingRedirectId: dup.id });
@@ -10086,12 +10095,12 @@ var redirectService = {
       resourceType: "redirect",
       resourceId: redirect.id,
       afterData: { fromPath: redirect.fromPath, toPath: redirect.toPath, statusCode: redirect.statusCode },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return redirect;
   },
-  async updateRedirect(caller, id6, input, meta13 = {}) {
+  async updateRedirect(caller, id6, input, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadRedirectOrThrow(id6, organizationId);
     if (input.toPath !== void 0) {
@@ -10112,12 +10121,12 @@ var redirectService = {
       resourceId: id6,
       beforeData: { toPath: existing.toPath, statusCode: existing.statusCode },
       afterData: patch,
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return updated;
   },
-  async deleteRedirect(caller, id6, meta13 = {}) {
+  async deleteRedirect(caller, id6, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadRedirectOrThrow(id6, organizationId);
     await redirectRepository.delete(id6);
@@ -10129,8 +10138,8 @@ var redirectService = {
       resourceType: "redirect",
       resourceId: id6,
       beforeData: { fromPath: existing.fromPath, toPath: existing.toPath },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
   },
   /**
@@ -10187,7 +10196,7 @@ var postService = {
     await loadPostOrThrow(id6, organizationId);
     return postRepository.listRevisions(id6);
   },
-  async createPost(caller, input, meta13 = {}) {
+  async createPost(caller, input, meta14 = {}) {
     const organizationId = caller.organizationId;
     const body = sanitizeContentHtml(input.body);
     await assertCategoryInOrg(input.categoryId, organizationId);
@@ -10242,12 +10251,12 @@ var postService = {
       resourceType: "post",
       resourceId: createdId,
       afterData: { title: input.title, slug },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return loadPostOrThrow(createdId, organizationId);
   },
-  async updatePost(caller, id6, input, meta13 = {}) {
+  async updatePost(caller, id6, input, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadPostOrThrow(id6, organizationId);
     const sanitizedBody = input.body !== void 0 ? sanitizeContentHtml(input.body) : void 0;
@@ -10334,8 +10343,8 @@ var postService = {
       resourceId: id6,
       beforeData: { status: existing.status, title: existing.title },
       afterData: { status: input.status, title: input.title, slug: input.slug },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     if (input.slug !== void 0 && input.slug !== existing.slug) {
       const finalStatus = input.status ?? existing.status;
@@ -10359,13 +10368,13 @@ var postService = {
         resourceId: id6,
         beforeData: { featuredMediaId: existing.featuredMediaId },
         afterData: { featuredMediaId: input.featuredMediaId ?? null },
-        ipAddress: meta13.ip,
-        userAgent: meta13.userAgent
+        ipAddress: meta14.ip,
+        userAgent: meta14.userAgent
       });
     }
     return loadPostOrThrow(id6, organizationId);
   },
-  async submitForReview(caller, id6, meta13 = {}) {
+  async submitForReview(caller, id6, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadPostOrThrow(id6, organizationId);
     if (existing.status !== "DRAFT") throw new ConflictError(`Only a DRAFT post can be submitted for review (current status: ${existing.status}).`);
@@ -10382,8 +10391,8 @@ var postService = {
       resourceId: id6,
       beforeData: { status: existing.status },
       afterData: { status: "IN_REVIEW" },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     try {
       await eventEngine.emit({
@@ -10400,7 +10409,7 @@ var postService = {
     }
     return loadPostOrThrow(id6, organizationId);
   },
-  async publishPost(caller, id6, meta13 = {}) {
+  async publishPost(caller, id6, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadPostOrThrow(id6, organizationId);
     if (existing.status === "ARCHIVED") throw new ConflictError("An archived post must be restored before it can be published.");
@@ -10421,8 +10430,8 @@ var postService = {
       resourceId: id6,
       beforeData: { status: existing.status },
       afterData: { status: "PUBLISHED" },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     if (existing.createdById && existing.createdById !== caller.id) {
       await notificationService.notify({
@@ -10435,7 +10444,7 @@ var postService = {
     }
     return loadPostOrThrow(id6, organizationId);
   },
-  async schedulePost(caller, id6, input, meta13 = {}) {
+  async schedulePost(caller, id6, input, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadPostOrThrow(id6, organizationId);
     if (existing.status === "ARCHIVED") throw new ConflictError("An archived post must be restored before it can be scheduled.");
@@ -10451,12 +10460,12 @@ var postService = {
       resourceId: id6,
       beforeData: { status: existing.status },
       afterData: { status: "SCHEDULED", scheduledAt: input.scheduledAt },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return loadPostOrThrow(id6, organizationId);
   },
-  async archivePost(caller, id6, meta13 = {}) {
+  async archivePost(caller, id6, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadPostOrThrow(id6, organizationId);
     if (existing.status === "ARCHIVED") throw new ConflictError("This post is already archived.");
@@ -10470,12 +10479,12 @@ var postService = {
       resourceId: id6,
       beforeData: { status: existing.status },
       afterData: { status: "ARCHIVED" },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return loadPostOrThrow(id6, organizationId);
   },
-  async revertPost(caller, id6, input, meta13 = {}) {
+  async revertPost(caller, id6, input, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadPostOrThrow(id6, organizationId);
     if (existing.status === "ARCHIVED") throw new ConflictError("An archived post must be restored before its content can be reverted.");
@@ -10512,12 +10521,12 @@ var postService = {
       resourceId: id6,
       beforeData: { fromVersion: current?.version, revertedToRevisionId: target.id, revertedToVersion: target.version },
       afterData: { newVersion: nextVersion },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return loadPostOrThrow(id6, organizationId);
   },
-  async deletePost(caller, id6, meta13 = {}) {
+  async deletePost(caller, id6, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadPostOrThrow(id6, organizationId);
     await postRepository.softDelete(id6);
@@ -10529,15 +10538,15 @@ var postService = {
       resourceType: "post",
       resourceId: id6,
       beforeData: { status: existing.status, title: existing.title },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
   },
   /** Phase 7 — Trash view (Content Dashboard): soft-deleted posts, paginated. */
   async listTrash(organizationId, page, limit) {
     return postRepository.listTrash(organizationId, page, limit);
   },
-  async restorePost(caller, id6, meta13 = {}) {
+  async restorePost(caller, id6, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await postRepository.findTrashedByIdInOrg(id6, organizationId);
     if (!existing) throw new NotFoundError("Post not found in trash.");
@@ -10550,8 +10559,8 @@ var postService = {
       resourceType: "post",
       resourceId: id6,
       beforeData: { status: existing.status, title: existing.title },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
   },
   /**
@@ -10563,14 +10572,14 @@ var postService = {
    * the rest of the batch — mirrors contentSchedulingService's per-item
    * isolation for the same reason.
    */
-  async bulkAction(caller, action, ids, meta13 = {}) {
+  async bulkAction(caller, action, ids, meta14 = {}) {
     const succeeded = [];
     const failed = [];
     for (const id6 of ids) {
       try {
-        if (action === "archive") await this.archivePost(caller, id6, meta13);
-        else if (action === "trash") await this.deletePost(caller, id6, meta13);
-        else await this.restorePost(caller, id6, meta13);
+        if (action === "archive") await this.archivePost(caller, id6, meta14);
+        else if (action === "trash") await this.deletePost(caller, id6, meta14);
+        else await this.restorePost(caller, id6, meta14);
         succeeded.push(id6);
       } catch (err) {
         failed.push({ id: id6, error: err instanceof Error ? err.message : "Action failed." });
@@ -10770,7 +10779,7 @@ var productService = {
     await loadProductOrThrow(id6);
     return productRepository.listRevisions(id6);
   },
-  async createProduct(caller, input, meta13 = {}) {
+  async createProduct(caller, input, meta14 = {}) {
     const existingCode = await productRepository.findByCode(input.code);
     if (existingCode) throw new ConflictError(`A product with code "${input.code}" already exists.`, { existingProductId: existingCode.id });
     let slug;
@@ -10827,12 +10836,12 @@ var productService = {
       resourceType: "product",
       resourceId: productId,
       afterData: { code: input.code, name: input.name, type: input.type, status: input.status ?? "DRAFT" },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return loadProductDetailOrThrow(productId);
   },
-  async updateProduct(caller, id6, input, meta13 = {}) {
+  async updateProduct(caller, id6, input, meta14 = {}) {
     const existing = await loadProductDetailOrThrow(id6);
     if (TERMINAL_STATUSES3.has(existing.status)) {
       throw new ConflictError("This product is archived and can no longer be edited.");
@@ -10894,12 +10903,12 @@ var productService = {
       resourceId: id6,
       beforeData: { status: existing.status, name: existing.name },
       afterData: patch,
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return loadProductDetailOrThrow(id6);
   },
-  async revertProduct(caller, id6, revisionId, meta13 = {}) {
+  async revertProduct(caller, id6, revisionId, meta14 = {}) {
     const existing = await loadProductDetailOrThrow(id6);
     if (TERMINAL_STATUSES3.has(existing.status)) throw new ConflictError("This product is archived and can no longer be edited.");
     const target = await productRepository.findRevision(id6, revisionId);
@@ -10915,12 +10924,12 @@ var productService = {
       resourceId: id6,
       beforeData: { fromVersion: existing.currentRevision?.version, revertedToVersion: target.version },
       afterData: { newVersion: nextVersion },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return loadProductDetailOrThrow(id6);
   },
-  async duplicateProduct(caller, id6, name, meta13 = {}) {
+  async duplicateProduct(caller, id6, name, meta14 = {}) {
     const existing = await loadProductDetailOrThrow(id6);
     const baseName = name ?? `${existing.name} (Copy)`;
     const slug = await productRepository.findUniqueSlug(baseName);
@@ -10969,12 +10978,12 @@ var productService = {
       resourceType: "product",
       resourceId: productId,
       afterData: { duplicatedFromId: id6, name: baseName },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return loadProductDetailOrThrow(productId);
   },
-  async archiveProduct(caller, id6, meta13 = {}) {
+  async archiveProduct(caller, id6, meta14 = {}) {
     const existing = await loadProductOrThrow(id6);
     if (existing.status === "ARCHIVED") {
       throw new ConflictError("This product is already archived.");
@@ -10987,18 +10996,18 @@ var productService = {
       resourceType: "product",
       resourceId: id6,
       beforeData: { status: existing.status },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return archived;
   },
   /** Phase 10 — bulk archive, the one bulk action that's unambiguous and safe for a catalog that's never hard-deleted. */
-  async bulkArchiveProducts(caller, ids, meta13 = {}) {
+  async bulkArchiveProducts(caller, ids, meta14 = {}) {
     const skipped = [];
     let archived = 0;
     for (const id6 of ids) {
       try {
-        await productService.archiveProduct(caller, id6, meta13);
+        await productService.archiveProduct(caller, id6, meta14);
         archived += 1;
       } catch {
         skipped.push(id6);
@@ -11423,7 +11432,7 @@ var invoiceService = {
   async getInvoice(organizationId, id6) {
     return withEffectiveStatus(await loadInvoiceOrThrow(id6, organizationId));
   },
-  async createInvoice(caller, input, meta13 = {}) {
+  async createInvoice(caller, input, meta14 = {}) {
     const organizationId = caller.organizationId;
     const client3 = await clientRepository.findByIdInOrg(input.clientId, organizationId);
     if (!client3) throw new ValidationError("The specified client does not exist in this organization.");
@@ -11474,12 +11483,12 @@ var invoiceService = {
       resourceType: "invoice",
       resourceId: invoice.id,
       afterData: { invoiceNumber, clientId: input.clientId, total: total.toString(), currency },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return withEffectiveStatus(invoice);
   },
-  async updateInvoice(caller, id6, input, meta13 = {}) {
+  async updateInvoice(caller, id6, input, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadInvoiceOrThrow(id6, organizationId);
     if (existing.status !== "DRAFT") {
@@ -11526,12 +11535,12 @@ var invoiceService = {
       resourceType: "invoice",
       resourceId: id6,
       beforeData: { total: existing.total.toString() },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return this.getInvoice(organizationId, id6);
   },
-  async issueInvoice(caller, id6, input, meta13 = {}) {
+  async issueInvoice(caller, id6, input, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadInvoiceOrThrow(id6, organizationId);
     if (existing.items.length === 0) throw new ValidationError("An invoice needs at least one line item before it can be issued.");
@@ -11553,12 +11562,12 @@ var invoiceService = {
       resourceId: id6,
       beforeData: { status: existing.status },
       afterData: { status: "ISSUED", total: existing.total.toString() },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return this.getInvoice(organizationId, id6);
   },
-  async voidInvoice(caller, id6, input, meta13 = {}) {
+  async voidInvoice(caller, id6, input, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadInvoiceOrThrow(id6, organizationId);
     if (existing.status === "VOID" || existing.status === "CANCELLED" || existing.status === "PAID") {
@@ -11579,12 +11588,12 @@ var invoiceService = {
       resourceId: id6,
       beforeData: { status: existing.status },
       afterData: { status: targetStatus, reason: input.reason },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return this.getInvoice(organizationId, id6);
   },
-  async recordPayment(caller, invoiceId, input, meta13 = {}) {
+  async recordPayment(caller, invoiceId, input, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadInvoiceOrThrow(invoiceId, organizationId);
     const amount = toMoney(input.amount);
@@ -11628,8 +11637,8 @@ var invoiceService = {
       resourceType: "payment",
       resourceId: payment.id,
       afterData: { invoiceId, amount: amount.toString(), currency, method: input.method },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return payment;
   }
@@ -11660,7 +11669,7 @@ var contractService = {
   async getContract(organizationId, id6) {
     return withCurrentValue(await loadContractOrThrow(id6, organizationId));
   },
-  async createContract(caller, input, meta13 = {}) {
+  async createContract(caller, input, meta14 = {}) {
     const organizationId = caller.organizationId;
     await assertClientInOrg2(input.clientId, organizationId);
     if (input.endDate && input.endDate.getTime() < input.startDate.getTime()) {
@@ -11688,12 +11697,12 @@ var contractService = {
       resourceType: "contract",
       resourceId: contract.id,
       afterData: { contractNumber, clientId: input.clientId, contractValue: contract.contractValue.toString(), currency: contract.currency },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return this.getContract(organizationId, contract.id);
   },
-  async updateContract(caller, id6, input, meta13 = {}) {
+  async updateContract(caller, id6, input, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadContractOrThrow(id6, organizationId);
     if (existing.status === "TERMINATED" || existing.status === "EXPIRED") {
@@ -11718,12 +11727,12 @@ var contractService = {
       resourceId: id6,
       beforeData: { title: existing.title },
       afterData: patch,
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return this.getContract(organizationId, id6);
   },
-  async activateContract(caller, id6, meta13 = {}) {
+  async activateContract(caller, id6, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadContractOrThrow(id6, organizationId);
     const count = await contractRepository.transitionStatus(id6, ACTIVATABLE_FROM, "ACTIVE");
@@ -11737,12 +11746,12 @@ var contractService = {
       resourceId: id6,
       beforeData: { status: existing.status },
       afterData: { status: "ACTIVE" },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return this.getContract(organizationId, id6);
   },
-  async suspendContract(caller, id6, meta13 = {}) {
+  async suspendContract(caller, id6, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadContractOrThrow(id6, organizationId);
     const count = await contractRepository.transitionStatus(id6, SUSPENDABLE_FROM, "SUSPENDED");
@@ -11756,12 +11765,12 @@ var contractService = {
       resourceId: id6,
       beforeData: { status: existing.status },
       afterData: { status: "SUSPENDED" },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return this.getContract(organizationId, id6);
   },
-  async terminateContract(caller, id6, input, meta13 = {}) {
+  async terminateContract(caller, id6, input, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadContractOrThrow(id6, organizationId);
     const count = await contractRepository.transitionStatus(id6, TERMINABLE_FROM, "TERMINATED");
@@ -11775,12 +11784,12 @@ var contractService = {
       resourceId: id6,
       beforeData: { status: existing.status },
       afterData: { status: "TERMINATED", reason: input.reason },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return this.getContract(organizationId, id6);
   },
-  async createVariation(caller, contractId, input, meta13 = {}) {
+  async createVariation(caller, contractId, input, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadContractOrThrow(contractId, organizationId);
     if (existing.status === "TERMINATED" || existing.status === "EXPIRED") {
@@ -11803,8 +11812,8 @@ var contractService = {
       resourceType: "contract",
       resourceId: contractId,
       afterData: { amount: amount.toString(), effectiveDate: input.effectiveDate, reason: input.reason },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return this.getContract(organizationId, contractId);
   }
@@ -11895,7 +11904,7 @@ var AI_TOOL_REGISTRY = Object.freeze({
     isMutating: true,
     requiresApproval: false,
     inputSchema: createLeadInput,
-    handler: async (caller, input, meta13) => leadService.createLead(caller, input, meta13)
+    handler: async (caller, input, meta14) => leadService.createLead(caller, input, meta14)
   }),
   "leads.convert": tool({
     code: "leads.convert",
@@ -11906,9 +11915,9 @@ var AI_TOOL_REGISTRY = Object.freeze({
     isMutating: true,
     requiresApproval: false,
     inputSchema: convertLeadInput,
-    handler: async (caller, input, meta13) => {
+    handler: async (caller, input, meta14) => {
       const { leadId, ...rest } = input;
-      return leadService.convertLead(caller, leadId, rest, meta13);
+      return leadService.convertLead(caller, leadId, rest, meta14);
     }
   }),
   "clients.list": tool({
@@ -11934,7 +11943,7 @@ var AI_TOOL_REGISTRY = Object.freeze({
     isMutating: true,
     requiresApproval: false,
     inputSchema: createClientInput,
-    handler: async (caller, input, meta13) => clientService.createClient(caller, input, meta13)
+    handler: async (caller, input, meta14) => clientService.createClient(caller, input, meta14)
   }),
   "content.list_posts": tool({
     code: "content.list_posts",
@@ -11959,7 +11968,7 @@ var AI_TOOL_REGISTRY = Object.freeze({
     isMutating: true,
     requiresApproval: false,
     inputSchema: createDraftPostInput,
-    handler: async (caller, input, meta13) => postService.createPost(caller, input, meta13)
+    handler: async (caller, input, meta14) => postService.createPost(caller, input, meta14)
   }),
   "products.list": tool({
     code: "products.list",
@@ -11984,7 +11993,7 @@ var AI_TOOL_REGISTRY = Object.freeze({
     isMutating: true,
     requiresApproval: true,
     inputSchema: issueInvoiceInput,
-    handler: async (caller, input, meta13) => invoiceService.issueInvoice(caller, input.invoiceId, {}, meta13)
+    handler: async (caller, input, meta14) => invoiceService.issueInvoice(caller, input.invoiceId, {}, meta14)
   }),
   "contracts.activate": tool({
     code: "contracts.activate",
@@ -11995,7 +12004,7 @@ var AI_TOOL_REGISTRY = Object.freeze({
     isMutating: true,
     requiresApproval: true,
     inputSchema: activateContractInput,
-    handler: async (caller, input, meta13) => contractService.activateContract(caller, input.contractId, meta13)
+    handler: async (caller, input, meta14) => contractService.activateContract(caller, input.contractId, meta14)
   })
 });
 function isRegisteredToolCode(code) {
@@ -12024,7 +12033,7 @@ async function assertToolEnabledForOrg(organizationId, toolCode) {
   }
 }
 async function executeGovernedTool(params) {
-  const { caller, toolCode, input, executionId, stepOrder, meta: meta13 = {} } = params;
+  const { caller, toolCode, input, executionId, stepOrder, meta: meta14 = {} } = params;
   if (!isRegisteredToolCode(toolCode)) {
     throw new NotFoundError(`AI tool "${toolCode}" is not registered.`);
   }
@@ -12082,8 +12091,8 @@ async function executeGovernedTool(params) {
       resourceType: "ai_tool",
       resourceId: toolCode,
       afterData: { approvalRequestId: approval.id, toolExecutionId: toolExecution2.id },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return { status: "AWAITING_APPROVAL", toolExecutionId: toolExecution2.id, approvalRequestId: approval.id };
   }
@@ -12099,12 +12108,12 @@ async function executeGovernedTool(params) {
       startedAt
     }
   });
-  return runToolHandler(definition, caller, validatedInput, meta13, toolExecution.id);
+  return runToolHandler(definition, caller, validatedInput, meta14, toolExecution.id);
 }
-async function runToolHandler(definition, caller, validatedInput, meta13, toolExecutionId) {
+async function runToolHandler(definition, caller, validatedInput, meta14, toolExecutionId) {
   const startedAt = /* @__PURE__ */ new Date();
   try {
-    const output = await definition.handler(caller, validatedInput, meta13);
+    const output = await definition.handler(caller, validatedInput, meta14);
     const completedAt = /* @__PURE__ */ new Date();
     await prisma.aIToolExecution.update({
       where: { id: toolExecutionId },
@@ -12124,8 +12133,8 @@ async function runToolHandler(definition, caller, validatedInput, meta13, toolEx
       resourceType: "ai_tool",
       resourceId: definition.code,
       afterData: { toolExecutionId },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return { status: "COMPLETED", output, toolExecutionId };
   } catch (err) {
@@ -12150,8 +12159,8 @@ async function runToolHandler(definition, caller, validatedInput, meta13, toolEx
       resourceId: definition.code,
       result: "FAILURE",
       afterData: { toolExecutionId, error: errorMessage },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return { status: "FAILED", error: errorMessage, toolExecutionId };
   }
@@ -12171,7 +12180,7 @@ var aiApprovalService = {
     if (!approval) throw new NotFoundError("AI approval request not found.");
     return approval;
   },
-  async decide(caller, id6, input, meta13 = {}) {
+  async decide(caller, id6, input, meta14 = {}) {
     const approval = await this.getApproval(caller.organizationId, id6);
     if (approval.status !== "PENDING") {
       throw new ConflictError(`This approval request has already been ${approval.status.toLowerCase()}.`);
@@ -12184,7 +12193,7 @@ var aiApprovalService = {
       throw new ConflictError("This approval request's payload no longer matches what was requested; it cannot be approved.");
     }
     if (input.decision === "REJECT") {
-      const rejected = await aiApprovalRepository.reject(id6, caller.id, input.rejectionReason);
+      const rejected2 = await aiApprovalRepository.reject(id6, caller.id, input.rejectionReason);
       if (approval.toolExecutionId) {
         await prisma.aIToolExecution.update({ where: { id: approval.toolExecutionId }, data: { status: "CANCELLED" } });
       }
@@ -12196,10 +12205,10 @@ var aiApprovalService = {
         resourceType: "ai_approval_request",
         resourceId: id6,
         afterData: { rejectionReason: input.rejectionReason },
-        ipAddress: meta13.ip,
-        userAgent: meta13.userAgent
+        ipAddress: meta14.ip,
+        userAgent: meta14.userAgent
       });
-      return rejected;
+      return rejected2;
     }
     if (!approval.toolExecutionId) {
       throw new ValidationError("This approval request has no associated tool execution to run.");
@@ -12220,8 +12229,8 @@ var aiApprovalService = {
       action: "AI_APPROVAL_APPROVED",
       resourceType: "ai_approval_request",
       resourceId: id6,
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     const requestingUser = await userRepository.findById(approval.requestedById);
     if (!requestingUser) {
@@ -12231,7 +12240,7 @@ var aiApprovalService = {
     if (!requesterCaller) {
       throw new ConflictError("The user who originally requested this action no longer has access to this organization.");
     }
-    await runToolHandler(definition, requesterCaller, parsed.data, meta13, approval.toolExecutionId);
+    await runToolHandler(definition, requesterCaller, parsed.data, meta14, approval.toolExecutionId);
     return approved;
   }
 };
@@ -13564,7 +13573,7 @@ var aiQuotaService = {
     const parsed = aiLimitsSchema.safeParse(row?.value);
     return parsed.success ? parsed.data : { dailyRequests: 0, dailyTokens: 0 };
   },
-  async setLimits(organizationId, actorUserId, limits, meta13 = {}) {
+  async setLimits(organizationId, actorUserId, limits, meta14 = {}) {
     const before = await this.getLimits(organizationId);
     await systemSettingRepository.upsert({
       organizationId,
@@ -13582,8 +13591,8 @@ var aiQuotaService = {
       resourceType: "ai_limits",
       beforeData: before,
       afterData: limits,
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return limits;
   },
@@ -16529,7 +16538,7 @@ var pageService = {
     await loadPageOrThrow(id6, organizationId);
     return pageRepository.listChildren(id6, organizationId);
   },
-  async createPage(caller, input, meta13 = {}) {
+  async createPage(caller, input, meta14 = {}) {
     const organizationId = caller.organizationId;
     const body = sanitizeContentHtml(input.body);
     const editorBlocks = input.editorBlocks ? sanitizeEditorDocument(input.editorBlocks) : void 0;
@@ -16589,12 +16598,12 @@ var pageService = {
       resourceType: "page",
       resourceId: createdId,
       afterData: { title: input.title, slug },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return loadPageOrThrow(createdId, organizationId);
   },
-  async updatePage(caller, id6, input, meta13 = {}) {
+  async updatePage(caller, id6, input, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadPageOrThrow(id6, organizationId);
     const sanitizedBody = input.body !== void 0 ? sanitizeContentHtml(input.body) : void 0;
@@ -16680,8 +16689,8 @@ var pageService = {
       resourceId: id6,
       beforeData: { status: existing.status, title: existing.title },
       afterData: { status: input.status, title: input.title, slug: input.slug },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     if (hasFeaturedMediaEdit && input.featuredMediaId !== existing.featuredMediaId) {
       await auditLogRepository.record({
@@ -16693,8 +16702,8 @@ var pageService = {
         resourceId: id6,
         beforeData: { featuredMediaId: existing.featuredMediaId },
         afterData: { featuredMediaId: input.featuredMediaId ?? null },
-        ipAddress: meta13.ip,
-        userAgent: meta13.userAgent
+        ipAddress: meta14.ip,
+        userAgent: meta14.userAgent
       });
     }
     if (input.slug !== void 0 && input.slug !== existing.slug) {
@@ -16711,7 +16720,7 @@ var pageService = {
     }
     return loadPageOrThrow(id6, organizationId);
   },
-  async submitForReview(caller, id6, meta13 = {}) {
+  async submitForReview(caller, id6, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadPageOrThrow(id6, organizationId);
     if (existing.status !== "DRAFT") throw new ConflictError(`Only a DRAFT page can be submitted for review (current status: ${existing.status}).`);
@@ -16728,8 +16737,8 @@ var pageService = {
       resourceId: id6,
       beforeData: { status: existing.status },
       afterData: { status: "IN_REVIEW" },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     try {
       await eventEngine.emit({
@@ -16746,7 +16755,7 @@ var pageService = {
     }
     return loadPageOrThrow(id6, organizationId);
   },
-  async publishPage(caller, id6, meta13 = {}) {
+  async publishPage(caller, id6, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadPageOrThrow(id6, organizationId);
     if (existing.status === "ARCHIVED") throw new ConflictError("An archived page must be restored before it can be published.");
@@ -16767,8 +16776,8 @@ var pageService = {
       resourceId: id6,
       beforeData: { status: existing.status },
       afterData: { status: "PUBLISHED" },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     if (existing.createdById && existing.createdById !== caller.id) {
       await notificationService.notify({
@@ -16781,7 +16790,7 @@ var pageService = {
     }
     return loadPageOrThrow(id6, organizationId);
   },
-  async schedulePage(caller, id6, input, meta13 = {}) {
+  async schedulePage(caller, id6, input, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadPageOrThrow(id6, organizationId);
     if (existing.status === "ARCHIVED") throw new ConflictError("An archived page must be restored before it can be scheduled.");
@@ -16797,12 +16806,12 @@ var pageService = {
       resourceId: id6,
       beforeData: { status: existing.status },
       afterData: { status: "SCHEDULED", scheduledAt: input.scheduledAt },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return loadPageOrThrow(id6, organizationId);
   },
-  async archivePage(caller, id6, meta13 = {}) {
+  async archivePage(caller, id6, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadPageOrThrow(id6, organizationId);
     if (existing.status === "ARCHIVED") throw new ConflictError("This page is already archived.");
@@ -16816,12 +16825,12 @@ var pageService = {
       resourceId: id6,
       beforeData: { status: existing.status },
       afterData: { status: "ARCHIVED" },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return loadPageOrThrow(id6, organizationId);
   },
-  async revertPage(caller, id6, input, meta13 = {}) {
+  async revertPage(caller, id6, input, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadPageOrThrow(id6, organizationId);
     if (existing.status === "ARCHIVED") throw new ConflictError("An archived page must be restored before its content can be reverted.");
@@ -16859,12 +16868,12 @@ var pageService = {
       resourceId: id6,
       beforeData: { fromVersion: current?.version, revertedToRevisionId: target.id, revertedToVersion: target.version },
       afterData: { newVersion: nextVersion },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return loadPageOrThrow(id6, organizationId);
   },
-  async deletePage(caller, id6, meta13 = {}) {
+  async deletePage(caller, id6, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadPageOrThrow(id6, organizationId);
     await pageRepository.softDelete(id6);
@@ -16876,15 +16885,15 @@ var pageService = {
       resourceType: "page",
       resourceId: id6,
       beforeData: { status: existing.status, title: existing.title },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
   },
   /** Phase 7 — Trash view (Content Dashboard): soft-deleted pages, paginated. */
   async listTrash(organizationId, page, limit) {
     return pageRepository.listTrash(organizationId, page, limit);
   },
-  async restorePage(caller, id6, meta13 = {}) {
+  async restorePage(caller, id6, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await pageRepository.findTrashedByIdInOrg(id6, organizationId);
     if (!existing) throw new NotFoundError("Page not found in trash.");
@@ -16897,19 +16906,19 @@ var pageService = {
       resourceType: "page",
       resourceId: id6,
       beforeData: { status: existing.status, title: existing.title },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
   },
   /** Phase 7 — bulk workflow actions, same per-item isolation as postService.bulkAction. */
-  async bulkAction(caller, action, ids, meta13 = {}) {
+  async bulkAction(caller, action, ids, meta14 = {}) {
     const succeeded = [];
     const failed = [];
     for (const id6 of ids) {
       try {
-        if (action === "archive") await this.archivePage(caller, id6, meta13);
-        else if (action === "trash") await this.deletePage(caller, id6, meta13);
-        else await this.restorePage(caller, id6, meta13);
+        if (action === "archive") await this.archivePage(caller, id6, meta14);
+        else if (action === "trash") await this.deletePage(caller, id6, meta14);
+        else await this.restorePage(caller, id6, meta14);
         succeeded.push(id6);
       } catch (err) {
         failed.push({ id: id6, error: err instanceof Error ? err.message : "Action failed." });
@@ -16999,9 +17008,9 @@ var contentApprovalService = {
       resourceId: contentId,
       afterData: { approvalId: approval.id }
     });
-    const approvers = await userRepository.listActiveByRoleKeysInOrg(organizationId, APPROVER_ROLE_KEYS);
+    const approvers2 = await userRepository.listActiveByRoleKeysInOrg(organizationId, APPROVER_ROLE_KEYS);
     await Promise.all(
-      approvers.filter((u) => u.id !== caller.id).map(
+      approvers2.filter((u) => u.id !== caller.id).map(
         (u) => notificationService.notify({
           organizationId,
           userId: u.id,
@@ -17508,7 +17517,7 @@ async function loadPage(organizationId, id6) {
   return page;
 }
 var pendingApprovalFor = (organizationId, pageId) => prisma.automationApproval.findFirst({ where: { organizationId, entityType: "landing_page", entityId: pageId, status: "PENDING" }, select: { id: true, requestedAt: true, requesterId: true } });
-async function audit(caller, organizationId, action, pageId, meta13, extra = {}) {
+async function audit(caller, organizationId, action, pageId, meta14, extra = {}) {
   await auditLogRepository.record({
     organizationId,
     actorUserId: caller?.id,
@@ -17517,8 +17526,8 @@ async function audit(caller, organizationId, action, pageId, meta13, extra = {})
     resourceType: "landing_page",
     resourceId: pageId,
     afterData: extra,
-    ipAddress: meta13.ip,
-    userAgent: meta13.userAgent
+    ipAddress: meta14.ip,
+    userAgent: meta14.userAgent
   });
 }
 async function toView(page) {
@@ -17589,7 +17598,7 @@ var landingPageService = {
   async get(caller, id6) {
     return toView(await loadPage(caller.organizationId, id6));
   },
-  async create(caller, input, meta13 = {}) {
+  async create(caller, input, meta14 = {}) {
     const organizationId = caller.organizationId;
     const slug = input.slug ?? await uniqueSlug(organizationId, input.title);
     if (input.slug) await assertSlugAvailable(organizationId, slug);
@@ -17602,10 +17611,10 @@ var landingPageService = {
       await tx.page.update({ where: { id: page.id }, data: { currentRevisionId: rev.id } });
       return page.id;
     });
-    await audit(caller, organizationId, "LANDING_PAGE_CREATED", pageId, meta13, { slug, templateKey: input.templateKey });
+    await audit(caller, organizationId, "LANDING_PAGE_CREATED", pageId, meta14, { slug, templateKey: input.templateKey });
     return toView(await loadPage(organizationId, pageId));
   },
-  async update(caller, id6, input, meta13 = {}) {
+  async update(caller, id6, input, meta14 = {}) {
     const organizationId = caller.organizationId;
     const page = await loadPage(organizationId, id6);
     if (page.status === "ARCHIVED") throw new ConflictError("An archived landing page must be restored before it can be edited.");
@@ -17648,7 +17657,7 @@ var landingPageService = {
     if (slugPatch && page.publishedAt) {
       await redirectService.autoRedirectOnSlugChange({ organizationId, fromPath: landingPath(page.slug), toPath: landingPath(slugPatch), resourceType: "landing_page", resourceId: id6 });
     }
-    await audit(caller, organizationId, "LANDING_PAGE_UPDATED", id6, meta13, { fields: Object.keys(input).filter((k) => k !== "expectedUpdatedAt"), slugChanged: !!slugPatch, forkedRevision: fork });
+    await audit(caller, organizationId, "LANDING_PAGE_UPDATED", id6, meta14, { fields: Object.keys(input).filter((k) => k !== "expectedUpdatedAt"), slugChanged: !!slugPatch, forkedRevision: fork });
     return toView(await loadPage(organizationId, id6));
   },
   async listRevisions(caller, id6) {
@@ -17667,7 +17676,7 @@ var landingPageService = {
     }));
   },
   /** Restore = clone an earlier revision into a NEW working draft (history is append-only); it goes live only through approval. */
-  async restoreRevision(caller, id6, revisionId, meta13 = {}) {
+  async restoreRevision(caller, id6, revisionId, meta14 = {}) {
     const organizationId = caller.organizationId;
     const page = await loadPage(organizationId, id6);
     if (page.status === "ARCHIVED") throw new ConflictError("An archived landing page must be restored first.");
@@ -17681,20 +17690,20 @@ var landingPageService = {
       });
       await tx.page.update({ where: { id: id6 }, data: { currentRevisionId: created.id, title: target.title } });
     });
-    await audit(caller, organizationId, "LANDING_PAGE_REVISION_RESTORED", id6, meta13, { fromVersion: target.version });
+    await audit(caller, organizationId, "LANDING_PAGE_REVISION_RESTORED", id6, meta14, { fromVersion: target.version });
     return toView(await loadPage(organizationId, id6));
   },
   /** Takes a live page offline at once (the address then answers 410). Needs publish permission. The draft stays; going live again needs approval. */
-  async unpublish(caller, id6, meta13 = {}) {
+  async unpublish(caller, id6, meta14 = {}) {
     const organizationId = caller.organizationId;
     const page = await loadPage(organizationId, id6);
     if (!page.landingLiveRevisionId) throw new ConflictError("This page is not live.");
     await prisma.page.update({ where: { id: id6 }, data: { status: "DRAFT", landingLiveRevisionId: null, landingUnpublishedAt: /* @__PURE__ */ new Date() } });
     await syncLandingForm(page, null, false);
-    await audit(caller, organizationId, "LANDING_PAGE_UNPUBLISHED", id6, meta13, { slug: page.slug });
+    await audit(caller, organizationId, "LANDING_PAGE_UNPUBLISHED", id6, meta14, { slug: page.slug });
     return toView(await loadPage(organizationId, id6));
   },
-  async archive(caller, id6, meta13 = {}) {
+  async archive(caller, id6, meta14 = {}) {
     const organizationId = caller.organizationId;
     const page = await loadPage(organizationId, id6);
     if (page.status === "ARCHIVED") throw new ConflictError("This page is already archived.");
@@ -17703,32 +17712,32 @@ var landingPageService = {
     await prisma.automationApproval.updateMany({ where: { organizationId, entityType: "landing_page", entityId: id6, status: "PENDING" }, data: { status: "CANCELLED", decidedAt: /* @__PURE__ */ new Date(), decisionReason: "Page archived" } });
     await prisma.page.update({ where: { id: id6 }, data: { status: "ARCHIVED", landingLiveRevisionId: null, ...wasLive || page.publishedAt ? { landingUnpublishedAt: /* @__PURE__ */ new Date() } : {} } });
     await syncLandingForm(page, null, false);
-    await audit(caller, organizationId, "LANDING_PAGE_ARCHIVED", id6, meta13, { wasLive });
+    await audit(caller, organizationId, "LANDING_PAGE_ARCHIVED", id6, meta14, { wasLive });
     return toView(await loadPage(organizationId, id6));
   },
-  async unarchive(caller, id6, meta13 = {}) {
+  async unarchive(caller, id6, meta14 = {}) {
     const organizationId = caller.organizationId;
     const page = await loadPage(organizationId, id6);
     if (page.status !== "ARCHIVED") throw new ConflictError("This page is not archived.");
     await prisma.page.update({ where: { id: id6 }, data: { status: "DRAFT" } });
-    await audit(caller, organizationId, "LANDING_PAGE_UNARCHIVED", id6, meta13);
+    await audit(caller, organizationId, "LANDING_PAGE_UNARCHIVED", id6, meta14);
     return toView(await loadPage(organizationId, id6));
   },
   /** A private link to the exact public rendering of the WORKING draft. Only a hash is stored; the raw token is returned once. */
-  async createPreview(caller, id6, ttlHours, meta13 = {}) {
+  async createPreview(caller, id6, ttlHours, meta14 = {}) {
     const organizationId = caller.organizationId;
     await loadPage(organizationId, id6);
     const token = crypto13.randomBytes(32).toString("base64url");
     const expiresAt = new Date(Date.now() + ttlHours * 36e5);
     await prisma.landingPreviewToken.create({ data: { pageId: id6, tokenHash: hashToken(token), expiresAt, createdById: caller.id } });
-    await audit(caller, organizationId, "LANDING_PAGE_PREVIEW_CREATED", id6, meta13, { expiresAt });
+    await audit(caller, organizationId, "LANDING_PAGE_PREVIEW_CREATED", id6, meta14, { expiresAt });
     const base3 = config.publicSiteBaseUrl ? config.publicSiteBaseUrl.replace(/\/+$/, "") : null;
     return { token, expiresAt, url: base3 ? `${base3}/lp-preview/${token}` : null, path: `/lp-preview/${token}` };
   },
-  async revokePreviews(caller, id6, meta13 = {}) {
+  async revokePreviews(caller, id6, meta14 = {}) {
     await loadPage(caller.organizationId, id6);
     const res = await prisma.landingPreviewToken.updateMany({ where: { pageId: id6, revokedAt: null, expiresAt: { gt: /* @__PURE__ */ new Date() } }, data: { revokedAt: /* @__PURE__ */ new Date() } });
-    await audit(caller, caller.organizationId, "LANDING_PAGE_PREVIEWS_REVOKED", id6, meta13, { count: res.count });
+    await audit(caller, caller.organizationId, "LANDING_PAGE_PREVIEWS_REVOKED", id6, meta14, { count: res.count });
     return { revoked: res.count };
   },
   /** `https://<site>/lp/<slug>?utm_*` for Composer posts: only for a LIVE page, with validated parameters. `url` is null when PUBLIC_SITE_BASE_URL is not configured (the relative `path` is always returned). */
@@ -17765,7 +17774,7 @@ async function workflowFor(organizationId) {
 }
 var landingApprovalService = {
   /** Author asks for the working draft to go live (first publish, or an update to a live page). */
-  async submit(caller, id6, meta13 = {}) {
+  async submit(caller, id6, meta14 = {}) {
     const organizationId = caller.organizationId;
     const page = await landingPageService.loadPage(organizationId, id6);
     if (page.status === "ARCHIVED") throw new ConflictError("An archived landing page must be restored first.");
@@ -17796,13 +17805,13 @@ var landingApprovalService = {
       }
     });
     if (!page.landingLiveRevisionId) await prisma.page.update({ where: { id: id6 }, data: { status: "IN_REVIEW" } });
-    await auditLogRepository.record({ organizationId, actorUserId: caller.id, actorType: "USER", action: "LANDING_PAGE_SUBMITTED_FOR_APPROVAL", resourceType: "landing_page", resourceId: id6, afterData: { approvalId: approval.id, version: rev.version }, ipAddress: meta13.ip, userAgent: meta13.userAgent });
-    const approvers = await userRepository.listActiveByRoleKeysInOrg(organizationId, APPROVER_ROLE_KEYS2);
-    await Promise.all(approvers.filter((u) => u.id !== caller.id).map((u) => notificationService.notify({ organizationId, userId: u.id, type: "approval_requested", title: "Landing page approval requested", message: `"${rev.title}" is waiting for your approval.`, entityType: "automation_approval", entityId: approval.id })));
+    await auditLogRepository.record({ organizationId, actorUserId: caller.id, actorType: "USER", action: "LANDING_PAGE_SUBMITTED_FOR_APPROVAL", resourceType: "landing_page", resourceId: id6, afterData: { approvalId: approval.id, version: rev.version }, ipAddress: meta14.ip, userAgent: meta14.userAgent });
+    const approvers2 = await userRepository.listActiveByRoleKeysInOrg(organizationId, APPROVER_ROLE_KEYS2);
+    await Promise.all(approvers2.filter((u) => u.id !== caller.id).map((u) => notificationService.notify({ organizationId, userId: u.id, type: "approval_requested", title: "Landing page approval requested", message: `"${rev.title}" is waiting for your approval.`, entityType: "automation_approval", entityId: approval.id })));
     return { approvalId: approval.id };
   },
   /** The requester (or anyone who can edit) takes the request back so the page can be edited again. */
-  async withdraw(caller, id6, meta13 = {}) {
+  async withdraw(caller, id6, meta14 = {}) {
     const organizationId = caller.organizationId;
     const page = await landingPageService.loadPage(organizationId, id6);
     const pending = await pendingApprovalFor(organizationId, id6);
@@ -17810,10 +17819,10 @@ var landingApprovalService = {
     await prisma.automationApproval.update({ where: { id: pending.id }, data: { status: "CANCELLED", decidedAt: /* @__PURE__ */ new Date(), decisionReason: "Withdrawn by the author" } });
     await prisma.automationExecution.updateMany({ where: { approvals: { some: { id: pending.id } } }, data: { status: "CANCELLED", completedAt: /* @__PURE__ */ new Date() } }).catch(() => void 0);
     if (!page.landingLiveRevisionId && page.status === "IN_REVIEW") await prisma.page.update({ where: { id: id6 }, data: { status: "DRAFT" } });
-    await auditLogRepository.record({ organizationId, actorUserId: caller.id, actorType: "USER", action: "LANDING_PAGE_APPROVAL_WITHDRAWN", resourceType: "landing_page", resourceId: id6, afterData: { approvalId: pending.id }, ipAddress: meta13.ip, userAgent: meta13.userAgent });
+    await auditLogRepository.record({ organizationId, actorUserId: caller.id, actorType: "USER", action: "LANDING_PAGE_APPROVAL_WITHDRAWN", resourceType: "landing_page", resourceId: id6, afterData: { approvalId: pending.id }, ipAddress: meta14.ip, userAgent: meta14.userAgent });
   },
   /** Called by the Approvals center. Needs `marketing.landing.publish`. */
-  async decide(caller, approvalId, decision, reason, meta13 = {}) {
+  async decide(caller, approvalId, decision, reason, meta14 = {}) {
     if (!can(caller, "marketing.landing.publish")) throw new AuthorizationError('Permission denied. Required privilege: "marketing.landing.publish"');
     const organizationId = caller.organizationId;
     const approval = await prisma.automationApproval.findFirst({ where: { id: approvalId, organizationId, entityType: LANDING_ENTITY } });
@@ -17848,8 +17857,8 @@ var landingApprovalService = {
       resourceType: "landing_page",
       resourceId: pageId,
       afterData: { approvalId: approval.id, reason: reason ?? null, path: landingPath(page.slug) },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     if (approval.requesterId && approval.requesterId !== caller.id) {
       await notificationService.notify({
@@ -18166,26 +18175,33 @@ async function loadRecords(orgId2, ids, email) {
   return { contacts, leads, clients, consent, submissions, conversations, messages, audit: audit4, auditSnapshotsWithEmail: Number(snaps[0]?.n ?? 0) };
 }
 var counts = (r) => ({ contacts: r.contacts.length, leads: r.leads.length, clients: r.clients.length, consentRecords: r.consent.length, formSubmissions: r.submissions.length, socialConversations: r.conversations.length, socialMessages: r.messages.length, auditReferences: r.audit.length });
-async function audit2(orgId2, actor, action, resourceId, afterData, meta13) {
-  await auditLogRepository.record({ organizationId: orgId2, actorUserId: actor?.id, actorType: actor ? "USER" : "SYSTEM", action, resourceType: "privacy_request", resourceId, afterData, ipAddress: meta13.ip, userAgent: meta13.userAgent });
+async function audit2(orgId2, actor, action, resourceId, afterData, meta14) {
+  await auditLogRepository.record({ organizationId: orgId2, actorUserId: actor?.id, actorType: actor ? "USER" : "SYSTEM", action, resourceType: "privacy_request", resourceId, afterData, ipAddress: meta14.ip, userAgent: meta14.userAgent });
+}
+async function createPrivacyApproval(orgId2, requestId, requesterId, description, ref) {
+  const workflow = await prisma.automationWorkflow.findFirst({ where: { organizationId: orgId2, category: "CONTENT_APPROVAL" } }) ?? await prisma.automationWorkflow.create({ data: { organizationId: orgId2, name: "Content Approval", description: "System workflow anchoring approval requests.", category: "CONTENT_APPROVAL", status: "ACTIVE", triggerType: "MANUAL", steps: [] } });
+  const execution = await prisma.automationExecution.create({ data: { organizationId: orgId2, workflowId: workflow.id, workflowVersion: workflow.currentVersion, status: "WAITING_APPROVAL", triggerType: "MANUAL", entityType: "privacy_erasure", entityId: requestId, correlationId: requestId, initiatedById: requesterId } });
+  const approval = await prisma.automationApproval.create({ data: { organizationId: orgId2, executionId: execution.id, workflowId: workflow.id, stepId: "privacy-erasure", action: "erase_personal_data", description, entityType: "privacy_erasure", entityId: requestId, requesterId, status: "PENDING", payload: { requestId, subjectRef: ref } } });
+  await prisma.privacyRequest.update({ where: { id: requestId }, data: { approvalId: approval.id } });
+  return approval;
 }
 var privacyService = {
   /** Everything held about a person. Viewing personal data is itself audited (pseudonym + counts only). */
-  async lookup(caller, rawEmail, meta13 = {}) {
+  async lookup(caller, rawEmail, meta14 = {}) {
     const orgId2 = caller.organizationId, email = normalizeEmail(rawEmail);
     const { ids, staff } = await resolveTargets(orgId2, email);
     const records = await loadRecords(orgId2, ids, email);
     const ref = subjectRef(orgId2, email);
-    await audit2(orgId2, caller, "PRIVACY_LOOKUP", ref, { subjectRef: ref, counts: counts(records) }, meta13);
+    await audit2(orgId2, caller, "PRIVACY_LOOKUP", ref, { subjectRef: ref, counts: counts(records) }, meta14);
     return { subjectRef: ref, staffAccount: staff, found: Object.values(counts(records)).some((n) => n > 0), counts: counts(records), auditSnapshotsContainingEmail: records.auditSnapshotsWithEmail, records: scrubSecrets(records) };
   },
   /** Export bundle (JSON or one long-format CSV). Needs privacy.export; audited. */
-  async exportBundle(caller, rawEmail, format, meta13 = {}) {
+  async exportBundle(caller, rawEmail, format, meta14 = {}) {
     const orgId2 = caller.organizationId, email = normalizeEmail(rawEmail);
     const { ids } = await resolveTargets(orgId2, email);
     const records = scrubSecrets(await loadRecords(orgId2, ids, email));
     const ref = subjectRef(orgId2, email);
-    await audit2(orgId2, caller, "PRIVACY_EXPORT_CREATED", ref, { subjectRef: ref, format, counts: counts(records) }, meta13);
+    await audit2(orgId2, caller, "PRIVACY_EXPORT_CREATED", ref, { subjectRef: ref, format, counts: counts(records) }, meta14);
     const bundle = { format: "artify-subject-export", version: 1, generatedAt: (/* @__PURE__ */ new Date()).toISOString(), subject: { email }, retention: "See Administration \u2192 Data Privacy \u2192 Retention policy.", ...records };
     if (format === "json") return { filename: `subject-export-${ref}.json`, contentType: "application/json", body: JSON.stringify(bundle, null, 2) };
     const rows = [];
@@ -18219,7 +18235,7 @@ var privacyService = {
     };
   },
   /** Creates the request and its approval. Stores IDs and counts only. */
-  async requestErasure(caller, rawEmail, reason, meta13 = {}) {
+  async requestErasure(caller, rawEmail, reason, meta14 = {}) {
     const orgId2 = caller.organizationId, email = normalizeEmail(rawEmail);
     const why = reason.trim();
     if (why.length < 10) throw new ValidationError("A reason of at least 10 characters is required.");
@@ -18229,12 +18245,9 @@ var privacyService = {
     if (ids.leads.length + ids.contacts.length + ids.clients.length + ids.submissions.length + ids.conversations.length === 0) throw new ConflictError("Nothing is held about this email, so there is nothing to erase.");
     const ref = subjectRef(orgId2, email);
     if (await prisma.privacyRequest.findFirst({ where: { organizationId: orgId2, subjectRef: ref, kind: "ERASURE", status: "PENDING_APPROVAL" } })) throw new ConflictError("An erasure request for this person is already waiting for approval.");
-    const workflow = await prisma.automationWorkflow.findFirst({ where: { organizationId: orgId2, category: "CONTENT_APPROVAL" } }) ?? await prisma.automationWorkflow.create({ data: { organizationId: orgId2, name: "Content Approval", description: "System workflow anchoring approval requests.", category: "CONTENT_APPROVAL", status: "ACTIVE", triggerType: "MANUAL", steps: [] } });
     const req = await prisma.privacyRequest.create({ data: { organizationId: orgId2, kind: "ERASURE", status: "PENDING_APPROVAL", subjectRef: ref, reason: why.slice(0, 500), requestedById: caller.id, targetIds: ids, previewCounts: counts(records) } });
-    const execution = await prisma.automationExecution.create({ data: { organizationId: orgId2, workflowId: workflow.id, workflowVersion: workflow.currentVersion, status: "WAITING_APPROVAL", triggerType: "MANUAL", entityType: "privacy_erasure", entityId: req.id, correlationId: req.id, initiatedById: caller.id } });
-    const approval = await prisma.automationApproval.create({ data: { organizationId: orgId2, executionId: execution.id, workflowId: workflow.id, stepId: "privacy-erasure", action: "erase_personal_data", description: `Erase personal data (subject ${ref})`, entityType: "privacy_erasure", entityId: req.id, requesterId: caller.id, status: "PENDING", payload: { requestId: req.id, subjectRef: ref } } });
-    await prisma.privacyRequest.update({ where: { id: req.id }, data: { approvalId: approval.id } });
-    await audit2(orgId2, caller, "PRIVACY_ERASURE_REQUESTED", req.id, { subjectRef: ref, counts: counts(records) }, meta13);
+    const approval = await createPrivacyApproval(orgId2, req.id, caller.id, `Erase personal data (subject ${ref})`, ref);
+    await audit2(orgId2, caller, "PRIVACY_ERASURE_REQUESTED", req.id, { subjectRef: ref, counts: counts(records) }, meta14);
     return { requestId: req.id, approvalId: approval.id, subjectRef: ref, counts: counts(records) };
   },
   async listRequests(orgId2) {
@@ -18244,6 +18257,7 @@ var privacyService = {
   async describeRequest(orgId2, requestId) {
     const r = await prisma.privacyRequest.findFirst({ where: { id: requestId, organizationId: orgId2 } });
     if (!r) throw new ConflictError("Request not found.");
+    if (r.kind === "META_DELETION") return { id: r.id, status: r.status, reason: r.reason, subjectRef: r.subjectRef, counts: r.previewCounts, maskedEmails: [] };
     const ids = r.targetIds ?? EMPTY;
     const [leads, contacts] = await Promise.all([
       ids.leads.length ? prisma.lead.findMany({ where: { id: { in: ids.leads }, organizationId: orgId2 }, select: { id: true, email: true, source: true, createdAt: true } }) : [],
@@ -18270,11 +18284,186 @@ var privacyService = {
   }
 };
 
+// server/services/meta/metaCallbackService.ts
+import { createHmac as createHmac4, randomBytes as randomBytes5 } from "node:crypto";
+
+// server/services/meta/signedRequest.ts
+import { createHmac as createHmac3, timingSafeEqual as timingSafeEqual2 } from "node:crypto";
+var SignedRequestError = class extends Error {
+  constructor(reason) {
+    super(`Invalid signed_request: ${reason}`);
+    this.reason = reason;
+    this.name = "SignedRequestError";
+  }
+};
+var SIGNED_REQUEST_MAX_AGE_SECONDS = 3 * 24 * 3600;
+var FUTURE_SKEW_SECONDS = 300;
+var b64urlToBuf = (s) => Buffer.from(s.replace(/-/g, "+").replace(/_/g, "/"), "base64");
+var B64URL = /^[A-Za-z0-9_-]+={0,2}$/;
+function parseSignedRequest(raw, appSecret, now = /* @__PURE__ */ new Date(), maxAgeSeconds = SIGNED_REQUEST_MAX_AGE_SECONDS) {
+  if (!appSecret) throw new SignedRequestError("not_configured");
+  if (typeof raw !== "string" || raw.length === 0) throw new SignedRequestError("missing");
+  if (raw.length > 4096) throw new SignedRequestError("malformed");
+  const parts = raw.split(".");
+  if (parts.length !== 2 || !parts[0] || !parts[1] || !B64URL.test(parts[0]) || !B64URL.test(parts[1])) throw new SignedRequestError("malformed");
+  const [sigPart, payloadPart] = parts;
+  let payload;
+  try {
+    const parsed = JSON.parse(b64urlToBuf(payloadPart).toString("utf8"));
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("not an object");
+    payload = parsed;
+  } catch {
+    throw new SignedRequestError("malformed");
+  }
+  if (typeof payload.algorithm !== "string" || payload.algorithm.toUpperCase() !== "HMAC-SHA256") throw new SignedRequestError("unsupported_algorithm");
+  const expected = createHmac3("sha256", appSecret).update(payloadPart).digest();
+  const given = b64urlToBuf(sigPart);
+  if (given.length !== expected.length || !timingSafeEqual2(given, expected)) throw new SignedRequestError("bad_signature");
+  if (typeof payload.issued_at === "number") {
+    const age = Math.floor(now.getTime() / 1e3) - payload.issued_at;
+    if (age > maxAgeSeconds || age < -FUTURE_SKEW_SECONDS) throw new SignedRequestError("expired");
+  }
+  if (typeof payload.user_id !== "string" || !/^[A-Za-z0-9_-]{1,64}$/.test(payload.user_id)) throw new SignedRequestError("no_user");
+  return payload;
+}
+
+// server/services/meta/metaCallbackService.ts
+var META_REQUESTER = "meta-callback";
+var META_DELETION_KIND = "META_DELETION";
+var STATUS_URL_PATH = "/data-deletion-status";
+var metaSubjectRef = (userId) => createHmac4("sha256", config.sessionSecret).update(`meta-subject:${userId}`).digest("hex").slice(0, 20);
+var newCode = () => `MDR-${randomBytes5(12).toString("base64url")}`;
+var siteBase = () => (config.publicSiteBaseUrl || "https://artifysols.com").replace(/\/+$/, "");
+var statusUrl = (code) => `${siteBase()}${STATUS_URL_PATH}?code=${encodeURIComponent(code)}`;
+async function approvers(orgId2) {
+  const rows = await prisma.organizationMembership.findMany({
+    where: { organizationId: orgId2, status: "ACTIVE", user: { status: "ACTIVE", deletedAt: null }, role: { OR: [{ key: "SUPER_ADMIN" }, { rolePermissions: { some: { permission: { key: "privacy.erase" } } } }] } },
+    select: { userId: true },
+    take: 20
+  });
+  return rows.map((r) => r.userId);
+}
+var metaCallbackService = {
+  /** Deauthorize callback. Throws SignedRequestError when the request cannot be verified (the route turns that into 400/503). */
+  async deauthorize(signedRequest, meta14 = {}) {
+    const payload = parseSignedRequest(signedRequest, config.metaAppSecret);
+    const ref = metaSubjectRef(payload.user_id);
+    const accounts = await prisma.socialAccount.findMany({ where: { metaUserId: payload.user_id, status: { not: "DISCONNECTED" } }, select: { id: true, organizationId: true, provider: true, externalAccountId: true } });
+    for (const a of accounts) {
+      await prisma.$transaction([
+        prisma.socialAccountCredential.deleteMany({ where: { socialAccountId: a.id } }),
+        prisma.socialAccount.update({ where: { id: a.id }, data: { status: "NEEDS_REAUTH", tokenExpiresAt: null, lastError: "Facebook reported that the person who connected this account removed the app. Reconnect it to restore access." } })
+      ]);
+      await auditLogRepository.record({
+        organizationId: a.organizationId,
+        actorType: "SYSTEM",
+        action: "META_DEAUTHORIZED",
+        resourceType: "social_account",
+        resourceId: a.id,
+        metadata: { provider: a.provider, externalAccountId: a.externalAccountId, subjectRef: ref, source: "meta_deauthorize_callback" },
+        ipAddress: meta14.ip,
+        userAgent: meta14.userAgent
+      });
+    }
+    await prisma.metaDataRequest.create({ data: { code: newCode(), kind: "DEAUTHORIZE", subjectRef: ref, status: "PROCESSED", matched: { accounts: accounts.length } } });
+    if (accounts.length === 0) {
+      await auditLogRepository.record({ actorType: "SYSTEM", action: "META_DEAUTHORIZE_RECEIVED", resourceType: "meta_callback", resourceId: ref, metadata: { accounts: 0 }, ipAddress: meta14.ip, userAgent: meta14.userAgent });
+    }
+    return { accountsUpdated: accounts.length };
+  },
+  /** Data-deletion callback. Returns exactly what Meta expects: `{ url, confirmation_code }`. */
+  async requestDeletion(signedRequest, meta14 = {}) {
+    const payload = parseSignedRequest(signedRequest, config.metaAppSecret);
+    const ref = metaSubjectRef(payload.user_id);
+    const open2 = await prisma.metaDataRequest.findFirst({ where: { subjectRef: ref, kind: "DELETION", status: "IN_REVIEW" }, orderBy: { createdAt: "desc" } });
+    if (open2) return { url: statusUrl(open2.code), confirmation_code: open2.code };
+    const [accounts, conversations] = await Promise.all([
+      prisma.socialAccount.findMany({ where: { metaUserId: payload.user_id }, select: { id: true, organizationId: true } }),
+      prisma.socialConversation.findMany({ where: { participantExternalId: payload.user_id }, select: { id: true, organizationId: true } })
+    ]);
+    const orgs = /* @__PURE__ */ new Map();
+    for (const a of accounts) (orgs.get(a.organizationId) ?? orgs.set(a.organizationId, { accounts: [], conversations: [] }).get(a.organizationId)).accounts.push(a.id);
+    for (const c of conversations) (orgs.get(c.organizationId) ?? orgs.set(c.organizationId, { accounts: [], conversations: [] }).get(c.organizationId)).conversations.push(c.id);
+    const code = newCode();
+    if (orgs.size === 0) {
+      await prisma.metaDataRequest.create({ data: { code, kind: "DELETION", subjectRef: ref, status: "NOTHING_HELD", matched: { accounts: 0, conversations: 0 } } });
+      await auditLogRepository.record({ actorType: "SYSTEM", action: "META_DELETION_RECEIVED", resourceType: "meta_callback", resourceId: ref, metadata: { code, outcome: "nothing_held" }, ipAddress: meta14.ip, userAgent: meta14.userAgent });
+      return { url: statusUrl(code), confirmation_code: code };
+    }
+    const matched = [];
+    for (const [orgId2, targets] of orgs) {
+      const req = await prisma.privacyRequest.create({
+        data: {
+          organizationId: orgId2,
+          kind: META_DELETION_KIND,
+          status: "PENDING_APPROVAL",
+          subjectRef: ref,
+          requestedById: META_REQUESTER,
+          reason: `Meta data deletion callback ${code}`,
+          targetIds: targets,
+          previewCounts: { socialAccounts: targets.accounts.length, socialConversations: targets.conversations.length }
+        }
+      });
+      await createPrivacyApproval(orgId2, req.id, null, `Meta data deletion request ${code} (subject ${ref})`, ref);
+      await auditLogRepository.record({
+        organizationId: orgId2,
+        actorType: "SYSTEM",
+        action: "META_DELETION_RECEIVED",
+        resourceType: "privacy_request",
+        resourceId: req.id,
+        afterData: { subjectRef: ref, code, accounts: targets.accounts.length, conversations: targets.conversations.length },
+        ipAddress: meta14.ip,
+        userAgent: meta14.userAgent
+      });
+      for (const userId of await approvers(orgId2)) {
+        await notificationService.notify({ organizationId: orgId2, userId, type: "approval_requested", title: "Meta data deletion request", message: `Facebook sent a data deletion request (${code}). Review it in Approvals; nothing is deleted until you approve.`, entityType: "privacy_request", entityId: req.id });
+      }
+      matched.push({ organizationId: orgId2, privacyRequestId: req.id, accounts: targets.accounts.length, conversations: targets.conversations.length });
+    }
+    await prisma.metaDataRequest.create({ data: { code, kind: "DELETION", subjectRef: ref, status: "IN_REVIEW", organizationId: matched[0].organizationId, privacyRequestId: matched[0].privacyRequestId, matched } });
+    return { url: statusUrl(code), confirmation_code: code };
+  },
+  /** Public status for the confirmation code. Reveals nothing about the person, only the state of the request. */
+  async deletionStatus(code) {
+    if (!/^MDR-[A-Za-z0-9_-]{16}$/.test(code)) return null;
+    const row = await prisma.metaDataRequest.findUnique({ where: { code } });
+    if (!row || row.kind !== "DELETION") return null;
+    let status = row.status;
+    if (row.status === "IN_REVIEW") {
+      const ids = (row.matched ?? []).map((m) => m.privacyRequestId);
+      const reqs = ids.length ? await prisma.privacyRequest.findMany({ where: { id: { in: ids } }, select: { status: true, decidedAt: true } }) : [];
+      if (reqs.length && reqs.every((r) => r.status === "EXECUTED")) status = "COMPLETED";
+      else if (reqs.some((r) => r.status === "REJECTED")) status = "DECLINED";
+      if (status !== row.status) await prisma.metaDataRequest.update({ where: { id: row.id }, data: { status } });
+    }
+    const message = {
+      IN_REVIEW: "We received the request and a person on our team is reviewing it. Nothing has been deleted yet.",
+      COMPLETED: "The data we held that is linked to this request has been deleted or anonymised.",
+      DECLINED: "The request was reviewed and could not be completed automatically. Please use the contact on the Data Deletion page and quote this code.",
+      NOTHING_HELD: "We did not find any data linked to this request, so there was nothing to delete."
+    }[status];
+    return { code, status, receivedAt: row.createdAt.toISOString(), updatedAt: row.updatedAt.toISOString(), message };
+  },
+  /** Executes the data part of an approved Meta deletion request. Called only by privacyApprovalService. Idempotent. */
+  async execute(orgId2, requestId) {
+    const r = await prisma.privacyRequest.findFirst({ where: { id: requestId, organizationId: orgId2, kind: META_DELETION_KIND } });
+    if (!r) throw new Error("Meta deletion request not found.");
+    const t = r.targetIds ?? { accounts: [], conversations: [] };
+    return prisma.$transaction(async (tx) => {
+      const creds2 = await tx.socialAccountCredential.deleteMany({ where: { socialAccountId: { in: t.accounts }, account: { organizationId: orgId2 } } });
+      const accounts = await tx.socialAccount.updateMany({ where: { id: { in: t.accounts }, organizationId: orgId2 }, data: { status: "DISCONNECTED", tokenExpiresAt: null, lastError: null, metaUserId: null, connectedByUserId: null } });
+      const msgs = await tx.socialMessage.deleteMany({ where: { conversationId: { in: t.conversations }, organizationId: orgId2 } });
+      const convs = await tx.socialConversation.updateMany({ where: { id: { in: t.conversations }, organizationId: orgId2 }, data: { participantName: null, participantHandle: null, participantExternalId: null } });
+      return { credentialsDeleted: creds2.count, socialAccounts: accounts.count, socialMessages: msgs.count, socialConversations: convs.count };
+    });
+  }
+};
+
 // server/services/ops/privacyApprovalService.ts
 var PRIVACY_ENTITY = "privacy_erasure";
 var can2 = (u, k) => u.role.key === "SUPER_ADMIN" || u.role.permissions.includes(k);
 var privacyApprovalService = {
-  async decide(caller, approvalId, decision, reason, meta13 = {}) {
+  async decide(caller, approvalId, decision, reason, meta14 = {}) {
     if (!can2(caller, "privacy.erase")) throw new AuthorizationError('Permission denied. Required privilege: "privacy.erase"');
     const orgId2 = caller.organizationId;
     const approval = await prisma.automationApproval.findFirst({ where: { id: approvalId, organizationId: orgId2, entityType: PRIVACY_ENTITY } });
@@ -18285,7 +18474,7 @@ var privacyApprovalService = {
     if (!req || req.status !== "PENDING_APPROVAL") throw new ConflictError("This request is no longer pending.");
     if (decision === "REJECTED" && !(reason && reason.trim())) throw new ValidationError("A reason is required to reject.");
     let result = null;
-    if (decision === "APPROVED") result = await privacyService.execute(orgId2, req.id);
+    if (decision === "APPROVED") result = req.kind === META_DELETION_KIND ? await metaCallbackService.execute(orgId2, req.id) : await privacyService.execute(orgId2, req.id);
     const now = /* @__PURE__ */ new Date();
     await prisma.privacyRequest.update({ where: { id: req.id }, data: { status: decision === "APPROVED" ? "EXECUTED" : "REJECTED", approvedById: caller.id, decidedAt: now, executedAt: decision === "APPROVED" ? now : null, resultCounts: result ?? void 0, targetIds: Prisma7.DbNull } });
     await prisma.automationApproval.update({ where: { id: approval.id }, data: { status: decision, approverId: caller.id, decisionReason: reason?.slice(0, 500) || null, decidedAt: now } });
@@ -18297,9 +18486,9 @@ var privacyApprovalService = {
       action: decision === "APPROVED" ? "PRIVACY_ERASURE_EXECUTED" : "PRIVACY_ERASURE_REJECTED",
       resourceType: "privacy_request",
       resourceId: req.id,
-      afterData: { subjectRef: req.subjectRef, requestedBy: req.requestedById, approvedBy: caller.id, ...result ? { counts: result } : {} },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      afterData: { kind: req.kind, subjectRef: req.subjectRef, requestedBy: req.requestedById, approvedBy: caller.id, ...result ? { counts: result } : {} },
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     await notificationService.notify({ organizationId: orgId2, userId: req.requestedById, type: decision === "APPROVED" ? "approval_completed" : "approval_rejected", title: decision === "APPROVED" ? "Erasure executed" : "Erasure rejected", message: `Request ${req.id.slice(0, 8)} was ${decision.toLowerCase()}.`, entityType: "privacy_request", entityId: req.id });
     return { approvalId: approval.id, decision, counts: result };
@@ -18310,7 +18499,7 @@ var privacyApprovalService = {
 init_errors();
 
 // server/services/social/connectors/mockProvider.ts
-import { createHmac as createHmac3, randomBytes as randomBytes5, timingSafeEqual as timingSafeEqual2 } from "node:crypto";
+import { createHmac as createHmac5, randomBytes as randomBytes6, timingSafeEqual as timingSafeEqual3 } from "node:crypto";
 
 // server/services/social/publishing/publishErrors.ts
 var SocialPublishError = class extends Error {
@@ -18364,8 +18553,8 @@ var mockMentionQueue = /* @__PURE__ */ new Map();
 var mockReviewSummaries = /* @__PURE__ */ new Map();
 var mockMentionContent = /* @__PURE__ */ new Map();
 var MOCK_SIGNATURE_HEADER = "x-mock-signature";
-var signMockWebhook = (rawBody, secret) => createHmac3("sha256", secret).update(rawBody).digest("hex");
-var tokenFor = (name, kind) => `mock_${kind}_${name}_${randomBytes5(8).toString("hex")}`;
+var signMockWebhook = (rawBody, secret) => createHmac5("sha256", secret).update(rawBody).digest("hex");
+var tokenFor = (name, kind) => `mock_${kind}_${name}_${randomBytes6(8).toString("hex")}`;
 var mockProvider = {
   key: "mock",
   label: "Mock Network (dev/test)",
@@ -18431,7 +18620,7 @@ var mockProvider = {
     if (!sig || !config.webhookSecret) return false;
     const expected = Buffer.from(signMockWebhook(rawBody, config.webhookSecret));
     const provided = Buffer.from(sig);
-    return expected.length === provided.length && timingSafeEqual2(expected, provided);
+    return expected.length === provided.length && timingSafeEqual3(expected, provided);
   },
   parseWebhook({ rawBody }) {
     let json;
@@ -18485,7 +18674,7 @@ var mockProvider = {
 };
 
 // server/services/social/tokenVault.ts
-import { createCipheriv as createCipheriv3, createDecipheriv as createDecipheriv3, hkdfSync as hkdfSync3, randomBytes as randomBytes6 } from "node:crypto";
+import { createCipheriv as createCipheriv3, createDecipheriv as createDecipheriv3, hkdfSync as hkdfSync3, randomBytes as randomBytes7 } from "node:crypto";
 var FORMAT = "sv1";
 function keyRing() {
   const ring = /* @__PURE__ */ new Map();
@@ -18514,7 +18703,7 @@ var tokenVault = {
   encrypt(tokens2, accountId) {
     const keyVersion = activeKeyVersion();
     const key2 = keyRing().get(keyVersion);
-    const iv = randomBytes6(12);
+    const iv = randomBytes7(12);
     const cipher = createCipheriv3("aes-256-gcm", key2, iv);
     cipher.setAAD(Buffer.from(accountId));
     const ct = Buffer.concat([cipher.update(JSON.stringify(tokens2), "utf8"), cipher.final()]);
@@ -18757,27 +18946,27 @@ var linkedinProvider = {
 };
 
 // server/services/social/connectors/metaGraph.ts
-import { createHmac as createHmac4, timingSafeEqual as timingSafeEqual3 } from "node:crypto";
+import { createHmac as createHmac6, timingSafeEqual as timingSafeEqual4 } from "node:crypto";
 var MESSAGING_WINDOW_MS = 24 * 60 * 60 * 1e3;
 var graphBase = () => `https://graph.facebook.com/${config.metaApiVersion}`;
 var dialogUrl = () => `https://www.facebook.com/${config.metaApiVersion}/dialog/oauth`;
 var metaHttp = { fetch: (...args) => fetch(...args) };
-var appSecretProof = (accessToken, appSecret) => createHmac4("sha256", appSecret).update(accessToken).digest("hex");
+var appSecretProof = (accessToken, appSecret) => createHmac6("sha256", appSecret).update(accessToken).digest("hex");
 function verifySignature(rawBody, header, appSecret) {
   const value = Array.isArray(header) ? header[0] : header;
   if (!appSecret || !value || !value.startsWith("sha256=")) return false;
   const given = value.slice("sha256=".length);
   if (!/^[0-9a-f]{64}$/i.test(given)) return false;
-  const expected = createHmac4("sha256", appSecret).update(rawBody).digest();
+  const expected = createHmac6("sha256", appSecret).update(rawBody).digest();
   const provided = Buffer.from(given, "hex");
-  return provided.length === expected.length && timingSafeEqual3(provided, expected);
+  return provided.length === expected.length && timingSafeEqual4(provided, expected);
 }
 function webhookChallenge(query, verifyToken) {
   const given = query["hub.verify_token"];
   if (!verifyToken || query["hub.mode"] !== "subscribe" || !given || !query["hub.challenge"]) return null;
   const a = Buffer.from(given);
   const b = Buffer.from(verifyToken);
-  return a.length === b.length && timingSafeEqual3(a, b) ? query["hub.challenge"] : null;
+  return a.length === b.length && timingSafeEqual4(a, b) ? query["hub.challenge"] : null;
 }
 function classifyGraphError(status, body) {
   const e = body?.error;
@@ -19094,7 +19283,7 @@ async function listPages(userToken) {
   }
   return pages;
 }
-var toSelectable = (p, scopes) => {
+var toSelectable = (p, scopes, userId) => {
   if (!p.access_token) return null;
   const tasks = p.tasks ?? [];
   const warnings = [];
@@ -19103,7 +19292,7 @@ var toSelectable = (p, scopes) => {
     if (!tasks.includes("MODERATE")) warnings.push("You can't moderate comments on this Page (needs the Moderate task).");
     if (!tasks.includes("MESSAGING")) warnings.push("You can't read or send Messenger messages for this Page (needs the Messages task).");
   }
-  return { profile: { externalAccountId: p.id, displayName: p.name ?? p.id, handle: null, avatarUrl: p.picture?.data?.url ?? null, accountType: "PAGE" }, tokens: { accessToken: p.access_token, pageId: p.id, scopes }, tasks, warnings };
+  return { profile: { externalAccountId: p.id, displayName: p.name ?? p.id, handle: null, avatarUrl: p.picture?.data?.url ?? null, accountType: "PAGE", providerUserId: userId ?? null }, tokens: { accessToken: p.access_token, pageId: p.id, scopes }, tasks, warnings };
 };
 var facebookPageProvider = {
   key: "meta_facebook",
@@ -19134,7 +19323,7 @@ var facebookPageProvider = {
       listPages(userToken)
     ]);
     const scopes = (perms.json.data ?? []).filter((p) => p.status === "granted").map((p) => p.permission);
-    const selectable = pages.map((p) => toSelectable(p, scopes)).filter((x) => !!x);
+    const selectable = pages.map((p) => toSelectable(p, scopes, me.json.id)).filter((x) => !!x);
     if (selectable.length === 0) throw new Error("This Facebook account does not manage any Pages (or no Page access was granted).");
     return { profile: { externalAccountId: me.json.id ?? "user", displayName: me.json.name ?? "Facebook user", accountType: "USER" }, tokens: { accessToken: "" }, selectable };
   },
@@ -19160,7 +19349,7 @@ var facebookPageProvider = {
     const missing = REQUIRED_SCOPES.filter((s) => d.scopes && !granted.has(s));
     if (missing.length) return { ok: false, error: `Missing permissions: ${missing.join(", ")}. Reconnect the Page and approve them.` };
     const times = [d.expires_at, d.data_access_expires_at].filter((t) => typeof t === "number" && t > 0);
-    return { ok: true, expiresAt: times.length ? new Date(Math.min(...times) * 1e3).toISOString() : null };
+    return { ok: true, expiresAt: times.length ? new Date(Math.min(...times) * 1e3).toISOString() : null, providerUserId: typeof d.user_id === "string" ? d.user_id : null };
   },
   async publish(tokens2, input) {
     const page = pageIdOf(tokens2, input.accountExternalId);
@@ -19441,7 +19630,7 @@ var instagramAnalytics = {
 };
 
 // server/services/social/connectors/instagramProvider.ts
-var DEFAULT_INSTAGRAM_SCOPES = ["instagram_basic", "instagram_content_publish", "instagram_manage_comments", "instagram_manage_messages", "pages_show_list", "pages_read_engagement", "business_management"];
+var DEFAULT_INSTAGRAM_SCOPES = ["instagram_basic", "instagram_content_publish", "instagram_manage_comments", "instagram_manage_messages", "pages_show_list", "pages_read_engagement"];
 var INSIGHTS_SCOPE = "instagram_manage_insights";
 var instagramScopes = () => {
   const base3 = config.metaInstagramLoginScopes ? config.metaInstagramLoginScopes.split(",") : [...DEFAULT_INSTAGRAM_SCOPES];
@@ -19663,7 +19852,7 @@ var instagramProvider = {
       if (!scopes.includes("instagram_manage_messages")) warnings.push("Direct messages are unavailable (instagram_manage_messages was not granted).");
       if (p.tasks?.length && !p.tasks.includes("CREATE_CONTENT")) warnings.push("You can't publish for this Page's Instagram account (needs the Create content task on the linked Page).");
       selectable.push({
-        profile: { externalAccountId: ig.id, displayName: ig.name ? `${ig.name} (@${ig.username ?? ig.id})` : `@${ig.username ?? ig.id}`, handle: ig.username ?? null, avatarUrl: ig.profile_picture_url ?? null, accountType: "BUSINESS" },
+        profile: { externalAccountId: ig.id, displayName: ig.name ? `${ig.name} (@${ig.username ?? ig.id})` : `@${ig.username ?? ig.id}`, handle: ig.username ?? null, avatarUrl: ig.profile_picture_url ?? null, accountType: "BUSINESS", providerUserId: me.json.id ?? null },
         tokens: { accessToken: p.access_token, pageId: p.id, igId: ig.id, scopes },
         tasks: p.tasks,
         warnings: [...warnings, `Linked Facebook Page: ${p.name ?? p.id}.`]
@@ -19699,7 +19888,7 @@ var instagramProvider = {
     const missing = REQUIRED_SCOPES2.filter((s) => d.scopes && !granted.has(s));
     if (missing.length) return { ok: false, error: `Missing permissions: ${missing.join(", ")}. Reconnect the account and approve them.` };
     const times = [d.expires_at, d.data_access_expires_at].filter((t) => typeof t === "number" && t > 0);
-    return { ok: true, expiresAt: times.length ? new Date(Math.min(...times) * 1e3).toISOString() : null };
+    return { ok: true, expiresAt: times.length ? new Date(Math.min(...times) * 1e3).toISOString() : null, providerUserId: typeof d.user_id === "string" ? d.user_id : null };
   },
   async publish(tokens2, input) {
     const ig = input.accountExternalId;
@@ -20171,7 +20360,7 @@ async function userIdsWithPermission(organizationId, permission) {
   return rows.map((r) => r.userId);
 }
 var has = (caller, key2) => caller.role.permissions.includes(key2);
-async function record(caller, action, post, meta13, extra = {}) {
+async function record(caller, action, post, meta14, extra = {}) {
   await auditLogRepository.record({
     organizationId: caller.organizationId,
     actorUserId: caller.id,
@@ -20180,8 +20369,8 @@ async function record(caller, action, post, meta13, extra = {}) {
     resourceType: "social_post",
     resourceId: post.id,
     metadata: auditMeta(post, extra),
-    ipAddress: meta13.ip,
-    userAgent: meta13.userAgent
+    ipAddress: meta14.ip,
+    userAgent: meta14.userAgent
   });
 }
 async function getApprovalMode(organizationId) {
@@ -20190,7 +20379,7 @@ async function getApprovalMode(organizationId) {
 var socialPostService = {
   evaluateGuardrails: evaluate,
   loadPost,
-  async create(caller, input, meta13 = {}, extra = {}) {
+  async create(caller, input, meta14 = {}, extra = {}) {
     const accounts = await accountsInOrg(caller.organizationId, input.accountIds);
     await assertMediaInOrg(caller.organizationId, input.mediaIds);
     if (input.sourceContent) await this.resolveSourceContent(caller.organizationId, input.sourceContent.type, input.sourceContent.id);
@@ -20217,7 +20406,7 @@ var socialPostService = {
       },
       include: POST_INCLUDE
     });
-    await record(caller, extra.aiGenerated ? "SOCIAL_POST_CREATED_BY_AI" : "SOCIAL_POST_CREATED", created, meta13, { accounts: accounts.length, aiExecutionId: extra.aiExecutionId });
+    await record(caller, extra.aiGenerated ? "SOCIAL_POST_CREATED_BY_AI" : "SOCIAL_POST_CREATED", created, meta14, { accounts: accounts.length, aiExecutionId: extra.aiExecutionId });
     return projectPost(created);
   },
   async get(organizationId, id6) {
@@ -20250,7 +20439,7 @@ var socialPostService = {
     for (const post of rows) (days[post.scheduledAt.toISOString().slice(0, 10)] ??= []).push(projectPost(post));
     return { days, total: rows.length };
   },
-  async update(caller, id6, input, meta13 = {}) {
+  async update(caller, id6, input, meta14 = {}) {
     const post = await loadPost(caller.organizationId, id6);
     const touchesContent = ["title", "body", "mediaIds", "linkUrl", "accountIds", "bodyOverrides", "sourceContent"].some((k) => k in input);
     const touchesSchedule = "scheduledAt" in input || "timezone" in input;
@@ -20299,17 +20488,17 @@ var socialPostService = {
         include: POST_INCLUDE
       });
     });
-    await record(caller, touchesContent ? "SOCIAL_POST_UPDATED" : "SOCIAL_POST_RESCHEDULED", updated, meta13);
+    await record(caller, touchesContent ? "SOCIAL_POST_UPDATED" : "SOCIAL_POST_RESCHEDULED", updated, meta14);
     return projectPost(updated);
   },
-  async remove(caller, id6, meta13 = {}) {
+  async remove(caller, id6, meta14 = {}) {
     const post = await loadPost(caller.organizationId, id6);
     if (!["DRAFT", "REJECTED", "CANCELLED"].includes(post.status)) throw new ConflictError(`A post in status ${post.status} cannot be deleted. Cancel it first.`);
     await prisma.socialPost.update({ where: { id: id6 }, data: { deletedAt: /* @__PURE__ */ new Date() } });
-    await record(caller, "SOCIAL_POST_DELETED", post, meta13);
+    await record(caller, "SOCIAL_POST_DELETED", post, meta14);
   },
   /** Moves a post to a new status after checking the transition table, guardrails and role rules. */
-  async transition(caller, id6, to, opts = {}, meta13 = {}) {
+  async transition(caller, id6, to, opts = {}, meta14 = {}) {
     const post = await loadPost(caller.organizationId, id6);
     if (!canTransition(post.status, to)) throw new ConflictError(`A ${post.status} post cannot move to ${to}.`);
     if (post.targets.some((t) => t.status === "PUBLISHING")) throw new ConflictError("This post is being published right now. Try again in a moment.");
@@ -20375,10 +20564,10 @@ var socialPostService = {
       });
       return tx.socialPost.update({ where: { id: id6 }, data: { ...data, status: target }, include: POST_INCLUDE });
     });
-    await record(caller, action, updated, meta13, { from: post.status, to: updated.status, ...opts.comment ? { comment: opts.comment.slice(0, 500) } : {} });
+    await record(caller, action, updated, meta14, { from: post.status, to: updated.status, ...opts.comment ? { comment: opts.comment.slice(0, 500) } : {} });
     if (action === "SOCIAL_POST_SUBMITTED") {
-      const approvers = (await userIdsWithPermission(caller.organizationId, "social.approve")).filter((u) => u !== caller.id);
-      await Promise.all(approvers.map((userId) => notificationService.notify({ organizationId: caller.organizationId, userId, type: "approval_requested", title: "Social post awaiting approval", message: `"${post.title}" is waiting for your approval.`, entityType: "social_post", entityId: post.id })));
+      const approvers2 = (await userIdsWithPermission(caller.organizationId, "social.approve")).filter((u) => u !== caller.id);
+      await Promise.all(approvers2.map((userId) => notificationService.notify({ organizationId: caller.organizationId, userId, type: "approval_requested", title: "Social post awaiting approval", message: `"${post.title}" is waiting for your approval.`, entityType: "social_post", entityId: post.id })));
     } else if ((action === "SOCIAL_POST_APPROVED" || action === "SOCIAL_POST_REJECTED") && post.createdById && post.createdById !== caller.id) {
       await notificationService.notify({
         organizationId: caller.organizationId,
@@ -20393,10 +20582,10 @@ var socialPostService = {
     return projectPost(updated);
   },
   /** Approvals-center entry point: approve/reject a post that is PENDING_APPROVAL. */
-  async decide(caller, id6, approve2, comment, meta13 = {}) {
+  async decide(caller, id6, approve2, comment, meta14 = {}) {
     const post = await loadPost(caller.organizationId, id6);
     if (post.status !== "PENDING_APPROVAL") throw new ConflictError(`This post is ${post.status}, not awaiting approval.`);
-    return this.transition(caller, id6, approve2 ? "APPROVED" : "REJECTED", { comment }, meta13);
+    return this.transition(caller, id6, approve2 ? "APPROVED" : "REJECTED", { comment }, meta14);
   },
   // ---- source content ("share this blog post / case study") ----
   async resolveSourceContent(organizationId, type, id6) {
@@ -20423,7 +20612,7 @@ var socialPostService = {
     const { toneDescriptors, audience, dos, donts, bannedWords, requiredDisclaimers, defaultHashtags, ctaPhrases, languages } = row;
     return { toneDescriptors, audience, dos, donts, bannedWords, requiredDisclaimers, defaultHashtags, ctaPhrases, languages };
   },
-  async updateBrandVoice(caller, input, meta13 = {}) {
+  async updateBrandVoice(caller, input, meta14 = {}) {
     const data = { ...input, audience: input.audience ?? null, defaultHashtags: input.defaultHashtags.map((h) => h.startsWith("#") ? h : `#${h}`), updatedById: caller.id };
     await prisma.socialBrandVoice.upsert({ where: { organizationId: caller.organizationId }, create: { organizationId: caller.organizationId, ...data }, update: data });
     await auditLogRepository.record({
@@ -20433,15 +20622,15 @@ var socialPostService = {
       action: "SOCIAL_BRAND_VOICE_UPDATED",
       resourceType: "social_brand_voice",
       metadata: { bannedWords: data.bannedWords.length, disclaimers: data.requiredDisclaimers.length, languages: data.languages },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return this.getBrandVoice(caller.organizationId);
   },
   async getSettings(organizationId) {
     return { approvalMode: await getApprovalMode(organizationId) };
   },
-  async updateSettings(caller, approvalMode, meta13 = {}) {
+  async updateSettings(caller, approvalMode, meta14 = {}) {
     if (caller.role.key !== "ADMIN" && caller.role.key !== "SUPER_ADMIN") throw new AuthorizationError("Only administrators can change the approval mode.");
     const before = await getApprovalMode(caller.organizationId);
     await prisma.socialWorkspaceSetting.upsert({ where: { organizationId: caller.organizationId }, create: { organizationId: caller.organizationId, approvalMode, updatedById: caller.id }, update: { approvalMode, updatedById: caller.id } });
@@ -20453,8 +20642,8 @@ var socialPostService = {
       resourceType: "social_workspace_setting",
       beforeData: { approvalMode: before },
       afterData: { approvalMode },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return { approvalMode };
   }
@@ -20669,26 +20858,26 @@ var approvalCenterService = {
     ]);
     return { total: counts2.ai + counts2.automation + counts2.content + counts2.social + counts2.landing + counts2.privacy, counts: counts2, sources: allowed };
   },
-  async decide(caller, source, id6, input, meta13 = {}) {
+  async decide(caller, source, id6, input, meta14 = {}) {
     const allowed = visibleSources(caller);
     if (!allowed.includes(source)) throw new AuthorizationError("You do not have access to this approval source.");
     if (!canDecideSource(caller, source)) throw new AuthorizationError(`Missing permission: ${SOURCE_DECIDE_PERMISSION[source]}`);
     const approve2 = input.decision === "approve";
     let result;
     if (source === "social") {
-      result = await socialPostService.decide(caller, id6, approve2, input.comment, meta13);
+      result = await socialPostService.decide(caller, id6, approve2, input.comment, meta14);
     } else if (source === "ai") {
-      result = await aiApprovalService.decide(caller, id6, { decision: approve2 ? "APPROVE" : "REJECT", rejectionReason: input.comment }, meta13);
+      result = await aiApprovalService.decide(caller, id6, { decision: approve2 ? "APPROVE" : "REJECT", rejectionReason: input.comment }, meta14);
     } else if (source === "privacy") {
       const row = await prisma.automationApproval.findFirst({ where: { id: id6, organizationId: caller.organizationId }, select: { entityType: true } });
       if (!row) throw new NotFoundError("Approval request not found.");
       if (row.entityType !== PRIVACY_ENTITY_TYPE) throw new ValidationError('This approval does not belong to the "privacy" source.');
-      result = await privacyApprovalService.decide(caller, id6, approve2 ? "APPROVED" : "REJECTED", input.comment, meta13);
+      result = await privacyApprovalService.decide(caller, id6, approve2 ? "APPROVED" : "REJECTED", input.comment, meta14);
     } else if (source === "landing") {
       const row = await prisma.automationApproval.findFirst({ where: { id: id6, organizationId: caller.organizationId }, select: { entityType: true } });
       if (!row) throw new NotFoundError("Approval request not found.");
       if (row.entityType !== LANDING_ENTITY_TYPE) throw new ValidationError('This approval does not belong to the "landing" source.');
-      result = await landingApprovalService.decide(caller, id6, approve2 ? "APPROVED" : "REJECTED", input.comment, meta13);
+      result = await landingApprovalService.decide(caller, id6, approve2 ? "APPROVED" : "REJECTED", input.comment, meta14);
     } else {
       const row = await prisma.automationApproval.findFirst({ where: { id: id6, organizationId: caller.organizationId }, select: { entityType: true } });
       if (!row) throw new NotFoundError("Approval request not found.");
@@ -20711,8 +20900,8 @@ var approvalCenterService = {
       resourceType: `${source}_approval`,
       resourceId: id6,
       metadata: { source, decision: input.decision, comment: input.comment ?? null },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return { source, id: id6, decision: input.decision, result };
   }
@@ -20747,7 +20936,7 @@ import { Prisma as Prisma8 } from "@prisma/client";
 init_errors();
 
 // server/services/social/socialAccountService.ts
-import { randomBytes as randomBytes7, randomUUID as randomUUID3 } from "node:crypto";
+import { randomBytes as randomBytes8, randomUUID as randomUUID3 } from "node:crypto";
 init_errors();
 var STATE_TTL_MS = 10 * 60 * 1e3;
 var EXPIRY_WARNING_MS = 7 * 24 * 60 * 60 * 1e3;
@@ -20817,16 +21006,16 @@ async function notifyManagers(account, title, message) {
   );
 }
 var SELECTION_TTL_MS = 15 * 60 * 1e3;
-async function startSelection(user, provider, selectable, meta13) {
+async function startSelection(user, provider, selectable, meta14) {
   await prisma.socialConnectSession.deleteMany({ where: { OR: [{ expiresAt: { lt: /* @__PURE__ */ new Date() } }, { organizationId: user.organizationId, userId: user.id, provider }] } });
   const id6 = randomUUID3();
   const { ciphertext, keyVersion } = tokenVault.encrypt({ accessToken: "", pages: selectable.map((p) => ({ profile: p.profile, tokens: p.tokens })) }, id6);
   await prisma.socialConnectSession.create({ data: { id: id6, organizationId: user.organizationId, userId: user.id, provider, ciphertext, keyVersion, expiresAt: new Date(Date.now() + SELECTION_TTL_MS) } });
   const existing = new Set((await prisma.socialAccount.findMany({ where: { organizationId: user.organizationId, provider, status: { not: "DISCONNECTED" } }, select: { externalAccountId: true } })).map((a) => a.externalAccountId));
-  await auditLogRepository.record({ organizationId: user.organizationId, actorUserId: user.id, actorType: "USER", action: "SOCIAL_ACCOUNT_SELECTION_STARTED", resourceType: "social_account", metadata: { provider, candidates: selectable.length }, ipAddress: meta13.ip, userAgent: meta13.userAgent });
+  await auditLogRepository.record({ organizationId: user.organizationId, actorUserId: user.id, actorType: "USER", action: "SOCIAL_ACCOUNT_SELECTION_STARTED", resourceType: "social_account", metadata: { provider, candidates: selectable.length }, ipAddress: meta14.ip, userAgent: meta14.userAgent });
   return { selection: { id: id6, provider, pages: selectable.map((p) => ({ externalId: p.profile.externalAccountId, name: p.profile.displayName, category: p.profile.accountType ?? null, avatarUrl: p.profile.avatarUrl ?? null, tasks: p.tasks ?? [], warnings: p.warnings ?? [], alreadyConnected: existing.has(p.profile.externalAccountId) })) } };
 }
-async function persistAccount(user, provider, connector, profile, tokens2, reconnectAccountId, meta13) {
+async function persistAccount(user, provider, connector, profile, tokens2, reconnectAccountId, meta14) {
   if (reconnectAccountId) {
     const target = await loadInOrgOrThrow(user.organizationId, reconnectAccountId);
     if (target.externalAccountId !== profile.externalAccountId) throw new ValidationError("You signed in with a different account than the one being reconnected.");
@@ -20845,7 +21034,8 @@ async function persistAccount(user, provider, connector, profile, tokens2, recon
     tokenExpiresAt: tokens2.expiresAt ? new Date(tokens2.expiresAt) : null,
     lastSyncAt: /* @__PURE__ */ new Date(),
     lastError: null,
-    connectedByUserId: user.id
+    connectedByUserId: user.id,
+    ...profile.providerUserId ? { metaUserId: profile.providerUserId } : {}
   };
   let account = await prisma.socialAccount.upsert({
     where: { organizationId_provider_externalAccountId: { organizationId: user.organizationId, provider, externalAccountId: profile.externalAccountId } },
@@ -20872,8 +21062,8 @@ async function persistAccount(user, provider, connector, profile, tokens2, recon
     resourceType: "social_account",
     resourceId: account.id,
     metadata: { provider: account.provider, externalAccountId: account.externalAccountId, handle: account.handle, ...warnings?.length ? { warnings: warnings.length } : {} },
-    ipAddress: meta13.ip,
-    userAgent: meta13.userAgent
+    ipAddress: meta14.ip,
+    userAgent: meta14.userAgent
   });
   return { account, ...warnings?.length ? { warnings } : {} };
 }
@@ -20893,13 +21083,13 @@ var socialAccountService = {
       const existing = await loadInOrgOrThrow(user.organizationId, reconnectAccountId);
       if (existing.provider !== provider) throw new ValidationError("That account belongs to a different provider.");
     }
-    const state = `art_oauth_${randomBytes7(32).toString("base64url")}`;
+    const state = `art_oauth_${randomBytes8(32).toString("base64url")}`;
     await prisma.socialOAuthState.create({
       data: { stateHash: hashToken(state), organizationId: user.organizationId, userId: user.id, provider, reconnectAccountId: reconnectAccountId ?? null, expiresAt: new Date(Date.now() + STATE_TTL_MS) }
     });
     return { authUrl: connector.getAuthUrl({ state, redirectUri: redirectUri(), scopes: connector.defaultScopes }) };
   },
-  async handleCallback(user, input, meta13 = {}) {
+  async handleCallback(user, input, meta14 = {}) {
     const invalid = () => new AuthenticationError("This connection request is invalid or has expired. Please start again.");
     const stateHash = hashToken(input.state);
     const row = await prisma.socialOAuthState.findUnique({ where: { stateHash } });
@@ -20920,8 +21110,8 @@ var socialAccountService = {
         resourceType: "social_account",
         result: "FAILURE",
         metadata: { provider: row.provider, reason: safeError(err, [input.code]) },
-        ipAddress: meta13.ip,
-        userAgent: meta13.userAgent
+        ipAddress: meta14.ip,
+        userAgent: meta14.userAgent
       });
       if (err instanceof ConnectorUserError) throw new ValidationError(err.message);
       throw new ValidationError("Could not connect the account. Please try again.");
@@ -20932,14 +21122,14 @@ var socialAccountService = {
         const target = await loadInOrgOrThrow(user.organizationId, row.reconnectAccountId);
         const match = result.selectable.find((p) => p.profile.externalAccountId === target.externalAccountId);
         if (!match) throw new ValidationError("You signed in with a different account than the one being reconnected.");
-        return persistAccount(user, row.provider, connector, match.profile, match.tokens, row.reconnectAccountId, meta13);
+        return persistAccount(user, row.provider, connector, match.profile, match.tokens, row.reconnectAccountId, meta14);
       }
-      return startSelection(user, row.provider, result.selectable, meta13);
+      return startSelection(user, row.provider, result.selectable, meta14);
     }
-    return persistAccount(user, row.provider, connector, profile, tokens2, row.reconnectAccountId ?? void 0, meta13);
+    return persistAccount(user, row.provider, connector, profile, tokens2, row.reconnectAccountId ?? void 0, meta14);
   },
   /** Step 2 of a multi-asset connect: create accounts for the chosen assets from the encrypted session. */
-  async completeSelection(user, input, meta13 = {}) {
+  async completeSelection(user, input, meta14 = {}) {
     const invalid = () => new AuthenticationError("This selection has expired. Please start the connection again.");
     const row = await prisma.socialConnectSession.findUnique({ where: { id: input.selectionId } });
     if (!row || row.usedAt || row.expiresAt.getTime() <= Date.now() || row.userId !== user.id || row.organizationId !== user.organizationId) throw invalid();
@@ -20960,13 +21150,13 @@ var socialAccountService = {
     const accounts = [];
     const warnings = [];
     for (const p of chosen) {
-      const out = await persistAccount(user, row.provider, connector, p.profile, p.tokens, void 0, meta13);
+      const out = await persistAccount(user, row.provider, connector, p.profile, p.tokens, void 0, meta14);
       accounts.push(out.account);
       warnings.push(...(out.warnings ?? []).map((w) => `${out.account.displayName}: ${w}`));
     }
     return { accounts, warnings };
   },
-  async disconnect(user, id6, meta13 = {}) {
+  async disconnect(user, id6, meta14 = {}) {
     const account = await loadInOrgOrThrow(user.organizationId, id6);
     try {
       const connector = connectorRegistry.getAvailable(account.provider);
@@ -20985,8 +21175,8 @@ var socialAccountService = {
       resourceType: "social_account",
       resourceId: id6,
       metadata: { provider: account.provider, externalAccountId: account.externalAccountId, handle: account.handle },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return updated;
   },
@@ -21041,11 +21231,13 @@ var socialAccountService = {
       }
       const health = await connector.healthCheck(tokens2);
       if (!health.ok) return fail("NEEDS_REAUTH", safeError(health.error ?? "The provider rejected the credentials.", [tokens2.accessToken, tokens2.refreshToken]));
-      return prisma.socialAccount.update({
+      const updated = await prisma.socialAccount.update({
         where: { id: account.id },
         data: { status: "CONNECTED", lastSyncAt: /* @__PURE__ */ new Date(), lastError: null, tokenExpiresAt: health.expiresAt ? new Date(health.expiresAt) : expiresAt },
         select: ACCOUNT_SELECT
       });
+      if (health.providerUserId) await prisma.socialAccount.updateMany({ where: { id: account.id, metaUserId: null }, data: { metaUserId: health.providerUserId } });
+      return updated;
     } catch (err) {
       return fail("ERROR", safeError(err, [tokens2?.accessToken, tokens2?.refreshToken]));
     }
@@ -21151,7 +21343,7 @@ var publishingSettingsService = {
     const gate = evaluateGate(config.socialPublishingDisabled, global, workspace);
     return { global, workspace, envDisabled: config.socialPublishingDisabled, effective: gate.allowed ? { publishing: true, dryRun: gate.dryRun } : { publishing: false, reason: gate.reason } };
   },
-  async updateWorkspace(caller, input, meta13 = {}) {
+  async updateWorkspace(caller, input, meta14 = {}) {
     if (!isAdmin(caller)) throw new AuthorizationError("Only administrators can change publishing settings.");
     const before = await this.getWorkspace(caller.organizationId);
     const data = { ...input, updatedById: caller.id };
@@ -21165,12 +21357,12 @@ var publishingSettingsService = {
       resourceType: "social_publishing_setting",
       beforeData: before,
       afterData: after,
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return this.view(caller.organizationId);
   },
-  async updateGlobal(caller, input, meta13 = {}) {
+  async updateGlobal(caller, input, meta14 = {}) {
     if (caller.role.key !== "SUPER_ADMIN") throw new AuthorizationError("Only a super administrator can change global publishing settings.");
     const before = await this.getGlobal();
     await prisma.socialPublishingGlobal.upsert({ where: { id: "global" }, create: { id: "global", ...GLOBAL_DEFAULT, ...input, updatedById: caller.id }, update: { ...input, updatedById: caller.id } });
@@ -21184,8 +21376,8 @@ var publishingSettingsService = {
       resourceId: "global",
       beforeData: before,
       afterData: after,
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return this.view(caller.organizationId);
   }
@@ -21213,7 +21405,7 @@ async function syncPostStatus(postId) {
   const next = derivePostStatus(post.status, post.targets);
   if (next) await prisma.socialPost.update({ where: { id: postId }, data: { status: next } });
 }
-async function audit3(organizationId, action, targetId, result, metadata, actor, meta13) {
+async function audit3(organizationId, action, targetId, result, metadata, actor, meta14) {
   await auditLogRepository.record({
     organizationId,
     actorUserId: actor?.id,
@@ -21223,8 +21415,8 @@ async function audit3(organizationId, action, targetId, result, metadata, actor,
     resourceId: targetId,
     result,
     metadata,
-    ipAddress: meta13?.ip,
-    userAgent: meta13?.userAgent
+    ipAddress: meta14?.ip,
+    userAgent: meta14?.userAgent
   }).catch((err) => logger.error({ targetId, err: safe(err) }, "[social-publish] audit write failed"));
 }
 async function withTimeout3(p, ms) {
@@ -21514,28 +21706,28 @@ async function loadActionable(caller, targetId, allowed = ACTIONABLE) {
 }
 var publishingActions = {
   /** Retry now. UNCERTAIN targets require explicit confirmation that nothing was posted. Never bypasses the gate/dry-run. */
-  async retryNow(caller, targetId, input = {}, meta13 = {}) {
+  async retryNow(caller, targetId, input = {}, meta14 = {}) {
     const t = await loadActionable(caller, targetId, ["FAILED", "MISSED", "UNCERTAIN"]);
     if (t.status === "UNCERTAIN" && !input.confirmNotPosted) throw new ValidationError("Confirm that the post is NOT on the network before retrying an uncertain publish (otherwise it may be duplicated).");
     const now = /* @__PURE__ */ new Date();
     const moved = await prisma.socialPostTarget.updateMany({ where: { id: targetId, status: t.status }, data: { status: "SCHEDULED", scheduledAt: now, nextAttemptAt: null, attempts: 0, publishError: null, providerState: Prisma8.JsonNull } });
     if (moved.count !== 1) throw new ConflictError("This target changed; refresh and try again.");
     await prisma.socialPost.updateMany({ where: { id: t.postId, status: { in: ["FAILED", "SCHEDULED"] } }, data: { status: "SCHEDULED", scheduledAt: now } });
-    await audit3(caller.organizationId, "SOCIAL_PUBLISH_RETRY_REQUESTED", targetId, "SUCCESS", { from: t.status, confirmNotPosted: !!input.confirmNotPosted, postId: t.postId }, caller, meta13);
-    const result = await publisher.publishTarget(targetId, { manual: { actor: caller, meta: meta13 } });
+    await audit3(caller.organizationId, "SOCIAL_PUBLISH_RETRY_REQUESTED", targetId, "SUCCESS", { from: t.status, confirmNotPosted: !!input.confirmNotPosted, postId: t.postId }, caller, meta14);
+    const result = await publisher.publishTarget(targetId, { manual: { actor: caller, meta: meta14 } });
     return { result, target: await publishingQueries.getTarget(caller.organizationId, targetId) };
   },
-  async reschedule(caller, targetId, input, meta13 = {}) {
+  async reschedule(caller, targetId, input, meta14 = {}) {
     const t = await loadActionable(caller, targetId);
     if (t.status === "UNCERTAIN" && !input.confirmNotPosted) throw new ValidationError("Confirm that the post is NOT on the network before rescheduling an uncertain publish.");
     if (input.scheduledAt.getTime() <= Date.now()) throw new ValidationError("Choose a future date and time.");
     const moved = await prisma.socialPostTarget.updateMany({ where: { id: targetId, status: t.status }, data: { status: "SCHEDULED", scheduledAt: input.scheduledAt, nextAttemptAt: null, attempts: 0, publishError: null, providerState: Prisma8.JsonNull } });
     if (moved.count !== 1) throw new ConflictError("This target changed; refresh and try again.");
     await prisma.socialPost.updateMany({ where: { id: t.postId, status: { in: ["FAILED", "SCHEDULED"] } }, data: { status: "SCHEDULED", scheduledAt: input.scheduledAt } });
-    await audit3(caller.organizationId, "SOCIAL_PUBLISH_RESCHEDULED", targetId, "SUCCESS", { from: t.status, scheduledAt: input.scheduledAt, postId: t.postId }, caller, meta13);
+    await audit3(caller.organizationId, "SOCIAL_PUBLISH_RESCHEDULED", targetId, "SUCCESS", { from: t.status, scheduledAt: input.scheduledAt, postId: t.postId }, caller, meta14);
     return publishingQueries.getTarget(caller.organizationId, targetId);
   },
-  async markPublished(caller, targetId, input, meta13 = {}) {
+  async markPublished(caller, targetId, input, meta14 = {}) {
     const t = await loadActionable(caller, targetId);
     const url = input.url.trim();
     try {
@@ -21547,17 +21739,17 @@ var publishingActions = {
     if (moved.count !== 1) throw new ConflictError("This target changed; refresh and try again.");
     await prisma.socialPublishAttempt.create({ data: { targetId, attemptNumber: await prisma.socialPublishAttempt.count({ where: { targetId } }) + 1, finishedAt: /* @__PURE__ */ new Date(), outcome: "SUCCESS", errorCategory: "manual", errorMessage: "Marked as published manually.", externalUrl: url, actorUserId: caller.id } });
     await syncPostStatus(t.postId);
-    await audit3(caller.organizationId, "SOCIAL_PUBLISH_MARKED_MANUALLY", targetId, "SUCCESS", { from: t.status, url, postId: t.postId }, caller, meta13);
+    await audit3(caller.organizationId, "SOCIAL_PUBLISH_MARKED_MANUALLY", targetId, "SUCCESS", { from: t.status, url, postId: t.postId }, caller, meta14);
     return publishingQueries.getTarget(caller.organizationId, targetId);
   },
-  async cancel(caller, targetId, meta13 = {}) {
+  async cancel(caller, targetId, meta14 = {}) {
     const t = await loadActionable(caller, targetId, ["FAILED", "UNCERTAIN", "MISSED", "SCHEDULED"]);
     const moved = await prisma.socialPostTarget.updateMany({ where: { id: targetId, status: t.status }, data: { status: "CANCELLED", nextAttemptAt: null } });
     if (moved.count !== 1) throw new ConflictError("This target changed (it may have started publishing); refresh and try again.");
     await syncPostStatus(t.postId);
     const remaining = await prisma.socialPostTarget.count({ where: { postId: t.postId, status: { not: "CANCELLED" } } });
     if (remaining === 0) await prisma.socialPost.update({ where: { id: t.postId }, data: { status: "CANCELLED" } });
-    await audit3(caller.organizationId, "SOCIAL_PUBLISH_CANCELLED", targetId, "SUCCESS", { from: t.status, postId: t.postId }, caller, meta13);
+    await audit3(caller.organizationId, "SOCIAL_PUBLISH_CANCELLED", targetId, "SUCCESS", { from: t.status, postId: t.postId }, caller, meta14);
     return publishingQueries.getTarget(caller.organizationId, targetId);
   }
 };
@@ -22093,25 +22285,25 @@ var analyticsQueries = {
     const accounts = await prisma.socialAccount.findMany({ where: { organizationId }, include: { analyticsState: true }, orderBy: { createdAt: "asc" }, take: 100 });
     const out = [];
     for (const a of accounts) {
-      const meta13 = accountMeta(a);
+      const meta14 = accountMeta(a);
       let headline = [];
-      if (meta13.analytics === "supported") {
+      if (meta14.analytics === "supported") {
         const values = await dayValues(a.id, [...HEADLINE_METRICS], r.previous.from, r.range.to);
-        headline = HEADLINE_METRICS.map((m) => computeKpi(ACCOUNT_METRICS.find((d) => d.key === m), values.get(m), r, reasonFor(meta13.capabilities, m)));
+        headline = HEADLINE_METRICS.map((m) => computeKpi(ACCOUNT_METRICS.find((d) => d.key === m), values.get(m), r, reasonFor(meta14.capabilities, m)));
       }
-      out.push({ ...meta13, headline: headline.map((k) => ({ ...k, series: [] })) });
+      out.push({ ...meta14, headline: headline.map((k) => ({ ...k, series: [] })) });
     }
     return { range: r.range, previous: r.previous, days: r.days, accounts: out };
   },
   async accountDetail(organizationId, accountId, q, now = /* @__PURE__ */ new Date()) {
     const a = await loadAccount(organizationId, accountId);
     const r = resolveRange(q.from, q.to, now);
-    const meta13 = accountMeta(a);
-    if (meta13.analytics === "unsupported") return { range: r.range, previous: r.previous, days: r.days, account: meta13, kpis: [], coverage: { firstDataDate: null, lastDataDate: null } };
+    const meta14 = accountMeta(a);
+    if (meta14.analytics === "unsupported") return { range: r.range, previous: r.previous, days: r.days, account: meta14, kpis: [], coverage: { firstDataDate: null, lastDataDate: null } };
     const values = await dayValues(a.id, ACCOUNT_METRIC_KEYS, r.previous.from, r.range.to);
-    const kpis = ACCOUNT_METRICS.map((d) => computeKpi(d, values.get(d.key), r, reasonFor(meta13.capabilities, d.key)));
+    const kpis = ACCOUNT_METRICS.map((d) => computeKpi(d, values.get(d.key), r, reasonFor(meta14.capabilities, d.key)));
     const span = await prisma.socialAccountMetric.aggregate({ where: { socialAccountId: a.id, value: { not: null } }, _min: { metricDate: true }, _max: { metricDate: true } });
-    return { range: r.range, previous: r.previous, days: r.days, account: meta13, kpis, coverage: { firstDataDate: span._min.metricDate ? dayString(span._min.metricDate) : null, lastDataDate: span._max.metricDate ? dayString(span._max.metricDate) : null } };
+    return { range: r.range, previous: r.previous, days: r.days, account: meta14, kpis, coverage: { firstDataDate: span._min.metricDate ? dayString(span._min.metricDate) : null, lastDataDate: span._max.metricDate ? dayString(span._max.metricDate) : null } };
   },
   async topPosts(organizationId, accountId, q, now = /* @__PURE__ */ new Date()) {
     const a = await loadAccount(organizationId, accountId);
@@ -22183,7 +22375,7 @@ var analyticsQueries = {
   },
   async audience(organizationId, accountId, q, now = /* @__PURE__ */ new Date()) {
     const a = await loadAccount(organizationId, accountId);
-    const meta13 = accountMeta(a);
+    const meta14 = accountMeta(a);
     const r = resolveRange(q.from ?? dayString(addDays(startOfUtcDay2(now), -90)), q.to, now);
     const connector = connectorRegistry.get(a.provider);
     const followersRows = await prisma.socialAccountMetric.findMany({ where: { socialAccountId: a.id, metric: "followers", metricDate: { gte: parseDay(r.range.from), lte: parseDay(r.range.to) } }, orderBy: { metricDate: "asc" }, select: { metricDate: true, value: true } });
@@ -22216,7 +22408,7 @@ var analyticsQueries = {
     });
     return {
       range: r.range,
-      account: meta13,
+      account: meta14,
       followers: {
         series: followers,
         current: last,
@@ -22471,7 +22663,7 @@ var socialAiService = {
    * "What worked this period" for one account. The model receives ONLY numbers read from stored snapshots (nulls are omitted, not zeroed) and its text is
    * rejected unless every figure in it exists in that data. Output is advisory text; nothing is saved or published.
    */
-  async analyticsSummary(caller, accountId, q, meta13 = {}) {
+  async analyticsSummary(caller, accountId, q, meta14 = {}) {
     if (!aiConfigured()) throw new ValidationError("AI summaries are not available: no AI provider is configured.");
     const detail = await analyticsQueries.accountDetail(caller.organizationId, accountId, q);
     if (detail.account.analytics !== "supported") throw new ValidationError(detail.account.unsupportedReason ?? "This account has no analytics.");
@@ -22500,7 +22692,7 @@ var socialAiService = {
         caller,
         def: SOCIAL_PROMPTS.analytics,
         toolCode: "social_analytics_summary",
-        meta: meta13,
+        meta: meta14,
         schema: summarySchema,
         inputSummary: { accountId, from: detail.range.from, to: detail.range.to, metrics: kpis.length, posts: topPosts.length },
         variables: { data: JSON.stringify(data, null, 2) }
@@ -22519,8 +22711,8 @@ var socialAiService = {
       resourceType: "social_account",
       resourceId: accountId,
       metadata: { from: detail.range.from, to: detail.range.to, aiExecutionId: executionId },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return { headline: verified.headline, bullets: verified.bullets, executionId, generatedAt: (/* @__PURE__ */ new Date()).toISOString(), range: detail.range, aiGenerated: true };
   },
@@ -22529,7 +22721,7 @@ var socialAiService = {
     return plans.map((p) => ({ id: p.id, brief: p.brief, cadencePerWeek: p.cadencePerWeek, startDate: p.startDate, endDate: p.endDate, status: p.status, createdAt: p.createdAt, postCount: p._count.posts }));
   },
   /** (a) Draft from brief: one DRAFT post with a per-account text for every selected account. */
-  async draftFromBrief(caller, input, meta13 = {}) {
+  async draftFromBrief(caller, input, meta14 = {}) {
     const targets = await accountsFor(caller, input.accountIds);
     const voice = await socialPostService.getBrandVoice(caller.organizationId);
     const source = input.sourceContent ? await socialPostService.resolveSourceContent(caller.organizationId, input.sourceContent.type, input.sourceContent.id) : null;
@@ -22537,7 +22729,7 @@ var socialAiService = {
       caller,
       def: SOCIAL_PROMPTS.draft,
       toolCode: "social_draft_from_brief",
-      meta: meta13,
+      meta: meta14,
       schema: draftSchema,
       inputSummary: { instruction: input.instruction.slice(0, 500), accounts: input.accountIds.length, sourceContent: input.sourceContent ?? null },
       variables: {
@@ -22567,13 +22759,13 @@ Link: ${source.url}` : "(none)"
         bodyOverrides: Object.fromEntries(targets.map((t, i) => [t.account.id, bodies[i]]).filter(([, b]) => b !== bodies[0])),
         sourceContent: input.sourceContent
       },
-      meta13,
+      meta14,
       { aiGenerated: true, aiExecutionId: executionId }
     );
     return { post, executionId };
   },
   /** (b) Generate plan: a SocialContentPlan plus DRAFT posts at suggested slots, all linked to the plan. */
-  async generatePlan(caller, input, meta13 = {}) {
+  async generatePlan(caller, input, meta14 = {}) {
     const targets = await accountsFor(caller, input.accountIds);
     const slots = planSlots(input.startDate, input.endDate, input.cadencePerWeek);
     if (slots.length === 0) throw new ValidationError("There are no future posting slots in that date range.");
@@ -22582,7 +22774,7 @@ Link: ${source.url}` : "(none)"
       caller,
       def: SOCIAL_PROMPTS.plan,
       toolCode: "social_content_plan",
-      meta: meta13,
+      meta: meta14,
       schema: planSchema,
       inputSummary: { brief: input.brief.slice(0, 500), accounts: input.accountIds.length, cadencePerWeek: input.cadencePerWeek, slots: slots.length },
       variables: {
@@ -22603,7 +22795,7 @@ Link: ${source.url}` : "(none)"
         await socialPostService.create(
           caller,
           { title: item.title || `Planned post ${i + 1}`, body: item.body, mediaIds: [], linkUrl: null, scheduledAt: slots[i], timezone: "UTC", accountIds: input.accountIds, bodyOverrides: {} },
-          meta13,
+          meta14,
           { aiGenerated: true, aiExecutionId: executionId, planId: plan.id }
         )
       );
@@ -22616,13 +22808,13 @@ Link: ${source.url}` : "(none)"
       resourceType: "social_content_plan",
       resourceId: plan.id,
       metadata: { posts: posts.length, cadencePerWeek: input.cadencePerWeek, aiExecutionId: executionId },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return { plan: { id: plan.id, brief: plan.brief, cadencePerWeek: plan.cadencePerWeek, startDate: plan.startDate, endDate: plan.endDate, status: plan.status, createdAt: plan.createdAt }, posts, executionId };
   },
   /** (c) Rewrite / shorten / translate the text of an editable draft. The previous text is returned so the UI can undo. */
-  async rewrite(caller, postId, input, meta13 = {}) {
+  async rewrite(caller, postId, input, meta14 = {}) {
     const post = await socialPostService.loadPost(caller.organizationId, postId);
     if (!CONTENT_EDITABLE.includes(post.status)) throw new ConflictError(`A post in status ${post.status} cannot be edited. Move it back to draft first.`);
     const target = input.accountId ? post.targets.find((t) => t.socialAccountId === input.accountId) : void 0;
@@ -22636,12 +22828,12 @@ Link: ${source.url}` : "(none)"
       caller,
       def: SOCIAL_PROMPTS.rewrite,
       toolCode: `social_${input.action}`,
-      meta: meta13,
+      meta: meta14,
       schema: rewriteSchema,
       inputSummary: { postId, action: input.action, language: input.language ?? null },
       variables: { brandVoice: brandVoiceText(voice), task: `${task}${input.instruction ? ` Extra guidance: ${input.instruction}` : ""}`, maxChars: constraints.maxChars, text: current }
     });
-    const updated = await socialPostService.update(caller, postId, target ? { bodyOverrides: { ...Object.fromEntries(post.targets.filter((t) => t.bodyOverride).map((t) => [t.socialAccountId, t.bodyOverride])), [target.socialAccountId]: result.body } } : { body: result.body }, meta13);
+    const updated = await socialPostService.update(caller, postId, target ? { bodyOverrides: { ...Object.fromEntries(post.targets.filter((t) => t.bodyOverride).map((t) => [t.socialAccountId, t.bodyOverride])), [target.socialAccountId]: result.body } } : { body: result.body }, meta14);
     await prisma.socialPost.update({ where: { id: postId }, data: { aiGenerated: true, aiExecutionId: executionId } });
     await auditLogRepository.record({
       organizationId: caller.organizationId,
@@ -22651,8 +22843,8 @@ Link: ${source.url}` : "(none)"
       resourceType: "social_post",
       resourceId: postId,
       metadata: { action: input.action, aiExecutionId: executionId },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return { post: { ...updated, aiGenerated: true, aiExecutionId: executionId }, previousBody: current, executionId };
   }
@@ -22859,7 +23051,7 @@ async function getInboxSettings(organizationId) {
   return row ? { autoTriage: row.autoTriage, autoDraft: row.autoDraft, autoReply: row.autoReply, autoLead: row.autoLead, firstResponseMinutes: row.firstResponseMinutes, retentionDays: row.retentionDays } : DEFAULT_INBOX_SETTINGS;
 }
 var safeText = (err, secrets = []) => redactSecrets(err, secrets).slice(0, 300);
-async function auditInbox(organizationId, action, resourceId, metadata, actor, meta13, result = "SUCCESS", resourceType = "social_conversation") {
+async function auditInbox(organizationId, action, resourceId, metadata, actor, meta14, result = "SUCCESS", resourceType = "social_conversation") {
   await auditLogRepository.record({
     organizationId,
     actorUserId: actor?.id,
@@ -22869,8 +23061,8 @@ async function auditInbox(organizationId, action, resourceId, metadata, actor, m
     resourceId,
     result,
     metadata,
-    ipAddress: meta13?.ip,
-    userAgent: meta13?.userAgent
+    ipAddress: meta14?.ip,
+    userAgent: meta14?.userAgent
   }).catch((err) => logger.error({ resourceId, action, err: safeText(err) }, "[social-inbox] audit write failed"));
 }
 async function repliers(organizationId) {
@@ -22893,7 +23085,7 @@ async function assertAssignable(organizationId, userId) {
   if (!ok) throw new ValidationError("That person is not an active member of this workspace with permission to reply.");
 }
 var EMAIL_RE = /[\w.+-]+@[\w-]+\.[\w.-]+/;
-async function handoffToCrm(conv, actor, opts = {}, meta13) {
+async function handoffToCrm(conv, actor, opts = {}, meta14) {
   if (conv.leadId || conv.contactId) return { outcome: conv.leadId ? "linked_lead" : "linked_contact", leadId: conv.leadId, contactId: conv.contactId };
   const inbound = await prisma.socialMessage.findMany({ where: { conversationId: conv.id, direction: "INBOUND" }, orderBy: { createdAt: "asc" }, take: 20, select: { body: true } });
   const email = (opts.email?.trim() || inbound.map((m) => EMAIL_RE.exec(m.body)?.[0]).find(Boolean) || "").toLowerCase() || void 0;
@@ -22905,7 +23097,7 @@ async function handoffToCrm(conv, actor, opts = {}, meta13) {
   const orgId2 = conv.organizationId;
   const done = async (outcome, leadId, contactId) => {
     await prisma.socialConversation.update({ where: { id: conv.id }, data: { leadId, contactId } });
-    await auditInbox(orgId2, "SOCIAL_INBOX_LEAD_LINKED", conv.id, { outcome, leadId, contactId, auto: !actor }, actor, meta13);
+    await auditInbox(orgId2, "SOCIAL_INBOX_LEAD_LINKED", conv.id, { outcome, leadId, contactId, auto: !actor }, actor, meta14);
     return { outcome, leadId, contactId };
   };
   if (email) {
@@ -22939,7 +23131,7 @@ async function handoffToCrm(conv, actor, opts = {}, meta13) {
     notes: [`Social lead from ${conv.account.provider} (${conv.type.toLowerCase()}) ${conv.participantHandle ? `@${conv.participantHandle.replace(/^@/, "")}` : ""}`.trim(), excerpt ? `Excerpt: ${excerpt}` : "", opts.note ?? "", link].filter(Boolean).join("\n\n"),
     assignedTo: conv.assigneeId ?? void 0
   });
-  await auditLogRepository.record({ organizationId: orgId2, actorUserId: actor?.id, actorType: actor ? "USER" : "SYSTEM", action: "LEAD_CREATED", resourceType: "lead", resourceId: lead.id, afterData: { companyName: lead.companyName, source: lead.source }, ipAddress: meta13?.ip, userAgent: meta13?.userAgent });
+  await auditLogRepository.record({ organizationId: orgId2, actorUserId: actor?.id, actorType: actor ? "USER" : "SYSTEM", action: "LEAD_CREATED", resourceType: "lead", resourceId: lead.id, afterData: { companyName: lead.companyName, source: lead.source }, ipAddress: meta14?.ip, userAgent: meta14?.userAgent });
   try {
     await eventEngine.emit({ eventType: "lead.created", entityType: "lead", entityId: lead.id, organizationId: orgId2, actorId: actor?.id, actorType: actor ? "USER" : "SYSTEM", sourceModule: "CRM", payload: { companyName: lead.companyName, source: lead.source } });
   } catch {
@@ -23571,8 +23763,8 @@ var inboxService = {
     });
   },
   // ---- drafts & replies ----
-  async draft(caller, id6, meta13 = {}) {
-    void meta13;
+  async draft(caller, id6, meta14 = {}) {
+    void meta14;
     await assertReviewAccess(caller, id6);
     const r = await generateDraft({ id: caller.id, organizationId: caller.organizationId }, caller.organizationId, id6);
     return r;
@@ -23585,41 +23777,41 @@ var inboxService = {
     const updated = await prisma.socialMessage.update({ where: { id: messageId }, data: { body, guardrailResult: guard, sentById: caller.id } });
     return { id: updated.id, body: updated.body, guardrailResult: guard };
   },
-  async send(caller, conversationId, input, meta13 = {}) {
+  async send(caller, conversationId, input, meta14 = {}) {
     await assertReviewAccess(caller, conversationId);
-    const m = await sendReply(caller.organizationId, conversationId, { actor: caller, ...input, meta: meta13 });
+    const m = await sendReply(caller.organizationId, conversationId, { actor: caller, ...input, meta: meta14 });
     return { message: { id: m.id, sendStatus: m.sendStatus, sendError: m.sendError, sentAt: m.sentAt } };
   },
-  async addNote(caller, conversationId, body, meta13 = {}) {
+  async addNote(caller, conversationId, body, meta14 = {}) {
     const conv = await prisma.socialConversation.findFirst({ where: { id: conversationId, organizationId: caller.organizationId } });
     if (!conv) throw new NotFoundError("Conversation not found.");
     const note = await prisma.socialMessage.create({ data: { conversationId, organizationId: caller.organizationId, socialAccountId: conv.socialAccountId, direction: "OUTBOUND", authorKind: "NOTE", body, sendStatus: "RECEIVED", sentById: caller.id } });
-    await auditInbox(caller.organizationId, "SOCIAL_INBOX_NOTE_ADDED", conversationId, { messageId: note.id, chars: body.length }, caller, meta13);
+    await auditInbox(caller.organizationId, "SOCIAL_INBOX_NOTE_ADDED", conversationId, { messageId: note.id, chars: body.length }, caller, meta14);
     return { id: note.id };
   },
   // ---- workflow ----
-  async setStatus(caller, id6, status, meta13 = {}) {
+  async setStatus(caller, id6, status, meta14 = {}) {
     const conv = await prisma.socialConversation.findFirst({ where: { id: id6, organizationId: caller.organizationId } });
     if (!conv) throw new NotFoundError("Conversation not found.");
     const settings = await getInboxSettings(caller.organizationId);
     const reopening = status === "OPEN" && conv.status !== "OPEN";
     await prisma.socialConversation.update({ where: { id: id6 }, data: { status, ...status === "SPAM" || status === "RESOLVED" ? { slaDueAt: null } : {}, ...reopening && !conv.firstResponseAt && conv.lastInboundAt ? { slaDueAt: new Date(conv.lastInboundAt.getTime() + settings.firstResponseMinutes * 6e4) } : {} } });
-    await auditInbox(caller.organizationId, status === "SPAM" ? "SOCIAL_INBOX_MARKED_SPAM" : "SOCIAL_INBOX_STATUS_CHANGED", id6, { from: conv.status, to: status }, caller, meta13);
+    await auditInbox(caller.organizationId, status === "SPAM" ? "SOCIAL_INBOX_MARKED_SPAM" : "SOCIAL_INBOX_STATUS_CHANGED", id6, { from: conv.status, to: status }, caller, meta14);
     return this.get(caller, id6).then((r) => r.conversation);
   },
-  async setPriority(caller, id6, priority, meta13 = {}) {
+  async setPriority(caller, id6, priority, meta14 = {}) {
     const conv = await prisma.socialConversation.findFirst({ where: { id: id6, organizationId: caller.organizationId } });
     if (!conv) throw new NotFoundError("Conversation not found.");
     await prisma.socialConversation.update({ where: { id: id6 }, data: { priority } });
-    await auditInbox(caller.organizationId, "SOCIAL_INBOX_PRIORITY_CHANGED", id6, { from: conv.priority, to: priority }, caller, meta13);
+    await auditInbox(caller.organizationId, "SOCIAL_INBOX_PRIORITY_CHANGED", id6, { from: conv.priority, to: priority }, caller, meta14);
     return this.get(caller, id6).then((r) => r.conversation);
   },
-  async assign(caller, id6, assigneeId, meta13 = {}) {
+  async assign(caller, id6, assigneeId, meta14 = {}) {
     const conv = await prisma.socialConversation.findFirst({ where: { id: id6, organizationId: caller.organizationId } });
     if (!conv) throw new NotFoundError("Conversation not found.");
     if (assigneeId) await assertAssignable(caller.organizationId, assigneeId);
     await prisma.socialConversation.update({ where: { id: id6 }, data: { assigneeId } });
-    await auditInbox(caller.organizationId, "SOCIAL_INBOX_ASSIGNED", id6, { from: conv.assigneeId, to: assigneeId }, caller, meta13);
+    await auditInbox(caller.organizationId, "SOCIAL_INBOX_ASSIGNED", id6, { from: conv.assigneeId, to: assigneeId }, caller, meta14);
     if (assigneeId && assigneeId !== caller.id) {
       const last = await prisma.socialMessage.findFirst({ where: { conversationId: id6, authorKind: "CUSTOMER" }, orderBy: { createdAt: "desc" }, select: { body: true } });
       await notifyInbox(caller.organizationId, [assigneeId], "social_inbox_assigned", "Inbox conversation assigned to you", id6, last?.body);
@@ -23633,7 +23825,7 @@ var inboxService = {
     if (read6) await syncProviderRead(conv);
     return { id: id6, isRead: read6 };
   },
-  async hideComment(caller, messageId, hidden, meta13 = {}) {
+  async hideComment(caller, messageId, hidden, meta14 = {}) {
     const msg = await prisma.socialMessage.findFirst({ where: { id: messageId, organizationId: caller.organizationId, direction: "INBOUND" }, include: { conversation: { include: { account: true } } } });
     if (!msg || !msg.providerMessageId) throw new NotFoundError("Message not found.");
     if (msg.conversation.type !== "COMMENT") throw new ValidationError("Only comments can be hidden.");
@@ -23645,20 +23837,20 @@ var inboxService = {
       await connector.hideComment(tokens2, { providerMessageId: msg.providerMessageId, hidden });
     } catch (err) {
       if (err instanceof ConnectorNotImplementedError) throw new ConflictError("Hiding comments is not supported for this provider yet.");
-      await auditInbox(caller.organizationId, "SOCIAL_INBOX_HIDE_FAILED", msg.conversationId, { messageId, hidden, error: safeText(err, [tokens2.accessToken]) }, caller, meta13, "FAILURE");
+      await auditInbox(caller.organizationId, "SOCIAL_INBOX_HIDE_FAILED", msg.conversationId, { messageId, hidden, error: safeText(err, [tokens2.accessToken]) }, caller, meta14, "FAILURE");
       throw new ConflictError("The network did not accept the request. Try again.");
     }
     await prisma.socialMessage.update({ where: { id: messageId }, data: { hidden } });
-    await auditInbox(caller.organizationId, hidden ? "SOCIAL_INBOX_COMMENT_HIDDEN" : "SOCIAL_INBOX_COMMENT_UNHIDDEN", msg.conversationId, { messageId }, caller, meta13);
+    await auditInbox(caller.organizationId, hidden ? "SOCIAL_INBOX_COMMENT_HIDDEN" : "SOCIAL_INBOX_COMMENT_UNHIDDEN", msg.conversationId, { messageId }, caller, meta14);
     return { id: messageId, hidden };
   },
-  async createLead(caller, id6, input, meta13 = {}) {
+  async createLead(caller, id6, input, meta14 = {}) {
     const conv = await prisma.socialConversation.findFirst({ where: { id: id6, organizationId: caller.organizationId }, include: { account: { select: { provider: true } } } });
     if (!conv) throw new NotFoundError("Conversation not found.");
     if (conv.leadId || conv.contactId) throw new ConflictError("This conversation is already linked to the CRM.", { leadId: conv.leadId, contactId: conv.contactId });
-    return handoffToCrm(conv, caller, input, meta13);
+    return handoffToCrm(conv, caller, input, meta14);
   },
-  async bulk(caller, ids, patch, meta13 = {}) {
+  async bulk(caller, ids, patch, meta14 = {}) {
     if (patch.assigneeId) await assertAssignable(caller.organizationId, patch.assigneeId);
     const where2 = { id: { in: ids }, organizationId: caller.organizationId };
     const data = {};
@@ -23670,7 +23862,7 @@ var inboxService = {
     if (patch.markRead !== void 0) data.isRead = patch.markRead;
     if ("assigneeId" in patch) data.assigneeId = patch.assigneeId;
     const res = await prisma.socialConversation.updateMany({ where: where2, data });
-    await auditInbox(caller.organizationId, "SOCIAL_INBOX_BULK_UPDATE", caller.organizationId, { count: res.count, requested: ids.length, patch: Object.keys(patch) }, caller, meta13, "SUCCESS", "social_inbox");
+    await auditInbox(caller.organizationId, "SOCIAL_INBOX_BULK_UPDATE", caller.organizationId, { count: res.count, requested: ids.length, patch: Object.keys(patch) }, caller, meta14, "SUCCESS", "social_inbox");
     return { updated: res.count };
   },
   /** People who can work the inbox (for the assignee picker). Names only. */
@@ -23686,16 +23878,16 @@ var inboxService = {
   async getSettings(organizationId) {
     return getInboxSettings(organizationId);
   },
-  async updateSettings(caller, input, meta13 = {}) {
+  async updateSettings(caller, input, meta14 = {}) {
     if (!isAdmin2(caller)) throw new AuthorizationError("Only administrators can change inbox settings.");
     const before = await getInboxSettings(caller.organizationId);
     await prisma.socialInboxSetting.upsert({ where: { organizationId: caller.organizationId }, create: { organizationId: caller.organizationId, ...DEFAULT_INBOX_SETTINGS, ...input, updatedById: caller.id }, update: { ...input, updatedById: caller.id } });
     const after = await getInboxSettings(caller.organizationId);
-    await auditInbox(caller.organizationId, "SOCIAL_INBOX_SETTINGS_CHANGED", caller.organizationId, { before, after }, caller, meta13, "SUCCESS", "social_inbox");
+    await auditInbox(caller.organizationId, "SOCIAL_INBOX_SETTINGS_CHANGED", caller.organizationId, { before, after }, caller, meta14, "SUCCESS", "social_inbox");
     return after;
   },
   listRules: (organizationId) => prisma.socialInboxRule.findMany({ where: { organizationId }, orderBy: { position: "asc" }, take: 100 }),
-  async saveRule(caller, id6, input, meta13 = {}) {
+  async saveRule(caller, id6, input, meta14 = {}) {
     if (input.assigneeId) await assertAssignable(caller.organizationId, input.assigneeId);
     if (!(input.matchKeywords?.length || input.matchIntents?.length || input.matchSentiments?.length)) throw new ValidationError("A rule needs at least one condition (keyword, intent or sentiment).");
     let rule;
@@ -23704,16 +23896,16 @@ var inboxService = {
       if (!existing) throw new NotFoundError("Rule not found.");
       rule = await prisma.socialInboxRule.update({ where: { id: id6 }, data: input });
     } else rule = await prisma.socialInboxRule.create({ data: { ...input, organizationId: caller.organizationId } });
-    await auditInbox(caller.organizationId, id6 ? "SOCIAL_INBOX_RULE_UPDATED" : "SOCIAL_INBOX_RULE_CREATED", rule.id, { name: rule.name }, caller, meta13, "SUCCESS", "social_inbox_rule");
+    await auditInbox(caller.organizationId, id6 ? "SOCIAL_INBOX_RULE_UPDATED" : "SOCIAL_INBOX_RULE_CREATED", rule.id, { name: rule.name }, caller, meta14, "SUCCESS", "social_inbox_rule");
     return rule;
   },
-  async deleteRule(caller, id6, meta13 = {}) {
+  async deleteRule(caller, id6, meta14 = {}) {
     const res = await prisma.socialInboxRule.deleteMany({ where: { id: id6, organizationId: caller.organizationId } });
     if (res.count !== 1) throw new NotFoundError("Rule not found.");
-    await auditInbox(caller.organizationId, "SOCIAL_INBOX_RULE_DELETED", id6, {}, caller, meta13, "SUCCESS", "social_inbox_rule");
+    await auditInbox(caller.organizationId, "SOCIAL_INBOX_RULE_DELETED", id6, {}, caller, meta14, "SUCCESS", "social_inbox_rule");
   },
   listCanned: (organizationId) => prisma.socialCannedReply.findMany({ where: { organizationId }, orderBy: { title: "asc" }, take: 200 }),
-  async saveCanned(caller, id6, input, meta13 = {}) {
+  async saveCanned(caller, id6, input, meta14 = {}) {
     if (input.approvedForAuto && !isAdmin2(caller)) throw new AuthorizationError("Only administrators can approve answers for auto-reply.");
     let row;
     if (id6) {
@@ -23722,15 +23914,15 @@ var inboxService = {
       if (existing.approvedForAuto && !isAdmin2(caller)) throw new AuthorizationError("Only administrators can edit answers approved for auto-reply.");
       row = await prisma.socialCannedReply.update({ where: { id: id6 }, data: input });
     } else row = await prisma.socialCannedReply.create({ data: { ...input, organizationId: caller.organizationId, createdById: caller.id } });
-    await auditInbox(caller.organizationId, id6 ? "SOCIAL_INBOX_CANNED_UPDATED" : "SOCIAL_INBOX_CANNED_CREATED", row.id, { title: row.title, approvedForAuto: row.approvedForAuto }, caller, meta13, "SUCCESS", "social_canned_reply");
+    await auditInbox(caller.organizationId, id6 ? "SOCIAL_INBOX_CANNED_UPDATED" : "SOCIAL_INBOX_CANNED_CREATED", row.id, { title: row.title, approvedForAuto: row.approvedForAuto }, caller, meta14, "SUCCESS", "social_canned_reply");
     return row;
   },
-  async deleteCanned(caller, id6, meta13 = {}) {
+  async deleteCanned(caller, id6, meta14 = {}) {
     const existing = await prisma.socialCannedReply.findFirst({ where: { id: id6, organizationId: caller.organizationId } });
     if (!existing) throw new NotFoundError("Canned reply not found.");
     if (existing.approvedForAuto && !isAdmin2(caller)) throw new AuthorizationError("Only administrators can delete answers approved for auto-reply.");
     await prisma.socialCannedReply.delete({ where: { id: id6 } });
-    await auditInbox(caller.organizationId, "SOCIAL_INBOX_CANNED_DELETED", id6, {}, caller, meta13, "SUCCESS", "social_canned_reply");
+    await auditInbox(caller.organizationId, "SOCIAL_INBOX_CANNED_DELETED", id6, {}, caller, meta14, "SUCCESS", "social_canned_reply");
   },
   /** DEV/TEST ONLY (route is disabled in production): injects a mock event through the same ingest path the webhook uses. */
   async injectMock(caller, input) {
@@ -24223,7 +24415,7 @@ socialContentRouter.post("/posts/:id/ai/rewrite", publish, aiExecutionLimiter, a
 }));
 
 // server/routes/v1/socialPublishingRoutes.ts
-import { timingSafeEqual as timingSafeEqual4 } from "node:crypto";
+import { timingSafeEqual as timingSafeEqual5 } from "node:crypto";
 import { Router as Router19 } from "express";
 init_apiResponse();
 
@@ -24271,7 +24463,7 @@ var meta4 = (req) => ({ ip: req.ip, userAgent: req.headers["user-agent"], reques
 var constantTimeEquals = (a, b) => {
   const x = Buffer.from(a);
   const y = Buffer.from(b);
-  return x.length === y.length && timingSafeEqual4(x, y);
+  return x.length === y.length && timingSafeEqual5(x, y);
 };
 var socialInternalRouter = Router19();
 socialInternalRouter.all(
@@ -24693,7 +24885,7 @@ var analyticsIngest = {
     return result;
   },
   /** "Refresh now" for one account (social.accounts.manage). Ignores the once-a-day gate but never the kill switches. */
-  async refreshNow(caller, accountId, meta13 = {}) {
+  async refreshNow(caller, accountId, meta14 = {}) {
     const account = await prisma.socialAccount.findFirst({ where: { id: accountId, organizationId: caller.organizationId }, select: { id: true } });
     if (!account) throw new NotFoundError("Social account not found.");
     const result = await this.runAccount(accountId, /* @__PURE__ */ new Date(), { budgetMs: REFRESH_BUDGET_MS });
@@ -24705,8 +24897,8 @@ var analyticsIngest = {
       resourceType: "social_account",
       resourceId: accountId,
       metadata: { outcome: result.outcome, reason: result.reason ?? null, days: result.daysStored, posts: result.postsSnapshotted },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     }).catch(() => void 0);
     return result;
   }
@@ -24937,7 +25129,7 @@ var formService = {
   async getForm(organizationId, id6) {
     return loadFormOrThrow(id6, organizationId);
   },
-  async createForm(caller, input, meta13 = {}) {
+  async createForm(caller, input, meta14 = {}) {
     const organizationId = caller.organizationId;
     if (input.slug) {
       const dup = await formRepository.findBySlugInOrg(organizationId, input.slug);
@@ -24962,12 +25154,12 @@ var formService = {
       resourceType: "form",
       resourceId: form2.id,
       afterData: { name: form2.name, slug: form2.slug },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return form2;
   },
-  async updateForm(caller, id6, input, meta13 = {}) {
+  async updateForm(caller, id6, input, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadFormOrThrow(id6, organizationId);
     if (input.slug !== void 0 && input.slug !== existing.slug) {
@@ -24992,12 +25184,12 @@ var formService = {
       resourceId: id6,
       beforeData: { name: existing.name, slug: existing.slug, status: existing.status },
       afterData: { name: input.name, slug: input.slug, status: input.status },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return updated;
   },
-  async deleteForm(caller, id6, meta13 = {}) {
+  async deleteForm(caller, id6, meta14 = {}) {
     const organizationId = caller.organizationId;
     await loadFormOrThrow(id6, organizationId);
     const submissionCount = await formRepository.countSubmissions(id6);
@@ -25012,8 +25204,8 @@ var formService = {
       action: "FORM_DELETED",
       resourceType: "form",
       resourceId: id6,
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
   },
   async listSubmissions(organizationId, formId, page, limit) {
@@ -25544,7 +25736,7 @@ var campaignService = {
   async getCampaign(organizationId, id6) {
     return loadCampaignOrThrow(id6, organizationId);
   },
-  async createCampaign(caller, input, meta13 = {}) {
+  async createCampaign(caller, input, meta14 = {}) {
     const organizationId = caller.organizationId;
     await assertRelationshipsUsable(input, organizationId);
     const campaign = await campaignRepository.create({
@@ -25578,13 +25770,13 @@ var campaignService = {
       resourceType: "campaign",
       resourceId: campaign.id,
       afterData: { name: campaign.name, status: campaign.status, channel: campaign.channel, utmCampaign: campaign.utmCampaign },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     await emitCampaignEvent("campaign.created", campaign, caller.id);
     return loadCampaignOrThrow(campaign.id, organizationId);
   },
-  async updateCampaign(caller, id6, input, meta13 = {}) {
+  async updateCampaign(caller, id6, input, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadCampaignOrThrow(id6, organizationId);
     if (TERMINAL_STATUSES4.has(existing.status)) {
@@ -25622,15 +25814,15 @@ var campaignService = {
       resourceId: id6,
       beforeData: { name: existing.name, channel: existing.channel },
       afterData: patch,
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     const updated = await loadCampaignOrThrow(id6, organizationId);
     await emitCampaignEvent("campaign.updated", updated, caller.id);
     return updated;
   },
   /** Creates a new DRAFT campaign copying this one's fields and relations (never its leads/opportunities/clients — those are this campaign's own attributed activity, not the new copy's). */
-  async duplicateCampaign(caller, id6, input, meta13 = {}) {
+  async duplicateCampaign(caller, id6, input, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadCampaignOrThrow(id6, organizationId);
     const copy = await campaignRepository.create({
@@ -25675,12 +25867,12 @@ var campaignService = {
       resourceId: copy.id,
       beforeData: { duplicatedFromCampaignId: id6 },
       afterData: { name: copy.name },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return loadCampaignOrThrow(copy.id, organizationId);
   },
-  async activateCampaign(caller, id6, meta13 = {}) {
+  async activateCampaign(caller, id6, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadCampaignOrThrow(id6, organizationId);
     assertValidTransition3(existing.status, "ACTIVE");
@@ -25695,14 +25887,14 @@ var campaignService = {
       resourceId: id6,
       beforeData: { status: existing.status },
       afterData: { status: "ACTIVE" },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     const updated = await loadCampaignOrThrow(id6, organizationId);
     await emitCampaignEvent("campaign.activated", updated, caller.id);
     return updated;
   },
-  async pauseCampaign(caller, id6, meta13 = {}) {
+  async pauseCampaign(caller, id6, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadCampaignOrThrow(id6, organizationId);
     if (existing.status !== "ACTIVE") throw new ConflictError("Only an ACTIVE campaign can be paused.");
@@ -25716,14 +25908,14 @@ var campaignService = {
       resourceId: id6,
       beforeData: { status: existing.status },
       afterData: { status: "PAUSED" },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     const updated = await loadCampaignOrThrow(id6, organizationId);
     await emitCampaignEvent("campaign.paused", updated, caller.id);
     return updated;
   },
-  async archiveCampaign(caller, id6, meta13 = {}) {
+  async archiveCampaign(caller, id6, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadCampaignOrThrow(id6, organizationId);
     if (existing.status === "ARCHIVED") throw new ConflictError("This campaign is already archived.");
@@ -25737,8 +25929,8 @@ var campaignService = {
       resourceId: id6,
       beforeData: { status: existing.status },
       afterData: { status: "ARCHIVED" },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     const updated = await loadCampaignOrThrow(id6, organizationId);
     await emitCampaignEvent("campaign.archived", updated, caller.id);
@@ -25753,7 +25945,7 @@ var campaignService = {
    * separately permissioned action), it only refuses to go live until
    * that's genuinely true.
    */
-  async publishCampaign(caller, id6, meta13 = {}) {
+  async publishCampaign(caller, id6, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadCampaignOrThrow(id6, organizationId);
     assertValidTransition3(existing.status, "ACTIVE");
@@ -25761,7 +25953,7 @@ var campaignService = {
     if (existing.landingPageId && existing.landingPage?.status !== "PUBLISHED") {
       throw new ValidationError("This campaign's landing page must be published before the campaign can go live.");
     }
-    return this.activateCampaign(caller, id6, meta13);
+    return this.activateCampaign(caller, id6, meta14);
   },
   /**
    * Composes the real, resolvable preview URL for this campaign's landing
@@ -26382,9 +26574,94 @@ var retentionService = {
 };
 
 // server/routes/v1/opsRoutes.ts
+init_errors();
+
+// server/services/meta/metaReviewService.ts
+import { randomBytes as randomBytes9 } from "node:crypto";
+init_errors();
+var REVIEW_ORG_SLUG = "meta-review-demo";
+var REVIEWER_EMAIL = "meta-reviewer@artifysols.com";
+var SAMPLE = {
+  accounts: [
+    { provider: "meta_facebook", externalAccountId: "demo-facebook-page", displayName: "Sample Page (demo data)", handle: null },
+    { provider: "meta_instagram", externalAccountId: "demo-instagram-account", displayName: "Sample Instagram (demo data)", handle: "sample_demo" }
+  ],
+  conversations: [
+    { acct: 0, type: "DM", thread: "dm:demo-1", name: "Sample Customer A", intent: "question", sentiment: "neutral", msgs: ["Hi, are you open on Saturdays?", "Sample reply: Yes, 9 to 2 on Saturdays."] },
+    { acct: 0, type: "COMMENT", thread: "c:demo-2", name: "Sample Customer B", intent: "praise", sentiment: "positive", msgs: ["Loved the new menu, thank you!"] },
+    { acct: 1, type: "MENTION", thread: "p:demo-3", name: "Sample Customer C", intent: "mention", sentiment: "positive", msgs: ["Great evening at @sample_demo with friends"] },
+    { acct: 1, type: "DM", thread: "dm:demo-4", name: "Sample Customer D", intent: "complaint", sentiment: "negative", msgs: ["My order arrived late, who can help?"] }
+  ],
+  posts: [
+    { title: "Sample post: weekend opening hours", body: "Sample content for review only: we are open 9 to 2 this Saturday.", status: "DRAFT" },
+    { title: "Sample post: new menu announcement", body: "Sample content for review only: our new menu starts Monday.", status: "PENDING_APPROVAL" }
+  ]
+};
+async function findOrg() {
+  return prisma.organization.findUnique({ where: { slug: REVIEW_ORG_SLUG } });
+}
+var metaReviewService = {
+  async status() {
+    const org = await findOrg();
+    if (!org) return { seeded: false };
+    const [accounts, conversations, posts, users] = await Promise.all([
+      prisma.socialAccount.count({ where: { organizationId: org.id } }),
+      prisma.socialConversation.count({ where: { organizationId: org.id } }),
+      prisma.socialPost.count({ where: { organizationId: org.id } }),
+      prisma.user.count({ where: { organizationId: org.id } })
+    ]);
+    return { seeded: true, organizationId: org.id, reviewerEmail: REVIEWER_EMAIL, counts: { accounts, conversations, posts, users }, createdAt: org.createdAt.toISOString() };
+  },
+  /** Creates the demo workspace once. Returns the one-time reviewer password; calling it again never reveals or resets anything. */
+  async seed(actor, meta14 = {}) {
+    if (await findOrg()) throw new ConflictError("The Meta review demo workspace already exists. Remove it first to recreate it with a new password.");
+    if (await prisma.user.findUnique({ where: { email: REVIEWER_EMAIL } })) throw new ConflictError(`A user with ${REVIEWER_EMAIL} already exists.`);
+    const password = randomBytes9(15).toString("base64url");
+    const passwordHash = await hashPassword(password);
+    const role = await prisma.role.findUniqueOrThrow({ where: { key: "ADMIN" } });
+    const org = await prisma.$transaction(async (tx) => {
+      const o = await tx.organization.create({ data: { name: "Meta Review Demo", slug: REVIEW_ORG_SLUG, type: "CLIENT", status: "ACTIVE" } });
+      const u = await tx.user.create({ data: { organizationId: o.id, email: REVIEWER_EMAIL, passwordHash, firstName: "Meta", lastName: "Reviewer", roleId: role.id, emailVerifiedAt: /* @__PURE__ */ new Date() } });
+      await tx.organizationMembership.create({ data: { userId: u.id, organizationId: o.id, roleId: role.id } });
+      const accounts = [];
+      for (const a of SAMPLE.accounts) accounts.push(await tx.socialAccount.create({ data: { organizationId: o.id, ...a, status: "DISCONNECTED", lastError: "Sample account for the Meta App Review demo. Connect your own test account to try live actions." } }));
+      for (const c of SAMPLE.conversations) {
+        const conv = await tx.socialConversation.create({ data: { organizationId: o.id, socialAccountId: accounts[c.acct].id, providerThreadId: c.thread, type: c.type, participantExternalId: `demo-${c.thread}`, participantName: c.name, intent: c.intent, sentiment: c.sentiment, isRead: false } });
+        for (const [i, body] of c.msgs.entries()) {
+          await tx.socialMessage.create({ data: { conversationId: conv.id, organizationId: o.id, socialAccountId: accounts[c.acct].id, direction: i === 0 ? "INBOUND" : "OUTBOUND", authorKind: i === 0 ? "CUSTOMER" : "PAGE", body, providerMessageId: `demo-${c.thread}-${i}`, sendStatus: i === 0 ? "RECEIVED" : "SENT" } });
+        }
+      }
+      for (const p of SAMPLE.posts) {
+        const post = await tx.socialPost.create({ data: { organizationId: o.id, title: p.title, body: p.body, status: p.status, createdById: u.id } });
+        await tx.socialPostTarget.create({ data: { postId: post.id, socialAccountId: accounts[0].id } });
+      }
+      return o;
+    });
+    await auditLogRepository.record({ organizationId: actor.organizationId, actorUserId: actor.id, actorType: "USER", action: "META_REVIEW_DEMO_SEEDED", resourceType: "organization", resourceId: org.id, ipAddress: meta14.ip, userAgent: meta14.userAgent });
+    return { organizationId: org.id, reviewerEmail: REVIEWER_EMAIL, reviewerPassword: password, note: "Shown once. Give it to Meta only in the App Review submission form." };
+  },
+  /** Deletes the demo organization, its reviewer user and everything the reviewer created in it. */
+  async remove(actor, meta14 = {}) {
+    const org = await findOrg();
+    if (!org) throw new ConflictError("The Meta review demo workspace does not exist.");
+    await prisma.$transaction(async (tx) => {
+      await tx.notification.deleteMany({ where: { organizationId: org.id } });
+      await tx.user.deleteMany({ where: { organizationId: org.id } });
+      await tx.organization.delete({ where: { id: org.id } });
+    });
+    await auditLogRepository.record({ organizationId: actor.organizationId, actorUserId: actor.id, actorType: "USER", action: "META_REVIEW_DEMO_REMOVED", resourceType: "organization", resourceId: org.id, ipAddress: meta14.ip, userAgent: meta14.userAgent });
+    return { removed: true };
+  }
+};
+
+// server/routes/v1/opsRoutes.ts
 var router22 = Router28();
 router22.use(authenticateToken);
-router22.get("/health", requirePermission("ops.health.read"), asyncHandler(async (req, res) => {
+var platformOrgOnly = (req, _res, next) => {
+  if (config.publicWebsiteOrganizationId && req.user && req.user.organizationId !== config.publicWebsiteOrganizationId) throw new AuthorizationError("Platform health is available to the main workspace only.");
+  next();
+};
+router22.get("/health", requirePermission("ops.health.read"), platformOrgOnly, asyncHandler(async (req, res) => {
   const checks = await healthService.runAndStore(req.user.organizationId);
   const present = (n) => !!process.env[n] && process.env[n].trim().length > 0;
   sendSuccess(res, {
@@ -26395,7 +26672,7 @@ router22.get("/health", requirePermission("ops.health.read"), asyncHandler(async
     env: ENV_CHECKLIST.map((e) => ({ name: e.name, required: e.required, purpose: e.purpose, present: present(e.name) }))
   });
 }));
-router22.get("/backups", requirePermission("ops.backups.read"), asyncHandler(async (req, res) => {
+router22.get("/backups", requirePermission("ops.backups.read"), platformOrgOnly, asyncHandler(async (req, res) => {
   const [provider, exports] = await Promise.all([backupService.providerInfo(), backupService.listExports(req.user.organizationId)]);
   sendSuccess(res, { provider, exportConfig: backupService.exportConfigStatus(), exports });
 }));
@@ -26416,6 +26693,10 @@ router22.get("/consent", requirePermission("privacy.read"), asyncHandler(async (
   const r = await consentService.list(req.user.organizationId, q);
   sendSuccess(res, { records: r.rows, summary: r.summary }, 200, { page: q.page, limit: q.limit, total: r.total });
 }));
+var reqMeta = (req) => ({ ip: req.ip, userAgent: req.headers["user-agent"], requestId: req.requestId });
+router22.get("/meta-review", requireRole(["SUPER_ADMIN"]), asyncHandler(async (_req, res) => sendSuccess(res, await metaReviewService.status())));
+router22.post("/meta-review", requireRole(["SUPER_ADMIN"]), sensitiveActionLimiter, asyncHandler(async (req, res) => sendSuccess(res, await metaReviewService.seed(req.user, reqMeta(req)), 201)));
+router22.delete("/meta-review", requireRole(["SUPER_ADMIN"]), sensitiveActionLimiter, asyncHandler(async (req, res) => sendSuccess(res, await metaReviewService.remove(req.user, reqMeta(req)))));
 var opsRoutes_default = router22;
 
 // server/routes/v1/privacyRoutes.ts
@@ -27112,15 +27393,51 @@ router24.get("/reports/recipients", manage4, asyncHandler(async (req, res) => {
 }));
 var dashboardRoutes_default = router24;
 
-// server/routes/v1/onboardingRoutes.ts
+// server/routes/v1/metaCallbackRoutes.ts
 import { Router as Router31 } from "express";
 init_apiResponse();
 var router25 = Router31();
-router25.use(authenticateToken);
+var meta11 = (req) => ({ ip: req.ip, userAgent: req.headers["user-agent"], requestId: req.requestId });
+async function rejected(req, res, kind, e) {
+  await auditLogRepository.record({ actorType: "SYSTEM", action: "META_CALLBACK_REJECTED", resourceType: "meta_callback", result: "FAILURE", metadata: { kind, reason: e.reason }, ipAddress: req.ip, userAgent: req.headers["user-agent"] }).catch(() => void 0);
+  if (e.reason === "not_configured") return res.status(503).json({ error: "Meta callbacks are not configured." });
+  return res.status(400).json({ error: "Invalid request." });
+}
+router25.post("/data-deletion", metaCallbackLimiter, asyncHandler(async (req, res) => {
+  try {
+    const out = await metaCallbackService.requestDeletion(req.body?.signed_request, meta11(req));
+    res.status(200).json(out);
+  } catch (e) {
+    if (e instanceof SignedRequestError) return void await rejected(req, res, "deletion", e);
+    throw e;
+  }
+}));
+router25.post("/deauthorize", metaCallbackLimiter, asyncHandler(async (req, res) => {
+  try {
+    await metaCallbackService.deauthorize(req.body?.signed_request, meta11(req));
+    res.status(200).json({ ok: true });
+  } catch (e) {
+    if (e instanceof SignedRequestError) return void await rejected(req, res, "deauthorize", e);
+    throw e;
+  }
+}));
+router25.get("/deletion-status", metaCallbackLimiter, asyncHandler(async (req, res) => {
+  const code = typeof req.query.code === "string" ? req.query.code : "";
+  const status = await metaCallbackService.deletionStatus(code);
+  if (!status) return void sendError(res, 404, "RESOURCE_NOT_FOUND" /* RESOURCE_NOT_FOUND */, "No request found for this code.");
+  sendSuccess(res, status);
+}));
+var metaCallbackRoutes_default = router25;
+
+// server/routes/v1/onboardingRoutes.ts
+import { Router as Router32 } from "express";
+init_apiResponse();
+var router26 = Router32();
+router26.use(authenticateToken);
 function requestMeta10(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router25.get(
+router26.get(
   "/",
   requirePermission("onboarding.read"),
   asyncHandler(async (req, res) => {
@@ -27134,7 +27451,7 @@ router25.get(
     sendSuccess(res, { onboarding: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router25.get(
+router26.get(
   "/template",
   requirePermission("onboarding.read"),
   asyncHandler(async (req, res) => {
@@ -27142,7 +27459,7 @@ router25.get(
     sendSuccess(res, template);
   })
 );
-router25.put(
+router26.put(
   "/template",
   requirePermission("onboarding.update"),
   asyncHandler(async (req, res) => {
@@ -27151,7 +27468,7 @@ router25.put(
     sendSuccess(res, template);
   })
 );
-router25.get(
+router26.get(
   "/:id",
   requirePermission("onboarding.read"),
   asyncHandler(async (req, res) => {
@@ -27159,7 +27476,7 @@ router25.get(
     sendSuccess(res, { onboarding: record2 });
   })
 );
-router25.get(
+router26.get(
   "/:id/activity",
   requirePermission("onboarding.read"),
   asyncHandler(async (req, res) => {
@@ -27167,7 +27484,7 @@ router25.get(
     sendSuccess(res, { activity });
   })
 );
-router25.patch(
+router26.patch(
   "/:id",
   requirePermission("onboarding.update"),
   asyncHandler(async (req, res) => {
@@ -27176,7 +27493,7 @@ router25.patch(
     sendSuccess(res, { onboarding: record2 });
   })
 );
-router25.patch(
+router26.patch(
   "/:id/steps/:key",
   requirePermission("onboarding.update"),
   asyncHandler(async (req, res) => {
@@ -27185,7 +27502,7 @@ router25.patch(
     sendSuccess(res, { onboarding: record2 });
   })
 );
-router25.post(
+router26.post(
   "/:id/complete",
   requirePermission("onboarding.complete"),
   asyncHandler(async (req, res) => {
@@ -27193,10 +27510,10 @@ router25.post(
     sendSuccess(res, { onboarding: record2 });
   })
 );
-var onboardingRoutes_default = router25;
+var onboardingRoutes_default = router26;
 
 // server/routes/v1/workspaceRoutes.ts
-import { Router as Router32 } from "express";
+import { Router as Router33 } from "express";
 
 // server/repositories/workspaceInvitationRepository.ts
 var workspaceInvitationRepository = {
@@ -27281,7 +27598,7 @@ var invitationService = {
       total
     };
   },
-  async createInvitation(caller, workspaceId, input, meta13 = {}) {
+  async createInvitation(caller, workspaceId, input, meta14 = {}) {
     const workspace = await loadWorkspaceForOwnerOrThrow2(workspaceId, caller.organizationId);
     const adminRole = await roleRepository.findByKey(CLIENT_ADMIN_ROLE_KEY);
     if (!adminRole) throw new InternalError("Required role configuration is missing.");
@@ -27312,15 +27629,15 @@ var invitationService = {
       resourceType: "workspace_invitation",
       resourceId: invitation.id,
       afterData: { workspaceId: workspace.id, email, roleKey: CLIENT_ADMIN_ROLE_KEY },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     if (workspace.provisionedForClient) {
       await onboardingService.completeStepForClient(workspace.provisionedForClient.id, "ADMINISTRATOR_INVITED", caller.id);
     }
     return { invitation, devToken: config.isProduction ? void 0 : token };
   },
-  async revokeInvitation(caller, invitationId, meta13 = {}) {
+  async revokeInvitation(caller, invitationId, meta14 = {}) {
     const invitation = await workspaceInvitationRepository.findById(invitationId);
     const workspace = invitation ? await workspaceRepository.findByIdForOwner(invitation.organizationId, caller.organizationId) : null;
     if (!invitation || !workspace) throw new NotFoundError("Invitation not found.");
@@ -27336,8 +27653,8 @@ var invitationService = {
       action: "CLIENT_ADMIN_INVITATION_REVOKED",
       resourceType: "workspace_invitation",
       resourceId: invitationId,
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
   },
   /** Public, unauthenticated lookup for the acceptance page (§26) — returns only what's needed to render a safe form, never the token hash or workspace internals. */
@@ -27356,7 +27673,7 @@ var invitationService = {
     };
   },
   /** Transactional acceptance (§21) — race-safe against double-acceptance via a conditional updateMany, same TOCTOU-guard pattern as leadService.convertLead. */
-  async acceptInvitation(token, input, meta13 = {}) {
+  async acceptInvitation(token, input, meta14 = {}) {
     const invitation = await workspaceInvitationRepository.findByToken(token);
     if (!invitation || computeInvitationStatus(invitation) !== "PENDING") {
       throw new AuthenticationError("This invitation link is invalid or has expired.");
@@ -27421,8 +27738,8 @@ var invitationService = {
       userId: result.id,
       organizationId: invitation.organizationId,
       expiresAt,
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     const role = await roleRepository.resolveById(invitation.roleId);
     if (!role) throw new InternalError("Role could not be resolved.");
@@ -27434,8 +27751,8 @@ var invitationService = {
       action: "CLIENT_ADMIN_ACCEPTED",
       resourceType: "workspace_invitation",
       resourceId: invitation.id,
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     const client3 = await prisma.client.findUnique({ where: { workspaceOrganizationId: invitation.organizationId } });
     if (client3) {
@@ -27468,12 +27785,12 @@ var acceptInvitationSchema = z37.object({
 });
 
 // server/routes/v1/workspaceRoutes.ts
-var router26 = Router32();
-router26.use(authenticateToken);
+var router27 = Router33();
+router27.use(authenticateToken);
 function requestMeta11(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router26.get(
+router27.get(
   "/",
   requirePermission("workspaces.read"),
   asyncHandler(async (req, res) => {
@@ -27487,7 +27804,7 @@ router26.get(
     sendSuccess(res, { workspaces: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router26.get(
+router27.get(
   "/:id",
   requirePermission("workspaces.read"),
   asyncHandler(async (req, res) => {
@@ -27495,7 +27812,7 @@ router26.get(
     sendSuccess(res, { workspace });
   })
 );
-router26.patch(
+router27.patch(
   "/:id",
   requirePermission("workspaces.update"),
   asyncHandler(async (req, res) => {
@@ -27504,7 +27821,7 @@ router26.patch(
     sendSuccess(res, { workspace });
   })
 );
-router26.get(
+router27.get(
   "/:id/members",
   requirePermission("workspaces.read"),
   asyncHandler(async (req, res) => {
@@ -27525,7 +27842,7 @@ router26.get(
     sendSuccess(res, { members }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router26.get(
+router27.get(
   "/:id/invitations",
   requirePermission("invitations.read"),
   asyncHandler(async (req, res) => {
@@ -27534,7 +27851,7 @@ router26.get(
     sendSuccess(res, { invitations: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router26.post(
+router27.post(
   "/:id/invitations",
   requirePermission("invitations.create"),
   asyncHandler(async (req, res) => {
@@ -27544,16 +27861,16 @@ router26.post(
     sendSuccess(res, { invitation: safeInvitation, devToken }, 201);
   })
 );
-var workspaceRoutes_default = router26;
+var workspaceRoutes_default = router27;
 
 // server/routes/v1/invitationRoutes.ts
-import { Router as Router33 } from "express";
+import { Router as Router34 } from "express";
 init_apiResponse();
-var router27 = Router33();
+var router28 = Router34();
 function requestMeta12(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router27.post(
+router28.post(
   "/:id/revoke",
   authenticateToken,
   requirePermission("invitations.revoke"),
@@ -27562,7 +27879,7 @@ router27.post(
     sendSuccess(res, { message: "Invitation revoked." });
   })
 );
-router27.get(
+router28.get(
   "/:token",
   tokenLinkLimiter,
   asyncHandler(async (req, res) => {
@@ -27570,7 +27887,7 @@ router27.get(
     sendSuccess(res, preview);
   })
 );
-router27.post(
+router28.post(
   "/:token/accept",
   tokenLinkLimiter,
   asyncHandler(async (req, res) => {
@@ -27579,10 +27896,10 @@ router27.post(
     sendSuccess(res, result, 201);
   })
 );
-var invitationRoutes_default = router27;
+var invitationRoutes_default = router28;
 
 // server/routes/v1/productRoutes.ts
-import { Router as Router34 } from "express";
+import { Router as Router35 } from "express";
 
 // server/services/productModuleService.ts
 init_errors();
@@ -27607,7 +27924,7 @@ var productModuleService = {
   async getModule(id6) {
     return loadModuleOrThrow(id6);
   },
-  async createModule(caller, productId, input, meta13 = {}) {
+  async createModule(caller, productId, input, meta14 = {}) {
     const product = await loadProductOrThrow2(productId);
     if (product.status === "ARCHIVED") {
       throw new ConflictError("Cannot add a module to an archived product.");
@@ -27645,12 +27962,12 @@ var productModuleService = {
       resourceType: "product_module",
       resourceId: module_.id,
       afterData: { productId, code: module_.code, name: module_.name, status: module_.status },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return module_;
   },
-  async updateModule(caller, id6, input, meta13 = {}) {
+  async updateModule(caller, id6, input, meta14 = {}) {
     const existing = await loadModuleOrThrow(id6);
     if (input.slug !== void 0 && input.slug !== existing.slug) {
       const dup = await productModuleRepository.findBySlugForProduct(existing.productId, input.slug);
@@ -27680,12 +27997,12 @@ var productModuleService = {
       resourceId: id6,
       beforeData: { status: existing.status, name: existing.name },
       afterData: patch,
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return updated;
   },
-  async archiveModule(caller, id6, meta13 = {}) {
+  async archiveModule(caller, id6, meta14 = {}) {
     const existing = await loadModuleOrThrow(id6);
     if (existing.status === "INACTIVE") {
       throw new ConflictError("This module is already inactive.");
@@ -27698,13 +28015,13 @@ var productModuleService = {
       resourceType: "product_module",
       resourceId: id6,
       beforeData: { status: existing.status },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return archived;
   },
   /** Transactional, all-or-nothing reorder — validates every id belongs to this exact product before applying anything (§36). */
-  async reorderModules(caller, productId, moduleIds, meta13 = {}) {
+  async reorderModules(caller, productId, moduleIds, meta14 = {}) {
     await loadProductOrThrow2(productId);
     const existingIds = await productModuleRepository.listAllIdsForProduct(productId);
     const existingSet = new Set(existingIds);
@@ -27720,8 +28037,8 @@ var productModuleService = {
       resourceType: "product",
       resourceId: productId,
       afterData: { order: moduleIds },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
   }
 };
@@ -27897,12 +28214,12 @@ var reorderProductModulesSchema = z40.object({
 });
 
 // server/routes/v1/productRoutes.ts
-var router28 = Router34();
-router28.use(authenticateToken);
+var router29 = Router35();
+router29.use(authenticateToken);
 function requestMeta13(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router28.get(
+router29.get(
   "/",
   requirePermission("products.read"),
   asyncHandler(async (req, res) => {
@@ -27917,7 +28234,7 @@ router28.get(
     sendSuccess(res, { products: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router28.post(
+router29.post(
   "/bulk/archive",
   requirePermission("products.archive"),
   asyncHandler(async (req, res) => {
@@ -27926,7 +28243,7 @@ router28.post(
     sendSuccess(res, result);
   })
 );
-router28.get(
+router29.get(
   "/:id",
   requirePermission("products.read"),
   asyncHandler(async (req, res) => {
@@ -27934,7 +28251,7 @@ router28.get(
     sendSuccess(res, { product });
   })
 );
-router28.post(
+router29.post(
   "/",
   requirePermission("products.create"),
   asyncHandler(async (req, res) => {
@@ -27943,7 +28260,7 @@ router28.post(
     sendSuccess(res, { product }, 201);
   })
 );
-router28.patch(
+router29.patch(
   "/:id",
   requirePermission("products.update"),
   asyncHandler(async (req, res) => {
@@ -27952,7 +28269,7 @@ router28.patch(
     sendSuccess(res, { product });
   })
 );
-router28.post(
+router29.post(
   "/:id/archive",
   requirePermission("products.archive"),
   asyncHandler(async (req, res) => {
@@ -27960,7 +28277,7 @@ router28.post(
     sendSuccess(res, { product });
   })
 );
-router28.get(
+router29.get(
   "/:id/revisions",
   requirePermission("products.read"),
   asyncHandler(async (req, res) => {
@@ -27968,7 +28285,7 @@ router28.get(
     sendSuccess(res, { revisions: revisions2 });
   })
 );
-router28.post(
+router29.post(
   "/:id/revert",
   requirePermission("products.update"),
   asyncHandler(async (req, res) => {
@@ -27977,7 +28294,7 @@ router28.post(
     sendSuccess(res, { product });
   })
 );
-router28.post(
+router29.post(
   "/:id/duplicate",
   requirePermission("products.create"),
   asyncHandler(async (req, res) => {
@@ -27986,7 +28303,7 @@ router28.post(
     sendSuccess(res, { product }, 201);
   })
 );
-router28.get(
+router29.get(
   "/:id/modules",
   requirePermission("product_modules.read"),
   asyncHandler(async (req, res) => {
@@ -27995,7 +28312,7 @@ router28.get(
     sendSuccess(res, { modules: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router28.post(
+router29.post(
   "/:id/modules",
   requirePermission("product_modules.create"),
   asyncHandler(async (req, res) => {
@@ -28004,7 +28321,7 @@ router28.post(
     sendSuccess(res, { module: module_ }, 201);
   })
 );
-router28.post(
+router29.post(
   "/:id/modules/reorder",
   requirePermission("product_modules.reorder"),
   asyncHandler(async (req, res) => {
@@ -28013,17 +28330,17 @@ router28.post(
     sendSuccess(res, { message: "Modules reordered." });
   })
 );
-var productRoutes_default = router28;
+var productRoutes_default = router29;
 
 // server/routes/v1/productModuleRoutes.ts
-import { Router as Router35 } from "express";
+import { Router as Router36 } from "express";
 init_apiResponse();
-var router29 = Router35();
-router29.use(authenticateToken);
+var router30 = Router36();
+router30.use(authenticateToken);
 function requestMeta14(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router29.get(
+router30.get(
   "/:id",
   requirePermission("product_modules.read"),
   asyncHandler(async (req, res) => {
@@ -28031,7 +28348,7 @@ router29.get(
     sendSuccess(res, { module: module_ });
   })
 );
-router29.patch(
+router30.patch(
   "/:id",
   requirePermission("product_modules.update"),
   asyncHandler(async (req, res) => {
@@ -28040,7 +28357,7 @@ router29.patch(
     sendSuccess(res, { module: module_ });
   })
 );
-router29.post(
+router30.post(
   "/:id/archive",
   requirePermission("product_modules.archive"),
   asyncHandler(async (req, res) => {
@@ -28048,10 +28365,10 @@ router29.post(
     sendSuccess(res, { module: module_ });
   })
 );
-var productModuleRoutes_default = router29;
+var productModuleRoutes_default = router30;
 
 // server/routes/v1/productCategoryRoutes.ts
-import { Router as Router36 } from "express";
+import { Router as Router37 } from "express";
 
 // server/services/productCategoryService.ts
 init_errors();
@@ -28067,7 +28384,7 @@ var productCategoryService = {
   async list(search) {
     return productCategoryRepository.list(search);
   },
-  async create(caller, input, meta13 = {}) {
+  async create(caller, input, meta14 = {}) {
     let slug;
     if (input.slug) {
       const existing = await productCategoryRepository.findBySlug(input.slug);
@@ -28089,12 +28406,12 @@ var productCategoryService = {
       resourceType: "product_category",
       resourceId: category.id,
       afterData: { name: category.name, slug: category.slug },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return category;
   },
-  async update(caller, id6, input, meta13 = {}) {
+  async update(caller, id6, input, meta14 = {}) {
     const existing = await loadOrThrow(id6);
     if (input.slug !== void 0 && input.slug !== existing.slug) {
       const dup = await productCategoryRepository.findBySlug(input.slug);
@@ -28114,12 +28431,12 @@ var productCategoryService = {
       resourceId: id6,
       beforeData: { name: existing.name, slug: existing.slug },
       afterData: input,
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return updated;
   },
-  async delete(caller, id6, meta13 = {}) {
+  async delete(caller, id6, meta14 = {}) {
     const existing = await loadOrThrow(id6);
     const productCount = await productCategoryRepository.countProducts(id6);
     if (productCount > 0) {
@@ -28133,8 +28450,8 @@ var productCategoryService = {
       resourceType: "product_category",
       resourceId: id6,
       beforeData: { name: existing.name, slug: existing.slug },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
   }
 };
@@ -28161,12 +28478,12 @@ var updateProductCategorySchema = z41.object({
 }).refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
 
 // server/routes/v1/productCategoryRoutes.ts
-var router30 = Router36();
-router30.use(authenticateToken);
+var router31 = Router37();
+router31.use(authenticateToken);
 function requestMeta15(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router30.get(
+router31.get(
   "/",
   requirePermission("product_categories.read"),
   asyncHandler(async (req, res) => {
@@ -28175,7 +28492,7 @@ router30.get(
     sendSuccess(res, { categories });
   })
 );
-router30.post(
+router31.post(
   "/",
   requirePermission("product_categories.manage"),
   asyncHandler(async (req, res) => {
@@ -28184,7 +28501,7 @@ router30.post(
     sendSuccess(res, { category }, 201);
   })
 );
-router30.patch(
+router31.patch(
   "/:id",
   requirePermission("product_categories.manage"),
   asyncHandler(async (req, res) => {
@@ -28193,7 +28510,7 @@ router30.patch(
     sendSuccess(res, { category });
   })
 );
-router30.delete(
+router31.delete(
   "/:id",
   requirePermission("product_categories.manage"),
   asyncHandler(async (req, res) => {
@@ -28201,10 +28518,10 @@ router30.delete(
     sendSuccess(res, { message: "Category deleted." });
   })
 );
-var productCategoryRoutes_default = router30;
+var productCategoryRoutes_default = router31;
 
 // server/routes/v1/industryRoutes.ts
-import { Router as Router37 } from "express";
+import { Router as Router38 } from "express";
 
 // server/services/industryService.ts
 init_errors();
@@ -28220,7 +28537,7 @@ var industryService = {
   async list(search) {
     return industryRepository.list(search);
   },
-  async create(caller, input, meta13 = {}) {
+  async create(caller, input, meta14 = {}) {
     let slug;
     if (input.slug) {
       const existing = await industryRepository.findBySlug(input.slug);
@@ -28242,12 +28559,12 @@ var industryService = {
       resourceType: "industry",
       resourceId: industry.id,
       afterData: { name: industry.name, slug: industry.slug },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return industry;
   },
-  async update(caller, id6, input, meta13 = {}) {
+  async update(caller, id6, input, meta14 = {}) {
     const existing = await loadOrThrow2(id6);
     if (input.slug !== void 0 && input.slug !== existing.slug) {
       const dup = await industryRepository.findBySlug(input.slug);
@@ -28267,12 +28584,12 @@ var industryService = {
       resourceId: id6,
       beforeData: { name: existing.name, slug: existing.slug },
       afterData: input,
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return updated;
   },
-  async delete(caller, id6, meta13 = {}) {
+  async delete(caller, id6, meta14 = {}) {
     const existing = await loadOrThrow2(id6);
     const productCount = await industryRepository.countProducts(id6);
     if (productCount > 0) {
@@ -28286,8 +28603,8 @@ var industryService = {
       resourceType: "industry",
       resourceId: id6,
       beforeData: { name: existing.name, slug: existing.slug },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
   }
 };
@@ -28314,12 +28631,12 @@ var updateIndustrySchema = z42.object({
 }).refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
 
 // server/routes/v1/industryRoutes.ts
-var router31 = Router37();
-router31.use(authenticateToken);
+var router32 = Router38();
+router32.use(authenticateToken);
 function requestMeta16(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router31.get(
+router32.get(
   "/",
   requirePermission("industries.read"),
   asyncHandler(async (req, res) => {
@@ -28328,7 +28645,7 @@ router31.get(
     sendSuccess(res, { industries });
   })
 );
-router31.post(
+router32.post(
   "/",
   requirePermission("industries.manage"),
   asyncHandler(async (req, res) => {
@@ -28337,7 +28654,7 @@ router31.post(
     sendSuccess(res, { industry }, 201);
   })
 );
-router31.patch(
+router32.patch(
   "/:id",
   requirePermission("industries.manage"),
   asyncHandler(async (req, res) => {
@@ -28346,7 +28663,7 @@ router31.patch(
     sendSuccess(res, { industry });
   })
 );
-router31.delete(
+router32.delete(
   "/:id",
   requirePermission("industries.manage"),
   asyncHandler(async (req, res) => {
@@ -28354,10 +28671,10 @@ router31.delete(
     sendSuccess(res, { message: "Industry deleted." });
   })
 );
-var industryRoutes_default = router31;
+var industryRoutes_default = router32;
 
 // server/routes/v1/pageRoutes.ts
-import { Router as Router38 } from "express";
+import { Router as Router39 } from "express";
 init_apiResponse();
 
 // server/schemas/pageSchemas.ts
@@ -28411,12 +28728,12 @@ var trashQuerySchema = z44.object({
   page: z44.coerce.number().int().positive().default(1),
   limit: z44.coerce.number().int().positive().max(100).default(20)
 });
-var router32 = Router38();
-router32.use(authenticateToken);
+var router33 = Router39();
+router33.use(authenticateToken);
 function requestMeta17(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router32.get(
+router33.get(
   "/",
   requirePermission("content.read"),
   asyncHandler(async (req, res) => {
@@ -28432,7 +28749,7 @@ router32.get(
     sendSuccess(res, { pages: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router32.get(
+router33.get(
   "/trash",
   requirePermission("content.read"),
   asyncHandler(async (req, res) => {
@@ -28441,7 +28758,7 @@ router32.get(
     sendSuccess(res, { pages: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router32.post(
+router33.post(
   "/bulk/archive",
   requirePermission("content.delete"),
   asyncHandler(async (req, res) => {
@@ -28450,7 +28767,7 @@ router32.post(
     sendSuccess(res, result);
   })
 );
-router32.post(
+router33.post(
   "/bulk/trash",
   requirePermission("content.delete"),
   asyncHandler(async (req, res) => {
@@ -28459,7 +28776,7 @@ router32.post(
     sendSuccess(res, result);
   })
 );
-router32.post(
+router33.post(
   "/bulk/restore",
   requirePermission("content.delete"),
   asyncHandler(async (req, res) => {
@@ -28468,7 +28785,7 @@ router32.post(
     sendSuccess(res, result);
   })
 );
-router32.post(
+router33.post(
   "/:id/restore",
   requirePermission("content.delete"),
   asyncHandler(async (req, res) => {
@@ -28476,7 +28793,7 @@ router32.post(
     sendSuccess(res, { message: "Page restored from trash." });
   })
 );
-router32.get(
+router33.get(
   "/:id",
   requirePermission("content.read"),
   asyncHandler(async (req, res) => {
@@ -28484,7 +28801,7 @@ router32.get(
     sendSuccess(res, { page });
   })
 );
-router32.get(
+router33.get(
   "/:id/revisions",
   requirePermission("content.read"),
   asyncHandler(async (req, res) => {
@@ -28492,7 +28809,7 @@ router32.get(
     sendSuccess(res, { revisions: revisions2 });
   })
 );
-router32.get(
+router33.get(
   "/:id/children",
   requirePermission("content.read"),
   asyncHandler(async (req, res) => {
@@ -28500,7 +28817,7 @@ router32.get(
     sendSuccess(res, { children });
   })
 );
-router32.post(
+router33.post(
   "/",
   requirePermission("content.create"),
   asyncHandler(async (req, res) => {
@@ -28509,7 +28826,7 @@ router32.post(
     sendSuccess(res, { page }, 201);
   })
 );
-router32.patch(
+router33.patch(
   "/:id",
   requirePermission("content.update"),
   asyncHandler(async (req, res) => {
@@ -28518,7 +28835,7 @@ router32.patch(
     sendSuccess(res, { page });
   })
 );
-router32.post(
+router33.post(
   "/:id/submit-review",
   requirePermission("content.update"),
   asyncHandler(async (req, res) => {
@@ -28526,7 +28843,7 @@ router32.post(
     sendSuccess(res, { page });
   })
 );
-router32.post(
+router33.post(
   "/:id/publish",
   requirePermission("content.publish"),
   asyncHandler(async (req, res) => {
@@ -28534,7 +28851,7 @@ router32.post(
     sendSuccess(res, { page });
   })
 );
-router32.post(
+router33.post(
   "/:id/schedule",
   requirePermission("content.publish"),
   asyncHandler(async (req, res) => {
@@ -28543,7 +28860,7 @@ router32.post(
     sendSuccess(res, { page });
   })
 );
-router32.post(
+router33.post(
   "/:id/archive",
   requirePermission("content.delete"),
   asyncHandler(async (req, res) => {
@@ -28551,7 +28868,7 @@ router32.post(
     sendSuccess(res, { page });
   })
 );
-router32.post(
+router33.post(
   "/:id/revert",
   requirePermission("content.update"),
   asyncHandler(async (req, res) => {
@@ -28560,7 +28877,7 @@ router32.post(
     sendSuccess(res, { page });
   })
 );
-router32.delete(
+router33.delete(
   "/:id",
   requirePermission("content.delete"),
   asyncHandler(async (req, res) => {
@@ -28568,10 +28885,10 @@ router32.delete(
     sendSuccess(res, { message: "Page deleted." });
   })
 );
-var pageRoutes_default = router32;
+var pageRoutes_default = router33;
 
 // server/routes/v1/templateRoutes.ts
-import { Router as Router39 } from "express";
+import { Router as Router40 } from "express";
 
 // server/utils/templateStructure.ts
 function normalizeRegions(structure) {
@@ -28757,7 +29074,7 @@ var templateService = {
     );
     return { template, regions };
   },
-  async createTemplate(caller, input, meta13 = {}) {
+  async createTemplate(caller, input, meta14 = {}) {
     const organizationId = caller.organizationId;
     if (input.slug) {
       const dup = await templateRepository.findBySlugInOrg(organizationId, input.slug);
@@ -28802,12 +29119,12 @@ var templateService = {
       resourceType: "template",
       resourceId: createdId,
       afterData: { name: input.name, slug, type: input.type },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return loadTemplateOrThrow(createdId, organizationId);
   },
-  async updateTemplate(caller, id6, input, meta13 = {}) {
+  async updateTemplate(caller, id6, input, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadTemplateOrThrow(id6, organizationId);
     assertNotSystem(existing, "edited");
@@ -28866,12 +29183,12 @@ var templateService = {
       resourceId: id6,
       beforeData: { name: existing.name, slug: existing.slug },
       afterData: { name: input.name, slug: input.slug },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return loadTemplateOrThrow(id6, organizationId);
   },
-  async publishTemplate(caller, id6, meta13 = {}) {
+  async publishTemplate(caller, id6, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadTemplateOrThrow(id6, organizationId);
     assertNotSystem(existing, "published");
@@ -28892,12 +29209,12 @@ var templateService = {
       resourceId: id6,
       beforeData: { status: existing.status },
       afterData: { status: "PUBLISHED" },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return loadTemplateOrThrow(id6, organizationId);
   },
-  async archiveTemplate(caller, id6, meta13 = {}) {
+  async archiveTemplate(caller, id6, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadTemplateOrThrow(id6, organizationId);
     assertNotSystem(existing, "archived");
@@ -28912,12 +29229,12 @@ var templateService = {
       resourceId: id6,
       beforeData: { status: existing.status },
       afterData: { status: "ARCHIVED" },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return loadTemplateOrThrow(id6, organizationId);
   },
-  async revertTemplate(caller, id6, input, meta13 = {}) {
+  async revertTemplate(caller, id6, input, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadTemplateOrThrow(id6, organizationId);
     assertNotSystem(existing, "rolled back");
@@ -28949,12 +29266,12 @@ var templateService = {
       resourceId: id6,
       beforeData: { fromVersion: current?.version, revertedToRevisionId: target.id, revertedToVersion: target.version },
       afterData: { newVersion: nextVersion },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return loadTemplateOrThrow(id6, organizationId);
   },
-  async duplicateTemplate(caller, id6, input, meta13 = {}) {
+  async duplicateTemplate(caller, id6, input, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadTemplateOrThrow(id6, organizationId);
     const baseName = input.name ?? `${existing.name} (Copy)`;
@@ -28994,12 +29311,12 @@ var templateService = {
       resourceType: "template",
       resourceId: createdId,
       afterData: { duplicatedFromId: id6, name: baseName },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return loadTemplateOrThrow(createdId, organizationId);
   },
-  async deleteTemplate(caller, id6, meta13 = {}) {
+  async deleteTemplate(caller, id6, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadTemplateOrThrow(id6, organizationId);
     assertNotSystem(existing, "deleted");
@@ -29015,8 +29332,8 @@ var templateService = {
       resourceType: "template",
       resourceId: id6,
       beforeData: { name: existing.name, status: existing.status },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
   }
 };
@@ -29117,12 +29434,12 @@ var revertTemplatePartSchema = z45.object({
 });
 
 // server/routes/v1/templateRoutes.ts
-var router33 = Router39();
-router33.use(authenticateToken);
+var router34 = Router40();
+router34.use(authenticateToken);
 function requestMeta18(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router33.get(
+router34.get(
   "/",
   requirePermission("templates.read"),
   asyncHandler(async (req, res) => {
@@ -29138,7 +29455,7 @@ router33.get(
     sendSuccess(res, { templates: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router33.get(
+router34.get(
   "/:id",
   requirePermission("templates.read"),
   asyncHandler(async (req, res) => {
@@ -29146,7 +29463,7 @@ router33.get(
     sendSuccess(res, { template });
   })
 );
-router33.get(
+router34.get(
   "/:id/revisions",
   requirePermission("templates.read"),
   asyncHandler(async (req, res) => {
@@ -29154,7 +29471,7 @@ router33.get(
     sendSuccess(res, { revisions: revisions2 });
   })
 );
-router33.get(
+router34.get(
   "/:id/usage",
   requirePermission("templates.read"),
   asyncHandler(async (req, res) => {
@@ -29162,7 +29479,7 @@ router33.get(
     sendSuccess(res, usage);
   })
 );
-router33.get(
+router34.get(
   "/:id/preview",
   requirePermission("templates.read"),
   asyncHandler(async (req, res) => {
@@ -29170,7 +29487,7 @@ router33.get(
     sendSuccess(res, preview);
   })
 );
-router33.post(
+router34.post(
   "/",
   requirePermission("templates.create"),
   asyncHandler(async (req, res) => {
@@ -29179,7 +29496,7 @@ router33.post(
     sendSuccess(res, { template }, 201);
   })
 );
-router33.post(
+router34.post(
   "/:id/duplicate",
   requirePermission("templates.create"),
   asyncHandler(async (req, res) => {
@@ -29188,7 +29505,7 @@ router33.post(
     sendSuccess(res, { template }, 201);
   })
 );
-router33.patch(
+router34.patch(
   "/:id",
   requirePermission("templates.update"),
   asyncHandler(async (req, res) => {
@@ -29197,7 +29514,7 @@ router33.patch(
     sendSuccess(res, { template });
   })
 );
-router33.post(
+router34.post(
   "/:id/publish",
   requirePermission("templates.publish"),
   asyncHandler(async (req, res) => {
@@ -29205,7 +29522,7 @@ router33.post(
     sendSuccess(res, { template });
   })
 );
-router33.post(
+router34.post(
   "/:id/archive",
   requirePermission("templates.delete"),
   asyncHandler(async (req, res) => {
@@ -29213,7 +29530,7 @@ router33.post(
     sendSuccess(res, { template });
   })
 );
-router33.post(
+router34.post(
   "/:id/revert",
   requirePermission("templates.update"),
   asyncHandler(async (req, res) => {
@@ -29222,7 +29539,7 @@ router33.post(
     sendSuccess(res, { template });
   })
 );
-router33.delete(
+router34.delete(
   "/:id",
   requirePermission("templates.delete"),
   asyncHandler(async (req, res) => {
@@ -29230,10 +29547,10 @@ router33.delete(
     sendSuccess(res, { message: "Template deleted." });
   })
 );
-var templateRoutes_default = router33;
+var templateRoutes_default = router34;
 
 // server/routes/v1/templatePartRoutes.ts
-import { Router as Router40 } from "express";
+import { Router as Router41 } from "express";
 
 // server/services/templatePartService.ts
 init_errors();
@@ -29266,7 +29583,7 @@ var templatePartService = {
     await loadTemplatePartOrThrow(id6, organizationId);
     return templatePartRepository.findUsage(id6, organizationId);
   },
-  async createPart(caller, input, meta13 = {}) {
+  async createPart(caller, input, meta14 = {}) {
     const organizationId = caller.organizationId;
     if (input.slug) {
       const dup = await templatePartRepository.findBySlugInOrg(organizationId, input.slug);
@@ -29311,12 +29628,12 @@ var templatePartService = {
       resourceType: "template_part",
       resourceId: createdId,
       afterData: { name: input.name, slug, type: input.type },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return loadTemplatePartOrThrow(createdId, organizationId);
   },
-  async updatePart(caller, id6, input, meta13 = {}) {
+  async updatePart(caller, id6, input, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadTemplatePartOrThrow(id6, organizationId);
     assertNotSystem2(existing, "edited");
@@ -29375,12 +29692,12 @@ var templatePartService = {
       resourceId: id6,
       beforeData: { name: existing.name, slug: existing.slug },
       afterData: { name: input.name, slug: input.slug },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return loadTemplatePartOrThrow(id6, organizationId);
   },
-  async publishPart(caller, id6, meta13 = {}) {
+  async publishPart(caller, id6, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadTemplatePartOrThrow(id6, organizationId);
     assertNotSystem2(existing, "published");
@@ -29400,12 +29717,12 @@ var templatePartService = {
       resourceId: id6,
       beforeData: { status: existing.status },
       afterData: { status: "PUBLISHED" },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return loadTemplatePartOrThrow(id6, organizationId);
   },
-  async archivePart(caller, id6, meta13 = {}) {
+  async archivePart(caller, id6, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadTemplatePartOrThrow(id6, organizationId);
     assertNotSystem2(existing, "archived");
@@ -29420,12 +29737,12 @@ var templatePartService = {
       resourceId: id6,
       beforeData: { status: existing.status },
       afterData: { status: "ARCHIVED" },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return loadTemplatePartOrThrow(id6, organizationId);
   },
-  async revertPart(caller, id6, input, meta13 = {}) {
+  async revertPart(caller, id6, input, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadTemplatePartOrThrow(id6, organizationId);
     assertNotSystem2(existing, "rolled back");
@@ -29457,12 +29774,12 @@ var templatePartService = {
       resourceId: id6,
       beforeData: { fromVersion: current?.version, revertedToRevisionId: target.id, revertedToVersion: target.version },
       afterData: { newVersion: nextVersion },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return loadTemplatePartOrThrow(id6, organizationId);
   },
-  async duplicatePart(caller, id6, input, meta13 = {}) {
+  async duplicatePart(caller, id6, input, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadTemplatePartOrThrow(id6, organizationId);
     const baseName = input.name ?? `${existing.name} (Copy)`;
@@ -29501,12 +29818,12 @@ var templatePartService = {
       resourceType: "template_part",
       resourceId: createdId,
       afterData: { duplicatedFromId: id6, name: baseName },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return loadTemplatePartOrThrow(createdId, organizationId);
   },
-  async deletePart(caller, id6, meta13 = {}) {
+  async deletePart(caller, id6, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadTemplatePartOrThrow(id6, organizationId);
     assertNotSystem2(existing, "deleted");
@@ -29526,20 +29843,20 @@ var templatePartService = {
       resourceType: "template_part",
       resourceId: id6,
       beforeData: { name: existing.name, status: existing.status },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
   }
 };
 
 // server/routes/v1/templatePartRoutes.ts
 init_apiResponse();
-var router34 = Router40();
-router34.use(authenticateToken);
+var router35 = Router41();
+router35.use(authenticateToken);
 function requestMeta19(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router34.get(
+router35.get(
   "/",
   requirePermission("template_parts.read"),
   asyncHandler(async (req, res) => {
@@ -29555,7 +29872,7 @@ router34.get(
     sendSuccess(res, { templateParts: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router34.get(
+router35.get(
   "/:id",
   requirePermission("template_parts.read"),
   asyncHandler(async (req, res) => {
@@ -29563,7 +29880,7 @@ router34.get(
     sendSuccess(res, { templatePart });
   })
 );
-router34.get(
+router35.get(
   "/:id/revisions",
   requirePermission("template_parts.read"),
   asyncHandler(async (req, res) => {
@@ -29571,7 +29888,7 @@ router34.get(
     sendSuccess(res, { revisions: revisions2 });
   })
 );
-router34.get(
+router35.get(
   "/:id/usage",
   requirePermission("template_parts.read"),
   asyncHandler(async (req, res) => {
@@ -29579,7 +29896,7 @@ router34.get(
     sendSuccess(res, usage);
   })
 );
-router34.post(
+router35.post(
   "/",
   requirePermission("template_parts.create"),
   asyncHandler(async (req, res) => {
@@ -29588,7 +29905,7 @@ router34.post(
     sendSuccess(res, { templatePart }, 201);
   })
 );
-router34.post(
+router35.post(
   "/:id/duplicate",
   requirePermission("template_parts.create"),
   asyncHandler(async (req, res) => {
@@ -29597,7 +29914,7 @@ router34.post(
     sendSuccess(res, { templatePart }, 201);
   })
 );
-router34.patch(
+router35.patch(
   "/:id",
   requirePermission("template_parts.update"),
   asyncHandler(async (req, res) => {
@@ -29606,7 +29923,7 @@ router34.patch(
     sendSuccess(res, { templatePart });
   })
 );
-router34.post(
+router35.post(
   "/:id/publish",
   requirePermission("template_parts.publish"),
   asyncHandler(async (req, res) => {
@@ -29614,7 +29931,7 @@ router34.post(
     sendSuccess(res, { templatePart });
   })
 );
-router34.post(
+router35.post(
   "/:id/archive",
   requirePermission("template_parts.delete"),
   asyncHandler(async (req, res) => {
@@ -29622,7 +29939,7 @@ router34.post(
     sendSuccess(res, { templatePart });
   })
 );
-router34.post(
+router35.post(
   "/:id/revert",
   requirePermission("template_parts.update"),
   asyncHandler(async (req, res) => {
@@ -29631,7 +29948,7 @@ router34.post(
     sendSuccess(res, { templatePart });
   })
 );
-router34.delete(
+router35.delete(
   "/:id",
   requirePermission("template_parts.delete"),
   asyncHandler(async (req, res) => {
@@ -29639,10 +29956,10 @@ router34.delete(
     sendSuccess(res, { message: "Template part deleted." });
   })
 );
-var templatePartRoutes_default = router34;
+var templatePartRoutes_default = router35;
 
 // server/routes/v1/navigationMenuRoutes.ts
-import { Router as Router41 } from "express";
+import { Router as Router42 } from "express";
 
 // server/repositories/navigationMenuRepository.ts
 function slugify15(input) {
@@ -29797,7 +30114,7 @@ var navigationMenuService = {
     await loadMenuOrThrow(id6, organizationId);
     return navigationMenuRepository.findUsage(id6, organizationId);
   },
-  async createMenu(caller, input, meta13 = {}) {
+  async createMenu(caller, input, meta14 = {}) {
     const organizationId = caller.organizationId;
     if (input.slug) {
       const dup = await navigationMenuRepository.findBySlugInOrg(organizationId, input.slug);
@@ -29834,12 +30151,12 @@ var navigationMenuService = {
       resourceType: "navigation_menu",
       resourceId: createdId,
       afterData: { name: input.name, slug, type: input.type },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return loadMenuOrThrow(createdId, organizationId);
   },
-  async updateMenu(caller, id6, input, meta13 = {}) {
+  async updateMenu(caller, id6, input, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadMenuOrThrow(id6, organizationId);
     assertNotSystem3(existing, "edited");
@@ -29897,12 +30214,12 @@ var navigationMenuService = {
       resourceId: id6,
       beforeData: { name: existing.name, slug: existing.slug },
       afterData: { name: input.name, slug: input.slug },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return loadMenuOrThrow(id6, organizationId);
   },
-  async publishMenu(caller, id6, meta13 = {}) {
+  async publishMenu(caller, id6, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadMenuOrThrow(id6, organizationId);
     assertNotSystem3(existing, "published");
@@ -29923,12 +30240,12 @@ var navigationMenuService = {
       resourceId: id6,
       beforeData: { status: existing.status },
       afterData: { status: "PUBLISHED" },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return loadMenuOrThrow(id6, organizationId);
   },
-  async archiveMenu(caller, id6, meta13 = {}) {
+  async archiveMenu(caller, id6, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadMenuOrThrow(id6, organizationId);
     assertNotSystem3(existing, "archived");
@@ -29943,12 +30260,12 @@ var navigationMenuService = {
       resourceId: id6,
       beforeData: { status: existing.status },
       afterData: { status: "ARCHIVED" },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return loadMenuOrThrow(id6, organizationId);
   },
-  async revertMenu(caller, id6, input, meta13 = {}) {
+  async revertMenu(caller, id6, input, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadMenuOrThrow(id6, organizationId);
     assertNotSystem3(existing, "rolled back");
@@ -29980,12 +30297,12 @@ var navigationMenuService = {
       resourceId: id6,
       beforeData: { fromVersion: current?.version, revertedToRevisionId: target.id, revertedToVersion: target.version },
       afterData: { newVersion: nextVersion },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return loadMenuOrThrow(id6, organizationId);
   },
-  async duplicateMenu(caller, id6, input, meta13 = {}) {
+  async duplicateMenu(caller, id6, input, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadMenuOrThrow(id6, organizationId);
     const baseName = input.name ?? `${existing.name} (Copy)`;
@@ -30009,12 +30326,12 @@ var navigationMenuService = {
       resourceType: "navigation_menu",
       resourceId: createdId,
       afterData: { duplicatedFromId: id6, name: baseName },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return loadMenuOrThrow(createdId, organizationId);
   },
-  async deleteMenu(caller, id6, meta13 = {}) {
+  async deleteMenu(caller, id6, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadMenuOrThrow(id6, organizationId);
     assertNotSystem3(existing, "deleted");
@@ -30034,8 +30351,8 @@ var navigationMenuService = {
       resourceType: "navigation_menu",
       resourceId: id6,
       beforeData: { name: existing.name, status: existing.status },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
   }
 };
@@ -30095,12 +30412,12 @@ var revertNavigationMenuSchema = z46.object({
 });
 
 // server/routes/v1/navigationMenuRoutes.ts
-var router35 = Router41();
-router35.use(authenticateToken);
+var router36 = Router42();
+router36.use(authenticateToken);
 function requestMeta20(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router35.get(
+router36.get(
   "/",
   requirePermission("navigation_menus.read"),
   asyncHandler(async (req, res) => {
@@ -30116,7 +30433,7 @@ router35.get(
     sendSuccess(res, { navigationMenus: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router35.get(
+router36.get(
   "/:id",
   requirePermission("navigation_menus.read"),
   asyncHandler(async (req, res) => {
@@ -30124,7 +30441,7 @@ router35.get(
     sendSuccess(res, { navigationMenu });
   })
 );
-router35.get(
+router36.get(
   "/:id/revisions",
   requirePermission("navigation_menus.read"),
   asyncHandler(async (req, res) => {
@@ -30132,7 +30449,7 @@ router35.get(
     sendSuccess(res, { revisions: revisions2 });
   })
 );
-router35.get(
+router36.get(
   "/:id/usage",
   requirePermission("navigation_menus.read"),
   asyncHandler(async (req, res) => {
@@ -30140,7 +30457,7 @@ router35.get(
     sendSuccess(res, usage);
   })
 );
-router35.post(
+router36.post(
   "/",
   requirePermission("navigation_menus.create"),
   asyncHandler(async (req, res) => {
@@ -30149,7 +30466,7 @@ router35.post(
     sendSuccess(res, { navigationMenu }, 201);
   })
 );
-router35.post(
+router36.post(
   "/:id/duplicate",
   requirePermission("navigation_menus.create"),
   asyncHandler(async (req, res) => {
@@ -30158,7 +30475,7 @@ router35.post(
     sendSuccess(res, { navigationMenu }, 201);
   })
 );
-router35.patch(
+router36.patch(
   "/:id",
   requirePermission("navigation_menus.update"),
   asyncHandler(async (req, res) => {
@@ -30167,7 +30484,7 @@ router35.patch(
     sendSuccess(res, { navigationMenu });
   })
 );
-router35.post(
+router36.post(
   "/:id/publish",
   requirePermission("navigation_menus.publish"),
   asyncHandler(async (req, res) => {
@@ -30175,7 +30492,7 @@ router35.post(
     sendSuccess(res, { navigationMenu });
   })
 );
-router35.post(
+router36.post(
   "/:id/archive",
   requirePermission("navigation_menus.delete"),
   asyncHandler(async (req, res) => {
@@ -30183,7 +30500,7 @@ router35.post(
     sendSuccess(res, { navigationMenu });
   })
 );
-router35.post(
+router36.post(
   "/:id/revert",
   requirePermission("navigation_menus.update"),
   asyncHandler(async (req, res) => {
@@ -30192,7 +30509,7 @@ router35.post(
     sendSuccess(res, { navigationMenu });
   })
 );
-router35.delete(
+router36.delete(
   "/:id",
   requirePermission("navigation_menus.delete"),
   asyncHandler(async (req, res) => {
@@ -30200,10 +30517,10 @@ router35.delete(
     sendSuccess(res, { message: "Navigation menu deleted." });
   })
 );
-var navigationMenuRoutes_default = router35;
+var navigationMenuRoutes_default = router36;
 
 // server/routes/v1/postRoutes.ts
-import { Router as Router42 } from "express";
+import { Router as Router43 } from "express";
 init_apiResponse();
 
 // server/schemas/postSchemas.ts
@@ -30254,12 +30571,12 @@ var trashQuerySchema2 = z48.object({
   page: z48.coerce.number().int().positive().default(1),
   limit: z48.coerce.number().int().positive().max(100).default(20)
 });
-var router36 = Router42();
-router36.use(authenticateToken);
+var router37 = Router43();
+router37.use(authenticateToken);
 function requestMeta21(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router36.get(
+router37.get(
   "/",
   requirePermission("content.read"),
   asyncHandler(async (req, res) => {
@@ -30275,7 +30592,7 @@ router36.get(
     sendSuccess(res, { posts: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router36.get(
+router37.get(
   "/trash",
   requirePermission("content.read"),
   asyncHandler(async (req, res) => {
@@ -30284,7 +30601,7 @@ router36.get(
     sendSuccess(res, { posts: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router36.post(
+router37.post(
   "/bulk/archive",
   requirePermission("content.delete"),
   asyncHandler(async (req, res) => {
@@ -30293,7 +30610,7 @@ router36.post(
     sendSuccess(res, result);
   })
 );
-router36.post(
+router37.post(
   "/bulk/trash",
   requirePermission("content.delete"),
   asyncHandler(async (req, res) => {
@@ -30302,7 +30619,7 @@ router36.post(
     sendSuccess(res, result);
   })
 );
-router36.post(
+router37.post(
   "/bulk/restore",
   requirePermission("content.delete"),
   asyncHandler(async (req, res) => {
@@ -30311,7 +30628,7 @@ router36.post(
     sendSuccess(res, result);
   })
 );
-router36.post(
+router37.post(
   "/:id/restore",
   requirePermission("content.delete"),
   asyncHandler(async (req, res) => {
@@ -30319,7 +30636,7 @@ router36.post(
     sendSuccess(res, { message: "Post restored from trash." });
   })
 );
-router36.get(
+router37.get(
   "/:id",
   requirePermission("content.read"),
   asyncHandler(async (req, res) => {
@@ -30327,7 +30644,7 @@ router36.get(
     sendSuccess(res, { post });
   })
 );
-router36.get(
+router37.get(
   "/:id/revisions",
   requirePermission("content.read"),
   asyncHandler(async (req, res) => {
@@ -30335,7 +30652,7 @@ router36.get(
     sendSuccess(res, { revisions: revisions2 });
   })
 );
-router36.post(
+router37.post(
   "/",
   requirePermission("content.create"),
   asyncHandler(async (req, res) => {
@@ -30344,7 +30661,7 @@ router36.post(
     sendSuccess(res, { post }, 201);
   })
 );
-router36.patch(
+router37.patch(
   "/:id",
   requirePermission("content.update"),
   asyncHandler(async (req, res) => {
@@ -30353,7 +30670,7 @@ router36.patch(
     sendSuccess(res, { post });
   })
 );
-router36.post(
+router37.post(
   "/:id/submit-review",
   requirePermission("content.update"),
   asyncHandler(async (req, res) => {
@@ -30361,7 +30678,7 @@ router36.post(
     sendSuccess(res, { post });
   })
 );
-router36.post(
+router37.post(
   "/:id/publish",
   requirePermission("content.publish"),
   asyncHandler(async (req, res) => {
@@ -30369,7 +30686,7 @@ router36.post(
     sendSuccess(res, { post });
   })
 );
-router36.post(
+router37.post(
   "/:id/schedule",
   requirePermission("content.publish"),
   asyncHandler(async (req, res) => {
@@ -30378,7 +30695,7 @@ router36.post(
     sendSuccess(res, { post });
   })
 );
-router36.post(
+router37.post(
   "/:id/archive",
   requirePermission("content.delete"),
   asyncHandler(async (req, res) => {
@@ -30386,7 +30703,7 @@ router36.post(
     sendSuccess(res, { post });
   })
 );
-router36.post(
+router37.post(
   "/:id/revert",
   requirePermission("content.update"),
   asyncHandler(async (req, res) => {
@@ -30395,7 +30712,7 @@ router36.post(
     sendSuccess(res, { post });
   })
 );
-router36.delete(
+router37.delete(
   "/:id",
   requirePermission("content.delete"),
   asyncHandler(async (req, res) => {
@@ -30403,10 +30720,10 @@ router36.delete(
     sendSuccess(res, { message: "Post deleted." });
   })
 );
-var postRoutes_default = router36;
+var postRoutes_default = router37;
 
 // server/routes/v1/caseStudyRoutes.ts
-import { Router as Router43 } from "express";
+import { Router as Router44 } from "express";
 
 // server/services/caseStudyService.ts
 init_errors();
@@ -30486,7 +30803,7 @@ var caseStudyService = {
     await loadCaseStudyOrThrow(id6, organizationId);
     return caseStudyRepository.listRevisions(id6);
   },
-  async createCaseStudy(caller, input, meta13 = {}) {
+  async createCaseStudy(caller, input, meta14 = {}) {
     const organizationId = caller.organizationId;
     const body = sanitizeContentHtml(input.body);
     const editorBlocks = input.editorBlocks ? sanitizeEditorDocument(input.editorBlocks) : void 0;
@@ -30548,12 +30865,12 @@ var caseStudyService = {
       resourceType: "case_study",
       resourceId: createdId,
       afterData: { title: input.title, slug },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return loadCaseStudyOrThrow(createdId, organizationId);
   },
-  async updateCaseStudy(caller, id6, input, meta13 = {}) {
+  async updateCaseStudy(caller, id6, input, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadCaseStudyOrThrow(id6, organizationId);
     const sanitizedBody = input.body !== void 0 ? sanitizeContentHtml(input.body) : void 0;
@@ -30657,8 +30974,8 @@ var caseStudyService = {
       resourceId: id6,
       beforeData: { status: existing.status, title: existing.title },
       afterData: { status: input.status, title: input.title, slug: input.slug },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     if (hasFeaturedMediaEdit && input.featuredMediaId !== existing.featuredMediaId) {
       await auditLogRepository.record({
@@ -30670,8 +30987,8 @@ var caseStudyService = {
         resourceId: id6,
         beforeData: { featuredMediaId: existing.featuredMediaId },
         afterData: { featuredMediaId: input.featuredMediaId ?? null },
-        ipAddress: meta13.ip,
-        userAgent: meta13.userAgent
+        ipAddress: meta14.ip,
+        userAgent: meta14.userAgent
       });
     }
     if (input.slug !== void 0 && input.slug !== existing.slug) {
@@ -30688,7 +31005,7 @@ var caseStudyService = {
     }
     return loadCaseStudyOrThrow(id6, organizationId);
   },
-  async submitForReview(caller, id6, meta13 = {}) {
+  async submitForReview(caller, id6, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadCaseStudyOrThrow(id6, organizationId);
     if (existing.status !== "DRAFT") throw new ConflictError(`Only a DRAFT case study can be submitted for review (current status: ${existing.status}).`);
@@ -30705,12 +31022,12 @@ var caseStudyService = {
       resourceId: id6,
       beforeData: { status: existing.status },
       afterData: { status: "IN_REVIEW" },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return loadCaseStudyOrThrow(id6, organizationId);
   },
-  async publishCaseStudy(caller, id6, meta13 = {}) {
+  async publishCaseStudy(caller, id6, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadCaseStudyOrThrow(id6, organizationId);
     if (existing.status === "ARCHIVED") throw new ConflictError("An archived case study must be restored before it can be published.");
@@ -30731,8 +31048,8 @@ var caseStudyService = {
       resourceId: id6,
       beforeData: { status: existing.status },
       afterData: { status: "PUBLISHED" },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     if (existing.createdById && existing.createdById !== caller.id) {
       await notificationService.notify({
@@ -30745,7 +31062,7 @@ var caseStudyService = {
     }
     return loadCaseStudyOrThrow(id6, organizationId);
   },
-  async scheduleCaseStudy(caller, id6, input, meta13 = {}) {
+  async scheduleCaseStudy(caller, id6, input, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadCaseStudyOrThrow(id6, organizationId);
     if (existing.status === "ARCHIVED") throw new ConflictError("An archived case study must be restored before it can be scheduled.");
@@ -30761,12 +31078,12 @@ var caseStudyService = {
       resourceId: id6,
       beforeData: { status: existing.status },
       afterData: { status: "SCHEDULED", scheduledAt: input.scheduledAt },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return loadCaseStudyOrThrow(id6, organizationId);
   },
-  async archiveCaseStudy(caller, id6, meta13 = {}) {
+  async archiveCaseStudy(caller, id6, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadCaseStudyOrThrow(id6, organizationId);
     if (existing.status === "ARCHIVED") throw new ConflictError("This case study is already archived.");
@@ -30780,12 +31097,12 @@ var caseStudyService = {
       resourceId: id6,
       beforeData: { status: existing.status },
       afterData: { status: "ARCHIVED" },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return loadCaseStudyOrThrow(id6, organizationId);
   },
-  async revertCaseStudy(caller, id6, input, meta13 = {}) {
+  async revertCaseStudy(caller, id6, input, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadCaseStudyOrThrow(id6, organizationId);
     if (existing.status === "ARCHIVED") throw new ConflictError("An archived case study must be restored before its content can be reverted.");
@@ -30820,12 +31137,12 @@ var caseStudyService = {
       resourceId: id6,
       beforeData: { fromVersion: current?.version, revertedToRevisionId: target.id, revertedToVersion: target.version },
       afterData: { newVersion: nextVersion },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return loadCaseStudyOrThrow(id6, organizationId);
   },
-  async deleteCaseStudy(caller, id6, meta13 = {}) {
+  async deleteCaseStudy(caller, id6, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadCaseStudyOrThrow(id6, organizationId);
     await caseStudyRepository.softDelete(id6);
@@ -30837,14 +31154,14 @@ var caseStudyService = {
       resourceType: "case_study",
       resourceId: id6,
       beforeData: { status: existing.status, title: existing.title },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
   },
   async listTrash(organizationId, page, limit) {
     return caseStudyRepository.listTrash(organizationId, page, limit);
   },
-  async restoreCaseStudy(caller, id6, meta13 = {}) {
+  async restoreCaseStudy(caller, id6, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await caseStudyRepository.findTrashedByIdInOrg(id6, organizationId);
     if (!existing) throw new NotFoundError("Case study not found in trash.");
@@ -30857,19 +31174,19 @@ var caseStudyService = {
       resourceType: "case_study",
       resourceId: id6,
       beforeData: { status: existing.status, title: existing.title },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
   },
   /** Bulk workflow actions for the list view — same per-item isolation as postService.bulkAction/pageService.bulkAction. */
-  async bulkAction(caller, action, ids, meta13 = {}) {
+  async bulkAction(caller, action, ids, meta14 = {}) {
     const succeeded = [];
     const failed = [];
     for (const id6 of ids) {
       try {
-        if (action === "archive") await this.archiveCaseStudy(caller, id6, meta13);
-        else if (action === "trash") await this.deleteCaseStudy(caller, id6, meta13);
-        else await this.restoreCaseStudy(caller, id6, meta13);
+        if (action === "archive") await this.archiveCaseStudy(caller, id6, meta14);
+        else if (action === "trash") await this.deleteCaseStudy(caller, id6, meta14);
+        else await this.restoreCaseStudy(caller, id6, meta14);
         succeeded.push(id6);
       } catch (err) {
         failed.push({ id: id6, error: err instanceof Error ? err.message : "Action failed." });
@@ -30947,12 +31264,12 @@ var trashQuerySchema3 = z50.object({
   page: z50.coerce.number().int().positive().default(1),
   limit: z50.coerce.number().int().positive().max(100).default(20)
 });
-var router37 = Router43();
-router37.use(authenticateToken);
+var router38 = Router44();
+router38.use(authenticateToken);
 function requestMeta22(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router37.get(
+router38.get(
   "/",
   requirePermission("content.read"),
   asyncHandler(async (req, res) => {
@@ -30968,7 +31285,7 @@ router37.get(
     sendSuccess(res, { caseStudies: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router37.get(
+router38.get(
   "/trash",
   requirePermission("content.read"),
   asyncHandler(async (req, res) => {
@@ -30977,7 +31294,7 @@ router37.get(
     sendSuccess(res, { caseStudies: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router37.post(
+router38.post(
   "/bulk/archive",
   requirePermission("content.delete"),
   asyncHandler(async (req, res) => {
@@ -30986,7 +31303,7 @@ router37.post(
     sendSuccess(res, result);
   })
 );
-router37.post(
+router38.post(
   "/bulk/trash",
   requirePermission("content.delete"),
   asyncHandler(async (req, res) => {
@@ -30995,7 +31312,7 @@ router37.post(
     sendSuccess(res, result);
   })
 );
-router37.post(
+router38.post(
   "/bulk/restore",
   requirePermission("content.delete"),
   asyncHandler(async (req, res) => {
@@ -31004,7 +31321,7 @@ router37.post(
     sendSuccess(res, result);
   })
 );
-router37.post(
+router38.post(
   "/:id/restore",
   requirePermission("content.delete"),
   asyncHandler(async (req, res) => {
@@ -31012,7 +31329,7 @@ router37.post(
     sendSuccess(res, { message: "Case study restored from trash." });
   })
 );
-router37.get(
+router38.get(
   "/:id",
   requirePermission("content.read"),
   asyncHandler(async (req, res) => {
@@ -31020,7 +31337,7 @@ router37.get(
     sendSuccess(res, { caseStudy });
   })
 );
-router37.get(
+router38.get(
   "/:id/revisions",
   requirePermission("content.read"),
   asyncHandler(async (req, res) => {
@@ -31028,7 +31345,7 @@ router37.get(
     sendSuccess(res, { revisions: revisions2 });
   })
 );
-router37.post(
+router38.post(
   "/",
   requirePermission("content.create"),
   asyncHandler(async (req, res) => {
@@ -31037,7 +31354,7 @@ router37.post(
     sendSuccess(res, { caseStudy }, 201);
   })
 );
-router37.patch(
+router38.patch(
   "/:id",
   requirePermission("content.update"),
   asyncHandler(async (req, res) => {
@@ -31046,7 +31363,7 @@ router37.patch(
     sendSuccess(res, { caseStudy });
   })
 );
-router37.post(
+router38.post(
   "/:id/submit-review",
   requirePermission("content.update"),
   asyncHandler(async (req, res) => {
@@ -31054,7 +31371,7 @@ router37.post(
     sendSuccess(res, { caseStudy });
   })
 );
-router37.post(
+router38.post(
   "/:id/publish",
   requirePermission("content.publish"),
   asyncHandler(async (req, res) => {
@@ -31062,7 +31379,7 @@ router37.post(
     sendSuccess(res, { caseStudy });
   })
 );
-router37.post(
+router38.post(
   "/:id/schedule",
   requirePermission("content.publish"),
   asyncHandler(async (req, res) => {
@@ -31071,7 +31388,7 @@ router37.post(
     sendSuccess(res, { caseStudy });
   })
 );
-router37.post(
+router38.post(
   "/:id/archive",
   requirePermission("content.delete"),
   asyncHandler(async (req, res) => {
@@ -31079,7 +31396,7 @@ router37.post(
     sendSuccess(res, { caseStudy });
   })
 );
-router37.post(
+router38.post(
   "/:id/revert",
   requirePermission("content.update"),
   asyncHandler(async (req, res) => {
@@ -31088,7 +31405,7 @@ router37.post(
     sendSuccess(res, { caseStudy });
   })
 );
-router37.delete(
+router38.delete(
   "/:id",
   requirePermission("content.delete"),
   asyncHandler(async (req, res) => {
@@ -31096,10 +31413,10 @@ router37.delete(
     sendSuccess(res, { message: "Case study deleted." });
   })
 );
-var caseStudyRoutes_default = router37;
+var caseStudyRoutes_default = router38;
 
 // server/routes/v1/categoryRoutes.ts
-import { Router as Router44 } from "express";
+import { Router as Router45 } from "express";
 
 // server/services/categoryService.ts
 init_errors();
@@ -31133,7 +31450,7 @@ var categoryService = {
   async getCategory(organizationId, id6) {
     return loadCategoryOrThrow(id6, organizationId);
   },
-  async createCategory(caller, input, meta13 = {}) {
+  async createCategory(caller, input, meta14 = {}) {
     const organizationId = caller.organizationId;
     if (input.slug) {
       const dup = await categoryRepository.findBySlugInOrg(organizationId, input.slug);
@@ -31155,12 +31472,12 @@ var categoryService = {
       resourceType: "category",
       resourceId: category.id,
       afterData: { name: category.name, slug: category.slug },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return category;
   },
-  async updateCategory(caller, id6, input, meta13 = {}) {
+  async updateCategory(caller, id6, input, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadCategoryOrThrow(id6, organizationId);
     if (input.slug !== void 0 && input.slug !== existing.slug) {
@@ -31188,12 +31505,12 @@ var categoryService = {
       resourceId: id6,
       beforeData: { name: existing.name, slug: existing.slug },
       afterData: patch,
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return updated;
   },
-  async deleteCategory(caller, id6, meta13 = {}) {
+  async deleteCategory(caller, id6, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadCategoryOrThrow(id6, organizationId);
     const postCount = await categoryRepository.countPostsUsing(id6);
@@ -31209,20 +31526,20 @@ var categoryService = {
       resourceType: "category",
       resourceId: id6,
       beforeData: { name: existing.name, slug: existing.slug },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
   }
 };
 
 // server/routes/v1/categoryRoutes.ts
 init_apiResponse();
-var router38 = Router44();
-router38.use(authenticateToken);
+var router39 = Router45();
+router39.use(authenticateToken);
 function requestMeta23(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router38.get(
+router39.get(
   "/",
   requirePermission("content.read"),
   asyncHandler(async (req, res) => {
@@ -31230,7 +31547,7 @@ router38.get(
     sendSuccess(res, { categories });
   })
 );
-router38.get(
+router39.get(
   "/:id",
   requirePermission("content.read"),
   asyncHandler(async (req, res) => {
@@ -31238,7 +31555,7 @@ router38.get(
     sendSuccess(res, { category });
   })
 );
-router38.post(
+router39.post(
   "/",
   requirePermission("content.create"),
   asyncHandler(async (req, res) => {
@@ -31247,7 +31564,7 @@ router38.post(
     sendSuccess(res, { category }, 201);
   })
 );
-router38.patch(
+router39.patch(
   "/:id",
   requirePermission("content.update"),
   asyncHandler(async (req, res) => {
@@ -31256,7 +31573,7 @@ router38.patch(
     sendSuccess(res, { category });
   })
 );
-router38.delete(
+router39.delete(
   "/:id",
   requirePermission("content.delete"),
   asyncHandler(async (req, res) => {
@@ -31264,10 +31581,10 @@ router38.delete(
     sendSuccess(res, { message: "Category deleted." });
   })
 );
-var categoryRoutes_default = router38;
+var categoryRoutes_default = router39;
 
 // server/routes/v1/redirectRoutes.ts
-import { Router as Router45 } from "express";
+import { Router as Router46 } from "express";
 init_apiResponse();
 
 // server/schemas/redirectSchemas.ts
@@ -31296,12 +31613,12 @@ var updateRedirectSchema = z51.object({
 }).strict().refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
 
 // server/routes/v1/redirectRoutes.ts
-var router39 = Router45();
-router39.use(authenticateToken);
+var router40 = Router46();
+router40.use(authenticateToken);
 function requestMeta24(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router39.get(
+router40.get(
   "/",
   requirePermission("seo.redirects.read"),
   asyncHandler(async (req, res) => {
@@ -31317,7 +31634,7 @@ router39.get(
     sendSuccess(res, { redirects: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router39.get(
+router40.get(
   "/:id",
   requirePermission("seo.redirects.read"),
   asyncHandler(async (req, res) => {
@@ -31325,7 +31642,7 @@ router39.get(
     sendSuccess(res, { redirect });
   })
 );
-router39.post(
+router40.post(
   "/",
   requirePermission("seo.redirects.create"),
   asyncHandler(async (req, res) => {
@@ -31334,7 +31651,7 @@ router39.post(
     sendSuccess(res, { redirect }, 201);
   })
 );
-router39.patch(
+router40.patch(
   "/:id",
   requirePermission("seo.redirects.update"),
   asyncHandler(async (req, res) => {
@@ -31343,7 +31660,7 @@ router39.patch(
     sendSuccess(res, { redirect });
   })
 );
-router39.delete(
+router40.delete(
   "/:id",
   requirePermission("seo.redirects.delete"),
   asyncHandler(async (req, res) => {
@@ -31351,10 +31668,10 @@ router39.delete(
     sendSuccess(res, { message: "Redirect deleted." });
   })
 );
-var redirectRoutes_default = router39;
+var redirectRoutes_default = router40;
 
 // server/routes/v1/seoRoutes.ts
-import { Router as Router46 } from "express";
+import { Router as Router47 } from "express";
 
 // server/services/seoAuditService.ts
 var LIVE_STATUSES = /* @__PURE__ */ new Set(["PUBLISHED", "SCHEDULED"]);
@@ -31365,27 +31682,27 @@ var VALID_SLUG_PATTERN = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 function checkRecord(resourceType, record2) {
   const issues = [];
   const isLive = LIVE_STATUSES.has(record2.status);
-  const meta13 = record2.currentRevision?.metadata ?? {};
+  const meta14 = record2.currentRevision?.metadata ?? {};
   const displayTitle = record2.currentRevision?.title || record2.title;
   function push(severity, code, message) {
     issues.push({ resourceType, resourceId: record2.id, resourceTitle: displayTitle, slug: record2.slug, status: record2.status, severity, code, message });
   }
-  if (!meta13.metaTitle) {
+  if (!meta14.metaTitle) {
     push(isLive ? "critical" : "warning", "missing_meta_title", "No SEO title set \u2014 search engines will fall back to the content title, which may not be optimized.");
-  } else if (meta13.metaTitle.length > META_TITLE_IDEAL_MAX) {
-    push("warning", "meta_title_too_long", `SEO title is ${meta13.metaTitle.length} characters \u2014 search engines typically truncate titles beyond ~${META_TITLE_IDEAL_MAX}.`);
+  } else if (meta14.metaTitle.length > META_TITLE_IDEAL_MAX) {
+    push("warning", "meta_title_too_long", `SEO title is ${meta14.metaTitle.length} characters \u2014 search engines typically truncate titles beyond ~${META_TITLE_IDEAL_MAX}.`);
   }
-  if (!meta13.metaDescription) {
+  if (!meta14.metaDescription) {
     push(isLive ? "critical" : "warning", "missing_meta_description", "No meta description set \u2014 search engines will auto-generate a snippet from the page content instead.");
-  } else if (meta13.metaDescription.length > META_DESCRIPTION_IDEAL_MAX) {
-    push("warning", "meta_description_too_long", `Meta description is ${meta13.metaDescription.length} characters \u2014 likely to be truncated beyond ~${META_DESCRIPTION_IDEAL_MAX}.`);
-  } else if (meta13.metaDescription.length < META_DESCRIPTION_IDEAL_MIN) {
-    push("warning", "meta_description_too_short", `Meta description is only ${meta13.metaDescription.length} characters \u2014 likely too short to be a useful search-result snippet.`);
+  } else if (meta14.metaDescription.length > META_DESCRIPTION_IDEAL_MAX) {
+    push("warning", "meta_description_too_long", `Meta description is ${meta14.metaDescription.length} characters \u2014 likely to be truncated beyond ~${META_DESCRIPTION_IDEAL_MAX}.`);
+  } else if (meta14.metaDescription.length < META_DESCRIPTION_IDEAL_MIN) {
+    push("warning", "meta_description_too_short", `Meta description is only ${meta14.metaDescription.length} characters \u2014 likely too short to be a useful search-result snippet.`);
   }
   if (record2.featuredMedia && !record2.featuredMedia.altText) {
     push("warning", "missing_featured_image_alt_text", "Featured image has no alt text \u2014 hurts accessibility and image search visibility.");
   }
-  if (isLive && !meta13.ogImage && !record2.featuredMedia) {
+  if (isLive && !meta14.ogImage && !record2.featuredMedia) {
     push("warning", "missing_social_image", "No social share image (Open Graph image or featured image) set \u2014 links shared on social platforms will show no preview image.");
   }
   if (!VALID_SLUG_PATTERN.test(record2.slug)) {
@@ -31430,11 +31747,11 @@ var seoAuditService = {
     const titleIndex = [];
     const descriptionIndex = [];
     function indexRecord(resourceType, record2) {
-      const meta13 = record2.currentRevision?.metadata ?? {};
+      const meta14 = record2.currentRevision?.metadata ?? {};
       const title = record2.currentRevision?.title || record2.title;
       const base3 = { resourceType, id: record2.id, slug: record2.slug, title, status: record2.status };
-      if (meta13.metaTitle) titleIndex.push({ ...base3, value: meta13.metaTitle });
-      if (meta13.metaDescription) descriptionIndex.push({ ...base3, value: meta13.metaDescription });
+      if (meta14.metaTitle) titleIndex.push({ ...base3, value: meta14.metaTitle });
+      if (meta14.metaDescription) descriptionIndex.push({ ...base3, value: meta14.metaDescription });
     }
     for (const post of posts) {
       issues.push(...checkRecord("post", post));
@@ -31456,9 +31773,9 @@ var seoAuditService = {
 
 // server/routes/v1/seoRoutes.ts
 init_apiResponse();
-var router40 = Router46();
-router40.use(authenticateToken);
-router40.get(
+var router41 = Router47();
+router41.use(authenticateToken);
+router41.get(
   "/issues",
   requirePermission("seo.audit.read"),
   asyncHandler(async (req, res) => {
@@ -31466,10 +31783,10 @@ router40.get(
     sendSuccess(res, { issues });
   })
 );
-var seoRoutes_default = router40;
+var seoRoutes_default = router41;
 
 // server/routes/v1/tagRoutes.ts
-import { Router as Router47 } from "express";
+import { Router as Router48 } from "express";
 
 // server/services/tagService.ts
 init_errors();
@@ -31488,7 +31805,7 @@ var tagService = {
   async getTag(organizationId, id6) {
     return loadTagOrThrow(id6, organizationId);
   },
-  async createTag(caller, input, meta13 = {}) {
+  async createTag(caller, input, meta14 = {}) {
     const organizationId = caller.organizationId;
     if (input.slug) {
       const dup = await tagRepository.findBySlugInOrg(organizationId, input.slug);
@@ -31509,12 +31826,12 @@ var tagService = {
       resourceType: "tag",
       resourceId: tag.id,
       afterData: { name: tag.name, slug: tag.slug },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return tag;
   },
-  async updateTag(caller, id6, input, meta13 = {}) {
+  async updateTag(caller, id6, input, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadTagOrThrow(id6, organizationId);
     if (input.slug !== void 0 && input.slug !== existing.slug) {
@@ -31540,12 +31857,12 @@ var tagService = {
       resourceId: id6,
       beforeData: { name: existing.name, slug: existing.slug },
       afterData: patch,
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return updated;
   },
-  async deleteTag(caller, id6, meta13 = {}) {
+  async deleteTag(caller, id6, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadTagOrThrow(id6, organizationId);
     const postCount = await tagRepository.countPostsUsing(id6);
@@ -31561,20 +31878,20 @@ var tagService = {
       resourceType: "tag",
       resourceId: id6,
       beforeData: { name: existing.name, slug: existing.slug },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
   }
 };
 
 // server/routes/v1/tagRoutes.ts
 init_apiResponse();
-var router41 = Router47();
-router41.use(authenticateToken);
+var router42 = Router48();
+router42.use(authenticateToken);
 function requestMeta25(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router41.get(
+router42.get(
   "/",
   requirePermission("content.read"),
   asyncHandler(async (req, res) => {
@@ -31582,7 +31899,7 @@ router41.get(
     sendSuccess(res, { tags });
   })
 );
-router41.get(
+router42.get(
   "/:id",
   requirePermission("content.read"),
   asyncHandler(async (req, res) => {
@@ -31590,7 +31907,7 @@ router41.get(
     sendSuccess(res, { tag });
   })
 );
-router41.post(
+router42.post(
   "/",
   requirePermission("content.create"),
   asyncHandler(async (req, res) => {
@@ -31599,7 +31916,7 @@ router41.post(
     sendSuccess(res, { tag }, 201);
   })
 );
-router41.patch(
+router42.patch(
   "/:id",
   requirePermission("content.update"),
   asyncHandler(async (req, res) => {
@@ -31608,7 +31925,7 @@ router41.patch(
     sendSuccess(res, { tag });
   })
 );
-router41.delete(
+router42.delete(
   "/:id",
   requirePermission("content.delete"),
   asyncHandler(async (req, res) => {
@@ -31616,10 +31933,10 @@ router41.delete(
     sendSuccess(res, { message: "Tag deleted." });
   })
 );
-var tagRoutes_default = router41;
+var tagRoutes_default = router42;
 
 // server/routes/v1/authorRoutes.ts
-import { Router as Router48 } from "express";
+import { Router as Router49 } from "express";
 
 // server/repositories/authorRepository.ts
 var withUser = { include: { user: { select: { id: true, email: true, firstName: true, lastName: true, displayName: true, status: true } } } };
@@ -31660,7 +31977,7 @@ var authorService = {
   async getAuthor(id6) {
     return loadAuthorOrThrow(id6);
   },
-  async createAuthor(caller, input, meta13 = {}) {
+  async createAuthor(caller, input, meta14 = {}) {
     const user = await userRepository.findById(input.userId);
     if (!user) throw new ValidationError("userId does not refer to an existing user.");
     const existing = await authorRepository.findByUserId(input.userId);
@@ -31673,12 +31990,12 @@ var authorService = {
       resourceType: "author",
       resourceId: author.id,
       afterData: { userId: input.userId },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return author;
   },
-  async updateAuthor(caller, id6, input, meta13 = {}) {
+  async updateAuthor(caller, id6, input, meta14 = {}) {
     const existing = await loadAuthorOrThrow(id6);
     const patch = {};
     if (input.bio !== void 0) patch.bio = input.bio;
@@ -31692,8 +32009,8 @@ var authorService = {
       resourceId: id6,
       beforeData: { bio: existing.bio, avatarUrl: existing.avatarUrl },
       afterData: patch,
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return updated;
   }
@@ -31715,12 +32032,12 @@ var updateAuthorSchema = z52.object({
 }).refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
 
 // server/routes/v1/authorRoutes.ts
-var router42 = Router48();
-router42.use(authenticateToken);
+var router43 = Router49();
+router43.use(authenticateToken);
 function requestMeta26(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router42.get(
+router43.get(
   "/",
   requirePermission("authors.read"),
   asyncHandler(async (_req, res) => {
@@ -31728,7 +32045,7 @@ router42.get(
     sendSuccess(res, { authors });
   })
 );
-router42.get(
+router43.get(
   "/:id",
   requirePermission("authors.read"),
   asyncHandler(async (req, res) => {
@@ -31736,7 +32053,7 @@ router42.get(
     sendSuccess(res, { author });
   })
 );
-router42.post(
+router43.post(
   "/",
   requirePermission("authors.create"),
   asyncHandler(async (req, res) => {
@@ -31745,7 +32062,7 @@ router42.post(
     sendSuccess(res, { author }, 201);
   })
 );
-router42.patch(
+router43.patch(
   "/:id",
   requirePermission("authors.update"),
   asyncHandler(async (req, res) => {
@@ -31754,10 +32071,10 @@ router42.patch(
     sendSuccess(res, { author });
   })
 );
-var authorRoutes_default = router42;
+var authorRoutes_default = router43;
 
 // server/routes/v1/mediaRoutes.ts
-import { Router as Router49 } from "express";
+import { Router as Router50 } from "express";
 import express2 from "express";
 init_apiResponse();
 init_errors();
@@ -31808,11 +32125,11 @@ var updateMediaSchema = z53.object({
 }).refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
 
 // server/routes/v1/mediaRoutes.ts
-var router43 = Router49();
+var router44 = Router50();
 function requestMeta27(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router43.put(
+router44.put(
   "/local-object",
   express2.raw({ type: () => true, limit: Math.max(config.mediaMaxImageSizeBytes, config.mediaMaxDocumentSizeBytes) }),
   asyncHandler(async (req, res) => {
@@ -31832,7 +32149,7 @@ router43.put(
     res.status(200).json({ ok: true });
   })
 );
-router43.get(
+router44.get(
   "/local-object",
   asyncHandler(async (req, res) => {
     if (getStorageProvider().name !== "local") {
@@ -31854,8 +32171,8 @@ router43.get(
     }
   })
 );
-router43.use(authenticateToken);
-router43.get(
+router44.use(authenticateToken);
+router44.get(
   "/",
   requirePermission("media.read"),
   asyncHandler(async (req, res) => {
@@ -31880,7 +32197,7 @@ router43.get(
     sendSuccess(res, { media: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router43.get(
+router44.get(
   "/:id",
   requirePermission("media.read"),
   asyncHandler(async (req, res) => {
@@ -31888,7 +32205,7 @@ router43.get(
     sendSuccess(res, { media });
   })
 );
-router43.get(
+router44.get(
   "/:id/url",
   requirePermission("media.read"),
   asyncHandler(async (req, res) => {
@@ -31896,7 +32213,7 @@ router43.get(
     sendSuccess(res, result);
   })
 );
-router43.get(
+router44.get(
   "/:id/embed-url",
   requirePermission("media.update"),
   asyncHandler(async (req, res) => {
@@ -31904,7 +32221,7 @@ router43.get(
     sendSuccess(res, result);
   })
 );
-router43.post(
+router44.post(
   "/upload-session",
   requirePermission("media.upload"),
   asyncHandler(async (req, res) => {
@@ -31913,7 +32230,7 @@ router43.post(
     sendSuccess(res, result, 201);
   })
 );
-router43.post(
+router44.post(
   "/:id/complete",
   requirePermission("media.upload"),
   asyncHandler(async (req, res) => {
@@ -31923,7 +32240,7 @@ router43.post(
     sendSuccess(res, { media });
   })
 );
-router43.patch(
+router44.patch(
   "/:id",
   requirePermission("media.update"),
   asyncHandler(async (req, res) => {
@@ -31932,7 +32249,7 @@ router43.patch(
     sendSuccess(res, { media });
   })
 );
-router43.post(
+router44.post(
   "/:id/archive",
   requirePermission("media.delete"),
   asyncHandler(async (req, res) => {
@@ -31940,7 +32257,7 @@ router43.post(
     sendSuccess(res, { media });
   })
 );
-router43.delete(
+router44.delete(
   "/:id",
   requirePermission("media.delete"),
   asyncHandler(async (req, res) => {
@@ -31948,10 +32265,10 @@ router43.delete(
     sendSuccess(res, { message: "Media deleted." });
   })
 );
-var mediaRoutes_default = router43;
+var mediaRoutes_default = router44;
 
 // server/routes/v1/contractRoutes.ts
-import { Router as Router50 } from "express";
+import { Router as Router51 } from "express";
 init_apiResponse();
 
 // server/schemas/contractSchemas.ts
@@ -32009,12 +32326,12 @@ var createContractVariationSchema = z55.object({
 });
 
 // server/routes/v1/contractRoutes.ts
-var router44 = Router50();
-router44.use(authenticateToken);
+var router45 = Router51();
+router45.use(authenticateToken);
 function requestMeta28(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router44.get(
+router45.get(
   "/",
   requirePermission("contracts.read"),
   asyncHandler(async (req, res) => {
@@ -32030,7 +32347,7 @@ router44.get(
     sendSuccess(res, { contracts: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router44.get(
+router45.get(
   "/:id",
   requirePermission("contracts.read"),
   asyncHandler(async (req, res) => {
@@ -32038,7 +32355,7 @@ router44.get(
     sendSuccess(res, { contract });
   })
 );
-router44.post(
+router45.post(
   "/",
   requirePermission("contracts.create"),
   asyncHandler(async (req, res) => {
@@ -32047,7 +32364,7 @@ router44.post(
     sendSuccess(res, { contract }, 201);
   })
 );
-router44.patch(
+router45.patch(
   "/:id",
   requirePermission("contracts.update"),
   asyncHandler(async (req, res) => {
@@ -32056,7 +32373,7 @@ router44.patch(
     sendSuccess(res, { contract });
   })
 );
-router44.post(
+router45.post(
   "/:id/activate",
   requirePermission("contracts.activate"),
   asyncHandler(async (req, res) => {
@@ -32064,7 +32381,7 @@ router44.post(
     sendSuccess(res, { contract });
   })
 );
-router44.post(
+router45.post(
   "/:id/suspend",
   requirePermission("contracts.suspend"),
   asyncHandler(async (req, res) => {
@@ -32072,7 +32389,7 @@ router44.post(
     sendSuccess(res, { contract });
   })
 );
-router44.post(
+router45.post(
   "/:id/terminate",
   requirePermission("contracts.terminate"),
   asyncHandler(async (req, res) => {
@@ -32081,7 +32398,7 @@ router44.post(
     sendSuccess(res, { contract });
   })
 );
-router44.post(
+router45.post(
   "/:id/variations",
   requirePermission("contracts.variations.create"),
   asyncHandler(async (req, res) => {
@@ -32090,10 +32407,10 @@ router44.post(
     sendSuccess(res, { contract }, 201);
   })
 );
-var contractRoutes_default = router44;
+var contractRoutes_default = router45;
 
 // server/routes/v1/subscriptionRoutes.ts
-import { Router as Router51 } from "express";
+import { Router as Router52 } from "express";
 
 // server/services/subscriptionService.ts
 init_errors();
@@ -32112,7 +32429,7 @@ var subscriptionService = {
   async getSubscription(organizationId, id6) {
     return loadSubscriptionOrThrow(id6, organizationId);
   },
-  async createSubscription(caller, input, meta13 = {}) {
+  async createSubscription(caller, input, meta14 = {}) {
     const organizationId = caller.organizationId;
     const client3 = await clientRepository.findByIdInOrg(input.clientId, organizationId);
     if (!client3) throw new ValidationError("The specified client does not exist in this organization.");
@@ -32155,12 +32472,12 @@ var subscriptionService = {
       resourceType: "subscription",
       resourceId: subscription.id,
       afterData: { subscriptionNumber, clientId: input.clientId, productId: input.productId, price: subscription.price.toString(), currency },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return subscription;
   },
-  async updateSubscription(caller, id6, input, meta13 = {}) {
+  async updateSubscription(caller, id6, input, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadSubscriptionOrThrow(id6, organizationId);
     if (existing.status === "CANCELLED" || existing.status === "EXPIRED") {
@@ -32185,12 +32502,12 @@ var subscriptionService = {
       resourceId: id6,
       beforeData: { quantity: existing.quantity, price: existing.price.toString() },
       afterData: patch,
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return loadSubscriptionOrThrow(id6, organizationId);
   },
-  async activateSubscription(caller, id6, meta13 = {}) {
+  async activateSubscription(caller, id6, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadSubscriptionOrThrow(id6, organizationId);
     const count = await subscriptionRepository.transitionStatus(id6, ACTIVATABLE_FROM2, { status: "ACTIVE" });
@@ -32204,12 +32521,12 @@ var subscriptionService = {
       resourceId: id6,
       beforeData: { status: existing.status },
       afterData: { status: "ACTIVE" },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return loadSubscriptionOrThrow(id6, organizationId);
   },
-  async pauseSubscription(caller, id6, meta13 = {}) {
+  async pauseSubscription(caller, id6, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadSubscriptionOrThrow(id6, organizationId);
     const count = await subscriptionRepository.transitionStatus(id6, PAUSABLE_FROM, { status: "PAUSED" });
@@ -32223,12 +32540,12 @@ var subscriptionService = {
       resourceId: id6,
       beforeData: { status: existing.status },
       afterData: { status: "PAUSED" },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return loadSubscriptionOrThrow(id6, organizationId);
   },
-  async cancelSubscription(caller, id6, input, meta13 = {}) {
+  async cancelSubscription(caller, id6, input, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadSubscriptionOrThrow(id6, organizationId);
     const now = /* @__PURE__ */ new Date();
@@ -32248,8 +32565,8 @@ var subscriptionService = {
       resourceId: id6,
       beforeData: { status: existing.status },
       afterData: { status: "CANCELLED", reason: input.reason },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return loadSubscriptionOrThrow(id6, organizationId);
   }
@@ -32297,12 +32614,12 @@ var cancelSubscriptionSchema = z56.object({
 });
 
 // server/routes/v1/subscriptionRoutes.ts
-var router45 = Router51();
-router45.use(authenticateToken);
+var router46 = Router52();
+router46.use(authenticateToken);
 function requestMeta29(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router45.get(
+router46.get(
   "/",
   requirePermission("subscriptions.read"),
   asyncHandler(async (req, res) => {
@@ -32318,7 +32635,7 @@ router45.get(
     sendSuccess(res, { subscriptions: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router45.get(
+router46.get(
   "/:id",
   requirePermission("subscriptions.read"),
   asyncHandler(async (req, res) => {
@@ -32326,7 +32643,7 @@ router45.get(
     sendSuccess(res, { subscription });
   })
 );
-router45.post(
+router46.post(
   "/",
   requirePermission("subscriptions.create"),
   asyncHandler(async (req, res) => {
@@ -32335,7 +32652,7 @@ router45.post(
     sendSuccess(res, { subscription }, 201);
   })
 );
-router45.patch(
+router46.patch(
   "/:id",
   requirePermission("subscriptions.update"),
   asyncHandler(async (req, res) => {
@@ -32344,7 +32661,7 @@ router45.patch(
     sendSuccess(res, { subscription });
   })
 );
-router45.post(
+router46.post(
   "/:id/activate",
   requirePermission("subscriptions.activate"),
   asyncHandler(async (req, res) => {
@@ -32352,7 +32669,7 @@ router45.post(
     sendSuccess(res, { subscription });
   })
 );
-router45.post(
+router46.post(
   "/:id/pause",
   requirePermission("subscriptions.pause"),
   asyncHandler(async (req, res) => {
@@ -32360,7 +32677,7 @@ router45.post(
     sendSuccess(res, { subscription });
   })
 );
-router45.post(
+router46.post(
   "/:id/cancel",
   requirePermission("subscriptions.cancel"),
   asyncHandler(async (req, res) => {
@@ -32369,10 +32686,10 @@ router45.post(
     sendSuccess(res, { subscription });
   })
 );
-var subscriptionRoutes_default = router45;
+var subscriptionRoutes_default = router46;
 
 // server/routes/v1/invoiceRoutes.ts
-import { Router as Router52 } from "express";
+import { Router as Router53 } from "express";
 
 // server/services/paymentService.ts
 init_errors();
@@ -32393,7 +32710,7 @@ var paymentService = {
   async getPayment(organizationId, id6) {
     return loadPaymentOrThrow(id6, organizationId);
   },
-  async reversePayment(caller, id6, input, meta13 = {}) {
+  async reversePayment(caller, id6, input, meta14 = {}) {
     const organizationId = caller.organizationId;
     const existing = await loadPaymentOrThrow(id6, organizationId);
     if (existing.status !== "COMPLETED") {
@@ -32424,8 +32741,8 @@ var paymentService = {
       resourceId: id6,
       beforeData: { status: "COMPLETED", amount: existing.amount.toString() },
       afterData: { status: "REVERSED", reason: input.reason },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return loadPaymentOrThrow(id6, organizationId);
   }
@@ -32491,12 +32808,12 @@ var recordPaymentSchema = z57.object({
 });
 
 // server/routes/v1/invoiceRoutes.ts
-var router46 = Router52();
-router46.use(authenticateToken);
+var router47 = Router53();
+router47.use(authenticateToken);
 function requestMeta30(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router46.get(
+router47.get(
   "/",
   requirePermission("invoices.read"),
   asyncHandler(async (req, res) => {
@@ -32520,7 +32837,7 @@ router46.get(
     sendSuccess(res, { invoices: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router46.get(
+router47.get(
   "/:id",
   requirePermission("invoices.read"),
   asyncHandler(async (req, res) => {
@@ -32528,7 +32845,7 @@ router46.get(
     sendSuccess(res, { invoice });
   })
 );
-router46.post(
+router47.post(
   "/",
   requirePermission("invoices.create"),
   asyncHandler(async (req, res) => {
@@ -32537,7 +32854,7 @@ router46.post(
     sendSuccess(res, { invoice }, 201);
   })
 );
-router46.patch(
+router47.patch(
   "/:id",
   requirePermission("invoices.update"),
   asyncHandler(async (req, res) => {
@@ -32546,7 +32863,7 @@ router46.patch(
     sendSuccess(res, { invoice });
   })
 );
-router46.post(
+router47.post(
   "/:id/issue",
   requirePermission("invoices.issue"),
   asyncHandler(async (req, res) => {
@@ -32555,7 +32872,7 @@ router46.post(
     sendSuccess(res, { invoice });
   })
 );
-router46.post(
+router47.post(
   "/:id/void",
   requirePermission("invoices.void"),
   asyncHandler(async (req, res) => {
@@ -32564,7 +32881,7 @@ router46.post(
     sendSuccess(res, { invoice });
   })
 );
-router46.get(
+router47.get(
   "/:id/payments",
   requirePermission("payments.read"),
   asyncHandler(async (req, res) => {
@@ -32572,7 +32889,7 @@ router46.get(
     sendSuccess(res, { payments: rows }, 200, { page: 1, limit: 100, total });
   })
 );
-router46.post(
+router47.post(
   "/:id/payments",
   requirePermission("payments.create"),
   asyncHandler(async (req, res) => {
@@ -32581,10 +32898,10 @@ router46.post(
     sendSuccess(res, { payment }, 201);
   })
 );
-var invoiceRoutes_default = router46;
+var invoiceRoutes_default = router47;
 
 // server/routes/v1/paymentRoutes.ts
-import { Router as Router53 } from "express";
+import { Router as Router54 } from "express";
 init_apiResponse();
 
 // server/schemas/paymentSchemas.ts
@@ -32604,12 +32921,12 @@ var reversePaymentSchema = z58.object({
 });
 
 // server/routes/v1/paymentRoutes.ts
-var router47 = Router53();
-router47.use(authenticateToken);
+var router48 = Router54();
+router48.use(authenticateToken);
 function requestMeta31(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"] };
 }
-router47.get(
+router48.get(
   "/",
   requirePermission("payments.read"),
   asyncHandler(async (req, res) => {
@@ -32625,7 +32942,7 @@ router47.get(
     sendSuccess(res, { payments: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router47.get(
+router48.get(
   "/:id",
   requirePermission("payments.read"),
   asyncHandler(async (req, res) => {
@@ -32633,7 +32950,7 @@ router47.get(
     sendSuccess(res, { payment });
   })
 );
-router47.post(
+router48.post(
   "/:id/reverse",
   requirePermission("payments.reverse"),
   asyncHandler(async (req, res) => {
@@ -32642,10 +32959,10 @@ router47.post(
     sendSuccess(res, { payment });
   })
 );
-var paymentRoutes_default = router47;
+var paymentRoutes_default = router48;
 
 // server/routes/v1/portalRoutes.ts
-import { Router as Router54 } from "express";
+import { Router as Router55 } from "express";
 import { z as z59 } from "zod";
 
 // server/services/clientPortalService.ts
@@ -32757,13 +33074,13 @@ var clientPortalService = {
 
 // server/routes/v1/portalRoutes.ts
 init_apiResponse();
-var router48 = Router54();
-router48.use(authenticateToken);
+var router49 = Router55();
+router49.use(authenticateToken);
 var pageQuerySchema2 = z59.object({
   page: z59.coerce.number().int().positive().default(1),
   limit: z59.coerce.number().int().positive().max(100).default(20)
 });
-router48.get(
+router49.get(
   "/dashboard",
   requirePermission("portal.dashboard.read"),
   asyncHandler(async (req, res) => {
@@ -32771,7 +33088,7 @@ router48.get(
     sendSuccess(res, { dashboard });
   })
 );
-router48.get(
+router49.get(
   "/contracts",
   requirePermission("portal.contracts.read"),
   asyncHandler(async (req, res) => {
@@ -32780,7 +33097,7 @@ router48.get(
     sendSuccess(res, { contracts: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router48.get(
+router49.get(
   "/contracts/:id",
   requirePermission("portal.contracts.read"),
   asyncHandler(async (req, res) => {
@@ -32788,7 +33105,7 @@ router48.get(
     sendSuccess(res, { contract });
   })
 );
-router48.get(
+router49.get(
   "/subscriptions",
   requirePermission("portal.subscriptions.read"),
   asyncHandler(async (req, res) => {
@@ -32797,7 +33114,7 @@ router48.get(
     sendSuccess(res, { subscriptions: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router48.get(
+router49.get(
   "/subscriptions/:id",
   requirePermission("portal.subscriptions.read"),
   asyncHandler(async (req, res) => {
@@ -32805,7 +33122,7 @@ router48.get(
     sendSuccess(res, { subscription });
   })
 );
-router48.get(
+router49.get(
   "/invoices",
   requirePermission("portal.invoices.read"),
   asyncHandler(async (req, res) => {
@@ -32814,7 +33131,7 @@ router48.get(
     sendSuccess(res, { invoices: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router48.get(
+router49.get(
   "/invoices/:id",
   requirePermission("portal.invoices.read"),
   asyncHandler(async (req, res) => {
@@ -32822,7 +33139,7 @@ router48.get(
     sendSuccess(res, { invoice });
   })
 );
-router48.get(
+router49.get(
   "/payments",
   requirePermission("portal.payments.read"),
   asyncHandler(async (req, res) => {
@@ -32831,7 +33148,7 @@ router48.get(
     sendSuccess(res, { payments: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router48.get(
+router49.get(
   "/documents",
   requirePermission("portal.documents.read"),
   asyncHandler(async (req, res) => {
@@ -32840,7 +33157,7 @@ router48.get(
     sendSuccess(res, { documents: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router48.get(
+router49.get(
   "/onboarding",
   requirePermission("portal.onboarding.read"),
   asyncHandler(async (req, res) => {
@@ -32848,10 +33165,10 @@ router48.get(
     sendSuccess(res, { onboarding });
   })
 );
-var portalRoutes_default = router48;
+var portalRoutes_default = router49;
 
 // server/routes/v1/publicRoutes.ts
-import { Router as Router55 } from "express";
+import { Router as Router56 } from "express";
 
 // server/services/publicFormService.ts
 init_errors();
@@ -32920,7 +33237,7 @@ var publicFormService = {
    * successMessage (§8's "accepted-but-discarded" contract from
    * publicLeadService), but writes nothing.
    */
-  async submit(slug, input, meta13 = {}, ctx = {}) {
+  async submit(slug, input, meta14 = {}, ctx = {}) {
     const organizationId = config.publicWebsiteOrganizationId;
     if (!organizationId) {
       throw new InfrastructureError("Public form intake is not configured.");
@@ -32973,7 +33290,7 @@ var publicFormService = {
     const sourceTag = ctx.sourceTag ?? `form:${form2.slug}${input.utmSource ? `:${input.utmSource}` : ""}`;
     const firstTouch = ctx.firstTouch && Object.values(ctx.firstTouch).some(Boolean) ? ctx.firstTouch : void 0;
     const landingPagePath = ctx.landingPagePath ?? input.landingPagePath;
-    const referrer = ctx.referrer ?? meta13.referrer;
+    const referrer = ctx.referrer ?? meta14.referrer;
     const notes = buildNotes(form2, fields, data, input, consentGiven, ctx.firstTouch);
     const campaignId = await campaignAttributionService.resolveCampaignId(organizationId, input.utmCampaign);
     const attribution = {
@@ -33044,8 +33361,8 @@ ${notes}` : notes,
       utmTerm: input.utmTerm,
       utmContent: input.utmContent,
       leadId,
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent,
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent,
       consentGiven: consentGiven ?? void 0,
       landingPagePath,
       referrer,
@@ -33061,8 +33378,8 @@ ${notes}` : notes,
       resourceType: "form_submission",
       resourceId: submission.id,
       afterData: { formId: form2.id, formSlug: form2.slug, leadId },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     try {
       await eventEngine.emit({
@@ -33593,7 +33910,7 @@ var publicLeadService = {
    * like a real submission from the caller's point of view, so a bot
    * learns nothing about which field gave it away.
    */
-  async createLead(input, meta13 = {}) {
+  async createLead(input, meta14 = {}) {
     if (input.website) {
       return null;
     }
@@ -33616,7 +33933,7 @@ var publicLeadService = {
       utmTerm: input.utmTerm,
       utmContent: input.utmContent,
       landingPagePath: input.landingPagePath,
-      referrer: meta13.referrer,
+      referrer: meta14.referrer,
       consentGiven: true,
       campaignId
     });
@@ -33628,8 +33945,8 @@ var publicLeadService = {
       resourceType: "lead",
       resourceId: lead.id,
       afterData: { companyName: lead.companyName, source: lead.source },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     try {
       await eventEngine.emit({
@@ -33655,7 +33972,7 @@ var publicLeadService = {
       utmContent: input.utmContent,
       campaignId,
       path: input.landingPagePath,
-      referrer: meta13.referrer
+      referrer: meta14.referrer
     });
     return lead;
   }
@@ -33730,7 +34047,7 @@ var publicLandingService = {
    * Lead form submit. Field keys and consent rules come from the LIVE form block (synced into the managed Form), never from the
    * request. First touch / last touch attribution and the page path are recorded server-side on the lead.
    */
-  async submit(slug, input, meta13 = {}) {
+  async submit(slug, input, meta14 = {}) {
     if (!orgId()) throw new NotFoundError("Landing page not found.");
     const page = await prisma.page.findFirst({ where: { organizationId: orgId(), slug, landingBuilder: true, deletedAt: null, status: { not: "ARCHIVED" }, landingLiveRevisionId: { not: null } } });
     if (!page) throw new NotFoundError("Landing page not found.");
@@ -33755,11 +34072,11 @@ var publicLandingService = {
         utmContent: last.utmContent,
         landingPagePath: path
       },
-      meta13,
+      meta14,
       {
         sourceTag: `landing:${slug}${last.utmSource ? `:${last.utmSource}` : ""}`.slice(0, 120),
         landingPagePath: path,
-        referrer: last.referrer || meta13.referrer,
+        referrer: last.referrer || meta14.referrer,
         firstTouch: first ? { ...first, landingPath: first.landingPath || path } : null,
         requireConsent: block.props.consent.enabled
       }
@@ -33871,8 +34188,8 @@ var reportQuerySchema = z61.object({
 });
 
 // server/routes/v1/publicRoutes.ts
-var router49 = Router55();
-router49.use((req, res, next) => {
+var router50 = Router56();
+router50.use((req, res, next) => {
   if (req.method === "GET" || req.method === "HEAD") {
     res.setHeader("Cache-Control", "public, s-maxage=60, stale-while-revalidate=300");
   }
@@ -33886,34 +34203,34 @@ function requestMeta32(req) {
     referrer: typeof referrerHeader === "string" ? referrerHeader.slice(0, 2e3) : void 0
   };
 }
-router49.get(
+router50.get(
   "/site",
   asyncHandler(async (_req, res) => {
     sendSuccess(res, { configured: publicSiteService.isConfigured() });
   })
 );
-router49.get(
+router50.get(
   "/site-settings",
   asyncHandler(async (_req, res) => {
     const settings = await publicSiteService.getSiteSettings();
     sendSuccess(res, { settings });
   })
 );
-router49.get(
+router50.get(
   "/pages/:slug",
   asyncHandler(async (req, res) => {
     const page = await publicSiteService.getPageBySlug(req.params.slug);
     sendSuccess(res, { page });
   })
 );
-router49.get(
+router50.get(
   "/homepage",
   asyncHandler(async (_req, res) => {
     const page = await publicSiteService.getHomepage();
     sendSuccess(res, { page });
   })
 );
-router49.get(
+router50.get(
   "/navigation-menus/:type",
   asyncHandler(async (req, res) => {
     const type = publicNavigationMenuTypeSchema.parse(req.params.type);
@@ -33921,7 +34238,7 @@ router49.get(
     sendSuccess(res, { menu });
   })
 );
-router49.get(
+router50.get(
   "/posts",
   asyncHandler(async (req, res) => {
     const query = listPublicPostsQuerySchema.parse(req.query);
@@ -33935,14 +34252,14 @@ router49.get(
     sendSuccess(res, { posts: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router49.get(
+router50.get(
   "/posts/:slug",
   asyncHandler(async (req, res) => {
     const post = await publicSiteService.getPostBySlug(req.params.slug);
     sendSuccess(res, { post });
   })
 );
-router49.get(
+router50.get(
   "/case-studies",
   asyncHandler(async (req, res) => {
     const query = listPublicCaseStudiesQuerySchema.parse(req.query);
@@ -33956,28 +34273,28 @@ router49.get(
     sendSuccess(res, { caseStudies: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router49.get(
+router50.get(
   "/case-studies/:slug",
   asyncHandler(async (req, res) => {
     const caseStudy = await publicSiteService.getCaseStudyBySlug(req.params.slug);
     sendSuccess(res, { caseStudy });
   })
 );
-router49.get(
+router50.get(
   "/categories",
   asyncHandler(async (_req, res) => {
     const categories = await publicSiteService.listCategories();
     sendSuccess(res, { categories });
   })
 );
-router49.get(
+router50.get(
   "/tags",
   asyncHandler(async (_req, res) => {
     const tags = await publicSiteService.listTags();
     sendSuccess(res, { tags });
   })
 );
-router49.get(
+router50.get(
   "/products",
   asyncHandler(async (req, res) => {
     const query = listPublicProductsQuerySchema.parse(req.query);
@@ -33989,35 +34306,35 @@ router49.get(
     sendSuccess(res, { products: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router49.get(
+router50.get(
   "/product-categories",
   asyncHandler(async (_req, res) => {
     const categories = await publicProductService.listProductCategories();
     sendSuccess(res, { categories });
   })
 );
-router49.get(
+router50.get(
   "/industries",
   asyncHandler(async (_req, res) => {
     const industries = await publicProductService.listIndustries();
     sendSuccess(res, { industries });
   })
 );
-router49.get(
+router50.get(
   "/products/:slug",
   asyncHandler(async (req, res) => {
     const product = await publicProductService.getProductBySlug(req.params.slug);
     sendSuccess(res, { product });
   })
 );
-router49.get(
+router50.get(
   "/products/:slug/modules",
   asyncHandler(async (req, res) => {
     const modules = await publicProductService.getProductModules(req.params.slug);
     sendSuccess(res, { modules });
   })
 );
-router49.get(
+router50.get(
   "/redirects",
   asyncHandler(async (req, res) => {
     const query = publicRedirectLookupQuerySchema.parse(req.query);
@@ -34025,7 +34342,7 @@ router49.get(
     sendSuccess(res, { redirect });
   })
 );
-router49.post(
+router50.post(
   "/leads",
   publicLeadLimiter,
   asyncHandler(async (req, res) => {
@@ -34034,21 +34351,21 @@ router49.post(
     sendSuccess(res, { message: "Thank you \u2014 your message has been received. We'll be in touch shortly." }, 201);
   })
 );
-router49.get(
+router50.get(
   "/forms/by-id/:id",
   asyncHandler(async (req, res) => {
     const form2 = await publicFormService.getFormForRender({ id: req.params.id });
     sendSuccess(res, { form: form2 });
   })
 );
-router49.get(
+router50.get(
   "/forms/:slug",
   asyncHandler(async (req, res) => {
     const form2 = await publicFormService.getFormForRender({ slug: req.params.slug });
     sendSuccess(res, { form: form2 });
   })
 );
-router49.post(
+router50.post(
   "/forms/:slug/submit",
   publicLeadLimiter,
   asyncHandler(async (req, res) => {
@@ -34057,15 +34374,15 @@ router49.post(
     sendSuccess(res, { message: successMessage }, 201);
   })
 );
-router49.get("/landing", asyncHandler(async (_req, res) => {
+router50.get("/landing", asyncHandler(async (_req, res) => {
   sendSuccess(res, { pages: await publicLandingService.listIndexable() });
 }));
-router49.get("/landing-preview/:token", tokenLinkLimiter, asyncHandler(async (req, res) => {
+router50.get("/landing-preview/:token", tokenLinkLimiter, asyncHandler(async (req, res) => {
   res.setHeader("Cache-Control", "no-store");
   res.setHeader("X-Robots-Tag", "noindex, nofollow");
   sendSuccess(res, { page: await publicLandingService.getPreview(req.params.token) });
 }));
-router49.get("/landing/:slug", asyncHandler(async (req, res) => {
+router50.get("/landing/:slug", asyncHandler(async (req, res) => {
   const found = await publicLandingService.getBySlug(req.params.slug);
   if (found.kind === "ok") {
     sendSuccess(res, { page: found.page });
@@ -34081,12 +34398,12 @@ router49.get("/landing/:slug", asyncHandler(async (req, res) => {
   }
   throw new NotFoundError("Landing page not found.");
 }));
-router49.post("/landing/:slug/submit", publicLeadLimiter, asyncHandler(async (req, res) => {
+router50.post("/landing/:slug/submit", publicLeadLimiter, asyncHandler(async (req, res) => {
   const input = publicLandingSubmitSchema.parse(req.body);
   const out = await publicLandingService.submit(req.params.slug, input, requestMeta32(req));
   sendSuccess(res, out, 201);
 }));
-router49.post(
+router50.post(
   "/analytics/events",
   publicAnalyticsLimiter,
   asyncHandler(async (req, res) => {
@@ -34095,10 +34412,10 @@ router49.post(
     sendSuccess(res, { recorded: true }, 201);
   })
 );
-var publicRoutes_default = router49;
+var publicRoutes_default = router50;
 
 // server/routes/v1/aiProviderRoutes.ts
-import { Router as Router56 } from "express";
+import { Router as Router57 } from "express";
 
 // server/repositories/aiProviderRepository.ts
 var aiProviderRepository = {
@@ -34163,7 +34480,7 @@ var aiProviderService = {
     if (!provider) throw new NotFoundError("AI provider not found.");
     return provider;
   },
-  async createProvider(caller, input, meta13 = {}) {
+  async createProvider(caller, input, meta14 = {}) {
     const existing = await aiProviderRepository.findProviderByCode(input.code);
     if (existing) throw new ConflictError(`An AI provider with code "${input.code}" already exists.`);
     if (input.isDefault) await aiProviderRepository.clearDefaultProviders();
@@ -34176,12 +34493,12 @@ var aiProviderService = {
       resourceType: "ai_provider",
       resourceId: provider.id,
       afterData: { code: provider.code, status: provider.status },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return provider;
   },
-  async updateProvider(caller, id6, input, meta13 = {}) {
+  async updateProvider(caller, id6, input, meta14 = {}) {
     await this.getProvider(id6);
     if (input.isDefault) await aiProviderRepository.clearDefaultProviders();
     const provider = await aiProviderRepository.updateProvider(id6, input);
@@ -34193,15 +34510,15 @@ var aiProviderService = {
       resourceType: "ai_provider",
       resourceId: id6,
       afterData: input,
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return provider;
   },
   async listModels(providerId) {
     return aiProviderRepository.listModels(providerId);
   },
-  async createModel(caller, input, meta13 = {}) {
+  async createModel(caller, input, meta14 = {}) {
     await this.getProvider(input.providerId);
     if (input.isDefault) await aiProviderRepository.clearDefaultModels(input.providerId);
     const model = await aiProviderRepository.createModel(input);
@@ -34213,12 +34530,12 @@ var aiProviderService = {
       resourceType: "ai_model",
       resourceId: model.id,
       afterData: { providerId: model.providerId, modelId: model.modelId },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return model;
   },
-  async updateModel(caller, id6, input, meta13 = {}) {
+  async updateModel(caller, id6, input, meta14 = {}) {
     const existing = await aiProviderRepository.getModel(id6);
     if (!existing) throw new NotFoundError("AI model not found.");
     if (input.isDefault) await aiProviderRepository.clearDefaultModels(existing.providerId);
@@ -34231,8 +34548,8 @@ var aiProviderService = {
       resourceType: "ai_model",
       resourceId: id6,
       afterData: input,
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return model;
   }
@@ -34346,12 +34663,12 @@ var decideAiApprovalSchema = z62.object({
 });
 
 // server/routes/v1/aiProviderRoutes.ts
-var router50 = Router56();
-router50.use(authenticateToken);
+var router51 = Router57();
+router51.use(authenticateToken);
 function requestMeta33(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"], requestId: req.requestId };
 }
-router50.get(
+router51.get(
   "/",
   requirePermission("ai.providers.read"),
   asyncHandler(async (_req, res) => {
@@ -34359,7 +34676,7 @@ router50.get(
     sendSuccess(res, { providers });
   })
 );
-router50.post(
+router51.post(
   "/",
   requirePermission("ai.providers.manage"),
   asyncHandler(async (req, res) => {
@@ -34368,7 +34685,7 @@ router50.post(
     sendSuccess(res, { provider }, 201);
   })
 );
-router50.patch(
+router51.patch(
   "/:id",
   requirePermission("ai.providers.manage"),
   asyncHandler(async (req, res) => {
@@ -34377,7 +34694,7 @@ router50.patch(
     sendSuccess(res, { provider });
   })
 );
-router50.get(
+router51.get(
   "/models",
   requirePermission("ai.models.read"),
   asyncHandler(async (req, res) => {
@@ -34386,7 +34703,7 @@ router50.get(
     sendSuccess(res, { models });
   })
 );
-router50.post(
+router51.post(
   "/models",
   requirePermission("ai.models.manage"),
   asyncHandler(async (req, res) => {
@@ -34395,7 +34712,7 @@ router50.post(
     sendSuccess(res, { model }, 201);
   })
 );
-router50.patch(
+router51.patch(
   "/models/:id",
   requirePermission("ai.models.manage"),
   asyncHandler(async (req, res) => {
@@ -34404,10 +34721,10 @@ router50.patch(
     sendSuccess(res, { model });
   })
 );
-var aiProviderRoutes_default = router50;
+var aiProviderRoutes_default = router51;
 
 // server/routes/v1/aiToolRoutes.ts
-import { Router as Router57 } from "express";
+import { Router as Router58 } from "express";
 
 // server/repositories/aiToolRepository.ts
 var aiToolRepository = {
@@ -34449,7 +34766,7 @@ var aiToolService = {
       requireApprovalOverride: settingByCode.get(tool2.code)?.requireApprovalOverride ?? null
     }));
   },
-  async updateOrgSetting(caller, toolCode, input, meta13 = {}) {
+  async updateOrgSetting(caller, toolCode, input, meta14 = {}) {
     const tool2 = await aiToolRepository.getToolByCode(toolCode);
     if (!tool2) throw new NotFoundError(`AI tool "${toolCode}" not found.`);
     const setting = await aiToolRepository.upsertOrgSetting(caller.organizationId, toolCode, input);
@@ -34461,8 +34778,8 @@ var aiToolService = {
       resourceType: "ai_tool",
       resourceId: toolCode,
       afterData: { enabled: setting.enabled, requireApprovalOverride: setting.requireApprovalOverride },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return setting;
   }
@@ -34470,12 +34787,12 @@ var aiToolService = {
 
 // server/routes/v1/aiToolRoutes.ts
 init_apiResponse();
-var router51 = Router57();
-router51.use(authenticateToken);
+var router52 = Router58();
+router52.use(authenticateToken);
 function requestMeta34(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"], requestId: req.requestId };
 }
-router51.get(
+router52.get(
   "/",
   requirePermission("ai.tools.read"),
   asyncHandler(async (req, res) => {
@@ -34483,7 +34800,7 @@ router51.get(
     sendSuccess(res, { tools });
   })
 );
-router51.patch(
+router52.patch(
   "/:code/settings",
   requirePermission("ai.tools.manage"),
   asyncHandler(async (req, res) => {
@@ -34492,10 +34809,10 @@ router51.patch(
     sendSuccess(res, { setting });
   })
 );
-var aiToolRoutes_default = router51;
+var aiToolRoutes_default = router52;
 
 // server/routes/v1/aiPromptRoutes.ts
-import { Router as Router58 } from "express";
+import { Router as Router59 } from "express";
 
 // server/services/aiPromptService.ts
 init_errors();
@@ -34511,7 +34828,7 @@ var aiPromptService = {
   async getTemplate(organizationId, id6) {
     return loadTemplateOrThrow2(id6, organizationId);
   },
-  async createTemplate(caller, input, meta13 = {}) {
+  async createTemplate(caller, input, meta14 = {}) {
     const existing = await aiPromptRepository.findByKeyInOrg(input.key, caller.organizationId);
     if (existing) throw new ConflictError(`A prompt template with key "${input.key}" already exists in this organization.`);
     const template = await aiPromptRepository.create(caller.organizationId, caller.id, input);
@@ -34523,12 +34840,12 @@ var aiPromptService = {
       resourceType: "ai_prompt_template",
       resourceId: template.id,
       afterData: { key: template.key, name: template.name },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return template;
   },
-  async createVersion(caller, templateId, input, meta13 = {}) {
+  async createVersion(caller, templateId, input, meta14 = {}) {
     await loadTemplateOrThrow2(templateId, caller.organizationId);
     const version = await aiPromptRepository.createVersion(templateId, caller.id, input);
     await auditLogRepository.record({
@@ -34539,12 +34856,12 @@ var aiPromptService = {
       resourceType: "ai_prompt_version",
       resourceId: version.id,
       afterData: { templateId, version: version.version },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return version;
   },
-  async updateTemplate(caller, id6, input, meta13 = {}) {
+  async updateTemplate(caller, id6, input, meta14 = {}) {
     await loadTemplateOrThrow2(id6, caller.organizationId);
     const template = await aiPromptRepository.update(id6, caller.id, input);
     await auditLogRepository.record({
@@ -34555,12 +34872,12 @@ var aiPromptService = {
       resourceType: "ai_prompt_template",
       resourceId: id6,
       afterData: input,
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return template;
   },
-  async publishVersion(caller, templateId, versionId, meta13 = {}) {
+  async publishVersion(caller, templateId, versionId, meta14 = {}) {
     await loadTemplateOrThrow2(templateId, caller.organizationId);
     const version = await aiPromptRepository.findVersionInTemplate(templateId, versionId);
     if (!version) throw new ValidationError("versionId does not refer to a version of this prompt template.");
@@ -34576,12 +34893,12 @@ var aiPromptService = {
       resourceType: "ai_prompt_template",
       resourceId: templateId,
       afterData: { versionId },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return aiPromptRepository.findByIdInOrg(templateId, caller.organizationId);
   },
-  async deleteTemplate(caller, id6, meta13 = {}) {
+  async deleteTemplate(caller, id6, meta14 = {}) {
     await loadTemplateOrThrow2(id6, caller.organizationId);
     await aiPromptRepository.update(id6, caller.id, { status: "ARCHIVED" });
     await auditLogRepository.record({
@@ -34591,20 +34908,20 @@ var aiPromptService = {
       action: "AI_PROMPT_TEMPLATE_ARCHIVED",
       resourceType: "ai_prompt_template",
       resourceId: id6,
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
   }
 };
 
 // server/routes/v1/aiPromptRoutes.ts
 init_apiResponse();
-var router52 = Router58();
-router52.use(authenticateToken);
+var router53 = Router59();
+router53.use(authenticateToken);
 function requestMeta35(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"], requestId: req.requestId };
 }
-router52.get(
+router53.get(
   "/",
   requirePermission("ai.prompts.read"),
   asyncHandler(async (req, res) => {
@@ -34620,7 +34937,7 @@ router52.get(
     sendSuccess(res, { promptTemplates: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router52.get(
+router53.get(
   "/:id",
   requirePermission("ai.prompts.read"),
   asyncHandler(async (req, res) => {
@@ -34628,7 +34945,7 @@ router52.get(
     sendSuccess(res, { promptTemplate });
   })
 );
-router52.post(
+router53.post(
   "/",
   requirePermission("ai.prompts.create"),
   asyncHandler(async (req, res) => {
@@ -34637,7 +34954,7 @@ router52.post(
     sendSuccess(res, { promptTemplate }, 201);
   })
 );
-router52.patch(
+router53.patch(
   "/:id",
   requirePermission("ai.prompts.update"),
   asyncHandler(async (req, res) => {
@@ -34646,7 +34963,7 @@ router52.patch(
     sendSuccess(res, { promptTemplate });
   })
 );
-router52.post(
+router53.post(
   "/:id/versions",
   requirePermission("ai.prompts.update"),
   asyncHandler(async (req, res) => {
@@ -34655,7 +34972,7 @@ router52.post(
     sendSuccess(res, { version }, 201);
   })
 );
-router52.post(
+router53.post(
   "/:id/publish",
   requirePermission("ai.prompts.publish"),
   asyncHandler(async (req, res) => {
@@ -34664,7 +34981,7 @@ router52.post(
     sendSuccess(res, { promptTemplate });
   })
 );
-router52.delete(
+router53.delete(
   "/:id",
   requirePermission("ai.prompts.delete"),
   asyncHandler(async (req, res) => {
@@ -34672,10 +34989,10 @@ router52.delete(
     sendSuccess(res, { archived: true });
   })
 );
-var aiPromptRoutes_default = router52;
+var aiPromptRoutes_default = router53;
 
 // server/routes/v1/aiWorkflowRoutes.ts
-import { Router as Router59 } from "express";
+import { Router as Router60 } from "express";
 
 // server/repositories/aiWorkflowRepository.ts
 var aiWorkflowRepository = {
@@ -34749,7 +35066,7 @@ var aiWorkflowService = {
   async getWorkflow(organizationId, id6) {
     return loadWorkflowOrThrow(id6, organizationId);
   },
-  async createWorkflow(caller, input, meta13 = {}) {
+  async createWorkflow(caller, input, meta14 = {}) {
     const existing = await aiWorkflowRepository.findByKeyInOrg(input.key, caller.organizationId);
     if (existing) throw new ConflictError(`A workflow with key "${input.key}" already exists in this organization.`);
     assertStepsValid(input.steps, input.maxSteps ?? 10);
@@ -34762,12 +35079,12 @@ var aiWorkflowService = {
       resourceType: "ai_workflow",
       resourceId: workflow.id,
       afterData: { key: workflow.key, name: workflow.name },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return workflow;
   },
-  async updateWorkflow(caller, id6, input, meta13 = {}) {
+  async updateWorkflow(caller, id6, input, meta14 = {}) {
     const existing = await loadWorkflowOrThrow(id6, caller.organizationId);
     if (input.expectedUpdatedAt && existing.updatedAt.getTime() !== input.expectedUpdatedAt.getTime()) {
       throw new ConflictError("This workflow was modified by someone else since you loaded it.");
@@ -34785,12 +35102,12 @@ var aiWorkflowService = {
       resourceType: "ai_workflow",
       resourceId: id6,
       afterData: patch,
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return workflow;
   },
-  async publishWorkflow(caller, id6, meta13 = {}) {
+  async publishWorkflow(caller, id6, meta14 = {}) {
     await loadWorkflowOrThrow(id6, caller.organizationId);
     const workflow = await aiWorkflowRepository.setStatus(id6, "ACTIVE", caller.id);
     await auditLogRepository.record({
@@ -34800,12 +35117,12 @@ var aiWorkflowService = {
       action: "AI_WORKFLOW_PUBLISHED",
       resourceType: "ai_workflow",
       resourceId: id6,
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return workflow;
   },
-  async archiveWorkflow(caller, id6, meta13 = {}) {
+  async archiveWorkflow(caller, id6, meta14 = {}) {
     await loadWorkflowOrThrow(id6, caller.organizationId);
     const workflow = await aiWorkflowRepository.setStatus(id6, "ARCHIVED", caller.id);
     await auditLogRepository.record({
@@ -34815,8 +35132,8 @@ var aiWorkflowService = {
       action: "AI_WORKFLOW_ARCHIVED",
       resourceType: "ai_workflow",
       resourceId: id6,
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return workflow;
   },
@@ -34827,7 +35144,7 @@ var aiWorkflowService = {
    * territory); a workflow left AWAITING_APPROVAL is a terminal state here,
    * re-run from scratch once the approval is resolved.
    */
-  async executeWorkflow(caller, id6, input, meta13 = {}) {
+  async executeWorkflow(caller, id6, input, meta14 = {}) {
     const workflow = await loadWorkflowOrThrow(id6, caller.organizationId);
     if (workflow.status !== "ACTIVE") {
       throw new ValidationError("Only an ACTIVE workflow can be executed.");
@@ -34839,7 +35156,7 @@ var aiWorkflowService = {
       userId: caller.id,
       kind: "WORKFLOW",
       workflowId: workflow.id,
-      requestId: meta13.requestId,
+      requestId: meta14.requestId,
       input: input.stepInputs
     });
     await auditLogRepository.record({
@@ -34850,8 +35167,8 @@ var aiWorkflowService = {
       resourceType: "ai_execution",
       resourceId: execution.id,
       afterData: { workflowId: workflow.id, workflowKey: workflow.key },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     const stepResults = [];
     const deadline = Date.now() + workflow.timeoutMs;
@@ -34867,7 +35184,7 @@ var aiWorkflowService = {
         input: stepInput,
         executionId: execution.id,
         stepOrder: step.order,
-        meta: meta13
+        meta: meta14
       });
       stepResults.push({ order: step.order, toolCode: step.toolCode, ...result });
       if (result.status === "AWAITING_APPROVAL") {
@@ -34883,12 +35200,12 @@ var aiWorkflowService = {
 
 // server/routes/v1/aiWorkflowRoutes.ts
 init_apiResponse();
-var router53 = Router59();
-router53.use(authenticateToken);
+var router54 = Router60();
+router54.use(authenticateToken);
 function requestMeta36(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"], requestId: req.requestId };
 }
-router53.get(
+router54.get(
   "/",
   requirePermission("ai.workflows.read"),
   asyncHandler(async (req, res) => {
@@ -34904,7 +35221,7 @@ router53.get(
     sendSuccess(res, { workflows: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router53.get(
+router54.get(
   "/:id",
   requirePermission("ai.workflows.read"),
   asyncHandler(async (req, res) => {
@@ -34912,7 +35229,7 @@ router53.get(
     sendSuccess(res, { workflow });
   })
 );
-router53.post(
+router54.post(
   "/",
   requirePermission("ai.workflows.create"),
   asyncHandler(async (req, res) => {
@@ -34921,7 +35238,7 @@ router53.post(
     sendSuccess(res, { workflow }, 201);
   })
 );
-router53.patch(
+router54.patch(
   "/:id",
   requirePermission("ai.workflows.update"),
   asyncHandler(async (req, res) => {
@@ -34930,7 +35247,7 @@ router53.patch(
     sendSuccess(res, { workflow });
   })
 );
-router53.post(
+router54.post(
   "/:id/publish",
   requirePermission("ai.workflows.publish"),
   asyncHandler(async (req, res) => {
@@ -34938,7 +35255,7 @@ router53.post(
     sendSuccess(res, { workflow });
   })
 );
-router53.delete(
+router54.delete(
   "/:id",
   requirePermission("ai.workflows.delete"),
   asyncHandler(async (req, res) => {
@@ -34946,7 +35263,7 @@ router53.delete(
     sendSuccess(res, { workflow });
   })
 );
-router53.post(
+router54.post(
   "/:id/execute",
   requirePermission("ai.workflows.execute"),
   aiExecutionLimiter,
@@ -34956,10 +35273,10 @@ router53.post(
     sendSuccess(res, { execution }, 202);
   })
 );
-var aiWorkflowRoutes_default = router53;
+var aiWorkflowRoutes_default = router54;
 
 // server/routes/v1/aiExecutionRoutes.ts
-import { Router as Router60 } from "express";
+import { Router as Router61 } from "express";
 
 // server/services/aiExecutionService.ts
 init_errors();
@@ -34973,13 +35290,13 @@ var aiExecutionService = {
     return execution;
   },
   /** A single governed tool call, outside of any workflow — e.g. a human coworker's assistant panel invoking one action directly. */
-  async executeTool(caller, input, meta13 = {}) {
+  async executeTool(caller, input, meta14 = {}) {
     const execution = await aiExecutionRepository.create({
       organizationId: caller.organizationId,
       userId: caller.id,
       kind: "TOOL_CALL",
       toolCode: input.toolCode,
-      requestId: meta13.requestId,
+      requestId: meta14.requestId,
       input: input.input
     });
     const result = await executeGovernedTool({
@@ -34987,7 +35304,7 @@ var aiExecutionService = {
       toolCode: input.toolCode,
       input: input.input,
       executionId: execution.id,
-      meta: meta13
+      meta: meta14
     });
     if (result.status === "AWAITING_APPROVAL") {
       return aiExecutionRepository.complete(execution.id, "AWAITING_APPROVAL", result);
@@ -35001,12 +35318,12 @@ var aiExecutionService = {
 
 // server/routes/v1/aiExecutionRoutes.ts
 init_apiResponse();
-var router54 = Router60();
-router54.use(authenticateToken);
+var router55 = Router61();
+router55.use(authenticateToken);
 function requestMeta37(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"], requestId: req.requestId };
 }
-router54.get(
+router55.get(
   "/",
   requirePermission("ai.executions.read"),
   asyncHandler(async (req, res) => {
@@ -35022,7 +35339,7 @@ router54.get(
     sendSuccess(res, { executions: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router54.get(
+router55.get(
   "/:id",
   requirePermission("ai.executions.read"),
   asyncHandler(async (req, res) => {
@@ -35030,7 +35347,7 @@ router54.get(
     sendSuccess(res, { execution });
   })
 );
-router54.post(
+router55.post(
   "/tool-call",
   // Reuses ai.workflows.execute — "can invoke governed AI actions" is one
   // capability whether the call is wrapped in a workflow or made directly;
@@ -35044,10 +35361,10 @@ router54.post(
     sendSuccess(res, { execution }, 202);
   })
 );
-var aiExecutionRoutes_default = router54;
+var aiExecutionRoutes_default = router55;
 
 // server/routes/v1/aiUsageRoutes.ts
-import { Router as Router61 } from "express";
+import { Router as Router62 } from "express";
 
 // server/services/aiUsageService.ts
 var aiUsageService = {
@@ -35061,10 +35378,10 @@ var aiUsageService = {
 
 // server/routes/v1/aiUsageRoutes.ts
 init_apiResponse();
-var router55 = Router61();
-router55.use(authenticateToken);
-router55.use(requirePermission("ai.usage.read"));
-router55.get(
+var router56 = Router62();
+router56.use(authenticateToken);
+router56.use(requirePermission("ai.usage.read"));
+router56.get(
   "/",
   asyncHandler(async (req, res) => {
     const query = usageSummaryQuerySchema.parse(req.query);
@@ -35072,7 +35389,7 @@ router55.get(
     sendSuccess(res, { usageRecords: records });
   })
 );
-router55.get(
+router56.get(
   "/summary",
   asyncHandler(async (req, res) => {
     const query = usageSummaryQuerySchema.parse(req.query);
@@ -35080,10 +35397,10 @@ router55.get(
     sendSuccess(res, { summary });
   })
 );
-var aiUsageRoutes_default = router55;
+var aiUsageRoutes_default = router56;
 
 // server/routes/v1/aiHealthRoutes.ts
-import { Router as Router62 } from "express";
+import { Router as Router63 } from "express";
 init_apiResponse();
 
 // server/services/aiHealthService.ts
@@ -35209,16 +35526,16 @@ var aiHealthService = {
 };
 
 // server/routes/v1/aiHealthRoutes.ts
-var router56 = Router62();
-router56.use(authenticateToken);
-router56.get(
+var router57 = Router63();
+router57.use(authenticateToken);
+router57.get(
   "/health",
   requirePermission("ai.usage.read"),
   asyncHandler(async (req, res) => {
     sendSuccess(res, { health: await aiHealthService.snapshot(req.user.organizationId) });
   })
 );
-router56.put(
+router57.put(
   "/limits",
   requirePermission("ai.providers.manage"),
   asyncHandler(async (req, res) => {
@@ -35230,10 +35547,10 @@ router56.put(
     sendSuccess(res, { limits });
   })
 );
-var aiHealthRoutes_default = router56;
+var aiHealthRoutes_default = router57;
 
 // server/routes/v1/portalRegistrationRoutes.ts
-import { Router as Router63 } from "express";
+import { Router as Router64 } from "express";
 import { z as z63 } from "zod";
 init_apiResponse();
 
@@ -35278,7 +35595,7 @@ var portalRegistrationService = {
       };
     });
   },
-  async link(caller, organizationId, clientId, meta13 = {}) {
+  async link(caller, organizationId, clientId, meta14 = {}) {
     assertOperator(caller);
     const org = await prisma.organization.findFirst({ where: { id: organizationId, ...pendingWhere }, select: { id: true } });
     if (!org) throw new NotFoundError("Pending registration not found.");
@@ -35298,11 +35615,11 @@ var portalRegistrationService = {
       resourceType: "organization",
       resourceId: organizationId,
       afterData: { clientId },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
   },
-  async reject(caller, organizationId, meta13 = {}) {
+  async reject(caller, organizationId, meta14 = {}) {
     assertOperator(caller);
     const org = await prisma.organization.findFirst({ where: { id: organizationId, ...pendingWhere }, select: { id: true } });
     if (!org) throw new NotFoundError("Pending registration not found.");
@@ -35316,51 +35633,51 @@ var portalRegistrationService = {
       action: "PORTAL_REGISTRATION_REJECTED",
       resourceType: "organization",
       resourceId: organizationId,
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
   }
 };
 
 // server/routes/v1/portalRegistrationRoutes.ts
-var router57 = Router63();
-router57.use(authenticateToken);
-var meta11 = (req) => ({ ip: req.ip, userAgent: req.headers["user-agent"] });
-router57.get(
+var router58 = Router64();
+router58.use(authenticateToken);
+var meta12 = (req) => ({ ip: req.ip, userAgent: req.headers["user-agent"] });
+router58.get(
   "/",
   requirePermission("workspaces.read"),
   asyncHandler(async (req, res) => sendSuccess(res, { registrations: await portalRegistrationService.list(req.user) }))
 );
-router57.post(
+router58.post(
   "/:organizationId/link",
   requirePermission("workspaces.update"),
   sensitiveActionLimiter,
   asyncHandler(async (req, res) => {
     const { clientId } = z63.object({ clientId: z63.string().uuid() }).parse(req.body);
-    await portalRegistrationService.link(req.user, req.params.organizationId, clientId, meta11(req));
+    await portalRegistrationService.link(req.user, req.params.organizationId, clientId, meta12(req));
     sendSuccess(res, { linked: true });
   })
 );
-router57.post(
+router58.post(
   "/:organizationId/reject",
   requirePermission("workspaces.suspend"),
   sensitiveActionLimiter,
   asyncHandler(async (req, res) => {
-    await portalRegistrationService.reject(req.user, req.params.organizationId, meta11(req));
+    await portalRegistrationService.reject(req.user, req.params.organizationId, meta12(req));
     sendSuccess(res, { rejected: true });
   })
 );
-var portalRegistrationRoutes_default = router57;
+var portalRegistrationRoutes_default = router58;
 
 // server/routes/v1/aiApprovalRoutes.ts
-import { Router as Router64 } from "express";
+import { Router as Router65 } from "express";
 init_apiResponse();
-var router58 = Router64();
-router58.use(authenticateToken);
+var router59 = Router65();
+router59.use(authenticateToken);
 function requestMeta38(req) {
   return { ip: req.ip, userAgent: req.headers["user-agent"], requestId: req.requestId };
 }
-router58.get(
+router59.get(
   "/",
   requirePermission("ai.approvals.read"),
   asyncHandler(async (req, res) => {
@@ -35376,7 +35693,7 @@ router58.get(
     sendSuccess(res, { approvals: rows }, 200, { page: query.page, limit: query.limit, total });
   })
 );
-router58.get(
+router59.get(
   "/:id",
   requirePermission("ai.approvals.read"),
   asyncHandler(async (req, res) => {
@@ -35384,7 +35701,7 @@ router58.get(
     sendSuccess(res, { approval });
   })
 );
-router58.post(
+router59.post(
   "/:id/decide",
   requirePermission("ai.approvals.decide"),
   asyncHandler(async (req, res) => {
@@ -35393,11 +35710,11 @@ router58.post(
     sendSuccess(res, { approval });
   })
 );
-var aiApprovalRoutes_default = router58;
+var aiApprovalRoutes_default = router59;
 
 // server/routes/v1/automationRoutes.ts
-import { timingSafeEqual as timingSafeEqual5 } from "node:crypto";
-import { Router as Router65 } from "express";
+import { timingSafeEqual as timingSafeEqual6 } from "node:crypto";
+import { Router as Router66 } from "express";
 import { z as z64 } from "zod";
 init_apiResponse();
 
@@ -35629,10 +35946,10 @@ init_errors();
 function constantTimeEquals2(a, b) {
   const ab = Buffer.from(a);
   const bb = Buffer.from(b);
-  return ab.length === bb.length && timingSafeEqual5(ab, bb);
+  return ab.length === bb.length && timingSafeEqual6(ab, bb);
 }
-var router59 = Router65();
-router59.get(
+var router60 = Router66();
+router60.get(
   "/internal/tick",
   asyncHandler(async (req, res) => {
     if (!config.cronSecret) {
@@ -35663,7 +35980,7 @@ router59.get(
     sendSuccess(res, { automation, content, webhookRetries, socialTokenHealth, socialPublish, socialInbox, socialAnalytics, socialListening, ops });
   })
 );
-router59.use(authenticateToken);
+router60.use(authenticateToken);
 var CreateWorkflowSchema = z64.object({
   name: z64.string().min(1).max(200),
   description: z64.string().optional(),
@@ -35741,7 +36058,7 @@ var ExecuteActionSchema = z64.object({
   actionId: z64.string().min(1),
   input: z64.record(z64.unknown()).default({})
 });
-router59.get(
+router60.get(
   "/dashboard",
   requirePermission("automation.read"),
   asyncHandler(async (req, res) => {
@@ -35749,7 +36066,7 @@ router59.get(
     sendSuccess(res, data);
   })
 );
-router59.get(
+router60.get(
   "/workflows",
   requirePermission("automation.read"),
   asyncHandler(async (req, res) => {
@@ -35765,7 +36082,7 @@ router59.get(
     sendSuccess(res, result);
   })
 );
-router59.post(
+router60.post(
   "/workflows",
   requirePermission("automation.create"),
   asyncHandler(async (req, res) => {
@@ -35786,7 +36103,7 @@ router59.post(
     sendSuccess(res, { workflow }, 201);
   })
 );
-router59.get(
+router60.get(
   "/workflows/:id",
   requirePermission("automation.read"),
   asyncHandler(async (req, res) => {
@@ -35794,7 +36111,7 @@ router59.get(
     sendSuccess(res, { workflow });
   })
 );
-router59.put(
+router60.put(
   "/workflows/:id",
   requirePermission("automation.edit"),
   asyncHandler(async (req, res) => {
@@ -35817,7 +36134,7 @@ router59.put(
     sendSuccess(res, { workflow: updated });
   })
 );
-router59.post(
+router60.post(
   "/workflows/:id/publish",
   requirePermission("automation.publish"),
   asyncHandler(async (req, res) => {
@@ -35831,7 +36148,7 @@ router59.post(
     sendSuccess(res, { workflow: published });
   })
 );
-router59.get(
+router60.get(
   "/workflows/:id/versions",
   requirePermission("automation.read"),
   asyncHandler(async (req, res) => {
@@ -35839,7 +36156,7 @@ router59.get(
     sendSuccess(res, { versions });
   })
 );
-router59.post(
+router60.post(
   "/workflows/:id/trigger",
   requirePermission("automation.execute"),
   asyncHandler(async (req, res) => {
@@ -35855,7 +36172,7 @@ router59.post(
     sendSuccess(res, result, 202);
   })
 );
-router59.get(
+router60.get(
   "/executions",
   requirePermission("automation.read"),
   asyncHandler(async (req, res) => {
@@ -35870,7 +36187,7 @@ router59.get(
     sendSuccess(res, result);
   })
 );
-router59.get(
+router60.get(
   "/executions/:id",
   requirePermission("automation.read"),
   asyncHandler(async (req, res) => {
@@ -35878,7 +36195,7 @@ router59.get(
     sendSuccess(res, { execution });
   })
 );
-router59.post(
+router60.post(
   "/executions/:id/retry",
   requirePermission("automation.execute"),
   asyncHandler(async (req, res) => {
@@ -35886,7 +36203,7 @@ router59.post(
     sendSuccess(res, { execution: result });
   })
 );
-router59.post(
+router60.post(
   "/executions/:id/cancel",
   requirePermission("automation.manage"),
   asyncHandler(async (req, res) => {
@@ -35895,7 +36212,7 @@ router59.post(
     sendSuccess(res, { execution: result });
   })
 );
-router59.get(
+router60.get(
   "/approvals",
   requirePermission("automation.read"),
   asyncHandler(async (req, res) => {
@@ -35909,7 +36226,7 @@ router59.get(
     sendSuccess(res, result);
   })
 );
-router59.post(
+router60.post(
   "/approvals/:id/decide",
   requirePermission("automation.approve"),
   asyncHandler(async (req, res) => {
@@ -35925,7 +36242,7 @@ router59.post(
     sendSuccess(res, result);
   })
 );
-router59.get(
+router60.get(
   "/tasks",
   requirePermission("automation.read"),
   asyncHandler(async (req, res) => {
@@ -35941,7 +36258,7 @@ router59.get(
     sendSuccess(res, result);
   })
 );
-router59.post(
+router60.post(
   "/tasks",
   requirePermission("automation.execute"),
   asyncHandler(async (req, res) => {
@@ -35953,7 +36270,7 @@ router59.post(
     sendSuccess(res, { task }, 201);
   })
 );
-router59.patch(
+router60.patch(
   "/tasks/:id",
   requirePermission("automation.execute"),
   asyncHandler(async (req, res) => {
@@ -35967,7 +36284,7 @@ router59.patch(
     sendSuccess(res, { task: updated });
   })
 );
-router59.post(
+router60.post(
   "/tasks/:id/comments",
   requirePermission("automation.execute"),
   asyncHandler(async (req, res) => {
@@ -35981,7 +36298,7 @@ router59.post(
     sendSuccess(res, result, 201);
   })
 );
-router59.get(
+router60.get(
   "/my-work",
   requirePermission("automation.read"),
   asyncHandler(async (req, res) => {
@@ -35989,7 +36306,7 @@ router59.get(
     sendSuccess(res, result);
   })
 );
-router59.get(
+router60.get(
   "/schedules",
   requirePermission("automation.read"),
   asyncHandler(async (req, res) => {
@@ -36004,7 +36321,7 @@ router59.get(
     sendSuccess(res, result);
   })
 );
-router59.post(
+router60.post(
   "/schedules",
   requirePermission("automation.manage"),
   asyncHandler(async (req, res) => {
@@ -36016,7 +36333,7 @@ router59.post(
     sendSuccess(res, { schedule }, 201);
   })
 );
-router59.patch(
+router60.patch(
   "/schedules/:id/toggle",
   requirePermission("automation.manage"),
   asyncHandler(async (req, res) => {
@@ -36025,7 +36342,7 @@ router59.patch(
     sendSuccess(res, { schedule });
   })
 );
-router59.delete(
+router60.delete(
   "/schedules/:id",
   requirePermission("automation.manage"),
   asyncHandler(async (req, res) => {
@@ -36033,7 +36350,7 @@ router59.delete(
     sendSuccess(res, result);
   })
 );
-router59.get(
+router60.get(
   "/events/types",
   requirePermission("automation.read"),
   asyncHandler(async (_req, res) => {
@@ -36041,7 +36358,7 @@ router59.get(
     sendSuccess(res, { types });
   })
 );
-router59.get(
+router60.get(
   "/events",
   requirePermission("automation.read"),
   asyncHandler(async (req, res) => {
@@ -36055,7 +36372,7 @@ router59.get(
     sendSuccess(res, result);
   })
 );
-router59.post(
+router60.post(
   "/events",
   requirePermission("automation.execute"),
   asyncHandler(async (req, res) => {
@@ -36069,7 +36386,7 @@ router59.post(
     sendSuccess(res, { event }, 202);
   })
 );
-router59.get(
+router60.get(
   "/actions",
   requirePermission("automation.read"),
   asyncHandler(async (_req, res) => {
@@ -36077,7 +36394,7 @@ router59.get(
     sendSuccess(res, { actions });
   })
 );
-router59.post(
+router60.post(
   "/actions/execute",
   requirePermission("automation.execute"),
   asyncHandler(async (req, res) => {
@@ -36092,10 +36409,10 @@ router59.post(
     sendSuccess(res, { result });
   })
 );
-var automationRoutes_default = router59;
+var automationRoutes_default = router60;
 
 // server/routes/v1/knowledgeRoutes.ts
-import { Router as Router66 } from "express";
+import { Router as Router67 } from "express";
 import express3 from "express";
 init_apiResponse();
 init_errors();
@@ -36159,9 +36476,9 @@ var searchKnowledgeSchema = z65.object({
 });
 
 // server/routes/v1/knowledgeRoutes.ts
-var router60 = Router66();
-router60.use(authenticateToken);
-router60.get(
+var router61 = Router67();
+router61.use(authenticateToken);
+router61.get(
   "/collections",
   requirePermission("knowledge.read"),
   asyncHandler(async (req, res) => {
@@ -36169,7 +36486,7 @@ router60.get(
     sendSuccess(res, { collections });
   })
 );
-router60.post(
+router61.post(
   "/collections",
   requirePermission("knowledge.create"),
   asyncHandler(async (req, res) => {
@@ -36182,7 +36499,7 @@ router60.post(
     sendSuccess(res, { collection }, 201);
   })
 );
-router60.get(
+router61.get(
   "/collections/:id",
   requirePermission("knowledge.read"),
   asyncHandler(async (req, res) => {
@@ -36190,7 +36507,7 @@ router60.get(
     sendSuccess(res, { collection });
   })
 );
-router60.post(
+router61.post(
   "/sources",
   requirePermission("knowledge.create"),
   asyncHandler(async (req, res) => {
@@ -36202,7 +36519,7 @@ router60.post(
     sendSuccess(res, { source }, 201);
   })
 );
-router60.get(
+router61.get(
   "/sources",
   requirePermission("knowledge.read"),
   asyncHandler(async (req, res) => {
@@ -36216,7 +36533,7 @@ router60.get(
     sendSuccess(res, { sources });
   })
 );
-router60.get(
+router61.get(
   "/documents",
   requirePermission("knowledge.read"),
   asyncHandler(async (req, res) => {
@@ -36238,7 +36555,7 @@ router60.get(
     sendSuccess(res, { documents });
   })
 );
-router60.get(
+router61.get(
   "/documents/:id",
   requirePermission("knowledge.read"),
   asyncHandler(async (req, res) => {
@@ -36257,7 +36574,7 @@ router60.get(
     sendSuccess(res, { document });
   })
 );
-router60.post(
+router61.post(
   "/documents/upload",
   requirePermission("knowledge.upload"),
   express3.json({ limit: "25mb" }),
@@ -36289,7 +36606,7 @@ router60.post(
     sendSuccess(res, result, 201);
   })
 );
-router60.post(
+router61.post(
   "/documents/:id/reindex",
   requirePermission("knowledge.reindex"),
   asyncHandler(async (req, res) => {
@@ -36297,7 +36614,7 @@ router60.post(
     sendSuccess(res, result);
   })
 );
-router60.post(
+router61.post(
   "/search",
   requirePermission("knowledge.search"),
   asyncHandler(async (req, res) => {
@@ -36320,10 +36637,10 @@ router60.post(
     sendSuccess(res, { results, count: results.length });
   })
 );
-var knowledgeRoutes_default = router60;
+var knowledgeRoutes_default = router61;
 
 // server/routes/v1/copilotRoutes.ts
-import { Router as Router67 } from "express";
+import { Router as Router68 } from "express";
 
 // server/services/copilot/CopilotService.ts
 init_errors();
@@ -37187,9 +37504,9 @@ var sendMessageSchema = z66.object({
 });
 
 // server/routes/v1/copilotRoutes.ts
-var router61 = Router67();
-router61.use(authenticateToken);
-router61.get(
+var router62 = Router68();
+router62.use(authenticateToken);
+router62.get(
   "/workspaces",
   asyncHandler(async (req, res) => {
     const permissions = req.user.role.permissions || [];
@@ -37197,7 +37514,7 @@ router61.get(
     sendSuccess(res, { workspaces });
   })
 );
-router61.post(
+router62.post(
   "/workspaces",
   requirePermission("copilot.manage"),
   asyncHandler(async (req, res) => {
@@ -37206,7 +37523,7 @@ router61.post(
     sendSuccess(res, { workspace }, 201);
   })
 );
-router61.get(
+router62.get(
   "/workspaces/:id",
   asyncHandler(async (req, res) => {
     const permissions = req.user.role.permissions || [];
@@ -37214,7 +37531,7 @@ router61.get(
     sendSuccess(res, { workspace });
   })
 );
-router61.get(
+router62.get(
   "/conversations",
   requirePermission("copilot.read"),
   asyncHandler(async (req, res) => {
@@ -37229,7 +37546,7 @@ router61.get(
     sendSuccess(res, result);
   })
 );
-router61.post(
+router62.post(
   "/conversations",
   requirePermission("copilot.use"),
   asyncHandler(async (req, res) => {
@@ -37238,7 +37555,7 @@ router61.post(
     sendSuccess(res, { conversation }, 201);
   })
 );
-router61.get(
+router62.get(
   "/conversations/:id",
   requirePermission("copilot.read"),
   asyncHandler(async (req, res) => {
@@ -37246,7 +37563,7 @@ router61.get(
     sendSuccess(res, { conversation });
   })
 );
-router61.post(
+router62.post(
   "/conversations/:id/archive",
   requirePermission("copilot.use"),
   asyncHandler(async (req, res) => {
@@ -37254,7 +37571,7 @@ router61.post(
     sendSuccess(res, { conversation: updated });
   })
 );
-router61.delete(
+router62.delete(
   "/conversations/:id",
   requirePermission("copilot.use"),
   asyncHandler(async (req, res) => {
@@ -37262,7 +37579,7 @@ router61.delete(
     sendSuccess(res, result);
   })
 );
-router61.post(
+router62.post(
   "/messages",
   requirePermission("copilot.use"),
   asyncHandler(async (req, res) => {
@@ -37280,7 +37597,7 @@ router61.post(
     sendSuccess(res, result);
   })
 );
-router61.post(
+router62.post(
   "/messages/stream",
   requirePermission("copilot.use"),
   asyncHandler(async (req, res) => {
@@ -37333,7 +37650,7 @@ data: ${JSON.stringify(data)}
     }
   })
 );
-router61.post(
+router62.post(
   "/actions/:id/confirm",
   requirePermission("copilot.use"),
   asyncHandler(async (req, res) => {
@@ -37346,7 +37663,7 @@ router61.post(
     sendSuccess(res, result);
   })
 );
-router61.post(
+router62.post(
   "/actions/:id/reject",
   requirePermission("copilot.use"),
   asyncHandler(async (req, res) => {
@@ -37359,7 +37676,7 @@ router61.post(
     sendSuccess(res, result);
   })
 );
-router61.get(
+router62.get(
   "/dashboard",
   requirePermission("copilot.read"),
   asyncHandler(async (req, res) => {
@@ -37367,10 +37684,10 @@ router61.get(
     sendSuccess(res, stats);
   })
 );
-var copilotRoutes_default = router61;
+var copilotRoutes_default = router62;
 
 // server/routes/v1/adminRoutes.ts
-import { Router as Router68 } from "express";
+import { Router as Router69 } from "express";
 import { z as z67 } from "zod";
 init_apiResponse();
 
@@ -37504,12 +37821,12 @@ var adminOverviewService = {
 };
 
 // server/routes/v1/adminRoutes.ts
-var router62 = Router68();
-router62.use(authenticateToken);
-router62.get("/overview", requirePermission("security.read"), asyncHandler(async (req, res) => sendSuccess(res, { overview: await adminOverviewService.overview(req.user) })));
-router62.get("/security/policy", requirePermission("security.read"), (_req, res) => sendSuccess(res, { policy: adminOverviewService.policy() }));
+var router63 = Router69();
+router63.use(authenticateToken);
+router63.get("/overview", requirePermission("security.read"), asyncHandler(async (req, res) => sendSuccess(res, { overview: await adminOverviewService.overview(req.user) })));
+router63.get("/security/policy", requirePermission("security.read"), (_req, res) => sendSuccess(res, { policy: adminOverviewService.policy() }));
 var pageQuery = z67.object({ page: z67.coerce.number().int().positive().default(1), limit: z67.coerce.number().int().positive().max(100).default(20) });
-router62.get(
+router63.get(
   "/security/events",
   requirePermission("security.read"),
   asyncHandler(async (req, res) => {
@@ -37518,7 +37835,7 @@ router62.get(
     sendSuccess(res, { events: rows.map((r) => ({ ...r, severity: auditSeverity(r) })) }, 200, { page, limit, total });
   })
 );
-router62.get(
+router63.get(
   "/sessions",
   requirePermission("security.read"),
   asyncHandler(async (req, res) => {
@@ -37527,7 +37844,7 @@ router62.get(
     sendSuccess(res, { sessions }, 200, { page, limit, total });
   })
 );
-router62.post(
+router63.post(
   "/sessions/:id/revoke",
   requirePermission("security.manage"),
   sensitiveActionLimiter,
@@ -37536,10 +37853,10 @@ router62.post(
     sendSuccess(res, { message: "Session revoked." });
   })
 );
-var adminRoutes_default = router62;
+var adminRoutes_default = router63;
 
 // server/routes/v1/integrationRoutes.ts
-import { Router as Router69 } from "express";
+import { Router as Router70 } from "express";
 init_apiResponse();
 
 // server/services/admin/integrationService.ts
@@ -37723,7 +38040,7 @@ var integrationService = {
       encryption: { source: encryptionKeySource() }
     };
   },
-  async upsert(caller, provider, input, meta13 = {}) {
+  async upsert(caller, provider, input, meta14 = {}) {
     const entry = catalogEntry(provider);
     const existing = await prisma.integration.findUnique({ where: { organizationId_provider: { organizationId: caller.organizationId, provider } } });
     let cfg = existing?.config ?? {};
@@ -37757,12 +38074,12 @@ var integrationService = {
       resourceId: row.id,
       afterData: { provider, enabled: row.enabled, configKeys: Object.keys(cfg), credentialRotated: input.secret !== void 0 },
       // never the secret
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return projectIntegration(row);
   },
-  async test(caller, provider, meta13 = {}) {
+  async test(caller, provider, meta14 = {}) {
     catalogEntry(provider);
     const row = await prisma.integration.findUnique({ where: { organizationId_provider: { organizationId: caller.organizationId, provider } } });
     if (!row || deriveStatus2(row) === "NOT_CONFIGURED") throw new ValidationError("Configure this integration before testing it.");
@@ -37781,12 +38098,12 @@ var integrationService = {
       resourceId: row.id,
       result: result.ok ? "SUCCESS" : "FAILURE",
       afterData: { provider, ok: result.ok },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return projectIntegration(updated);
   },
-  async clearSecret(caller, provider, meta13 = {}) {
+  async clearSecret(caller, provider, meta14 = {}) {
     catalogEntry(provider);
     const row = await prisma.integration.findUnique({ where: { organizationId_provider: { organizationId: caller.organizationId, provider } } });
     if (!row) throw new NotFoundError("Integration not configured.");
@@ -37802,22 +38119,22 @@ var integrationService = {
       resourceType: "integration",
       resourceId: row.id,
       afterData: { provider },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return projectIntegration(updated);
   }
 };
 
 // server/services/admin/apiKeyService.ts
-import { randomBytes as randomBytes8 } from "node:crypto";
+import { randomBytes as randomBytes10 } from "node:crypto";
 init_errors();
 var KEY_PREFIX = "artify_ak_";
 var MAX_ACTIVE_KEYS = 25;
 var MAX_LIFETIME_DAYS = 365;
 var LAST_USED_THROTTLE_MS = 6e4;
 function generateApiKey() {
-  return `${KEY_PREFIX}${randomBytes8(32).toString("hex")}`;
+  return `${KEY_PREFIX}${randomBytes10(32).toString("hex")}`;
 }
 function projectApiKey(k) {
   const now = Date.now();
@@ -37851,7 +38168,7 @@ var apiKeyService = {
     const keys = await prisma.apiKey.findMany({ where: { organizationId }, orderBy: { createdAt: "desc" } });
     return keys.map(projectApiKey);
   },
-  async create(caller, input, meta13 = {}) {
+  async create(caller, input, meta14 = {}) {
     const active = await prisma.apiKey.count({ where: { organizationId: caller.organizationId, revokedAt: null } });
     if (active >= MAX_ACTIVE_KEYS) throw new ConflictError(`An organization can have at most ${MAX_ACTIVE_KEYS} active API keys.`);
     const scopes = validateScopes(caller, input.scopes);
@@ -37878,12 +38195,12 @@ var apiKeyService = {
       resourceType: "api_key",
       resourceId: record2.id,
       afterData: { name: record2.name, scopes, expiresAt: record2.expiresAt?.toISOString() ?? null },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return { apiKey: projectApiKey(record2), key: key2 };
   },
-  async revoke(caller, id6, meta13 = {}) {
+  async revoke(caller, id6, meta14 = {}) {
     const existing = await prisma.apiKey.findFirst({ where: { id: id6, organizationId: caller.organizationId } });
     if (!existing) throw new NotFoundError("API key not found.");
     if (existing.revokedAt) return projectApiKey(existing);
@@ -37896,8 +38213,8 @@ var apiKeyService = {
       resourceType: "api_key",
       resourceId: id6,
       beforeData: { name: existing.name },
-      ipAddress: meta13.ip,
-      userAgent: meta13.userAgent
+      ipAddress: meta14.ip,
+      userAgent: meta14.userAgent
     });
     return projectApiKey(updated);
   },
@@ -37915,9 +38232,9 @@ var apiKeyService = {
 };
 
 // server/routes/v1/integrationRoutes.ts
-var meta12 = (req) => ({ ip: req.ip, userAgent: req.headers["user-agent"] });
+var meta13 = (req) => ({ ip: req.ip, userAgent: req.headers["user-agent"] });
 var noStore2 = (res) => res.setHeader("Cache-Control", "no-store");
-var integrationsRouter = Router69();
+var integrationsRouter = Router70();
 integrationsRouter.use(authenticateToken);
 integrationsRouter.get("/", requirePermission("integrations.read"), asyncHandler(async (req, res) => sendSuccess(res, await integrationService.overview(req.user.organizationId))));
 integrationsRouter.put(
@@ -37926,22 +38243,22 @@ integrationsRouter.put(
   sensitiveActionLimiter,
   asyncHandler(async (req, res) => {
     const input = upsertIntegrationSchema.parse(req.body);
-    sendSuccess(res, { integration: await integrationService.upsert(req.user, req.params.provider, input, meta12(req)) });
+    sendSuccess(res, { integration: await integrationService.upsert(req.user, req.params.provider, input, meta13(req)) });
   })
 );
 integrationsRouter.post(
   "/:provider/test",
   requirePermission("integrations.manage"),
   sensitiveActionLimiter,
-  asyncHandler(async (req, res) => sendSuccess(res, { integration: await integrationService.test(req.user, req.params.provider, meta12(req)) }))
+  asyncHandler(async (req, res) => sendSuccess(res, { integration: await integrationService.test(req.user, req.params.provider, meta13(req)) }))
 );
 integrationsRouter.delete(
   "/:provider/secret",
   requirePermission("integrations.manage"),
   sensitiveActionLimiter,
-  asyncHandler(async (req, res) => sendSuccess(res, { integration: await integrationService.clearSecret(req.user, req.params.provider, meta12(req)) }))
+  asyncHandler(async (req, res) => sendSuccess(res, { integration: await integrationService.clearSecret(req.user, req.params.provider, meta13(req)) }))
 );
-var webhookEndpointsRouter = Router69();
+var webhookEndpointsRouter = Router70();
 webhookEndpointsRouter.use(authenticateToken);
 webhookEndpointsRouter.get("/events", requirePermission("webhooks.read"), (_req, res) => sendSuccess(res, { events: supportedEvents() }));
 webhookEndpointsRouter.get("/", requirePermission("webhooks.read"), asyncHandler(async (req, res) => sendSuccess(res, { endpoints: await webhookEndpointService.list(req.user.organizationId) })));
@@ -37952,13 +38269,13 @@ webhookEndpointsRouter.post(
   asyncHandler(async (req, res) => {
     const input = createWebhookEndpointSchema.parse(req.body);
     noStore2(res);
-    sendSuccess(res, await webhookEndpointService.create(req.user, input, meta12(req)), 201);
+    sendSuccess(res, await webhookEndpointService.create(req.user, input, meta13(req)), 201);
   })
 );
 webhookEndpointsRouter.patch(
   "/:id",
   requirePermission("webhooks.manage"),
-  asyncHandler(async (req, res) => sendSuccess(res, { endpoint: await webhookEndpointService.update(req.user, req.params.id, updateWebhookEndpointSchema.parse(req.body), meta12(req)) }))
+  asyncHandler(async (req, res) => sendSuccess(res, { endpoint: await webhookEndpointService.update(req.user, req.params.id, updateWebhookEndpointSchema.parse(req.body), meta13(req)) }))
 );
 webhookEndpointsRouter.post(
   "/:id/rotate-secret",
@@ -37966,7 +38283,7 @@ webhookEndpointsRouter.post(
   sensitiveActionLimiter,
   asyncHandler(async (req, res) => {
     noStore2(res);
-    sendSuccess(res, await webhookEndpointService.rotateSecret(req.user, req.params.id, meta12(req)));
+    sendSuccess(res, await webhookEndpointService.rotateSecret(req.user, req.params.id, meta13(req)));
   })
 );
 webhookEndpointsRouter.post(
@@ -37979,7 +38296,7 @@ webhookEndpointsRouter.delete(
   "/:id",
   requirePermission("webhooks.manage"),
   asyncHandler(async (req, res) => {
-    await webhookEndpointService.remove(req.user, req.params.id, meta12(req));
+    await webhookEndpointService.remove(req.user, req.params.id, meta13(req));
     sendSuccess(res, { message: "Webhook endpoint deleted." });
   })
 );
@@ -37998,7 +38315,7 @@ webhookEndpointsRouter.post(
   sensitiveActionLimiter,
   asyncHandler(async (req, res) => sendSuccess(res, { delivery: await webhookEndpointService.retryDelivery(req.user, req.params.deliveryId) }))
 );
-var apiKeysRouter = Router69();
+var apiKeysRouter = Router70();
 apiKeysRouter.use(authenticateToken);
 apiKeysRouter.get("/", requirePermission("api_keys.read"), asyncHandler(async (req, res) => sendSuccess(res, { apiKeys: await apiKeyService.list(req.user.organizationId) })));
 apiKeysRouter.post(
@@ -38008,18 +38325,18 @@ apiKeysRouter.post(
   asyncHandler(async (req, res) => {
     const input = createApiKeySchema.parse(req.body);
     noStore2(res);
-    sendSuccess(res, await apiKeyService.create(req.user, input, meta12(req)), 201);
+    sendSuccess(res, await apiKeyService.create(req.user, input, meta13(req)), 201);
   })
 );
 apiKeysRouter.post(
   "/:id/revoke",
   requirePermission("api_keys.manage"),
   sensitiveActionLimiter,
-  asyncHandler(async (req, res) => sendSuccess(res, { apiKey: await apiKeyService.revoke(req.user, req.params.id, meta12(req)) }))
+  asyncHandler(async (req, res) => sendSuccess(res, { apiKey: await apiKeyService.revoke(req.user, req.params.id, meta13(req)) }))
 );
 
 // server/routes/v1/externalRoutes.ts
-import { Router as Router70 } from "express";
+import { Router as Router71 } from "express";
 
 // server/middleware/apiKeyAuth.ts
 init_errors();
@@ -38034,19 +38351,19 @@ var authenticateApiKey = asyncHandler(async (req, _res, next) => {
 
 // server/routes/v1/externalRoutes.ts
 init_apiResponse();
-var router63 = Router70();
-router63.use(generalApiLimiter, authenticateApiKey);
-router63.get(
+var router64 = Router71();
+router64.use(generalApiLimiter, authenticateApiKey);
+router64.get(
   "/whoami",
   asyncHandler(async (req, res) => {
     const org = await prisma.organization.findUnique({ where: { id: req.apiKey.organizationId }, select: { id: true, name: true, slug: true } });
     sendSuccess(res, { organization: org, apiKey: { id: req.apiKey.id, scopes: req.apiKey.scopes } });
   })
 );
-var externalRoutes_default = router63;
+var externalRoutes_default = router64;
 
 // server/routes/v1/analyticsRoutes.ts
-import { Router as Router71 } from "express";
+import { Router as Router72 } from "express";
 
 // server/services/analyticsReportingService.ts
 init_errors();
@@ -38233,9 +38550,9 @@ var analyticsReportingService = {
 
 // server/routes/v1/analyticsRoutes.ts
 init_apiResponse();
-var router64 = Router71();
-router64.use(authenticateToken);
-router64.get(
+var router65 = Router72();
+router65.use(authenticateToken);
+router65.get(
   "/overview",
   requirePermission("analytics.read"),
   asyncHandler(async (req, res) => {
@@ -38244,7 +38561,7 @@ router64.get(
     sendSuccess(res, overview);
   })
 );
-router64.get(
+router65.get(
   "/content/top-pages",
   requirePermission("analytics.read"),
   asyncHandler(async (req, res) => {
@@ -38253,14 +38570,14 @@ router64.get(
     sendSuccess(res, { topPages });
   })
 );
-var analyticsRoutes_default = router64;
+var analyticsRoutes_default = router65;
 
 // server/routes/v1/reportsRoutes.ts
-import { Router as Router72 } from "express";
+import { Router as Router73 } from "express";
 init_apiResponse();
 init_errors();
-var router65 = Router72();
-router65.use(authenticateToken);
+var router66 = Router73();
+router66.use(authenticateToken);
 function assertReportType(value) {
   if (REPORT_TYPES.includes(value)) return value;
   throw new NotFoundError("Unknown report type.");
@@ -38281,7 +38598,7 @@ function reportToCsvRows(data) {
   }
   return { header: ["value"], rows: [[data]] };
 }
-router65.get(
+router66.get(
   "/:type",
   requirePermission("reports.read"),
   asyncHandler(async (req, res) => {
@@ -38291,7 +38608,7 @@ router65.get(
     sendSuccess(res, { type, range: { from: query.from ?? null, to: query.to ?? null }, report });
   })
 );
-router65.get(
+router66.get(
   "/:type/export",
   requirePermission("reports.export"),
   asyncHandler(async (req, res) => {
@@ -38302,14 +38619,14 @@ router65.get(
     sendCsv(res, `${type}.csv`, toCsv(header, rows));
   })
 );
-var reportsRoutes_default = router65;
+var reportsRoutes_default = router66;
 
 // server/routes/v1/contentApprovalRoutes.ts
-import { Router as Router73 } from "express";
+import { Router as Router74 } from "express";
 import { z as z68 } from "zod";
 init_apiResponse();
-var router66 = Router73();
-router66.use(authenticateToken);
+var router67 = Router74();
+router67.use(authenticateToken);
 var SubmitSchema = z68.object({
   contentType: z68.enum(["page", "post"]),
   contentId: z68.string().min(1)
@@ -38318,7 +38635,7 @@ var DecideSchema = z68.object({
   decision: z68.enum(["APPROVED", "REJECTED", "CHANGES_REQUESTED"]),
   reason: z68.string().max(2e3).optional()
 });
-router66.get(
+router67.get(
   "/",
   requirePermission("content.update"),
   asyncHandler(async (req, res) => {
@@ -38331,7 +38648,7 @@ router66.get(
     sendSuccess(res, result);
   })
 );
-router66.post(
+router67.post(
   "/",
   requirePermission("content.update"),
   asyncHandler(async (req, res) => {
@@ -38340,7 +38657,7 @@ router66.post(
     sendSuccess(res, result, 201);
   })
 );
-router66.post(
+router67.post(
   "/:id/decide",
   requirePermission("content.publish"),
   asyncHandler(async (req, res) => {
@@ -38349,10 +38666,10 @@ router66.post(
     sendSuccess(res, result);
   })
 );
-var contentApprovalRoutes_default = router66;
+var contentApprovalRoutes_default = router67;
 
 // server/routes/v1/index.ts
-var v1Router = Router74();
+var v1Router = Router75();
 v1Router.use("/auth", authRoutes_default);
 v1Router.use("/webhooks", webhookRoutes_default);
 v1Router.use("/system", systemRoutes_default);
@@ -38386,6 +38703,7 @@ v1Router.use("/marketing/landing-pages", landingRoutes_default);
 v1Router.use("/ops", opsRoutes_default);
 v1Router.use("/privacy", privacyRoutes_default);
 v1Router.use("/dashboard", dashboardRoutes_default);
+v1Router.use("/meta", metaCallbackRoutes_default);
 v1Router.use("/marketing", marketingRoutes_default);
 v1Router.use("/onboarding", onboardingRoutes_default);
 v1Router.use("/workspaces", workspaceRoutes_default);
