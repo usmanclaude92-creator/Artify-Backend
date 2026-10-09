@@ -165,3 +165,13 @@ Manual "Run export now" is SUPER_ADMIN only (role check). No existing permission
 | 10 | Export and privacy endpoints use `sensitiveActionLimiter`; emails travel in POST bodies, never in URLs | Info | OK |
 | 10b | Live checks that passed: tick endpoint without or with a wrong `CRON_SECRET` returns 401; `social/internal/publish-tick` with a wrong secret 401; an unsigned provider webhook POST 401 | Info | OK |
 | 11 | There is no unsubscribe or marketing-email link flow in the app | Info | Nothing to check |
+
+## 11. Live test results (production, 2026-10-09)
+
+* **System Health**: 21 checks returned real statuses (database 21 ms, 18/60 connections, every scheduler heartbeat green, no failed or uncertain posts, 24.8 MB database, required configuration complete). Facebook and Instagram report "Unknown" because Meta returns no token expiry date.
+* **Bug found by the live test and fixed**: token checks matched `FACEBOOK` but real provider ids are `meta_facebook` / `meta_instagram`, so connected accounts were reported as "not connected" (commit `56fa384`, test added).
+* **Forced red and alert**: a QA UNCERTAIN post target turned "Uncertain social posts" red at 09:56:03 UTC; the grouped alert was delivered at 10:15:05 UTC (first tick after 15 minutes red), one notification per admin recipient (4), and `last_alerted_at` was set so the 6-hour cooldown applied. After the QA target was cancelled the check returned to OK with `red_since` cleared. Cosmetic: the alert names the check by its short key ("uncertain") rather than its label.
+* **Privacy**: lookup, JSON export, CSV export and erasure preview worked. Requester approving own request: 403; generic automation route: refused; second SUPER_ADMIN approved: lead anonymised and archived, consent record kept, request EXECUTED with its target ids wiped; all `PRIVACY_*` audit rows hold only the pseudonymous ref and counts; an attempted UPDATE of a privacy audit row was blocked by the trigger.
+* **Security checks**: see section 10 (rate limits not enforced without `REDIS_URL`).
+* **Not verified in production**: the scheduled critical-data export and its verify step (`BACKUP_EXPORT_KEY` not set), the provider backup list (`SUPABASE_ACCESS_TOKEN` not set), the retention purge (02:00 to 04:59 UTC window not reached; `RETENTION_PURGE_ENABLED` off), erasure of social conversations and form submissions (the QA person had only a lead; covered by automated tests), and Vercel log redaction of tokens (logs not inspected).
+* **QA cleanup**: QA sessions were revoked; deleting the QA rows needs a database delete approval. `docs/ops-qa-cleanup.sql` removes everything created by the Step 12 and Step 13 live tests.
