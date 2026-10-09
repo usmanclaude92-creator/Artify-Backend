@@ -7,6 +7,7 @@
 import { Router } from "express";
 import { invitationService } from "../../services/invitationService";
 import { authenticateToken, requirePermission } from "../../middleware/auth";
+import { tokenLinkLimiter } from "../../middleware/rateLimiter";
 import { asyncHandler } from "../../utils/asyncHandler";
 import { sendSuccess } from "../../core/apiResponse";
 import { acceptInvitationSchema } from "../../schemas/invitationSchemas";
@@ -30,6 +31,7 @@ router.post(
 /** Public — returns only what's needed to render a safe acceptance form (§26): never a token hash, internal ids, or user security metadata. */
 router.get(
   "/:token",
+  tokenLinkLimiter,
   asyncHandler(async (req, res) => {
     const preview = await invitationService.previewInvitation(req.params.token!);
     sendSuccess(res, preview);
@@ -38,6 +40,7 @@ router.get(
 
 router.post(
   "/:token/accept",
+  tokenLinkLimiter,
   asyncHandler(async (req, res) => {
     const input = acceptInvitationSchema.parse(req.body);
     const result = await invitationService.acceptInvitation(req.params.token!, input, requestMeta(req));

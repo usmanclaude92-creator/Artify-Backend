@@ -17,7 +17,7 @@ import { publicLandingService } from "../../services/landing/publicLandingServic
 import { publicLandingSubmitSchema } from "../../schemas/landingSchemas";
 import { NotFoundError } from "../../core/errors";
 import { analyticsEventService } from "../../services/analyticsEventService";
-import { publicLeadLimiter, publicAnalyticsLimiter } from "../../middleware/rateLimiter";
+import { publicLeadLimiter, publicAnalyticsLimiter, tokenLinkLimiter } from "../../middleware/rateLimiter";
 import { asyncHandler } from "../../utils/asyncHandler";
 import { sendSuccess } from "../../core/apiResponse";
 import {
@@ -261,7 +261,7 @@ router.post(
 router.get("/landing", asyncHandler(async (_req, res) => {
   sendSuccess(res, { pages: await publicLandingService.listIndexable() });
 }));
-router.get("/landing-preview/:token", asyncHandler(async (req, res) => {
+router.get("/landing-preview/:token", tokenLinkLimiter, asyncHandler(async (req, res) => {
   res.setHeader("Cache-Control", "no-store");
   res.setHeader("X-Robots-Tag", "noindex, nofollow");
   sendSuccess(res, { page: await publicLandingService.getPreview(req.params.token!) });

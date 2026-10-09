@@ -147,6 +147,18 @@ export const publicLeadLimiter = rateLimit({
   keyGenerator: (req: Request) => req.ip ?? "unknown-ip",
 });
 
+/** Step 13 — public token-bearing links (invitation preview/accept, landing preview): a stricter per-IP budget than the general limiter so a link token can never be probed at volume. */
+export const tokenLinkLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 40,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: rateLimitHandler,
+  store: makeStore("token-link"),
+  passOnStoreError: true,
+  keyGenerator: (req: Request) => req.ip ?? "unknown-ip",
+});
+
 /** Phase 15 — public website analytics event ingestion (docs/ANALYTICS_ARCHITECTURE.md). Anonymous, IP-keyed like publicLeadLimiter, but far more generous: a page-view beacon fires on every route change rather than a deliberate form submission. */
 export const publicAnalyticsLimiter = rateLimit({
   windowMs: 60 * 1000,
