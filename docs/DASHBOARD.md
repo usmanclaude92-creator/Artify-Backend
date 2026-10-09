@@ -72,3 +72,7 @@ as the widget, same numbers as on screen (it reuses the dashboard computation).
 | `GET/POST/DELETE /dashboard/views` | signed-in internal user (own views) |
 | `GET/POST/PATCH/DELETE /dashboard/reports/schedules`, `GET …/runs`, `POST …/schedules/:id/run`, `POST …/schedules/:id/send-test`, `PUT /dashboard/reports/settings` | `reports.manage` |
 | `GET /dashboard/reports/inbox`, `GET /dashboard/reports/deliveries/:id/download` | the recipient only |
+
+## 7. Funnel attribution
+
+A landing session is attributed to the UTM source of its **first** landing view in the period; submissions use their own `utm_source`; leads use `leads.utm_source` (source tag `landing:…`). Qualified/converted are the lead's current status. Stages are counts, never rates.

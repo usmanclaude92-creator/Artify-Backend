@@ -24,6 +24,21 @@ Method: local server + scratch database (never production) driven by Playwright 
 | 16 | Security | `npm audit --audit-level=high`: 3 high, all one chain: `deepmerge-ts` → `@prisma/config` → `prisma` **CLI** (dev tooling; not loaded by the running API). Fix needs a Prisma upgrade. | Medium | Open (not auto-fixed to avoid a Prisma major bump) |
 | 17 | Security | CORS: explicit origin list with credentials. Auth: bearer token in sessionStorage (no auth cookie). Webhook and CRON paths verified in earlier steps (signature / secret). CSP of the public website was not re-tested in this step. | – | Not re-verified: website CSP |
 | 18 | MFA / accounts | No MFA on any account, including the only real SUPER_ADMIN. | High | Open |
+| 19 | **Production role grants** | The production permission catalogue lacks 15 rows the code and seed expect: `analytics.read`, `campaigns.*`, `navigation_menus.*`, `industries.*`, `product_categories.*`. So in production Analytics, Campaigns, Marketing Dashboard, Navigation Menus and Taxonomy are usable only by SUPER_ADMIN, the Analytics page shows no website data even for SUPER_ADMIN, and the new dashboard's Website widget is "forbidden" for ADMIN/MANAGER/USER/VIEWER. Found in the live test. | **High** (functional) | **Open – `docs/prod-permission-sync.sql` is ready, not applied** (it widens access to what the seed intends; your call) |
+| 20 | Live test | Dashboard opened as SUPER_ADMIN, ADMIN, MANAGER, USER, VIEWER (each saw exactly their permitted widgets; CLIENT_PORTAL got 403); 6 numbers compared with their source (below); report dry run, kill switch (run KILLED, test send refused), real in-app delivery to your account only; CSV export 200, forbidden export 403; `reports.manage` endpoints 403 for MANAGER/VIEWER. | – | Verified |
+
+## Live numbers compared (production, SUPER_ADMIN, last 28 days 2026-09-11 to 2026-10-08)
+
+| # | Dashboard | Source | Result |
+|---|---|---|---|
+| 1 | Website page views 167 | `analytics_events` count (SQL) | equal |
+| 2 | Website sessions 71 | distinct `session_id` (SQL) | equal |
+| 3 | CRM leads 2, qualified 1 | CRM summary page | equal |
+| 4 | Social accounts 2 | Social accounts page | equal |
+| 5 | Followers 0 / 0 (both accounts) | Social analytics summary | equal |
+| 6 | Health ok 15, unknown 4, disabled 2 | System Health page | equal |
+
+Not compared numerically: approvals (0 on the dashboard; the Approvals endpoint shape differs). The previous-period comparison correctly showed no percentage: the first stored page view is 2026-10-05, so the previous period is not covered.
 
 ## What was not verified
 
