@@ -3582,3 +3582,43 @@ export const privacyApi = {
     URL.revokeObjectURL(url);
   },
 };
+
+// ---------- Step 14: Dashboard, saved views, scheduled reports ----------
+export type DashboardWidgetKey = "attention_approvals" | "attention_posts" | "attention_sla" | "attention_health" | "attention_accounts" | "website" | "crm" | "social_accounts" | "social_analytics" | "landing" | "funnel" | "operations";
+export interface DashboardWidget { key: DashboardWidgetKey; title: string; state: "ok" | "empty" | "forbidden"; asOf: string; sourceAsOf: string | null; source: string; link: string; emptyText?: string; data?: Record<string, any> }
+export interface DashboardPeriodInfo { days: 7 | 28 | 90; from: string; to: string; previousFrom: string; previousTo: string }
+export interface DashboardResponse { period: DashboardPeriodInfo; asOf: string; widgets: DashboardWidget[] }
+export interface DashboardCompare { current: number; previous: number | null; changePct: number | null; note: string | null }
+export interface DashboardView { id: string; name: string; period: number }
+export interface ReportSchedule { id: string; name: string; cadence: "WEEKLY" | "MONTHLY"; sections: string[]; recipientIds: string[]; periodDays: number; enabled: boolean; dryRun: boolean; nextRunAt: string | null; lastRunAt: string | null }
+export interface ReportSettings { killSwitch: boolean; emailConfigured: boolean; updatedAt: string | null }
+export interface ReportRun { id: string; trigger: string; status: string; dryRun: boolean; periodFrom: string; periodTo: string; summary: { outcomes?: Array<{ userId: string; outcome: string }> } | null; createdAt: string }
+export interface ReportRecipient { id: string; name: string; email: string; role: string; roleKey: string }
+export interface ReportInboxItem { id: string; name: string; periodFrom: string; periodTo: string; sections: string[]; channels: string[]; createdAt: string }
+
+async function saveBlob(blob: Blob, filename: string): Promise<void> {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+}
+
+export const dashboardApi = {
+  get: (period: number) => apiClient.get<DashboardResponse>(`/dashboard${toQuery({ period })}`),
+  exportCsv: async (widget: DashboardWidgetKey, period: number) => saveBlob(await apiClient.getBlob(`/dashboard/export/${widget}.csv${toQuery({ period })}`), `${widget}-last-${period}-days.csv`),
+  views: () => apiClient.get<{ views: DashboardView[] }>("/dashboard/views"),
+  saveView: (name: string, period: number) => apiClient.post<{ view: DashboardView }>("/dashboard/views", { name, period }),
+  deleteView: (id: string) => apiClient.delete<{ deleted: boolean }>(`/dashboard/views/${id}`),
+  inbox: () => apiClient.get<{ reports: ReportInboxItem[] }>("/dashboard/reports/inbox"),
+  downloadReport: async (id: string, name: string) => saveBlob(await apiClient.getBlob(`/dashboard/reports/deliveries/${id}/download`), `${name.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}.html`),
+  schedules: () => apiClient.get<{ schedules: ReportSchedule[]; settings: ReportSettings }>("/dashboard/reports/schedules"),
+  recipients: () => apiClient.get<{ recipients: ReportRecipient[] }>("/dashboard/reports/recipients"),
+  createSchedule: (b: Omit<ReportSchedule, "id" | "nextRunAt" | "lastRunAt">) => apiClient.post<{ schedule: ReportSchedule }>("/dashboard/reports/schedules", b),
+  updateSchedule: (id: string, b: Partial<Omit<ReportSchedule, "id" | "nextRunAt" | "lastRunAt">>) => apiClient.patch<{ schedule: ReportSchedule }>(`/dashboard/reports/schedules/${id}`, b),
+  deleteSchedule: (id: string) => apiClient.delete<{ deleted: boolean }>(`/dashboard/reports/schedules/${id}`),
+  runSchedule: (id: string) => apiClient.post<{ runId: string; status: string; dryRun: boolean; killed: boolean; outcomes: Array<{ userId: string; outcome: string }> }>(`/dashboard/reports/schedules/${id}/run`),
+  sendTest: (id: string) => apiClient.post<{ deliveryId: string; channels: string[]; emailConfigured: boolean }>(`/dashboard/reports/schedules/${id}/send-test`),
+  runs: (id: string) => apiClient.get<{ runs: ReportRun[] }>(`/dashboard/reports/schedules/${id}/runs`),
+  setKillSwitch: (killSwitch: boolean) => apiClient.put<ReportSettings>("/dashboard/reports/settings", { killSwitch }),
+};

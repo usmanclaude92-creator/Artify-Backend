@@ -33,7 +33,7 @@ export const SystemHealthPage: React.FC = () => {
     <div className="space-y-4">
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div>
-          <h2 className="text-lg font-bold flex items-center gap-2" style={{ color: "var(--text-primary)" }}><Activity className="w-5 h-5" /> System health</h2>
+          <h1 className="text-lg font-bold flex items-center gap-2" style={{ color: "var(--text-primary)" }}><Activity className="w-5 h-5" /> System health</h1>
           <p className="text-xs max-w-2xl" style={{ color: "var(--text-muted)" }}>Every check shows when it ran and why it has its status. A signal the app cannot measure is shown as Unknown, never as a green. Checks that stay red for 15 minutes raise one grouped alert in the notification bell.</p>
         </div>
         <Button onClick={load} disabled={busy}><RefreshCw className={`w-3.5 h-3.5 ${busy ? "animate-spin" : ""}`} /> Refresh</Button>
