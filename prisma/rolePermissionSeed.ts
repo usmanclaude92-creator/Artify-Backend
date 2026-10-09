@@ -69,6 +69,10 @@ const ROLE_PERMISSION_SETS: Record<RoleKey, readonly string[] | "*"> = {
     "content.update",
     "marketing.landing.edit",
     "marketing.landing.publish",
+    "ops.health.read",
+    "ops.backups.read",
+    "privacy.read",
+    "privacy.export",
     "content.publish",
     "content.delete",
     // Phase 1 (Website module) — ADMIN gets full template/template-part

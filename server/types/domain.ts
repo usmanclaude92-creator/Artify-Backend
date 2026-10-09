@@ -157,6 +157,12 @@ export const PERMISSION_KEYS = [
   "marketing.landing.read",
   "marketing.landing.edit",
   "marketing.landing.publish",
+  // Step 13 — Operations & data privacy (ADMIN + SUPER_ADMIN; privacy.erase SUPER_ADMIN only).
+  "ops.health.read",
+  "ops.backups.read",
+  "privacy.read",
+  "privacy.export",
+  "privacy.erase",
   // Step 2 redesign — global Approvals center front door (each source still needs its own permission).
   "approvals.read",
   "settings.read",

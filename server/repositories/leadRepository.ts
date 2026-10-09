@@ -5,6 +5,7 @@
  */
 import type { Lead, Prisma } from "@prisma/client";
 import { prisma } from "../db/prisma";
+import { consentService } from "../services/ops/consentService";
 
 export interface LeadFilters {
   search?: string;
@@ -92,7 +93,7 @@ export const leadRepository = {
     campaignId?: string;
     firstTouch?: Prisma.InputJsonValue;
   }): Promise<Lead> {
-    return prisma.lead.create({
+    const created = await prisma.lead.create({
       data: {
         organizationId: data.organizationId,
         companyName: data.companyName,
@@ -116,6 +117,9 @@ export const leadRepository = {
         firstTouch: data.firstTouch,
       },
     });
+    // Consent register: every capture path leaves a record (source + status + time). Form paths record at submission level instead.
+    if (!data.formId) await consentService.record({ organizationId: data.organizationId, leadId: created.id, source: data.source ?? "lead", consentGiven: data.consentGiven ?? null, at: created.createdAt });
+    return created;
   },
 
   async update(id: string, data: Prisma.LeadUpdateInput): Promise<Lead> {

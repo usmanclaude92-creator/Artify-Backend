@@ -19,6 +19,7 @@ import { config } from "../config/env";
 import { InfrastructureError, NotFoundError, ValidationError } from "../core/errors";
 import type { PublicFormSubmitInput, FormField } from "../schemas/formSchemas";
 import type { RequestMeta } from "./authService";
+import { consentService } from "./ops/consentService";
 import type { Form, Prisma } from "@prisma/client";
 
 const DEFAULT_SUCCESS_MESSAGE = "Thank you — your submission has been received. We'll be in touch shortly.";
@@ -252,6 +253,8 @@ export const publicFormService = {
       campaignId,
       firstTouch,
     });
+
+    await consentService.record({ organizationId, leadId, submissionId: submission.id, source: landingPagePath?.startsWith("/lp/") ? `landing:${landingPagePath.slice(4)}` : `form:${form.slug}`, consentGiven: consentGiven ?? null, at: submission.createdAt });
 
     await auditLogRepository.record({
       organizationId,
