@@ -1,6 +1,6 @@
 -- Production permission catalogue is missing 15 permission rows that the code and seed expect (found in the Step 14 live test).
 -- Effect today: Analytics, Campaigns, Navigation Menus, Taxonomy pages and the dashboard Website widget work only for SUPER_ADMIN.
--- This file adds the rows and grants them exactly as prisma/rolePermissionSeed.ts does. Idempotent. NOT applied: review first.
+-- This file adds the rows and grants them exactly as prisma/rolePermissionSeed.ts does. Idempotent. APPLIED to production on 2026-10-09 (Supabase migration "sync_missing_permissions").
 INSERT INTO permissions (id, key, name, module, created_at)
 SELECT gen_random_uuid()::text, v.k, v.k, split_part(v.k,'.',1), now() FROM (VALUES ('analytics.read'),('campaigns.archive'),('campaigns.create'),('campaigns.publish'),('campaigns.read'),('campaigns.update'),('industries.manage'),('industries.read'),('navigation_menus.create'),('navigation_menus.delete'),('navigation_menus.publish'),('navigation_menus.read'),('navigation_menus.update'),('product_categories.manage'),('product_categories.read')) v(k)
 WHERE NOT EXISTS (SELECT 1 FROM permissions p WHERE p.key = v.k);
