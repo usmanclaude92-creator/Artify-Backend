@@ -41,6 +41,14 @@ router.post("/deauthorize", metaCallbackLimiter, asyncHandler(async (req, res) =
   }
 }));
 
+/** A person (or reviewer) opening a callback URL in a browser sends GET. Say what the URL is for instead of a bare 404. Meta itself only POSTs. */
+for (const path of ["/data-deletion", "/deauthorize"]) {
+  router.get(path, (_req, res) => {
+    res.setHeader("Allow", "POST");
+    res.status(405).json({ error: "This address only accepts POST requests sent by Meta (Facebook / Instagram). Nothing to see here." });
+  });
+}
+
 /** Public status lookup for a deletion confirmation code (used by the website's /data-deletion-status page). */
 router.get("/deletion-status", metaCallbackLimiter, asyncHandler(async (req, res) => {
   const code = typeof req.query.code === "string" ? req.query.code : "";

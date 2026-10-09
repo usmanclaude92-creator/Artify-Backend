@@ -27421,6 +27421,12 @@ router25.post("/deauthorize", metaCallbackLimiter, asyncHandler(async (req, res)
     throw e;
   }
 }));
+for (const path of ["/data-deletion", "/deauthorize"]) {
+  router25.get(path, (_req, res) => {
+    res.setHeader("Allow", "POST");
+    res.status(405).json({ error: "This address only accepts POST requests sent by Meta (Facebook / Instagram). Nothing to see here." });
+  });
+}
 router25.get("/deletion-status", metaCallbackLimiter, asyncHandler(async (req, res) => {
   const code = typeof req.query.code === "string" ? req.query.code : "";
   const status = await metaCallbackService.deletionStatus(code);

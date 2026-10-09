@@ -68,6 +68,15 @@ describe("Step 15 Meta callbacks", () => {
     });
   });
 
+  it("answers a browser visit (GET) with a clear 405 and an Allow: POST header, never a 404", async () => {
+    for (const path of ["/data-deletion", "/deauthorize"]) {
+      const r = await request(app).get(`/api/v1/meta${path}`).set("X-Forwarded-For", `10.15.7.${ip++}`);
+      expect(r.status).toBe(405);
+      expect(r.headers.allow).toBe("POST");
+      expect(JSON.stringify(r.body)).toMatch(/only accepts POST/);
+    }
+  });
+
   describe("deauthorize", () => {
     it("moves only that person's accounts to NEEDS_REAUTH, deletes their tokens, audits, and returns 200", async () => {
       const r = await form("/deauthorize", fresh());
