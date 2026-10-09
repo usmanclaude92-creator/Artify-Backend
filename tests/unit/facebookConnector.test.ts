@@ -308,13 +308,15 @@ describe("requests", () => {
     const dbg = (data: Record<string, unknown>) => ({ data });
     reply([dbg({ is_valid: true, expires_at: 0, data_access_expires_at: 1900000000, scopes: ["pages_manage_posts", "pages_manage_engagement", "pages_read_engagement", "pages_messaging"] })]);
     const ok = await facebookPageProvider.healthCheck(tokens);
-    expect(ok).toEqual({ ok: true, expiresAt: new Date(1900000000 * 1000).toISOString() });
+    expect(ok).toEqual({ ok: true, expiresAt: new Date(1900000000 * 1000).toISOString(), providerUserId: null });
     const u = new URL(calls[0]!.url);
     expect(u.pathname).toBe("/v25.0/debug_token");
     expect(u.searchParams.get("input_token")).toBe(TOKEN);
     expect(u.searchParams.get("access_token")).toBe("APPID|app-secret-0123456789abcdef");
     reply([dbg({ is_valid: true, expires_at: 0, data_access_expires_at: 0, scopes: ["pages_manage_posts", "pages_manage_engagement", "pages_read_engagement"] })]);
-    expect(await facebookPageProvider.healthCheck(tokens)).toEqual({ ok: true, expiresAt: null }); // "never expires"
+    expect(await facebookPageProvider.healthCheck(tokens)).toEqual({ ok: true, expiresAt: null, providerUserId: null }); // "never expires"
+    reply([dbg({ is_valid: true, user_id: "1234567890", expires_at: 0, data_access_expires_at: 0, scopes: ["pages_manage_posts", "pages_manage_engagement", "pages_read_engagement"] })]);
+    expect((await facebookPageProvider.healthCheck(tokens)).providerUserId).toBe("1234567890"); // Step 15: lets Meta callbacks find accounts connected earlier
     reply([dbg({ is_valid: false, error: { message: `Session invalidated ${TOKEN}` } })]);
     const bad = await facebookPageProvider.healthCheck(tokens);
     expect(bad.ok).toBe(false);
