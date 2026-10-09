@@ -10,12 +10,19 @@ import { backupService } from "../../services/ops/backupService";
 import { retentionService, purgeEnabled } from "../../services/ops/retentionService";
 import { consentService } from "../../services/ops/consentService";
 import { RETENTION_POLICY } from "../../services/ops/retentionPolicy";
+import { config } from "../../config/env";
+import { AuthorizationError } from "../../core/errors";
 import { metaReviewService } from "../../services/meta/metaReviewService";
 
 const router = Router();
 router.use(authenticateToken);
 
-router.get("/health", requirePermission("ops.health.read"), asyncHandler(async (req, res) => {
+/** Platform-level pages (System Health, Backups): only the main workspace may read them, so a demo/review workspace's ADMIN cannot see infrastructure details. */
+const platformOrgOnly = (req: Request, _res: unknown, next: () => void) => {
+  if (config.publicWebsiteOrganizationId && req.user && req.user.organizationId !== config.publicWebsiteOrganizationId) throw new AuthorizationError("Platform health is available to the main workspace only.");
+  next();
+};
+router.get("/health", requirePermission("ops.health.read"), platformOrgOnly, asyncHandler(async (req, res) => {
   const checks = await healthService.runAndStore(req.user!.organizationId);
   const present = (n: string) => !!process.env[n] && process.env[n]!.trim().length > 0;
   sendSuccess(res, {
@@ -27,7 +34,7 @@ router.get("/health", requirePermission("ops.health.read"), asyncHandler(async (
   });
 }));
 
-router.get("/backups", requirePermission("ops.backups.read"), asyncHandler(async (req, res) => {
+router.get("/backups", requirePermission("ops.backups.read"), platformOrgOnly, asyncHandler(async (req, res) => {
   const [provider, exports] = await Promise.all([backupService.providerInfo(), backupService.listExports(req.user!.organizationId)]);
   sendSuccess(res, { provider, exportConfig: backupService.exportConfigStatus(), exports });
 }));

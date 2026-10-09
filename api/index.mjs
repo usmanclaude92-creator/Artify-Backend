@@ -26573,6 +26573,9 @@ var retentionService = {
   }
 };
 
+// server/routes/v1/opsRoutes.ts
+init_errors();
+
 // server/services/meta/metaReviewService.ts
 import { randomBytes as randomBytes9 } from "node:crypto";
 init_errors();
@@ -26654,7 +26657,11 @@ var metaReviewService = {
 // server/routes/v1/opsRoutes.ts
 var router22 = Router28();
 router22.use(authenticateToken);
-router22.get("/health", requirePermission("ops.health.read"), asyncHandler(async (req, res) => {
+var platformOrgOnly = (req, _res, next) => {
+  if (config.publicWebsiteOrganizationId && req.user && req.user.organizationId !== config.publicWebsiteOrganizationId) throw new AuthorizationError("Platform health is available to the main workspace only.");
+  next();
+};
+router22.get("/health", requirePermission("ops.health.read"), platformOrgOnly, asyncHandler(async (req, res) => {
   const checks = await healthService.runAndStore(req.user.organizationId);
   const present = (n) => !!process.env[n] && process.env[n].trim().length > 0;
   sendSuccess(res, {
@@ -26665,7 +26672,7 @@ router22.get("/health", requirePermission("ops.health.read"), asyncHandler(async
     env: ENV_CHECKLIST.map((e) => ({ name: e.name, required: e.required, purpose: e.purpose, present: present(e.name) }))
   });
 }));
-router22.get("/backups", requirePermission("ops.backups.read"), asyncHandler(async (req, res) => {
+router22.get("/backups", requirePermission("ops.backups.read"), platformOrgOnly, asyncHandler(async (req, res) => {
   const [provider, exports] = await Promise.all([backupService.providerInfo(), backupService.listExports(req.user.organizationId)]);
   sendSuccess(res, { provider, exportConfig: backupService.exportConfigStatus(), exports });
 }));

@@ -217,6 +217,9 @@ describe("Step 15 Meta review demo workspace", () => {
     const names = JSON.stringify(accounts.body);
     expect(names).toContain("Sample Page (demo data)");
     expect(names).not.toContain("real page");
+    // platform-level pages are not readable from the demo workspace
+    expect((await api("get", "/ops/health", tok)).status).toBe(403);
+    expect((await api("get", "/ops/backups", tok)).status).toBe(403);
     expect((await api("get", "/users", tok)).body.data?.users?.every?.((u: { email: string }) => u.email === "meta-reviewer@artifysols.com") ?? true).toBe(true);
   });
 

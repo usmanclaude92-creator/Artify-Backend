@@ -227,6 +227,11 @@ App dashboard → Settings → Basic:
 ### Owner values still unfilled in the public pages
 Run `listOwnerMarkers()` (website repo, `src/components/pages/legalContent.ts`) or search the three pages for "Owner to confirm". Current list: company legal name, registered business address, privacy contact email, contact email, effective date, response time, authority to complain to, legal bases and regulations, AI provider, email provider, hosting regions/transfer mechanism, retention confirmation, minimum age, ownership of custom work, fees, limitation of liability, governing law. Terms sections 8, 10 and 11 need a lawyer.
 
+### Live test result (production, no secrets used)
+* Forged, malformed and missing `signed_request` on both callbacks: `400 {"error":"Invalid request."}`; 7 `META_CALLBACK_REJECTED` audit rows written; unknown/junk codes on the status endpoint: 404.
+* Demo workspace: created, second create refused (409), reviewer login worked, saw only sample data, could not read the main workspace, workspace removed, reviewer's token invalid afterwards. Found and fixed: the reviewer (ADMIN of the demo workspace) could read System Health; `/ops/health` and `/ops/backups` are now limited to the main workspace.
+* **Not verified live:** a correctly signed request. It needs the real app secret, which was deliberately not read. Do it once with Meta's own test button (App dashboard → Settings → Advanced / Use cases → Data deletion → *Test*), then check *Approvals → Privacy* and `meta_data_requests`.
+
 ## 7. Operating it
 
 * Approve or reject a Meta deletion request: *Approvals → Privacy* (needs `privacy.erase`, SUPER_ADMIN by default). The requester is the system, so one approver is enough; the rule "requester cannot approve" is not weakened for human-made requests.
