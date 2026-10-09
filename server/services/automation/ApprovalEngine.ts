@@ -109,6 +109,10 @@ export class ApprovalEngine {
     if (approval.entityType === "landing_page") {
       throw new ValidationError("Landing page approvals are decided in the Approvals center (Landing pages).");
     }
+    // Erasure approvals enforce the two-person rule and run the erasure; only privacyApprovalService may decide them.
+    if (approval.entityType === "privacy_erasure") {
+      throw new ValidationError("Erasure approvals are decided in the Approvals center (Privacy).");
+    }
 
     // Verify role if a specific role is required
     if (approval.requiredRole && params.userRole !== approval.requiredRole && params.userRole !== "SUPER_ADMIN" && params.userRole !== "ADMIN") {

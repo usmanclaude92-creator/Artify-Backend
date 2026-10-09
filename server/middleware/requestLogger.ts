@@ -7,6 +7,19 @@ import pinoHttp from "pino-http";
 import type { Request } from "express";
 import { logger } from "../core/logger";
 
+/** Path segments and query values that carry a credential (invitation, landing preview, reset/verify tokens) never reach the logs. */
+export function redactUrl(url: string): string {
+  const [path = "", query] = url.split("?");
+  const safePath = path
+    .replace(/(\/invitations\/)[^/]+/i, "$1[REDACTED]")
+    .replace(/(\/landing-preview\/)[^/]+/i, "$1[REDACTED]")
+    .replace(/(\/lp-preview\/)[^/]+/i, "$1[REDACTED]");
+  if (!query) return safePath;
+  const params = new URLSearchParams(query);
+  for (const k of [...params.keys()]) if (/token|code|key|secret|password|signature|hub\.verify_token/i.test(k)) params.set(k, "[REDACTED]");
+  return `${safePath}?${params.toString()}`;
+}
+
 export const requestLogger = pinoHttp({
   logger,
   genReqId: (req: Request) => req.requestId,
@@ -20,7 +33,7 @@ export const requestLogger = pinoHttp({
     organizationId: req.organizationId,
   }),
   serializers: {
-    req: (req) => ({ method: req.method, url: req.url }),
+    req: (req) => ({ method: req.method, url: redactUrl(req.url) }),
     res: (res) => ({ statusCode: res.statusCode }),
   },
 });

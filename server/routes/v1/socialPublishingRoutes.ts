@@ -9,6 +9,7 @@ import { authenticateToken, requirePermission } from "../../middleware/auth";
 import { sensitiveActionLimiter } from "../../middleware/rateLimiter";
 import { asyncHandler } from "../../utils/asyncHandler";
 import { sendSuccess } from "../../core/apiResponse";
+import { heartbeat } from "../../services/ops/heartbeat";
 import { config } from "../../config/env";
 import { AuthenticationError, NotFoundError } from "../../core/errors";
 import { publisher, publishingActions, publishingQueries } from "../../services/social/publishing/publisher";
@@ -30,7 +31,7 @@ socialInternalRouter.all(
     if (req.method !== "GET" && req.method !== "POST") throw new NotFoundError("Not found.");
     if (!config.cronSecret) throw new NotFoundError("Not found.");
     if (!constantTimeEquals(req.headers.authorization ?? "", `Bearer ${config.cronSecret}`)) throw new AuthenticationError("Invalid cron credentials.");
-    sendSuccess(res, { publish: await publisher.tick() });
+    sendSuccess(res, { publish: await heartbeat.around("publish_tick", () => publisher.tick()) });
   })
 );
 

@@ -204,7 +204,13 @@ export async function resetDb(): Promise<void> {
   await prisma.campaign.deleteMany();
 
   await prisma.webhookEvent.deleteMany();
-  await prisma.auditLog.deleteMany();
+  // Step 13: PRIVACY_* audit rows are immutable (DB trigger); test cleanup is the one place allowed to remove them, via a transaction-local flag.
+  await prisma.$transaction([prisma.$executeRaw`SELECT set_config('app.allow_privacy_audit_delete', 'on', true)`, prisma.auditLog.deleteMany()]);
+  await prisma.consentRecord.deleteMany();
+  await prisma.privacyRequest.deleteMany();
+  await prisma.dataExport.deleteMany();
+  await prisma.healthCheckResult.deleteMany();
+  await prisma.jobHeartbeat.deleteMany();
   await prisma.session.deleteMany();
   await prisma.organizationMembership.deleteMany();
   await prisma.author.deleteMany();

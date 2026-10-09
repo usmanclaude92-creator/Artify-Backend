@@ -4485,3 +4485,94 @@ model LandingPreviewToken {
   @@index([pageId])
   @@map("landing_preview_tokens")
 }
+
+// ---------------------------------------------------------------------------------------------
+// Step 13 — Operations: health, backups/exports, data privacy (docs/OPERATIONS.md)
+// ---------------------------------------------------------------------------------------------
+
+/// One row per scheduled job: written by the job itself every time it runs, read by System Health to detect a late or dead scheduler.
+model JobHeartbeat {
+  key             String    @id
+  lastStartedAt   DateTime? @map("last_started_at")
+  lastFinishedAt  DateTime? @map("last_finished_at")
+  lastStatus      String?   @map("last_status")
+  lastError       String?   @map("last_error")
+  runCount        Int       @default(0) @map("run_count")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  @@map("job_heartbeats")
+}
+
+/// Last result of every System Health check, per organization; `redSince` drives "stays red" alerting.
+model HealthCheckResult {
+  id             String    @id @default(uuid())
+  organizationId String    @map("organization_id")
+  key            String
+  status         String
+  reason         String
+  checkedAt      DateTime  @map("checked_at")
+  redSince       DateTime? @map("red_since")
+  lastAlertedAt  DateTime? @map("last_alerted_at")
+
+  @@unique([organizationId, key])
+  @@map("health_check_results")
+}
+
+/// Encrypted logical exports of critical tables (secrets never included). The file lives in private object storage.
+model DataExport {
+  id             String    @id @default(uuid())
+  organizationId String    @map("organization_id")
+  kind           String
+  status         String
+  storageKey     String?   @map("storage_key")
+  sizeBytes      Int?      @map("size_bytes")
+  sha256         String?
+  rowCounts      Json?     @map("row_counts")
+  error          String?
+  createdById    String?   @map("created_by")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  expiresAt      DateTime? @map("expires_at")
+  verifiedAt     DateTime? @map("verified_at")
+
+  @@index([organizationId, createdAt])
+  @@map("data_exports")
+}
+
+/// Data-subject requests. Holds NO personal data: only an HMAC pseudonym of the subject, the reason text and counts.
+model PrivacyRequest {
+  id             String    @id @default(uuid())
+  organizationId String    @map("organization_id")
+  kind           String
+  status         String
+  subjectRef     String    @map("subject_ref")
+  reason         String
+  mode           String?
+  requestedById  String    @map("requested_by")
+  approvedById   String?   @map("approved_by")
+  approvalId     String?   @map("approval_id")
+  targetIds      Json?     @map("target_ids")
+  previewCounts  Json?     @map("preview_counts")
+  resultCounts   Json?     @map("result_counts")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  decidedAt      DateTime? @map("decided_at")
+  executedAt     DateTime? @map("executed_at")
+
+  @@index([organizationId, createdAt])
+  @@index([organizationId, subjectRef])
+  @@map("privacy_requests")
+}
+
+/// Consent register: one row per capture event (source + timestamp). `leadId`/`submissionId` are IDs, not personal data.
+model ConsentRecord {
+  id             String   @id @default(uuid())
+  organizationId String   @map("organization_id")
+  leadId         String?  @map("lead_id")
+  submissionId   String?  @map("submission_id")
+  source         String
+  status         String
+  capturedAt     DateTime @default(now()) @map("captured_at")
+
+  @@index([organizationId, capturedAt])
+  @@index([leadId])
+  @@map("consent_records")
+}

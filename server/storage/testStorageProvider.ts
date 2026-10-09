@@ -25,6 +25,11 @@ export class TestStorageProvider implements StorageProvider {
     this.objects.set(key, { bytes, contentType });
   }
 
+  /** Test helper — returns the stored bytes (what a signed-URL GET would return). */
+  getBytes(key: string): Buffer | null {
+    return this.objects.get(key)?.bytes ?? null;
+  }
+
   reset(): void {
     this.objects.clear();
     this.missingKeys.clear();

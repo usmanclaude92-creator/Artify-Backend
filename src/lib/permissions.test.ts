@@ -68,7 +68,7 @@ describe("sidebar structure (Step 1 redesign)", () => {
     Catalog: ["/products", "/products/modules", "/services", "/solutions", "/products/taxonomy"],
     Commercial: ["/commercial/contracts", "/commercial/subscriptions", "/commercial/invoices", "/commercial/payments"],
     "Automation & AI": ["/automation", "/ai", "/ai/providers", "/ai/tools", "/ai/prompts", "/ai/workflows", "/ai/executions", "/ai/usage", "/ai/approvals", "/ai/copilot"],
-    Administration: ["/users", "/roles", "/permissions", "/organizations", "/workspaces", "/workspaces/members", "/security-center", "/audit-log", "/security", "/administration", "/integrations", "/settings"],
+    Administration: ["/users", "/roles", "/permissions", "/organizations", "/workspaces", "/workspaces/members", "/security-center", "/system-health", "/backups", "/privacy", "/audit-log", "/security", "/administration", "/integrations", "/settings"],
     "Client Portal": ["/portal"],
   };
 
@@ -83,10 +83,10 @@ describe("sidebar structure (Step 1 redesign)", () => {
 
   it("keeps every one of the 62 existing pages plus the new /social and /approvals pages, with unique ids and paths", () => {
     const all = Object.values(EXPECTED).flat();
-    expect(all).toHaveLength(77);
-    expect(NAV_ITEMS).toHaveLength(77);
-    expect(new Set(NAV_ITEMS.map((i) => i.path)).size).toBe(77);
-    expect(new Set(NAV_ITEMS.map((i) => i.id)).size).toBe(77);
+    expect(all).toHaveLength(80);
+    expect(NAV_ITEMS).toHaveLength(80);
+    expect(new Set(NAV_ITEMS.map((i) => i.path)).size).toBe(80);
+    expect(new Set(NAV_ITEMS.map((i) => i.id)).size).toBe(80);
     expect(NAV_ITEMS.map((i) => i.path).sort()).toEqual([...all].sort());
   });
 
@@ -96,7 +96,7 @@ describe("sidebar structure (Step 1 redesign)", () => {
     const grouped = NAV_ITEMS.filter((i) => i.group);
     expect(new Set(grouped.map((i) => i.section))).toEqual(new Set(["Website Management", "Administration"]));
     expect([...new Set(NAV_ITEMS.filter((i) => i.section === "Website Management").sort(byOrder).map((i) => i.group))]).toEqual(["Design", "Content", "SEO"]);
-    expect([...new Set(NAV_ITEMS.filter((i) => i.section === "Administration").sort(byOrder).map((i) => i.group))]).toEqual(["People & access", "Security", "Platform"]);
+    expect([...new Set(NAV_ITEMS.filter((i) => i.section === "Administration").sort(byOrder).map((i) => i.group))]).toEqual(["People & access", "Security", "Operations", "Platform"]);
   });
 
   it("gates /social behind social.read", () => {

@@ -22,6 +22,8 @@ import { analyticsIngest } from "../../services/social/analytics/analyticsIngest
 import { listeningJobs } from "../../services/social/listening/listeningJobs";
 import { contentSchedulingService } from "../../services/contentSchedulingService";
 import { config } from "../../config/env";
+import { heartbeat } from "../../services/ops/heartbeat";
+import { opsTick } from "../../services/ops/opsTick";
 import { AuthenticationError, NotFoundError } from "../../core/errors";
 
 /** Length-independent constant-time string comparison for shared secrets. */
@@ -62,22 +64,27 @@ router.get(
     if (!constantTimeEquals(req.headers.authorization ?? "", `Bearer ${config.cronSecret}`)) {
       throw new AuthenticationError("Invalid cron credentials.");
     }
+    const tickStarted = new Date();
+    const failed = (r: unknown) => !!r && typeof r === "object" && "error" in (r as object) && !!(r as { error?: unknown }).error;
     const [automation, content, webhookRetries, socialTokenHealth, socialPublish, socialInbox, socialAnalytics, socialListening] = await Promise.all([
       automationService.runCronTick(),
       contentSchedulingService.publishDueScheduled(),
       webhookEndpointService.processDueRetries(),
       // Daily social token check; a failure here must never break the other jobs sharing this cron entry.
-      socialAccountService.runTokenHealthJob().catch(() => ({ checked: 0, needsAttention: 0, errors: 1 })),
+      heartbeat.around("token_health", () => socialAccountService.runTokenHealthJob().catch(() => ({ checked: 0, needsAttention: 0, errors: 1 })), (r) => r.errors > 0 && r.checked === 0),
       // Catch-up pass for social publishing (the minute-level scheduler hits /social/internal/publish-tick); gated, default OFF.
       publisher.tick().then((r) => ({ considered: r.considered, outcomes: r.outcomes, missed: r.missed })).catch(() => ({ error: true })),
       // Inbox: polling fallback, AI triage, SLA notifications, retention purge (02–04 UTC). Counts only; never throws.
-      inboxTick().catch(() => ({ error: true })),
+      heartbeat.around("inbox_tick", () => inboxTick().catch(() => ({ error: true })), failed),
       // Analytics: READ-ONLY insights snapshots, one successful run per account per UTC day, kill-switch gated; counts only; never throws.
-      analyticsIngest.tick().catch(() => ({ error: true })),
+      heartbeat.around("analytics_ingest", () => analyticsIngest.tick().catch(() => ({ error: true })), failed),
       // Listening: mention/tag polling fallback (flag, default OFF) and the daily review-rating snapshot. READ-ONLY; counts only; never throws.
-      listeningJobs.tick().catch(() => ({ error: true })),
+      heartbeat.around("listening_poll", () => listeningJobs.tick().catch(() => ({ error: true })), failed),
     ]);
-    sendSuccess(res, { automation, content, webhookRetries, socialTokenHealth, socialPublish, socialInbox, socialAnalytics, socialListening });
+    await heartbeat.record("automation_tick", tickStarted, "ok");
+    // Step 13: health record + grouped alerts, retention purge and scheduled export (each gated and failure-isolated).
+    const ops = await opsTick();
+    sendSuccess(res, { automation, content, webhookRetries, socialTokenHealth, socialPublish, socialInbox, socialAnalytics, socialListening, ops });
   })
 );
 
