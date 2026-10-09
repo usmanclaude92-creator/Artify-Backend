@@ -2868,7 +2868,7 @@ export const reportsApi = {
 
 // ---- Global Approvals center + sidebar badges (Step 2 redesign) ----
 
-export type ApprovalSourceKey = "ai" | "automation" | "content" | "social" | "landing";
+export type ApprovalSourceKey = "ai" | "automation" | "content" | "social" | "landing" | "privacy";
 export type ApprovalStatusFilter = "pending" | "approved" | "rejected";
 
 export interface CenterApproval {
@@ -3529,4 +3529,56 @@ export const landingApi = {
   utmLink: (id: string, p: { source: string; medium: string; campaign: string; term?: string; content?: string }) =>
     apiClient.get<{ url: string | null; path: string }>(`/marketing/landing-pages/${id}/utm-link${toQuery(p)}`),
   stats: (id: string, days = 30) => apiClient.get<{ stats: LandingStats }>(`/marketing/landing-pages/${id}/stats${toQuery({ days })}`),
+};
+
+// ---- Operations & data privacy (Step 13) ----
+
+export type HealthStatus = "ok" | "warn" | "red" | "disabled" | "unknown";
+export interface HealthCheckView { key: string; group: string; label: string; status: HealthStatus; reason: string; checkedAt: string; value?: string | number | null; redSince?: string | null }
+export interface HealthReport {
+  generatedAt: string; summary: Record<HealthStatus, number>; checks: HealthCheckView[];
+  env: Array<{ name: string; required: boolean; purpose: string; present: boolean }>;
+}
+export interface ProviderBackupView {
+  available: boolean; reason?: string; region?: string | null; pitrEnabled?: boolean | null; walgEnabled?: boolean | null;
+  backups?: Array<{ at: string | null; status: string | null; physical: boolean | null }>; lastBackupAt?: string | null; earliestRecoveryAt?: string | null; latestRecoveryAt?: string | null;
+}
+export interface ExportRow { id: string; status: string; sizeBytes: number | null; rowCounts: Record<string, number> | null; error: string | null; createdAt: string; expiresAt: string | null; verifiedAt: string | null }
+export interface BackupsReport { provider: ProviderBackupView; exportConfig: { enabled: boolean; keyConfigured: boolean; retentionDays: number; problems: string[] }; exports: ExportRow[] }
+export interface RetentionPolicyRow { key: string; dataClass: string; tables: string[]; retentionDays: number | null; basis: string; purgeJob: string | null; setBy: string }
+export interface RetentionPreviewRow { key: string; dataClass: string; retentionDays: number | null; cutoff: string | null; eligible: number | null; purged: number; note?: string }
+export interface ConsentRow { id: string; leadId: string | null; submissionId: string | null; source: string; status: "GIVEN" | "DECLINED" | "NOT_COLLECTED"; capturedAt: string }
+export interface PrivacyCounts { contacts: number; leads: number; clients: number; consentRecords: number; formSubmissions: number; socialConversations: number; socialMessages: number; auditReferences: number }
+export interface PrivacyLookup { subjectRef: string; staffAccount: boolean; found: boolean; counts: PrivacyCounts; auditSnapshotsContainingEmail: number; records: Record<string, unknown[]> }
+export interface ErasurePreview { subjectRef: string; staffAccount: boolean; erasable: boolean; blocker: string | null; changes: Array<{ table: string; rows: number; action: string; detail: string }>; counts: PrivacyCounts }
+export interface PrivacyRequestRow { id: string; kind: string; status: string; subjectRef: string; reason: string; requestedById: string; approvedById: string | null; previewCounts: PrivacyCounts | null; resultCounts: Record<string, number> | null; createdAt: string; decidedAt: string | null; executedAt: string | null }
+
+export const opsApi = {
+  health: () => apiClient.get<HealthReport>("/ops/health"),
+  backups: () => apiClient.get<BackupsReport>("/ops/backups"),
+  verifyExport: (id: string) => apiClient.post<{ ok: boolean; checks: Array<{ name: string; ok: boolean; detail?: string }> }>(`/ops/backups/exports/${id}/verify`),
+  runExport: () => apiClient.post<{ export: { id: string; status: string } }>("/ops/backups/exports"),
+  retention: () => apiClient.get<{ policy: RetentionPolicyRow[]; purgeEnabled: boolean; preview: RetentionPreviewRow[] }>("/ops/retention"),
+  consent: async (params: { page?: number; limit?: number; status?: string; source?: string }) => {
+    const raw = await apiClient.getRaw<{ records: ConsentRow[]; summary: Array<{ source: string; status: string; count: number }> }>(`/ops/consent${toQuery(params)}`);
+    const meta = raw.meta as EnvelopeMeta;
+    const d = raw.data as unknown as { records: ConsentRow[]; summary: Array<{ source: string; status: string; count: number }> };
+    return { records: d.records, summary: d.summary, total: meta.pagination?.total ?? d.records.length, totalPages: Math.max(1, Math.ceil((meta.pagination?.total ?? d.records.length) / (meta.pagination?.limit ?? 25))) };
+  },
+};
+
+export const privacyApi = {
+  lookup: (email: string) => apiClient.post<PrivacyLookup>("/privacy/lookup", { email }),
+  preview: (email: string) => apiClient.post<ErasurePreview>("/privacy/erasure/preview", { email }),
+  requestErasure: (email: string, reason: string) => apiClient.post<{ requestId: string; approvalId: string; subjectRef: string }>("/privacy/erasure-requests", { email, reason }),
+  requests: () => apiClient.get<{ requests: PrivacyRequestRow[] }>("/privacy/requests"),
+  request: (id: string) => apiClient.get<{ request: { id: string; status: string; reason: string; subjectRef: string; counts: PrivacyCounts | null; maskedEmails: string[] } }>(`/privacy/requests/${id}`),
+  download: async (email: string, format: "json" | "csv", filename: string): Promise<void> => {
+    const blob = await apiClient.getBlob("/privacy/export", { method: "POST", body: { email, format } });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  },
 };

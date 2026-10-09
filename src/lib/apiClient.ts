@@ -146,13 +146,14 @@ async function apiRequest<T>(path: string, options: ApiRequestOptions = {}): Pro
  * returns a Blob instead of parsing a success envelope, since the server
  * genuinely isn't sending one for this endpoint.
  */
-async function fetchBlob(path: string): Promise<Blob> {
+async function fetchBlob(path: string, init?: { method?: "GET" | "POST"; body?: unknown }): Promise<Blob> {
   const baseUrl = resolveBaseUrl();
   const url = `${baseUrl}${path.startsWith("/") ? path : `/${path}`}`;
   const headers: Record<string, string> = {};
   const token = authTokenGetter?.();
   if (token) headers.Authorization = `Bearer ${token}`;
-  const response = await fetch(url, { headers, credentials: "include" });
+  if (init?.body !== undefined) headers["Content-Type"] = "application/json";
+  const response = await fetch(url, { method: init?.method ?? "GET", headers, credentials: "include", body: init?.body !== undefined ? JSON.stringify(init.body) : undefined });
   if (!response.ok) throw new ApiClientError(`Export failed with status ${response.status}`, { code: "EXPORT_FAILED", status: response.status });
   return response.blob();
 }
