@@ -63,10 +63,11 @@ async function schedulerChecks(at: Date): Promise<HealthCheck[]> {
 
 async function connectorChecks(orgId: string, at: Date): Promise<HealthCheck[]> {
   const accounts = await prisma.socialAccount.findMany({ where: { organizationId: orgId, status: { not: "DISCONNECTED" } }, select: { provider: true, status: true, tokenExpiresAt: true, displayName: true } });
+  // Real provider ids are `meta_facebook`, `meta_instagram` and `linkedin*`; match on the network name so a prefix never hides an account.
   const providers: Array<[string, string]> = [["FACEBOOK", "Facebook"], ["INSTAGRAM", "Instagram"], ["LINKEDIN", "LinkedIn"]];
   const out: HealthCheck[] = [];
   for (const [id, name] of providers) {
-    const mine = accounts.filter((a) => a.provider.toUpperCase() === id);
+    const mine = accounts.filter((a) => a.provider.toUpperCase().includes(id));
     if (mine.length === 0) { out.push(mk(`token_${id.toLowerCase()}`, "Connectors", `${name} token`, { status: "disabled", reason: `No ${name} account is connected.` }, at)); continue; }
     const bad = mine.filter((a) => a.status !== "CONNECTED");
     if (bad.length) { out.push(mk(`token_${id.toLowerCase()}`, "Connectors", `${name} token`, { status: "red", reason: `${bad.length} of ${mine.length} account(s) need attention (${bad.map((a) => a.status).join(", ")}). Reconnect in Social → Accounts.` }, at)); continue; }

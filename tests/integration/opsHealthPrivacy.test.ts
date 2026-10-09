@@ -113,7 +113,7 @@ describe("Step 13 operations and privacy", () => {
       expect(all.every((c) => c.reason.length > 0 && !!c.checkedAt)).toBe(true);
     });
     it("connector token: days to expiry drives warn and red; reconnect-needed is red", async () => {
-      const acc = await prisma.socialAccount.create({ data: { organizationId: orgId, provider: "FACEBOOK", externalAccountId: "qa-fb-1", displayName: "QA_TEST_2026_ Page", status: "CONNECTED", tokenExpiresAt: new Date(Date.now() + 10 * 86_400_000) } });
+      const acc = await prisma.socialAccount.create({ data: { organizationId: orgId, provider: "meta_facebook", externalAccountId: "qa-fb-1", displayName: "QA_TEST_2026_ Page", status: "CONNECTED", tokenExpiresAt: new Date(Date.now() + 10 * 86_400_000) } });
       expect((await byKey("token_facebook")).status).toBe("warn");
       await prisma.socialAccount.update({ where: { id: acc.id }, data: { tokenExpiresAt: new Date(Date.now() + 3 * 86_400_000) } });
       const red = await byKey("token_facebook");
@@ -123,6 +123,10 @@ describe("Step 13 operations and privacy", () => {
       expect((await byKey("token_facebook")).status).toBe("ok");
       await prisma.socialAccount.update({ where: { id: acc.id }, data: { status: "NEEDS_REAUTH" } });
       expect((await byKey("token_facebook")).status).toBe("red");
+      const ig = await prisma.socialAccount.create({ data: { organizationId: orgId, provider: "meta_instagram", externalAccountId: "qa-ig-1", displayName: "QA_TEST_2026_ IG", status: "CONNECTED", tokenExpiresAt: new Date(Date.now() + 60 * 86_400_000) } });
+      expect((await byKey("token_instagram")).status).toBe("ok"); // real provider id is meta_instagram
+      expect((await byKey("token_linkedin")).status).toBe("disabled");
+      await prisma.socialAccount.delete({ where: { id: ig.id } });
       await prisma.socialAccount.delete({ where: { id: acc.id } });
     });
     it("queues: failed and stuck approvals surface", async () => {
@@ -185,7 +189,7 @@ describe("Step 13 operations and privacy", () => {
       delete process.env.SUPABASE_ACCESS_TOKEN; delete process.env.SUPABASE_PROJECT_REF;
     });
     it("exports critical tables encrypted, never includes credentials, and verifies (the restore test)", async () => {
-      const acc = await prisma.socialAccount.create({ data: { organizationId: orgId, provider: "FACEBOOK", externalAccountId: "qa-fb-exp", displayName: "QA_TEST_2026_ Export Page", status: "CONNECTED", tokenExpiresAt: new Date(Date.now() + 40 * 86_400_000) } });
+      const acc = await prisma.socialAccount.create({ data: { organizationId: orgId, provider: "meta_facebook", externalAccountId: "qa-fb-exp", displayName: "QA_TEST_2026_ Export Page", status: "CONNECTED", tokenExpiresAt: new Date(Date.now() + 40 * 86_400_000) } });
       await prisma.socialAccountCredential.create({ data: { socialAccountId: acc.id, ciphertext: `sv1.${SECRET_SENTINEL}`, keyVersion: 1 } });
       await prisma.apiKey.create({ data: { organizationId: orgId, name: "QA_TEST_2026_ key", keyHash: SECRET_SENTINEL, prefix: "art_test", createdById: adminId, scopes: [] } });
       await prisma.lead.create({ data: { organizationId: orgId, companyName: "QA_TEST_2026_ Co", email: "qa_test_2026_exp@example.com", source: "manual" } });
@@ -293,7 +297,7 @@ describe("Step 13 operations and privacy", () => {
       const form = await prisma.form.findFirstOrThrow({ where: { slug: "qa-consent-form" } });
       subId = (await prisma.formSubmission.create({ data: { formId: form.id, organizationId: orgId, data: { email: PERSON, message: "hello" }, leadId, ipAddress: "203.0.113.9", userAgent: "UA", consentGiven: true } })).id;
       await prisma.consentRecord.create({ data: { organizationId: orgId, leadId, submissionId: subId, source: "form:qa", status: "GIVEN" } });
-      const acc = await prisma.socialAccount.create({ data: { organizationId: orgId, provider: "FACEBOOK", externalAccountId: "qa-priv", displayName: "QA_TEST_2026_ Priv", status: "CONNECTED" } });
+      const acc = await prisma.socialAccount.create({ data: { organizationId: orgId, provider: "meta_facebook", externalAccountId: "qa-priv", displayName: "QA_TEST_2026_ Priv", status: "CONNECTED" } });
       const conv = await prisma.socialConversation.create({ data: { organizationId: orgId, socialAccountId: acc.id, providerThreadId: "qa-thread", type: "DM", participantName: "QA Person", participantHandle: "qa.person", leadId, lastMessageAt: new Date() } });
       convId = conv.id;
       await prisma.socialMessage.createMany({ data: [1, 2].map((n) => ({ conversationId: conv.id, organizationId: orgId, socialAccountId: acc.id, direction: "INBOUND", authorKind: "CUSTOMER", body: `private message ${n}` })) as never });

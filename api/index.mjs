@@ -26182,7 +26182,7 @@ async function connectorChecks(orgId2, at) {
   const providers = [["FACEBOOK", "Facebook"], ["INSTAGRAM", "Instagram"], ["LINKEDIN", "LinkedIn"]];
   const out = [];
   for (const [id6, name] of providers) {
-    const mine = accounts.filter((a) => a.provider.toUpperCase() === id6);
+    const mine = accounts.filter((a) => a.provider.toUpperCase().includes(id6));
     if (mine.length === 0) {
       out.push(mk(`token_${id6.toLowerCase()}`, "Connectors", `${name} token`, { status: "disabled", reason: `No ${name} account is connected.` }, at));
       continue;
