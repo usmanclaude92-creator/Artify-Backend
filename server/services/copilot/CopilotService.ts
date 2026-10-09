@@ -195,6 +195,7 @@ export class CopilotService {
         where: { organizationId, slug: ws.slug },
       });
       if (!existing) {
+        // Two first-visit requests can race here; the loser's unique-constraint error just means the row now exists.
         await prisma.copilotWorkspace.create({
           data: {
             organizationId,
@@ -213,6 +214,8 @@ export class CopilotService {
             maxTokens: ws.maxTokens,
             requireCitations: ws.requireCitations,
           },
+        }).catch((err: { code?: string }) => {
+          if (err?.code !== "P2002") throw err;
         });
       }
     }

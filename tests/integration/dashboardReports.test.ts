@@ -64,7 +64,7 @@ describe("Step 14 dashboard, funnel and reports", () => {
         const perms = (await prisma.rolePermission.findMany({ where: { role: { key } }, include: { permission: true } })).map((r) => r.permission.key);
         const w = await widgets(key);
         for (const k of WIDGET_KEYS) {
-          const expected = canRead({ role: { key, permissions: perms } }, WIDGET_PERMISSION[k]);
+          const expected = canRead({ role: { id: "", name: key, key, permissions: perms } }, WIDGET_PERMISSION[k]);
           expect(w[k].state === "forbidden", `${key}/${k}`).toBe(!expected);
           if (!expected) { expect(w[k].data).toBeUndefined(); expect(w[k].csv).toBeUndefined(); }
         }
@@ -294,7 +294,7 @@ describe("Step 14 dashboard, funnel and reports", () => {
       }
     });
     it("skips a recipient who can no longer read any section", async () => {
-      await prisma.dashboardReportSchedule.update({ where: { id: scheduleId }, data: { sections: ["operations"], recipientIds: [ids.MANAGER], dryRun: false } });
+      await prisma.dashboardReportSchedule.update({ where: { id: scheduleId }, data: { sections: ["operations"], recipientIds: [ids.MANAGER!], dryRun: false } });
       const r = await reportService.run(scheduleId, "MANUAL");
       expect(r.outcomes).toEqual([{ userId: ids.MANAGER, outcome: "SKIPPED_NO_PERMISSION" }]);
       await prisma.dashboardReportSchedule.update({ where: { id: scheduleId }, data: { sections: ["website", "crm"] } });

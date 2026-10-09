@@ -36468,6 +36468,8 @@ var CopilotService = class {
             maxTokens: ws.maxTokens,
             requireCitations: ws.requireCitations
           }
+        }).catch((err) => {
+          if (err?.code !== "P2002") throw err;
         });
       }
     }
