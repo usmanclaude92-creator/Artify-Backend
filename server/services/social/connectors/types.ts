@@ -7,6 +7,8 @@ export interface SocialProfile {
   handle?: string | null;
   avatarUrl?: string | null;
   accountType?: string;
+  /** App-scoped id of the person who signed in (Meta). Stored so deauthorize / data-deletion callbacks can find the accounts they concern. */
+  providerUserId?: string | null;
 }
 
 /** One connectable asset (e.g. a Facebook Page) discovered during OAuth. Its tokens are encrypted server-side and never sent to the browser. */

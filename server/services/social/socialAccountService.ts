@@ -113,6 +113,7 @@ async function persistAccount(user: SanitizedUser, provider: string, connector: 
     displayName: profile.displayName, handle: profile.handle ?? null, avatarUrl: profile.avatarUrl ?? null, accountType: profile.accountType ?? "PROFILE",
     status: "CONNECTED" as const, scopes: tokens.scopes ?? connector.defaultScopes, tokenExpiresAt: tokens.expiresAt ? new Date(tokens.expiresAt) : null,
     lastSyncAt: new Date(), lastError: null, connectedByUserId: user.id,
+    ...(profile.providerUserId ? { metaUserId: profile.providerUserId } : {}),
   };
   let account = await prisma.socialAccount.upsert({
     where: { organizationId_provider_externalAccountId: { organizationId: user.organizationId, provider, externalAccountId: profile.externalAccountId } },

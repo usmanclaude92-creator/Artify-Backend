@@ -1,5 +1,5 @@
 /** Administration: System Health, Backups, retention and consent register (Step 13). Mounted at /api/v1/ops. */
-import { Router } from "express";
+import { Router, type Request } from "express";
 import { z } from "zod";
 import { authenticateToken, requirePermission, requireRole } from "../../middleware/auth";
 import { sensitiveActionLimiter } from "../../middleware/rateLimiter";
@@ -10,6 +10,7 @@ import { backupService } from "../../services/ops/backupService";
 import { retentionService, purgeEnabled } from "../../services/ops/retentionService";
 import { consentService } from "../../services/ops/consentService";
 import { RETENTION_POLICY } from "../../services/ops/retentionPolicy";
+import { metaReviewService } from "../../services/meta/metaReviewService";
 
 const router = Router();
 router.use(authenticateToken);
@@ -52,5 +53,11 @@ router.get("/consent", requirePermission("privacy.read"), asyncHandler(async (re
   const r = await consentService.list(req.user!.organizationId, q);
   sendSuccess(res, { records: r.rows, summary: r.summary }, 200, { page: q.page, limit: q.limit, total: r.total });
 }));
+
+/** Meta App Review demo workspace (Step 15): SUPER_ADMIN only. */
+const reqMeta = (req: Request) => ({ ip: req.ip, userAgent: req.headers["user-agent"], requestId: req.requestId });
+router.get("/meta-review", requireRole(["SUPER_ADMIN"]), asyncHandler(async (_req, res) => sendSuccess(res, await metaReviewService.status())));
+router.post("/meta-review", requireRole(["SUPER_ADMIN"]), sensitiveActionLimiter, asyncHandler(async (req, res) => sendSuccess(res, await metaReviewService.seed(req.user!, reqMeta(req)), 201)));
+router.delete("/meta-review", requireRole(["SUPER_ADMIN"]), sensitiveActionLimiter, asyncHandler(async (req, res) => sendSuccess(res, await metaReviewService.remove(req.user!, reqMeta(req)))));
 
 export default router;

@@ -455,6 +455,8 @@ model SocialAccount {
   tokenExpiresAt    DateTime?           @map("token_expires_at")
   lastSyncAt        DateTime?           @map("last_sync_at")
   lastError         String?             @map("last_error")
+  // Step 15: app-scoped Facebook user id of the person who connected this asset; lets Meta's deauthorize / data-deletion callbacks find the accounts they concern.
+  metaUserId        String?             @map("meta_user_id")
   connectedByUserId String?             @map("connected_by_user_id")
   createdAt         DateTime            @default(now()) @map("created_at")
   updatedAt         DateTime            @updatedAt @map("updated_at")
@@ -472,6 +474,7 @@ model SocialAccount {
   reviewSnapshots   SocialReviewSnapshot[]
 
   @@unique([organizationId, provider, externalAccountId])
+  @@index([metaUserId])
   @@index([organizationId, status])
   @@map("social_accounts")
 }
@@ -4664,4 +4667,23 @@ model DashboardReportDelivery {
   @@index([runId])
   @@index([userId, createdAt])
   @@map("dashboard_report_deliveries")
+}
+
+/// Step 15: one row per Meta deauthorize / data-deletion callback. `code` is the confirmation code returned to Meta and shown on the public status page.
+/// No personal data: `subjectRef` is a keyed hash of Meta's app-scoped user id.
+model MetaDataRequest {
+  id               String   @id @default(uuid())
+  code             String   @unique
+  organizationId   String?  @map("organization_id")
+  kind             String
+  subjectRef       String   @map("subject_ref")
+  status           String
+  privacyRequestId String?  @map("privacy_request_id")
+  matched          Json?
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  @@index([subjectRef, kind, status])
+  @@index([createdAt])
+  @@map("meta_data_requests")
 }

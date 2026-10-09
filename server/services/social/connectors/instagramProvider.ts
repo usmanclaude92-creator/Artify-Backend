@@ -260,7 +260,7 @@ export const instagramProvider: SocialConnector = {
       if (!scopes.includes("instagram_manage_messages")) warnings.push("Direct messages are unavailable (instagram_manage_messages was not granted).");
       if (p.tasks?.length && !p.tasks.includes("CREATE_CONTENT")) warnings.push("You can't publish for this Page's Instagram account (needs the Create content task on the linked Page).");
       selectable.push({
-        profile: { externalAccountId: ig.id, displayName: ig.name ? `${ig.name} (@${ig.username ?? ig.id})` : `@${ig.username ?? ig.id}`, handle: ig.username ?? null, avatarUrl: ig.profile_picture_url ?? null, accountType: "BUSINESS" },
+        profile: { externalAccountId: ig.id, displayName: ig.name ? `${ig.name} (@${ig.username ?? ig.id})` : `@${ig.username ?? ig.id}`, handle: ig.username ?? null, avatarUrl: ig.profile_picture_url ?? null, accountType: "BUSINESS", providerUserId: me.json.id ?? null },
         tokens: { accessToken: p.access_token, pageId: p.id, igId: ig.id, scopes }, tasks: p.tasks, warnings: [...warnings, `Linked Facebook Page: ${p.name ?? p.id}.`],
       });
     }

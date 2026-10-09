@@ -3622,3 +3622,11 @@ export const dashboardApi = {
   runs: (id: string) => apiClient.get<{ runs: ReportRun[] }>(`/dashboard/reports/schedules/${id}/runs`),
   setKillSwitch: (killSwitch: boolean) => apiClient.put<ReportSettings>("/dashboard/reports/settings", { killSwitch }),
 };
+
+// ---------- Step 15: Meta App Review demo workspace ----------
+export type MetaReviewStatus = { seeded: false } | { seeded: true; organizationId: string; reviewerEmail: string; counts: { accounts: number; conversations: number; posts: number; users: number }; createdAt: string };
+export const metaReviewApi = {
+  status: () => apiClient.get<MetaReviewStatus>("/ops/meta-review"),
+  seed: () => apiClient.post<{ organizationId: string; reviewerEmail: string; reviewerPassword: string; note: string }>("/ops/meta-review"),
+  remove: () => apiClient.delete<{ removed: boolean }>("/ops/meta-review"),
+};

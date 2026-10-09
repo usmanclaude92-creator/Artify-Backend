@@ -198,6 +198,9 @@ describe("meta facebook", () => {
     expect(chosen.body.data.accounts[0]).toMatchObject({ provider: "meta_facebook", externalAccountId: "QA_PAGE_1", displayName: "QA_TEST_2026_ Page One", accountType: "PAGE", status: "CONNECTED", tokenExpiresAt: null });
     const resBody = JSON.stringify(chosen.body);
     for (const secret of [PAGE_TOKEN, PAGE2_TOKEN, USER_TOKEN]) expect(resBody).not.toContain(secret);
+    // Step 15: the app-scoped id of the person who connected is stored (for Meta's deauthorize / deletion callbacks) and never returned by the API.
+    expect((await prisma.socialAccount.findMany({ where: { externalAccountId: { in: ["QA_PAGE_1", "QA_PAGE_2"] } } })).map((a) => a.metaUserId)).toEqual(["QA_USER", "QA_USER"]);
+    expect(resBody).not.toContain("QA_USER");
     page1 = chosen.body.data.accounts[0].id; page2 = chosen.body.data.accounts[1].id;
 
     // Page tokens are stored encrypted, bound to their account; the user token is never stored
