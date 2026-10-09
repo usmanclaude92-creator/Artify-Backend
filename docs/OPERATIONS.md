@@ -147,3 +147,19 @@ Manual "Run export now" is SUPER_ADMIN only (role check). No existing permission
 | Verify fails "decrypt" | the key differs from the one used at export time |
 | Erasure request can't be approved | only one SUPER_ADMIN exists, or the approver is the requester |
 | Retention tab shows eligible rows but nothing is deleted | `RETENTION_PURGE_ENABLED` is not `true` (by design) |
+
+## 10. Security sweep (2026-10-09, production, read-only unless stated)
+
+| # | Finding | Severity | Status |
+|---|---|---|---|
+| 1 | Admin-level accounts: 1 SUPER_ADMIN (`admin@artifysols.com`) and 7 ADMIN, **none with MFA**. Six ADMINs are leftover test accounts ("Phase 1 Preview ..." organizations, last login 2026-09-30) | High | **Not changed.** Owner decision: disable or delete the six test accounts; enable MFA for real admins |
+| 2 | Only **one SUPER_ADMIN**: the two-person erasure rule can never be satisfied (the requester cannot approve) | Medium | Create a second SUPER_ADMIN before the first erasure request |
+| 3 | `qa_test_2026_landing@invalid.example` (ADMIN, no usable password, session revoked) and the Step 12 QA page, lead, form and analytics event still exist: the cleanup deletes were never approved | Medium | Open. Cleanup SQL is in the Step 12 report |
+| 4 | 19 active sessions on the single SUPER_ADMIN account | Low | Not changed. "Log out everywhere" in My Sessions clears them |
+| 5 | No active API keys, webhook endpoints or enabled integrations | Info | |
+| 6 | Public endpoints: forms, landing submit, public lead, analytics beacon, webhooks (signature + `webhookLimiter`), auth, password reset, portal registration all have a dedicated limiter. Invitation preview/accept and landing preview had **only the general limiter (300 per 15 min)** | Medium | **Fixed**: `tokenLinkLimiter` (40 per 15 min per IP) on those three routes |
+| 7 | All limiters use `passOnStoreError: true`: if the Redis store fails (or `REDIS_URL` is unset, which falls back to per-instance memory on serverless) limits are **fail-open / weak**. Cron and internal tick endpoints do fail closed (404 without `CRON_SECRET`, 401 on a wrong secret, constant-time compare) | Medium | **Not changed** (availability trade-off). System Health shows whether `REDIS_URL` is set |
+| 8 | The access log wrote the raw URL, so invitation tokens, landing preview tokens and token-like query values reached Vercel logs | Medium | **Fixed**: `redactUrl` in the request logger (tested) |
+| 9 | Secrets in logs: no `console.log` in request paths; pino redacts password, token, secret, API key and authorization fields; no log call found that passes a credential-named field | Info | OK |
+| 10 | Export and privacy endpoints use `sensitiveActionLimiter`; emails travel in POST bodies, never in URLs | Info | OK |
+| 11 | There is no unsubscribe or marketing-email link flow in the app | Info | Nothing to check |
