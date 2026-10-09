@@ -153,6 +153,10 @@ export const PERMISSION_KEYS = [
   "social.analytics.read",
   "social.listening.read",
   "social.reviews.respond",
+  // Step 12 — Marketing landing pages (publish is ADMIN/SUPER_ADMIN only).
+  "marketing.landing.read",
+  "marketing.landing.edit",
+  "marketing.landing.publish",
   // Step 2 redesign — global Approvals center front door (each source still needs its own permission).
   "approvals.read",
   "settings.read",

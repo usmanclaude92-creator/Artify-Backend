@@ -2868,7 +2868,7 @@ export const reportsApi = {
 
 // ---- Global Approvals center + sidebar badges (Step 2 redesign) ----
 
-export type ApprovalSourceKey = "ai" | "automation" | "content" | "social";
+export type ApprovalSourceKey = "ai" | "automation" | "content" | "social" | "landing";
 export type ApprovalStatusFilter = "pending" | "approved" | "rejected";
 
 export interface CenterApproval {
@@ -3483,4 +3483,50 @@ export const socialInboxApi = {
   saveCanned: (id: string | null, input: { title: string; body: string; category?: string | null; approvedForAuto?: boolean; matchKeywords?: string[] }) =>
     (id ? apiClient.put<{ reply: InboxCannedReply }>(`/social/inbox/canned/${id}`, input) : apiClient.post<{ reply: InboxCannedReply }>("/social/inbox/canned", input)).then((r) => r.reply),
   deleteCanned: (id: string) => apiClient.delete<{ deleted: boolean }>(`/social/inbox/canned/${id}`),
+};
+
+// ---- Marketing → Landing Pages (Step 12) ----
+
+export type LandingStatus = "DRAFT" | "IN_REVIEW" | "PUBLISHED" | "UNPUBLISHED" | "ARCHIVED";
+export interface LandingBlock { id: string; type: string; placeholder?: boolean; props: Record<string, any> }
+export interface LandingDocument { version: 1; blocks: LandingBlock[] }
+export interface LandingSeo { metaTitle?: string; metaDescription?: string; ogImageMediaId: string | null; noindex: boolean }
+export interface LandingPublishIssue { blockId?: string; message: string }
+export interface LandingPageRow {
+  id: string; title: string; slug: string; status: LandingStatus; path: string; templateKey: string | null; updatedAt: string; publishedAt: string | null;
+  hasUnpublishedChanges: boolean; pendingApproval: boolean; version: number; noindex: boolean;
+}
+export interface LandingPageView {
+  id: string; title: string; slug: string; status: LandingStatus; templateKey: string | null; document: LandingDocument; seo: LandingSeo; version: number;
+  updatedAt: string; createdAt: string; publishedAt: string | null; unpublishedAt: string | null;
+  live: { revisionId: string; version: number; publishedAt: string | null } | null; hasUnpublishedChanges: boolean;
+  pendingApproval: { id: string; requestedAt: string } | null; publishIssues: LandingPublishIssue[]; canPublishNow: boolean; path: string; publicUrl: string | null;
+}
+export interface LandingTemplateInfo { key: string; name: string; description: string }
+export interface LandingRevisionRow { id: string; version: number; title: string; createdAt: string; publishedAt: string | null; createdBy: string | null; isCurrent: boolean; isLive: boolean; blocks: number }
+export interface LandingStats {
+  days: number; path: string; views: number; uniqueSessions: number; submissions: number; conversionRate: number | null;
+  topSources: Array<{ source: string; views: number }>; daily: Array<{ date: string; views: number }>; hasData: boolean; note: string;
+}
+export interface LandingUpdateInput { title?: string; slug?: string; document?: LandingDocument; seo?: { metaTitle?: string; metaDescription?: string; ogImageMediaId?: string | null; noindex?: boolean }; expectedUpdatedAt?: string }
+
+export const landingApi = {
+  templates: () => apiClient.get<{ templates: LandingTemplateInfo[] }>("/marketing/landing-pages/templates"),
+  list: (params: { page?: number; limit?: number; search?: string; status?: LandingStatus }) => paginatedGet<LandingPageRow>("/marketing/landing-pages", "pages", params),
+  live: () => apiClient.get<{ pages: Array<{ id: string; title: string; slug: string; path: string; url: string | null }> }>("/marketing/landing-pages/live"),
+  get: (id: string) => apiClient.get<{ page: LandingPageView }>(`/marketing/landing-pages/${id}`),
+  create: (payload: { title: string; slug?: string; templateKey: string }) => apiClient.post<{ page: LandingPageView }>("/marketing/landing-pages", payload),
+  update: (id: string, payload: LandingUpdateInput) => apiClient.patch<{ page: LandingPageView }>(`/marketing/landing-pages/${id}`, payload),
+  revisions: (id: string) => apiClient.get<{ revisions: LandingRevisionRow[] }>(`/marketing/landing-pages/${id}/revisions`),
+  restore: (id: string, revisionId: string) => apiClient.post<{ page: LandingPageView }>(`/marketing/landing-pages/${id}/restore`, { revisionId }),
+  submitForApproval: (id: string) => apiClient.post<{ approvalId: string; page: LandingPageView }>(`/marketing/landing-pages/${id}/submit-for-approval`),
+  withdraw: (id: string) => apiClient.post<{ page: LandingPageView }>(`/marketing/landing-pages/${id}/withdraw`),
+  unpublish: (id: string) => apiClient.post<{ page: LandingPageView }>(`/marketing/landing-pages/${id}/unpublish`),
+  archive: (id: string) => apiClient.post<{ page: LandingPageView }>(`/marketing/landing-pages/${id}/archive`),
+  unarchive: (id: string) => apiClient.post<{ page: LandingPageView }>(`/marketing/landing-pages/${id}/unarchive`),
+  preview: (id: string, ttlHours = 24) => apiClient.post<{ preview: { token: string; expiresAt: string; url: string | null; path: string } }>(`/marketing/landing-pages/${id}/preview`, { ttlHours }),
+  revokePreviews: (id: string) => apiClient.post<{ revoked: number }>(`/marketing/landing-pages/${id}/preview/revoke`),
+  utmLink: (id: string, p: { source: string; medium: string; campaign: string; term?: string; content?: string }) =>
+    apiClient.get<{ url: string | null; path: string }>(`/marketing/landing-pages/${id}/utm-link${toQuery(p)}`),
+  stats: (id: string, days = 30) => apiClient.get<{ stats: LandingStats }>(`/marketing/landing-pages/${id}/stats${toQuery({ days })}`),
 };

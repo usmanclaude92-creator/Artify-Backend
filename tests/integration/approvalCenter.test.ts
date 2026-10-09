@@ -199,7 +199,7 @@ describe("Approvals center", () => {
     expect(badges).not.toHaveProperty("myWork"); // no automation.read
 
     const all = await api("get", "/approvals?status=pending", adminToken);
-    expect(all.body.data.sources).toEqual(["ai", "automation", "content", "social"]);
+    expect(all.body.data.sources).toEqual(["ai", "automation", "content", "social", "landing"]);
     expect((await api("get", "/approvals", portalToken)).status).toBe(403);
   });
 
