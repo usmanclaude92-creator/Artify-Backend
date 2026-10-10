@@ -2,7 +2,7 @@
 
 Generated from `NAV_ITEMS` (`src/lib/permissions.ts`) and the role → permission rows of the seeded catalogue. ✔ = item shown in the sidebar and the page opens; — = hidden in the sidebar, and a typed URL shows the *Access denied* page (`AppShell`). The API enforces the same permission: `tests/integration/qaRoleMatrix.test.ts` probes one endpoint per permission the sidebar uses, for all six roles and an anonymous caller.
 
-Dashboard, Notifications and Security (own sessions/MFA) need no permission. CLIENT_PORTAL is the external client role: it sees only those three plus Client Portal, and `/dashboard` shows it a pointer to the portal instead of workspace numbers.
+Dashboard, Notifications and Security (own sessions/MFA) need no permission. CLIENT_PORTAL is the external client role: it sees only those three plus Your Account (Client Portal), and `/dashboard` shows it a pointer to the portal instead of workspace numbers.
 
 81 items in 10 sections.
 
@@ -117,7 +117,7 @@ Dashboard, Notifications and Security (own sessions/MFA) need no permission. CLI
 
 | Page | Path | Needs | SUPER_ADMIN | ADMIN | MANAGER | USER | VIEWER | CLIENT_PORTAL |
 |---|---|---|---|---|---|---|---|---|
-| client-portal | `/portal` | portal.dashboard.read | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ |
+| client-portal | `/portal` | portal.dashboard.read | — | — | — | — | — | ✔ |
 
 ## Social Media
 
@@ -141,9 +141,11 @@ Dashboard, Notifications and Security (own sessions/MFA) need no permission. CLI
 
 | Role | Pages visible (of 81) |
 |---|---|
-| SUPER_ADMIN | 81 |
-| ADMIN | 81 |
-| MANAGER | 64 |
-| USER | 50 |
-| VIEWER | 70 |
+| SUPER_ADMIN | 80 |
+| ADMIN | 80 |
+| MANAGER | 63 |
+| USER | 49 |
+| VIEWER | 69 |
 | CLIENT_PORTAL | 4 |
+
+Update (Step 15 follow-up): the *Your Account* (client portal) item is now shown to CLIENT_PORTAL only. Staff roles hold the portal read permissions, but the page is not for them and the API refuses them, so it was an error page in their sidebar. Staff totals above are one lower than first generated.

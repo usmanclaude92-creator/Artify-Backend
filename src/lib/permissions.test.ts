@@ -81,6 +81,13 @@ describe("sidebar structure (Step 1 redesign)", () => {
     }
   });
 
+  it("shows the client portal page only to the CLIENT_PORTAL role, even when staff roles hold the portal permission", () => {
+    const perms = ["portal.dashboard.read"];
+    expect(visibleNavItems(perms, "ADMIN").map((i) => i.path)).not.toContain("/portal");
+    expect(visibleNavItems(perms, "SUPER_ADMIN").map((i) => i.path)).not.toContain("/portal");
+    expect(visibleNavItems(perms, "CLIENT_PORTAL").map((i) => i.path)).toContain("/portal");
+  });
+
   it("keeps every one of the 62 existing pages plus the new /social and /approvals pages, with unique ids and paths", () => {
     const all = Object.values(EXPECTED).flat();
     expect(all).toHaveLength(82);

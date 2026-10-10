@@ -187,6 +187,8 @@ export interface NavItem {
   icon: ComponentType<{ className?: string }>;
   /** Any one of these permissions is enough to show the item; empty means always visible to an authenticated user. */
   requiresAnyPermission?: string[];
+  /** Shown only to the external CLIENT_PORTAL role (staff roles hold the portal read permissions but the page is not for them: the API refuses them). */
+  portalOnly?: boolean;
   component: ComponentType | LazyExoticComponent<ComponentType>;
   /** Groups items under a heading in the sidebar (§22/§31) — purely presentational. */
   section: NavSection;
@@ -834,6 +836,7 @@ export const NAV_ITEMS: NavItem[] = [
     path: "/portal",
     icon: UserCircle,
     requiresAnyPermission: ["portal.dashboard.read"],
+    portalOnly: true,
     component: ClientPortalPage,
     section: "Client Portal",
   },
@@ -956,6 +959,10 @@ export const NAV_ITEMS: NavItem[] = [
   },
 ];
 
-export function visibleNavItems(permissions: readonly string[] | undefined): NavItem[] {
-  return NAV_ITEMS.filter((item) => !item.requiresAnyPermission || item.requiresAnyPermission.some((p) => hasPermission(permissions, p)));
+/** `roleKey` is optional so callers that only know permissions keep working; when given, portal-only items are hidden from every other role. */
+export function visibleNavItems(permissions: readonly string[] | undefined, roleKey?: string): NavItem[] {
+  return NAV_ITEMS.filter((item) => {
+    if (item.portalOnly && roleKey !== undefined && roleKey !== "CLIENT_PORTAL") return false;
+    return !item.requiresAnyPermission || item.requiresAnyPermission.some((p) => hasPermission(permissions, p));
+  });
 }

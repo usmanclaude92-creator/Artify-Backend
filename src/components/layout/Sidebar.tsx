@@ -205,7 +205,7 @@ export const Sidebar: React.FC<{ mobileOpen: boolean; onCloseMobile: () => void 
   const { user } = useAuth();
   const { path, navigate } = useRouter();
   const prefs = useNavPreferences();
-  const items = useMemo(() => visibleNavItems(user?.role.permissions), [user?.role.permissions]);
+  const items = useMemo(() => visibleNavItems(user?.role.permissions, user?.role.key), [user?.role.permissions, user?.role.key]);
   const badges = useNavBadges();
   const countFor = (itemId: string): number => {
     const def = BADGE_FOR_ITEM[itemId];
