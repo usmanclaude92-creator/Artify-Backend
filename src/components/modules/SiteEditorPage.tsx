@@ -1354,12 +1354,15 @@ const PageOrPartEditor: React.FC = () => {
   // to rendered block content only (never the Control Center's own chrome
   // theme). Reads the PUBLISHED values, same as what the live site shows,
   // so what an editor sees here matches what visitors will see.
+  // Skipped for roles without settings.read: they would only get a 403 (a console error) and the canvas falls back to defaults anyway.
+  const canReadGlobalStyles = hasPermission(user?.role.permissions, "settings.read");
   useEffect(() => {
+    if (!canReadGlobalStyles) return;
     void siteSettingsApi
       .getGlobalStyles()
       .then((res) => setGlobalStyles(res.published))
       .catch(() => undefined);
-  }, []);
+  }, [canReadGlobalStyles]);
 
   // Pre-resolve every image block's URL on load (both for the Canvas and
   // for blocksToPlainHtml's body fallback below).

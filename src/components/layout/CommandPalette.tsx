@@ -255,7 +255,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ open, onClose })
   }, [query, permissions]);
 
   const navItemResults = useMemo((): PaletteItem[] => {
-    const visible = visibleNavItems(permissions);
+    const visible = visibleNavItems(permissions, user?.role.key);
     const trimmed = query.trim().toLowerCase();
     const matches = trimmed ? visible.filter((item) => item.label.toLowerCase().includes(trimmed) || item.section.toLowerCase().includes(trimmed)) : visible;
     return matches.map((item) => ({
@@ -283,7 +283,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ open, onClose })
   const pinActionResults = useMemo((): PaletteItem[] => {
     const trimmed = query.trim().toLowerCase();
     if (trimmed && !"pin unpin current page favourite favorite".includes(trimmed) && !trimmed.includes("pin")) return [];
-    const current = visibleNavItems(permissions).find((i) => i.path === path);
+    const current = visibleNavItems(permissions, user?.role.key).find((i) => i.path === path);
     if (!current) return [];
     const pinned = prefs.isPinned(current.id);
     if (!pinned && prefs.pinned.length >= prefs.maxPins) return [];

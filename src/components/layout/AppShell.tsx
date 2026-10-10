@@ -43,6 +43,8 @@ export const AppShell: React.FC = () => {
           Page not found.
         </div>
       );
+  } else if (item.portalOnly && user?.role.key !== "CLIENT_PORTAL") {
+    content = <AccessDenied requiredPermission="the client portal role" />;
   } else if (item.requiresAnyPermission && !item.requiresAnyPermission.some((p) => hasPermission(user?.role.permissions, p))) {
     content = <AccessDenied requiredPermission={item.requiresAnyPermission[0]} />;
   } else {
@@ -54,7 +56,7 @@ export const AppShell: React.FC = () => {
   // role gets at least users.read/audit.read via the seed, but handled
   // honestly rather than rendering a blank shell) still sees Dashboard,
   // which requires no permission.
-  void visibleNavItems(user?.role.permissions);
+  void visibleNavItems(user?.role.permissions, user?.role.key);
 
   return (
     <div className="flex min-h-screen" style={{ background: "var(--bg-app)" }}>
