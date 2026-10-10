@@ -19039,14 +19039,15 @@ async function grantedPageIds(userToken) {
     return [];
   }
 }
-async function listGrantedPagesDirect(userToken, fields) {
+async function listGrantedPagesDirect(userToken, fields, notes) {
   const ids = await grantedPageIds(userToken);
   const rows = [];
   for (const id6 of ids.slice(0, 25)) {
     try {
       const r = await graph({ method: "GET", path: `/${id6}`, token: userToken, phase: "read", query: { fields } });
       if (r.json && r.json.id) rows.push(r.json);
-    } catch {
+    } catch (err) {
+      notes?.push(`Reading Page ${id6}: ${String(err?.message ?? err).slice(0, 220)}`);
     }
   }
   return rows;
@@ -19304,7 +19305,7 @@ function parseWebhookPayload(payload) {
   return out;
 }
 var PAGE_FIELDS = "id,name,category,access_token,tasks,picture{url}";
-async function listPages(userToken) {
+async function listPages(userToken, notes) {
   const pages = [];
   let after;
   for (let i = 0; i < 5; i++) {
@@ -19313,7 +19314,7 @@ async function listPages(userToken) {
     after = r.json.paging?.next ? r.json.paging.cursors?.after : void 0;
     if (!after) break;
   }
-  return pages.length ? pages : listGrantedPagesDirect(userToken, PAGE_FIELDS);
+  return pages.length ? pages : listGrantedPagesDirect(userToken, PAGE_FIELDS, notes);
 }
 var toSelectable = (p, scopes, userId) => {
   if (!p.access_token) return null;
@@ -19349,16 +19350,17 @@ var facebookPageProvider = {
     const long = await graph({ method: "GET", path: "/oauth/access_token", phase: "read", query: { grant_type: "fb_exchange_token", client_id: config.metaAppId, client_secret: config.metaAppSecret, fb_exchange_token: short.json.access_token } });
     const userToken = long.json.access_token;
     if (!userToken) throw new Error("Meta did not return a long-lived token.");
+    const notes = [];
     const [me, perms, pages] = await Promise.all([
       graph({ method: "GET", path: "/me", token: userToken, phase: "read", query: { fields: "id,name" } }),
       graph({ method: "GET", path: "/me/permissions", token: userToken, phase: "read" }),
-      listPages(userToken)
+      listPages(userToken, notes)
     ]);
     const scopes = (perms.json.data ?? []).filter((p) => p.status === "granted").map((p) => p.permission);
     const selectable = pages.map((p) => toSelectable(p, scopes, me.json.id)).filter((x) => !!x);
     if (selectable.length === 0) {
       const why = pages.length === 0 ? await describeEmptyPages(userToken) : "Meta returned Pages but none came with an access token (the account may lack a full-control Page role).";
-      throw new Error(`This Facebook account does not manage any Pages (or no Page access was granted). ${why}`.trim());
+      throw new Error(`This Facebook account does not manage any Pages (or no Page access was granted). ${why} ${notes.join(" ")}`.trim());
     }
     return { profile: { externalAccountId: me.json.id ?? "user", displayName: me.json.name ?? "Facebook user", accountType: "USER" }, tokens: { accessToken: "" }, selectable };
   },
@@ -19828,7 +19830,7 @@ async function liveQuotaExhausted(token, ig) {
   return null;
 }
 var PAGE_IG_FIELDS = "id,name,access_token,tasks,instagram_business_account{id,username,name,profile_picture_url},connected_instagram_account{id,username,name,profile_picture_url}";
-async function listPagesWithInstagram(userToken) {
+async function listPagesWithInstagram(userToken, notes) {
   const pages = [];
   let after;
   for (let i = 0; i < 5; i++) {
@@ -19843,7 +19845,7 @@ async function listPagesWithInstagram(userToken) {
     after = r.json.paging?.next ? r.json.paging.cursors?.after : void 0;
     if (!after) break;
   }
-  return pages.length ? pages : listGrantedPagesDirect(userToken, PAGE_IG_FIELDS);
+  return pages.length ? pages : listGrantedPagesDirect(userToken, PAGE_IG_FIELDS, notes);
 }
 var instagramProvider = {
   key: "meta_instagram",
@@ -19871,13 +19873,14 @@ var instagramProvider = {
     const long = await graph({ method: "GET", path: "/oauth/access_token", phase: "read", query: { grant_type: "fb_exchange_token", client_id: config.metaAppId, client_secret: config.metaAppSecret, fb_exchange_token: short.json.access_token } });
     const userToken = long.json.access_token;
     if (!userToken) throw new Error("Meta did not return a long-lived token.");
+    const notes = [];
     const [me, perms, pages] = await Promise.all([
       graph({ method: "GET", path: "/me", token: userToken, phase: "read", query: { fields: "id,name" } }),
       graph({ method: "GET", path: "/me/permissions", token: userToken, phase: "read" }),
-      listPagesWithInstagram(userToken)
+      listPagesWithInstagram(userToken, notes)
     ]);
     const scopes = (perms.json.data ?? []).filter((p) => p.status === "granted").map((p) => p.permission);
-    if (pages.length === 0) throw new ConnectorUserError(`This Facebook account does not manage any Pages. Instagram connects through a Facebook Page: link your Instagram professional account to a Page you manage, then try again. ${await describeEmptyPages(userToken)}`.trim());
+    if (pages.length === 0) throw new ConnectorUserError(`This Facebook account does not manage any Pages. Instagram connects through a Facebook Page: link your Instagram professional account to a Page you manage, then try again. ${await describeEmptyPages(userToken)} ${notes.join(" ")}`.trim());
     const selectable = [];
     for (const p of pages) {
       const ig = p.instagram_business_account ?? p.connected_instagram_account;

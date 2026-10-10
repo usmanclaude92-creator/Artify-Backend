@@ -156,15 +156,16 @@ export async function grantedPageIds(userToken: string): Promise<string[]> {
  * Fallback when /me/accounts is empty although a Page-level grant exists (seen for Pages owned through a Business portfolio): read each granted
  * Page directly with the user token. Returns only rows that Meta answers for; errors for one Page never block the others.
  */
-export async function listGrantedPagesDirect<T extends { id: string }>(userToken: string, fields: string): Promise<T[]> {
+export async function listGrantedPagesDirect<T extends { id: string }>(userToken: string, fields: string, notes?: string[]): Promise<T[]> {
   const ids = await grantedPageIds(userToken);
   const rows: T[] = [];
   for (const id of ids.slice(0, 25)) {
     try {
       const r = await graph<T>({ method: "GET", path: `/${id}`, token: userToken, phase: "read", query: { fields } });
       if (r.json && (r.json as { id?: string }).id) rows.push(r.json);
-    } catch {
-      /* a Page we cannot read is skipped */
+    } catch (err) {
+      // A Page we cannot read is skipped; Meta's reason (already redacted by the transport) is kept for the connect error.
+      notes?.push(`Reading Page ${id}: ${String((err as { message?: string })?.message ?? err).slice(0, 220)}`);
     }
   }
   return rows;

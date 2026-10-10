@@ -209,7 +209,7 @@ type PageRow = { id: string; name?: string; access_token?: string; tasks?: strin
 
 const PAGE_IG_FIELDS = "id,name,access_token,tasks,instagram_business_account{id,username,name,profile_picture_url},connected_instagram_account{id,username,name,profile_picture_url}";
 
-async function listPagesWithInstagram(userToken: string): Promise<PageRow[]> {
+async function listPagesWithInstagram(userToken: string, notes: string[]): Promise<PageRow[]> {
   const pages: PageRow[] = [];
   let after: string | undefined;
   for (let i = 0; i < 5; i++) {
@@ -221,7 +221,7 @@ async function listPagesWithInstagram(userToken: string): Promise<PageRow[]> {
     after = r.json.paging?.next ? r.json.paging.cursors?.after : undefined;
     if (!after) break;
   }
-  return pages.length ? pages : listGrantedPagesDirect<PageRow>(userToken, PAGE_IG_FIELDS);
+  return pages.length ? pages : listGrantedPagesDirect<PageRow>(userToken, PAGE_IG_FIELDS, notes);
 }
 
 export const instagramProvider: SocialConnector = {
@@ -246,13 +246,14 @@ export const instagramProvider: SocialConnector = {
     const long = await graph<{ access_token?: string }>({ method: "GET", path: "/oauth/access_token", phase: "read", query: { grant_type: "fb_exchange_token", client_id: config.metaAppId, client_secret: config.metaAppSecret, fb_exchange_token: short.json.access_token } });
     const userToken = long.json.access_token;
     if (!userToken) throw new Error("Meta did not return a long-lived token.");
+    const notes: string[] = [];
     const [me, perms, pages] = await Promise.all([
       graph<{ id?: string; name?: string }>({ method: "GET", path: "/me", token: userToken, phase: "read", query: { fields: "id,name" } }),
       graph<{ data?: Array<{ permission: string; status: string }> }>({ method: "GET", path: "/me/permissions", token: userToken, phase: "read" }),
-      listPagesWithInstagram(userToken),
+      listPagesWithInstagram(userToken, notes),
     ]);
     const scopes = (perms.json.data ?? []).filter((p) => p.status === "granted").map((p) => p.permission);
-    if (pages.length === 0) throw new ConnectorUserError(`This Facebook account does not manage any Pages. Instagram connects through a Facebook Page: link your Instagram professional account to a Page you manage, then try again. ${await describeEmptyPages(userToken)}`.trim());
+    if (pages.length === 0) throw new ConnectorUserError(`This Facebook account does not manage any Pages. Instagram connects through a Facebook Page: link your Instagram professional account to a Page you manage, then try again. ${await describeEmptyPages(userToken)} ${notes.join(" ")}`.trim());
     const selectable: SelectableAccount[] = [];
     for (const p of pages) {
       const ig = p.instagram_business_account ?? p.connected_instagram_account;
