@@ -9,6 +9,7 @@ import crypto from "node:crypto";
 import { createApp, finalizeApp } from "../../server/app/app";
 import { disconnectPrisma, prisma } from "../../server/db/prisma";
 import { resetDb } from "../helpers/db";
+import { config } from "../../server/config/env";
 
 type Probe = { method: "get" | "post" | "patch"; path: string; body?: object; /** roles that pass the permission guard but are refused later by the service (documented) */ serviceRefuses?: string[] };
 /** nav permission -> an endpoint that is guarded by exactly that permission (POST {} is used where the guard precedes validation, so authorised callers get 400). */
@@ -74,7 +75,8 @@ describe("QA role x API matrix", () => {
 
   beforeAll(async () => {
     await resetDb();
-    const org = await prisma.organization.create({ data: { name: "QA_TEST_2026_ Matrix", slug: "qa-matrix" } });
+    // The platform-level pages (System Health, Backups) are limited to the main workspace, so the matrix runs inside it.
+    const org = await prisma.organization.create({ data: { id: config.publicWebsiteOrganizationId || undefined, name: "QA_TEST_2026_ Matrix", slug: "qa-matrix" } });
     for (const key of ROLES) {
       const role = await prisma.role.findUniqueOrThrow({ where: { key }, include: { rolePermissions: { include: { permission: true } } } });
       perms[key] = new Set(role.rolePermissions.map((rp) => rp.permission.key));
