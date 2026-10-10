@@ -217,15 +217,31 @@ App dashboard → Settings → Basic:
 - [ ] App domains: `artifysols.com`, `cc.artifysols.com`.
 - [ ] Contact email = the mailbox in the Privacy Policy.
 - [ ] Business Verification complete; Data Use Checkup answered if prompted.
-- [ ] Every `[Owner to confirm: …]` on the three public pages replaced (list below).
+- [ ] Public pages reviewed by you (and the Terms by a lawyer); replace the trading-name wording once the company is registered.
 - [ ] Test users / testers added; test Page and linked test Instagram account created.
 - [ ] Demo workspace created, reviewer credentials pasted into the reviewer instructions, publishing switched on for the review window.
 - [ ] Recordings made per section 4, English, 1080p.
 - [ ] App mode: stay in **Development** while submitting; **do not** switch to Live until Meta has approved (switching is your decision, not done by this build).
 - [ ] After approval: remove the demo workspace, switch publishing back to your normal setting, put a reminder for the annual Data Use Checkup.
 
-### Owner values still unfilled in the public pages
-Run `listOwnerMarkers()` (website repo, `src/components/pages/legalContent.ts`) or search the three pages for "Owner to confirm". Current list: company legal name, registered business address, privacy contact email, contact email, effective date, response time, authority to complain to, legal bases and regulations, AI provider, email provider, hosting regions/transfer mechanism, retention confirmation, minimum age, ownership of custom work, fees, limitation of liability, governing law. Terms sections 8, 10 and 11 need a lawyer.
+### Owner values in the public pages
+All placeholders were filled on 9 October 2026 with the values below, written from the platform's real behaviour and common practice (UAE PDPL, GDPR principles). **They are assumptions you must confirm or correct**, and a lawyer should review the Terms (liability, governing law) before you rely on them.
+
+| Item | Value used |
+|---|---|
+| Business name | "Artify Solutions", described as a trading name **not yet registered as a company** |
+| Contact / privacy email | ArtifySols@gmail.com (a Gmail address: Meta's Business Verification and reviewers generally prefer an address on your own domain) |
+| Registered address | none published; the pages say it will be added after registration |
+| Effective date | 9 October 2026 |
+| Reply time | 30 days |
+| Laws / authority | UAE PDPL principles and GDPR principles; complaints to the UAE Data Office or the person's EU/UK authority |
+| AI provider | Google Gemini, when AI features are enabled (verify in production: the key is set, the provider variable is not readable) |
+| Email | platform sends none; replies from the Gmail mailbox |
+| Hosting | database Supabase Tokyo (ap-northeast-1); API on Vercel Tokyo; website on Vercel US East |
+| Minimum age | not directed at under-18s |
+| Terms | fees per written proposal; liability capped at fees paid in the previous 12 months, no cap where the law forbids; **governed by UAE law (assumption: confirm the country/emirate)**; custom work belongs to the client once paid |
+
+Still needed outside the pages: a registered legal entity (Business Verification requires one), a registered address and, ideally, a business email on `artifysols.com`; then update the pages (`src/components/pages/legalContent.ts` in the website repo).
 
 ### Live test result (production, no secrets used)
 * Forged, malformed and missing `signed_request` on both callbacks: `400 {"error":"Invalid request."}`; 7 `META_CALLBACK_REJECTED` audit rows written; unknown/junk codes on the status endpoint: 404.
