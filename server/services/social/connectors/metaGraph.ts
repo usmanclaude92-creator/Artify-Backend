@@ -139,24 +139,41 @@ export async function graph<T = Record<string, unknown>>(req: GraphRequest): Pro
   return { status: res.status, json, headers: res.headers };
 }
 
-/**
- * One line that explains an EMPTY Page list: what Meta says the login actually granted (permission names and Page ids only, never tokens).
- * Used in the connect error so "does not manage any Pages" can be told apart from "granted to other Pages" or "Page-level permission missing".
- * Best effort: any failure returns an empty string so the original error still reaches the person.
- */
-export async function describeEmptyPages(userToken: string): Promise<string> {
+/** Page ids the login was granted at Page level (debug_token granular_scopes). Empty on any failure. */
+export async function grantedPageIds(userToken: string): Promise<string[]> {
   try {
-    const r = await graph<{ data?: { is_valid?: boolean; scopes?: string[]; granular_scopes?: Array<{ scope: string; target_ids?: string[] }> } }>({
+    const r = await graph<{ data?: { granular_scopes?: Array<{ scope: string; target_ids?: string[] }> } }>({
       method: "GET", path: "/debug_token", token: `${config.metaAppId}|${config.metaAppSecret}`, phase: "read", query: { input_token: userToken },
     });
-    const d = r.json.data;
-    if (!d) return "";
-    const pageGrants = (d.granular_scopes ?? []).filter((g) => g.scope === "pages_show_list" || g.scope === "pages_manage_posts");
-    const targets = Array.from(new Set(pageGrants.flatMap((g) => g.target_ids ?? [])));
-    const parts = [`Meta returned 0 Pages for this login.`, `Granted: ${(d.scopes ?? []).join(", ") || "none"}.`];
-    parts.push(targets.length ? `Page-level grants cover: ${targets.join(", ")}.` : "No Page-level grant was recorded (no Page was ticked on Facebook's screen).");
-    return redactSecrets(parts.join(" "), [userToken]).slice(0, 400);
+    const grants = (r.json.data?.granular_scopes ?? []).filter((g) => g.scope === "pages_show_list" || g.scope === "pages_manage_posts");
+    return Array.from(new Set(grants.flatMap((g) => g.target_ids ?? [])));
   } catch {
-    return "";
+    return [];
   }
+}
+
+/**
+ * Fallback when /me/accounts is empty although a Page-level grant exists (seen for Pages owned through a Business portfolio): read each granted
+ * Page directly with the user token. Returns only rows that Meta answers for; errors for one Page never block the others.
+ */
+export async function listGrantedPagesDirect<T extends { id: string }>(userToken: string, fields: string): Promise<T[]> {
+  const ids = await grantedPageIds(userToken);
+  const rows: T[] = [];
+  for (const id of ids.slice(0, 25)) {
+    try {
+      const r = await graph<T>({ method: "GET", path: `/${id}`, token: userToken, phase: "read", query: { fields } });
+      if (r.json && (r.json as { id?: string }).id) rows.push(r.json);
+    } catch {
+      /* a Page we cannot read is skipped */
+    }
+  }
+  return rows;
+}
+
+/** One short line that explains an EMPTY Page list. Permission names are left out: Page-level grants are what matter. Never includes tokens. */
+export async function describeEmptyPages(userToken: string): Promise<string> {
+  const ids = await grantedPageIds(userToken);
+  return ids.length
+    ? `Meta returned 0 Pages. Page-level grants cover: ${ids.join(", ")}.`
+    : "Meta returned 0 Pages and no Page-level grant was recorded (no Page was ticked on Facebook's screen).";
 }

@@ -14,7 +14,7 @@
 import { config } from "../../../config/env";
 import { redactSecrets, type SocialTokenSet } from "../tokenVault";
 import { SocialPublishError } from "../publishing/publishErrors";
-import { MESSAGING_WINDOW_MS, describeEmptyPages, dialogUrl, graph, verifySignature, webhookChallenge } from "./metaGraph";
+import { MESSAGING_WINDOW_MS, describeEmptyPages, dialogUrl, listGrantedPagesDirect, graph, verifySignature, webhookChallenge } from "./metaGraph";
 import { instagramAnalytics } from "./instagramInsights";
 import {
   ConnectorUserError, DEFAULT_CONSTRAINTS, type ConnectResult, type HealthResult, type InboundEvent, type PublishInput, type PublishMedia, type PublishResult, type ReplyWindow,
@@ -207,6 +207,8 @@ async function liveQuotaExhausted(token: string, ig: string): Promise<{ used: nu
 type IgRow = { id: string; username?: string; name?: string; profile_picture_url?: string };
 type PageRow = { id: string; name?: string; access_token?: string; tasks?: string[]; instagram_business_account?: IgRow; connected_instagram_account?: IgRow };
 
+const PAGE_IG_FIELDS = "id,name,access_token,tasks,instagram_business_account{id,username,name,profile_picture_url},connected_instagram_account{id,username,name,profile_picture_url}";
+
 async function listPagesWithInstagram(userToken: string): Promise<PageRow[]> {
   const pages: PageRow[] = [];
   let after: string | undefined;
@@ -219,7 +221,7 @@ async function listPagesWithInstagram(userToken: string): Promise<PageRow[]> {
     after = r.json.paging?.next ? r.json.paging.cursors?.after : undefined;
     if (!after) break;
   }
-  return pages;
+  return pages.length ? pages : listGrantedPagesDirect<PageRow>(userToken, PAGE_IG_FIELDS);
 }
 
 export const instagramProvider: SocialConnector = {

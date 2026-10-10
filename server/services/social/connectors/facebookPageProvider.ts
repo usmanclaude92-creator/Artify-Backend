@@ -15,7 +15,7 @@ import { config } from "../../../config/env";
 import { redactSecrets, type SocialTokenSet } from "../tokenVault";
 import { SocialPublishError } from "../publishing/publishErrors";
 import {
-  MESSAGING_WINDOW_MS, describeEmptyPages, dialogUrl, graph, verifySignature, webhookChallenge,
+  MESSAGING_WINDOW_MS, describeEmptyPages, dialogUrl, listGrantedPagesDirect, graph, verifySignature, webhookChallenge,
 } from "./metaGraph";
 import { facebookAnalytics } from "./facebookInsights";
 import {
@@ -131,6 +131,8 @@ export function parseWebhookPayload(payload: WebhookPayload): InboundEvent[] {
 // ---------------- connector ----------------
 type PageRow = { id: string; name?: string; category?: string; access_token?: string; tasks?: string[]; picture?: { data?: { url?: string } } };
 
+const PAGE_FIELDS = "id,name,category,access_token,tasks,picture{url}";
+
 async function listPages(userToken: string): Promise<PageRow[]> {
   const pages: PageRow[] = [];
   let after: string | undefined;
@@ -140,7 +142,8 @@ async function listPages(userToken: string): Promise<PageRow[]> {
     after = r.json.paging?.next ? r.json.paging.cursors?.after : undefined;
     if (!after) break;
   }
-  return pages;
+  // Pages owned through a Business portfolio can be missing from /me/accounts although they were granted: read them directly.
+  return pages.length ? pages : listGrantedPagesDirect<PageRow>(userToken, PAGE_FIELDS);
 }
 
 const toSelectable = (p: PageRow, scopes: string[], userId?: string): SelectableAccount | null => {

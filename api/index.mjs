@@ -19024,7 +19024,7 @@ async function graph(req) {
   if (!res.ok || json.error) throw errorFromGraph(res.status, json, [req.token, config.metaAppSecret]);
   return { status: res.status, json, headers: res.headers };
 }
-async function describeEmptyPages(userToken) {
+async function grantedPageIds(userToken) {
   try {
     const r = await graph({
       method: "GET",
@@ -19033,16 +19033,27 @@ async function describeEmptyPages(userToken) {
       phase: "read",
       query: { input_token: userToken }
     });
-    const d = r.json.data;
-    if (!d) return "";
-    const pageGrants = (d.granular_scopes ?? []).filter((g) => g.scope === "pages_show_list" || g.scope === "pages_manage_posts");
-    const targets = Array.from(new Set(pageGrants.flatMap((g) => g.target_ids ?? [])));
-    const parts = [`Meta returned 0 Pages for this login.`, `Granted: ${(d.scopes ?? []).join(", ") || "none"}.`];
-    parts.push(targets.length ? `Page-level grants cover: ${targets.join(", ")}.` : "No Page-level grant was recorded (no Page was ticked on Facebook's screen).");
-    return redactSecrets(parts.join(" "), [userToken]).slice(0, 400);
+    const grants = (r.json.data?.granular_scopes ?? []).filter((g) => g.scope === "pages_show_list" || g.scope === "pages_manage_posts");
+    return Array.from(new Set(grants.flatMap((g) => g.target_ids ?? [])));
   } catch {
-    return "";
+    return [];
   }
+}
+async function listGrantedPagesDirect(userToken, fields) {
+  const ids = await grantedPageIds(userToken);
+  const rows = [];
+  for (const id6 of ids.slice(0, 25)) {
+    try {
+      const r = await graph({ method: "GET", path: `/${id6}`, token: userToken, phase: "read", query: { fields } });
+      if (r.json && r.json.id) rows.push(r.json);
+    } catch {
+    }
+  }
+  return rows;
+}
+async function describeEmptyPages(userToken) {
+  const ids = await grantedPageIds(userToken);
+  return ids.length ? `Meta returned 0 Pages. Page-level grants cover: ${ids.join(", ")}.` : "Meta returned 0 Pages and no Page-level grant was recorded (no Page was ticked on Facebook's screen).";
 }
 
 // server/services/social/connectors/metaInsights.ts
@@ -19292,6 +19303,7 @@ function parseWebhookPayload(payload) {
   }
   return out;
 }
+var PAGE_FIELDS = "id,name,category,access_token,tasks,picture{url}";
 async function listPages(userToken) {
   const pages = [];
   let after;
@@ -19301,7 +19313,7 @@ async function listPages(userToken) {
     after = r.json.paging?.next ? r.json.paging.cursors?.after : void 0;
     if (!after) break;
   }
-  return pages;
+  return pages.length ? pages : listGrantedPagesDirect(userToken, PAGE_FIELDS);
 }
 var toSelectable = (p, scopes, userId) => {
   if (!p.access_token) return null;
@@ -19815,6 +19827,7 @@ async function liveQuotaExhausted(token, ig) {
   }
   return null;
 }
+var PAGE_IG_FIELDS = "id,name,access_token,tasks,instagram_business_account{id,username,name,profile_picture_url},connected_instagram_account{id,username,name,profile_picture_url}";
 async function listPagesWithInstagram(userToken) {
   const pages = [];
   let after;
@@ -19830,7 +19843,7 @@ async function listPagesWithInstagram(userToken) {
     after = r.json.paging?.next ? r.json.paging.cursors?.after : void 0;
     if (!after) break;
   }
-  return pages;
+  return pages.length ? pages : listGrantedPagesDirect(userToken, PAGE_IG_FIELDS);
 }
 var instagramProvider = {
   key: "meta_instagram",
