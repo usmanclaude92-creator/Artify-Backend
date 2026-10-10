@@ -14,7 +14,7 @@
 import { config } from "../../../config/env";
 import { redactSecrets, type SocialTokenSet } from "../tokenVault";
 import { SocialPublishError } from "../publishing/publishErrors";
-import { MESSAGING_WINDOW_MS, dialogUrl, graph, verifySignature, webhookChallenge } from "./metaGraph";
+import { MESSAGING_WINDOW_MS, describeEmptyPages, dialogUrl, graph, verifySignature, webhookChallenge } from "./metaGraph";
 import { instagramAnalytics } from "./instagramInsights";
 import {
   ConnectorUserError, DEFAULT_CONSTRAINTS, type ConnectResult, type HealthResult, type InboundEvent, type PublishInput, type PublishMedia, type PublishResult, type ReplyWindow,
@@ -250,7 +250,7 @@ export const instagramProvider: SocialConnector = {
       listPagesWithInstagram(userToken),
     ]);
     const scopes = (perms.json.data ?? []).filter((p) => p.status === "granted").map((p) => p.permission);
-    if (pages.length === 0) throw new ConnectorUserError("This Facebook account does not manage any Pages. Instagram connects through a Facebook Page: link your Instagram professional account to a Page you manage, then try again.");
+    if (pages.length === 0) throw new ConnectorUserError(`This Facebook account does not manage any Pages. Instagram connects through a Facebook Page: link your Instagram professional account to a Page you manage, then try again. ${await describeEmptyPages(userToken)}`.trim());
     const selectable: SelectableAccount[] = [];
     for (const p of pages) {
       const ig = p.instagram_business_account ?? p.connected_instagram_account;

@@ -15,7 +15,7 @@ import { config } from "../../../config/env";
 import { redactSecrets, type SocialTokenSet } from "../tokenVault";
 import { SocialPublishError } from "../publishing/publishErrors";
 import {
-  MESSAGING_WINDOW_MS, dialogUrl, graph, verifySignature, webhookChallenge,
+  MESSAGING_WINDOW_MS, describeEmptyPages, dialogUrl, graph, verifySignature, webhookChallenge,
 } from "./metaGraph";
 import { facebookAnalytics } from "./facebookInsights";
 import {
@@ -183,7 +183,10 @@ export const facebookPageProvider: SocialConnector = {
     ]);
     const scopes = (perms.json.data ?? []).filter((p) => p.status === "granted").map((p) => p.permission);
     const selectable = pages.map((p) => toSelectable(p, scopes, me.json.id)).filter((x): x is SelectableAccount => !!x);
-    if (selectable.length === 0) throw new Error("This Facebook account does not manage any Pages (or no Page access was granted).");
+    if (selectable.length === 0) {
+      const why = pages.length === 0 ? await describeEmptyPages(userToken) : "Meta returned Pages but none came with an access token (the account may lack a full-control Page role).";
+      throw new Error(`This Facebook account does not manage any Pages (or no Page access was granted). ${why}`.trim());
+    }
     // The user token is NOT returned for storage: only per-Page tokens are persisted, after the person picks which Pages to connect.
     return { profile: { externalAccountId: me.json.id ?? "user", displayName: me.json.name ?? "Facebook user", accountType: "USER" }, tokens: { accessToken: "" }, selectable };
   },

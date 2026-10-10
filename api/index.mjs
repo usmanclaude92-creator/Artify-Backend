@@ -19024,6 +19024,26 @@ async function graph(req) {
   if (!res.ok || json.error) throw errorFromGraph(res.status, json, [req.token, config.metaAppSecret]);
   return { status: res.status, json, headers: res.headers };
 }
+async function describeEmptyPages(userToken) {
+  try {
+    const r = await graph({
+      method: "GET",
+      path: "/debug_token",
+      token: `${config.metaAppId}|${config.metaAppSecret}`,
+      phase: "read",
+      query: { input_token: userToken }
+    });
+    const d = r.json.data;
+    if (!d) return "";
+    const pageGrants = (d.granular_scopes ?? []).filter((g) => g.scope === "pages_show_list" || g.scope === "pages_manage_posts");
+    const targets = Array.from(new Set(pageGrants.flatMap((g) => g.target_ids ?? [])));
+    const parts = [`Meta returned 0 Pages for this login.`, `Granted: ${(d.scopes ?? []).join(", ") || "none"}.`];
+    parts.push(targets.length ? `Page-level grants cover: ${targets.join(", ")}.` : "No Page-level grant was recorded (no Page was ticked on Facebook's screen).");
+    return redactSecrets(parts.join(" "), [userToken]).slice(0, 400);
+  } catch {
+    return "";
+  }
+}
 
 // server/services/social/connectors/metaInsights.ts
 var DAY_MS = 864e5;
@@ -19324,7 +19344,10 @@ var facebookPageProvider = {
     ]);
     const scopes = (perms.json.data ?? []).filter((p) => p.status === "granted").map((p) => p.permission);
     const selectable = pages.map((p) => toSelectable(p, scopes, me.json.id)).filter((x) => !!x);
-    if (selectable.length === 0) throw new Error("This Facebook account does not manage any Pages (or no Page access was granted).");
+    if (selectable.length === 0) {
+      const why = pages.length === 0 ? await describeEmptyPages(userToken) : "Meta returned Pages but none came with an access token (the account may lack a full-control Page role).";
+      throw new Error(`This Facebook account does not manage any Pages (or no Page access was granted). ${why}`.trim());
+    }
     return { profile: { externalAccountId: me.json.id ?? "user", displayName: me.json.name ?? "Facebook user", accountType: "USER" }, tokens: { accessToken: "" }, selectable };
   },
   async refreshToken() {
@@ -19841,7 +19864,7 @@ var instagramProvider = {
       listPagesWithInstagram(userToken)
     ]);
     const scopes = (perms.json.data ?? []).filter((p) => p.status === "granted").map((p) => p.permission);
-    if (pages.length === 0) throw new ConnectorUserError("This Facebook account does not manage any Pages. Instagram connects through a Facebook Page: link your Instagram professional account to a Page you manage, then try again.");
+    if (pages.length === 0) throw new ConnectorUserError(`This Facebook account does not manage any Pages. Instagram connects through a Facebook Page: link your Instagram professional account to a Page you manage, then try again. ${await describeEmptyPages(userToken)}`.trim());
     const selectable = [];
     for (const p of pages) {
       const ig = p.instagram_business_account ?? p.connected_instagram_account;

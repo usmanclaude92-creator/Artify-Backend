@@ -138,3 +138,25 @@ export async function graph<T = Record<string, unknown>>(req: GraphRequest): Pro
   if (!res.ok || (json as GraphErrorBody).error) throw errorFromGraph(res.status, json as GraphErrorBody, [req.token, config.metaAppSecret]);
   return { status: res.status, json, headers: res.headers };
 }
+
+/**
+ * One line that explains an EMPTY Page list: what Meta says the login actually granted (permission names and Page ids only, never tokens).
+ * Used in the connect error so "does not manage any Pages" can be told apart from "granted to other Pages" or "Page-level permission missing".
+ * Best effort: any failure returns an empty string so the original error still reaches the person.
+ */
+export async function describeEmptyPages(userToken: string): Promise<string> {
+  try {
+    const r = await graph<{ data?: { is_valid?: boolean; scopes?: string[]; granular_scopes?: Array<{ scope: string; target_ids?: string[] }> } }>({
+      method: "GET", path: "/debug_token", token: `${config.metaAppId}|${config.metaAppSecret}`, phase: "read", query: { input_token: userToken },
+    });
+    const d = r.json.data;
+    if (!d) return "";
+    const pageGrants = (d.granular_scopes ?? []).filter((g) => g.scope === "pages_show_list" || g.scope === "pages_manage_posts");
+    const targets = Array.from(new Set(pageGrants.flatMap((g) => g.target_ids ?? [])));
+    const parts = [`Meta returned 0 Pages for this login.`, `Granted: ${(d.scopes ?? []).join(", ") || "none"}.`];
+    parts.push(targets.length ? `Page-level grants cover: ${targets.join(", ")}.` : "No Page-level grant was recorded (no Page was ticked on Facebook's screen).");
+    return redactSecrets(parts.join(" "), [userToken]).slice(0, 400);
+  } catch {
+    return "";
+  }
+}
