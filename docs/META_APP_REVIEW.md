@@ -201,7 +201,7 @@ Retention numbers below are the platform defaults (`RETENTION_POLICY`; see OPERA
 - [ ] Legal business name, registered address, phone and website exactly as on the documents.
 - [ ] At least two of: trade licence / certificate of incorporation, tax registration, a recent (within 12 months) utility or bank statement in the company name (Meta's accepted list is country-specific: check it for your country).
 - [ ] Business email on your own domain, able to receive the verification code.
-- [ ] Domain `artifysols.com` verified in Business Settings → Brand safety → Domains (DNS TXT or meta tag).
+- [x] Domain `artifysols.com` verified in Business Settings → Brand safety → Domains (DNS TXT record on the root, added 2026-10-10; Meta confirmed "Verified"). Keep the TXT record in place.
 - [ ] Documents readable, not self-filed forms, not older than Meta allows.
 - [ ] Expect up to about two weeks; do not submit App Review before verification finishes.
 

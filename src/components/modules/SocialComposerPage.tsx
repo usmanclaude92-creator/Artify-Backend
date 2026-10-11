@@ -399,7 +399,7 @@ export const SocialComposerPage: React.FC = () => {
                     <li key={id} className="relative">
                       {mediaCache[id] ? <MediaThumb media={mediaCache[id]!} /> : <span className="w-16 h-16 rounded-lg block" style={{ background: "var(--bg-hover)" }} />}
                       {editable && (
-                        <button type="button" aria-label="Remove media" className="absolute -top-1.5 -right-1.5 rounded-full p-0.5" style={{ background: "var(--bg-surface)", border: "1px solid var(--border)" }} onClick={() => { setMediaIds((m) => m.filter((x) => x !== id)); touch(); }}>
+                        <button type="button" aria-label="Remove media" className="absolute -top-2 -right-2 rounded-full inline-flex items-center justify-center min-w-6 min-h-6" style={{ background: "var(--bg-surface)", border: "1px solid var(--border)" }} onClick={() => { setMediaIds((m) => m.filter((x) => x !== id)); touch(); }}>
                           <X className="w-3 h-3" />
                         </button>
                       )}

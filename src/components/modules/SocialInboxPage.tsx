@@ -43,7 +43,7 @@ const Thread: React.FC<{ messages: InboxMessage[]; canReply: boolean; isComment:
             </p>
             {(m.sendStatus === "FAILED" || m.sendStatus === "UNCERTAIN") && m.sendError && <p className="text-[11px] text-rose-500 break-words">{m.sendError.replace(/^[a-z_]+: /, "")}</p>}
             <div className="flex gap-2">
-              {canReply && !mine && isComment && <button type="button" className="text-[11px] underline inline-flex items-center gap-1" onClick={() => onHide(m)}><EyeOff className="w-3 h-3" aria-hidden="true" />{m.hidden ? "Unhide" : "Hide comment"}</button>}
+              {canReply && !mine && isComment && <button type="button" className="text-[11px] underline inline-flex items-center gap-1 min-h-6" onClick={() => onHide(m)}><EyeOff className="w-3 h-3" aria-hidden="true" />{m.hidden ? "Unhide" : "Hide comment"}</button>}
               {canReply && (m.sendStatus === "FAILED" || m.sendStatus === "UNCERTAIN") && <button type="button" className="text-[11px] underline" onClick={() => onRetry(m)}>Retry sending</button>}
             </div>
           </div>
