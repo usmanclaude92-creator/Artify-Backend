@@ -6,6 +6,7 @@ import { CommandPalette, useCommandPaletteShortcut } from "./CommandPalette";
 import { AccessDenied } from "../common/AccessDenied";
 import { Spinner } from "../ui/ui";
 import { useAuth } from "../../context/AuthContext";
+import { PageErrorBoundary } from "../common/PageErrorBoundary";
 import { useRouter } from "../../lib/router";
 import { NAV_ITEMS, hasPermission, visibleNavItems } from "../../lib/permissions";
 
@@ -65,7 +66,9 @@ export const AppShell: React.FC = () => {
         <Header onOpenMobileMenu={() => setMobileOpen(true)} onOpenCommandPalette={() => setPaletteOpen(true)} />
         <Breadcrumbs item={item} />
         <main className="flex-1 p-4 sm:p-6 max-w-[1400px] w-full mx-auto">
-          <Suspense fallback={<RouteFallback />}>{content}</Suspense>
+          <PageErrorBoundary resetKey={path}>
+            <Suspense fallback={<RouteFallback />}>{content}</Suspense>
+          </PageErrorBoundary>
         </main>
       </div>
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />

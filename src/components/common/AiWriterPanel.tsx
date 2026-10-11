@@ -54,14 +54,14 @@ export const AiWriterPanel: React.FC<{
           <div className="grid grid-cols-2 gap-2">
             <div>
               {label("Tone", "ai-writer-tone")}
-              <Select id="ai-writer-tone" value={tone} onChange={(e) => setTone(e.target.value as AiWriterTone)}>
+              <Select id="ai-writer-tone" className="w-full" value={tone} onChange={(e) => setTone(e.target.value as AiWriterTone)}>
                 <option value="professional">Professional</option><option value="friendly">Friendly</option><option value="persuasive">Persuasive</option><option value="technical">Technical</option>
               </Select>
             </div>
             {kind === "article" && (
               <div>
                 {label("Length", "ai-writer-length")}
-                <Select id="ai-writer-length" value={length} onChange={(e) => setLength(e.target.value as "short" | "medium" | "long")}>
+                <Select id="ai-writer-length" className="w-full" value={length} onChange={(e) => setLength(e.target.value as "short" | "medium" | "long")}>
                   <option value="short">Short (~400 words)</option><option value="medium">Medium (~800 words)</option><option value="long">Long (~1,400 words)</option>
                 </Select>
               </div>

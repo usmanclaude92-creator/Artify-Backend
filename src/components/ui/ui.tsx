@@ -211,7 +211,8 @@ export const Modal: React.FC<{ open: boolean; onClose: () => void; title: string
 }) => {
   if (!open) return null;
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: "rgba(2,6,23,0.6)" }}>
+    <div className="fixed inset-0 z-50 overflow-y-auto" style={{ background: "rgba(2,6,23,0.6)" }}>
+      <div className="min-h-full flex items-center justify-center p-4">
       <div
         role="dialog"
         aria-modal="true"
@@ -234,6 +235,7 @@ export const Modal: React.FC<{ open: boolean; onClose: () => void; title: string
           </button>
         </div>
         {children}
+      </div>
       </div>
     </div>
   );
