@@ -12,6 +12,7 @@ import { ProviderAvatar, StatusBadge, expiresSoon, timeAgo } from "./socialShare
 import { ConnectPagePicker } from "./ConnectPagePicker";
 import { FacebookSetupPanel } from "./FacebookSetupPanel";
 import { takeOAuthReturn } from "../../lib/oauthReturn";
+import { stashSessionForOAuth } from "../../lib/oauthSessionHandoff";
 
 const SOCIAL_ACCOUNTS_PATH = "/social/accounts";
 
@@ -75,6 +76,7 @@ export const SocialAccountsPage: React.FC = () => {
     setBusy(`connect:${provider}`);
     try {
       const { authUrl } = await socialApi.startConnect(provider);
+      stashSessionForOAuth();
       window.location.assign(authUrl);
     } catch (err) {
       notify(err instanceof ApiClientError ? err.message : "Could not start the connection.", "error");
@@ -86,6 +88,7 @@ export const SocialAccountsPage: React.FC = () => {
     setBusy(`reconnect:${account.id}`);
     try {
       const { authUrl } = await socialApi.reconnect(account.id);
+      stashSessionForOAuth();
       window.location.assign(authUrl);
     } catch (err) {
       notify(err instanceof ApiClientError ? err.message : "Could not start reconnecting.", "error");
