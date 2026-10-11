@@ -15,7 +15,7 @@ import { config } from "../../../config/env";
 import { redactSecrets, type SocialTokenSet } from "../tokenVault";
 import { SocialPublishError } from "../publishing/publishErrors";
 import {
-  MESSAGING_WINDOW_MS, dialogUrl, graph, verifySignature, webhookChallenge,
+  MESSAGING_WINDOW_MS, describeEmptyPages, dialogUrl, listGrantedPagesDirect, graph, verifySignature, webhookChallenge,
 } from "./metaGraph";
 import { facebookAnalytics } from "./facebookInsights";
 import {
@@ -131,7 +131,9 @@ export function parseWebhookPayload(payload: WebhookPayload): InboundEvent[] {
 // ---------------- connector ----------------
 type PageRow = { id: string; name?: string; category?: string; access_token?: string; tasks?: string[]; picture?: { data?: { url?: string } } };
 
-async function listPages(userToken: string): Promise<PageRow[]> {
+const PAGE_FIELDS = "id,name,category,access_token,tasks,picture{url}";
+
+async function listPages(userToken: string, notes: string[]): Promise<PageRow[]> {
   const pages: PageRow[] = [];
   let after: string | undefined;
   for (let i = 0; i < 5; i++) {
@@ -140,7 +142,8 @@ async function listPages(userToken: string): Promise<PageRow[]> {
     after = r.json.paging?.next ? r.json.paging.cursors?.after : undefined;
     if (!after) break;
   }
-  return pages;
+  // Pages owned through a Business portfolio can be missing from /me/accounts although they were granted: read them directly.
+  return pages.length ? pages : listGrantedPagesDirect<PageRow>(userToken, PAGE_FIELDS, notes);
 }
 
 const toSelectable = (p: PageRow, scopes: string[], userId?: string): SelectableAccount | null => {
@@ -176,14 +179,18 @@ export const facebookPageProvider: SocialConnector = {
     const long = await graph<{ access_token?: string }>({ method: "GET", path: "/oauth/access_token", phase: "read", query: { grant_type: "fb_exchange_token", client_id: config.metaAppId, client_secret: config.metaAppSecret, fb_exchange_token: short.json.access_token } });
     const userToken = long.json.access_token;
     if (!userToken) throw new Error("Meta did not return a long-lived token.");
+    const notes: string[] = [];
     const [me, perms, pages] = await Promise.all([
       graph<{ id?: string; name?: string }>({ method: "GET", path: "/me", token: userToken, phase: "read", query: { fields: "id,name" } }),
       graph<{ data?: Array<{ permission: string; status: string }> }>({ method: "GET", path: "/me/permissions", token: userToken, phase: "read" }),
-      listPages(userToken),
+      listPages(userToken, notes),
     ]);
     const scopes = (perms.json.data ?? []).filter((p) => p.status === "granted").map((p) => p.permission);
     const selectable = pages.map((p) => toSelectable(p, scopes, me.json.id)).filter((x): x is SelectableAccount => !!x);
-    if (selectable.length === 0) throw new Error("This Facebook account does not manage any Pages (or no Page access was granted).");
+    if (selectable.length === 0) {
+      const why = pages.length === 0 ? await describeEmptyPages(userToken) : "Meta returned Pages but none came with an access token (the account may lack a full-control Page role).";
+      throw new Error(`This Facebook account does not manage any Pages (or no Page access was granted). ${why} ${notes.join(" ")}`.trim());
+    }
     // The user token is NOT returned for storage: only per-Page tokens are persisted, after the person picks which Pages to connect.
     return { profile: { externalAccountId: me.json.id ?? "user", displayName: me.json.name ?? "Facebook user", accountType: "USER" }, tokens: { accessToken: "" }, selectable };
   },

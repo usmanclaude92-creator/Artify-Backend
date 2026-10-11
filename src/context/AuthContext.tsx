@@ -19,8 +19,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { authApi, type MembershipSummary, type SanitizedUser } from "../lib/api";
 import { setAuthTokenGetter, setUnauthorizedHandler, ApiClientError } from "../lib/apiClient";
-
-const TOKEN_STORAGE_KEY = "artify_cc_session_token";
+import { SESSION_TOKEN_KEY as TOKEN_STORAGE_KEY, adoptStashedSession, clearStashedSession } from "../lib/oauthSessionHandoff";
 
 type AuthStatus = "loading" | "authenticated" | "unauthenticated";
 
@@ -43,7 +42,14 @@ interface AuthContextValue {
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [token, setToken] = useState<string | null>(() => sessionStorage.getItem(TOKEN_STORAGE_KEY));
+  const [token, setToken] = useState<string | null>(() => {
+    const own = sessionStorage.getItem(TOKEN_STORAGE_KEY);
+    if (own) { clearStashedSession(); return own; }
+    // A provider return that opened in a new tab (Facebook/Instagram connect) adopts the one-time hand-off instead of asking for sign-in again.
+    const adopted = adoptStashedSession();
+    if (adopted) { try { sessionStorage.setItem(TOKEN_STORAGE_KEY, adopted); } catch { /* keep in memory only */ } }
+    return adopted;
+  });
   const [status, setStatus] = useState<AuthStatus>("loading");
   const [user, setUser] = useState<SanitizedUser | null>(null);
   const [organizations, setOrganizations] = useState<MembershipSummary[]>([]);

@@ -199,6 +199,26 @@ describe("requests", () => {
     await expect(facebookPageProvider.handleCallback({ code: "c", redirectUri: "r" })).rejects.toThrow(/does not manage any Pages/);
   });
 
+  it("OAuth: a granted Page missing from /me/accounts (Business-owned) is read directly by id", async () => {
+    reply([
+      { access_token: "S" }, { access_token: "L" }, { id: "U1", name: "Ada" },
+      { data: [{ permission: "pages_manage_posts", status: "granted" }] },
+      { data: [] }, // /me/accounts empty
+      { data: { granular_scopes: [{ scope: "pages_show_list", target_ids: ["PAGE9"] }, { scope: "pages_manage_posts", target_ids: ["PAGE9"] }] } }, // debug_token
+      { id: "PAGE9", name: "Biz Page", access_token: "PAGE_TOKEN_9", tasks: ["CREATE_CONTENT", "MODERATE", "MESSAGING"] }, // GET /PAGE9
+    ]);
+    const res = await facebookPageProvider.handleCallback({ code: "c", redirectUri: "r" });
+    expect(calls[5]!.url).toContain("/debug_token?");
+    expect(calls[6]!.url).toContain("/PAGE9?");
+    expect(res.selectable!.map((p) => p.profile.externalAccountId)).toEqual(["PAGE9"]);
+    expect(res.selectable![0]).toMatchObject({ tokens: { accessToken: "PAGE_TOKEN_9", pageId: "PAGE9" } });
+  });
+
+  it("OAuth: when nothing was granted the error names the Page-level grants", async () => {
+    reply([{ access_token: "S" }, { access_token: "L" }, { id: "U1", name: "Ada" }, { data: [] }, { data: [] }, { data: { granular_scopes: [] } }, { data: { granular_scopes: [] } }]);
+    await expect(facebookPageProvider.handleCallback({ code: "c", redirectUri: "r" })).rejects.toThrow(/no Page-level grant was recorded/);
+  });
+
   it("publishes text + link with POST /{page}/feed — and never schedules on Meta's side", async () => {
     reply([{ id: "PAGE1_POST7" }]);
     const out = await facebookPageProvider.publish!(tokens, { ...base, linkUrl: "https://artifysols.com/blog/x" });
