@@ -3630,3 +3630,12 @@ export const metaReviewApi = {
   seed: () => apiClient.post<{ organizationId: string; reviewerEmail: string; reviewerPassword: string; note: string }>("/ops/meta-review"),
   remove: () => apiClient.delete<{ removed: boolean }>("/ops/meta-review"),
 };
+
+// ---- AI writer for the Posts and Products editors (text only; the editor saves it) ----
+export type AiWriterTone = "professional" | "friendly" | "persuasive" | "technical";
+export interface AiPostDraft { title: string; excerpt: string; bodyHtml: string; seoTitle: string; seoDescription: string; executionId: string }
+export interface AiProductDraft { shortDescription: string; description: string; benefits: string[]; features: string[]; businessProblem: string; seoTitle: string; seoDescription: string; executionId: string }
+export const contentAiApi = {
+  writePost: (input: { brief: string; tone?: AiWriterTone; length?: "short" | "medium" | "long"; language?: string; currentTitle?: string }) => apiClient.post<AiPostDraft>("/ai/content/post", input),
+  writeProduct: (input: { brief: string; name?: string; itemType?: "PRODUCT" | "SERVICE" | "SOLUTION"; tone?: AiWriterTone; language?: string }) => apiClient.post<AiProductDraft>("/ai/content/product", input),
+};
