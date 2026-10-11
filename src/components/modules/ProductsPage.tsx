@@ -38,6 +38,7 @@ import {
   industriesApi,
   formsApi,
   mediaApi,
+  contentAiApi,
   type CatalogProduct,
   type ProductModule,
   type ProductTypeValue,
@@ -54,6 +55,7 @@ import { Card, Button, Input, Select, Badge, LoadingState, ErrorState, EmptyStat
 import { hasPermission } from "../../lib/permissions";
 import { initialSearchFromQuery } from "../../lib/deepLink";
 import { MediaPickerModal } from "../common/MediaPickerModal";
+import { AiWriterPanel, type AiWriterOptions } from "../common/AiWriterPanel";
 import { SeoFieldsPanel, EMPTY_SEO_FIELDS, seoFieldsFromMetadata, seoFieldsToMetadata } from "../common/SeoFieldsPanel";
 
 const TYPE_OPTIONS: ProductTypeValue[] = ["PRODUCT", "SERVICE", "SOLUTION"];
@@ -266,6 +268,25 @@ const ProductFormModal: React.FC<{
     }
   };
 
+  const writeWithAi = async (o: AiWriterOptions) => {
+    const draft = await contentAiApi.writeProduct({ brief: o.brief, tone: o.tone, name: name || undefined, itemType: lockedType ?? type });
+    const before = { shortDescription, description, benefits, features, businessProblem, seo };
+    setShortDescription(draft.shortDescription);
+    setDescription(draft.description);
+    setBenefits(draft.benefits);
+    setFeatures(draft.features);
+    if (draft.businessProblem) setBusinessProblem(draft.businessProblem);
+    setSeo((cur) => ({ ...cur, metaTitle: draft.seoTitle, metaDescription: draft.seoDescription }));
+    return () => {
+      setShortDescription(before.shortDescription);
+      setDescription(before.description);
+      setBenefits(before.benefits);
+      setFeatures(before.features);
+      setBusinessProblem(before.businessProblem);
+      setSeo(before.seo);
+    };
+  };
+
   const typeLabel = TYPE_LABEL[lockedType ?? type];
 
   return (
@@ -306,6 +327,7 @@ const ProductFormModal: React.FC<{
             </Select>
           </Field>
         </div>
+        <AiWriterPanel kind="product" onGenerate={writeWithAi} hasContent={!!(shortDescription || description || benefits.length || features.length)} />
         <Field label="Short description">
           <Input value={shortDescription} onChange={(e) => setShortDescription(e.target.value)} maxLength={300} />
         </Field>

@@ -23,6 +23,7 @@ import {
   tagsApi,
   mediaApi,
   authorsApi,
+  contentAiApi,
   type CmsPost,
   type CmsCategory,
   type CmsTag,
@@ -37,6 +38,7 @@ import { hasPermission } from "../../lib/permissions";
 import { initialSearchFromQuery, consumeNewFlag } from "../../lib/deepLink";
 import { MediaPickerModal } from "../common/MediaPickerModal";
 import { RichTextEditor } from "../common/RichTextEditor";
+import { AiWriterPanel, type AiWriterOptions } from "../common/AiWriterPanel";
 import { SeoFieldsPanel, EMPTY_SEO_FIELDS, seoFieldsFromMetadata, seoFieldsToMetadata, type SeoFieldsValue } from "../common/SeoFieldsPanel";
 
 const STATUS_OPTIONS: ContentStatusValue[] = ["DRAFT", "IN_REVIEW", "SCHEDULED", "PUBLISHED", "ARCHIVED"];
@@ -188,10 +190,26 @@ const PostFormModal: React.FC<{
     }
   };
 
+  const writeWithAi = async (o: AiWriterOptions) => {
+    const draft = await contentAiApi.writePost({ brief: o.brief, tone: o.tone, length: o.length, currentTitle: title || undefined });
+    const before = { title, excerpt, body, seo };
+    setTitle(draft.title);
+    setExcerpt(draft.excerpt);
+    setBody(draft.bodyHtml);
+    setSeo((cur) => ({ ...cur, metaTitle: draft.seoTitle, metaDescription: draft.seoDescription }));
+    return () => {
+      setTitle(before.title);
+      setExcerpt(before.excerpt);
+      setBody(before.body);
+      setSeo(before.seo);
+    };
+  };
+
   return (
     <Modal open={open} onClose={onClose} title={mode === "create" ? "New post" : `Edit ${post?.title}`}>
       <form onSubmit={handleSubmit} className="space-y-3">
         {error && <div className="text-xs rounded-lg px-3 py-2 bg-rose-500/10 text-rose-500 border border-rose-500/30">{error}</div>}
+        <AiWriterPanel kind="article" onGenerate={writeWithAi} hasContent={!!(title || body)} />
         <Field label="Title">
           <Input required value={title} onChange={(e) => setTitle(e.target.value)} />
         </Field>
