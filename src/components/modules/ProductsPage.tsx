@@ -27,6 +27,7 @@ import {
   Copy,
   CheckSquare,
   Square,
+  ArrowLeft,
 } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
@@ -153,8 +154,8 @@ const FeaturedImageField: React.FC<{ mediaId: string | undefined; onChange: (med
   );
 };
 
-const ProductFormModal: React.FC<{
-  open: boolean;
+/** Full-page editor for a product, service or solution (replaces the old pop-up). `onClose` returns to the list. */
+const ProductFormPage: React.FC<{
   onClose: () => void;
   onSaved: (product?: CatalogProduct) => void;
   mode: "create" | "edit";
@@ -164,7 +165,7 @@ const ProductFormModal: React.FC<{
   industries: Industry[];
   forms: MarketingForm[];
   allProducts: CatalogProduct[];
-}> = ({ open, onClose, onSaved, mode, product, lockedType, categories, industries, forms, allProducts }) => {
+}> = ({ onClose, onSaved, mode, product, lockedType, categories, industries, forms, allProducts }) => {
   const { notify } = useToast();
   const [code, setCode] = useState(product?.code ?? "");
   const [name, setName] = useState(product?.name ?? "");
@@ -189,28 +190,6 @@ const ProductFormModal: React.FC<{
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
-  useEffect(() => {
-    if (open) {
-      setCode(product?.code ?? "");
-      setName(product?.name ?? "");
-      setSlug(product?.slug ?? "");
-      setType(lockedType ?? product?.type ?? "PRODUCT");
-      setShortDescription(product?.shortDescription ?? "");
-      setDescription(product?.description ?? "");
-      setStatus(product && product.status !== "ARCHIVED" ? product.status : "DRAFT");
-      setIsFeatured(product?.isFeatured ?? false);
-      setFeaturedMediaId(product?.featuredMediaId ?? undefined);
-      setCategoryId(product?.categoryId ?? "");
-      setBenefits(product?.currentRevision?.content.benefits ?? []);
-      setFeatures(product?.currentRevision?.content.features ?? []);
-      setBusinessProblem(product?.currentRevision?.content.businessProblem ?? "");
-      setCtaFormId(product?.currentRevision?.content.ctaFormId ?? "");
-      setSeo(seoFieldsFromMetadata(product?.currentRevision?.content.seo ?? {}));
-      setRelatedProductIds([...(product?.relatedFrom ?? []).map((r) => r.toProductId), ...(product?.relatedTo ?? []).map((r) => r.fromProductId)]);
-      setIndustryIds((product?.industries ?? []).map((i) => i.industryId));
-      setError(null);
-    }
-  }, [open, product, lockedType]);
 
   const content: ProductContentValue = {
     benefits: benefits.map((b) => b.trim()).filter(Boolean),
@@ -315,183 +294,192 @@ const ProductFormModal: React.FC<{
 
   const typeLabel = TYPE_LABEL[lockedType ?? type];
 
+  // Unsaved-changes guard: compare the editable state with what the form opened with.
+  const snapshot = JSON.stringify({ code, name, slug, type, shortDescription, description, status, isFeatured, featuredMediaId, categoryId, benefits, features, businessProblem, ctaFormId, seo, relatedProductIds, industryIds });
+  const initialSnapshot = useRef(snapshot);
+  const dirty = snapshot !== initialSnapshot.current;
+  useEffect(() => {
+    if (!dirty) return;
+    const warn = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ""; };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [dirty]);
+  const requestClose = () => {
+    if (dirty && !window.confirm("Discard your unsaved changes?")) return;
+    onClose();
+  };
+
+  const textarea = "w-full px-3 py-2 rounded-lg text-sm focus:outline-none";
+  const textareaStyle = { background: "var(--bg-app)", border: "1px solid var(--border)", color: "var(--text-primary)" } as const;
+  const chip = (active: boolean) => (active ? { background: "var(--accent-soft)", color: "var(--accent)", borderColor: "var(--accent)" } : { color: "var(--text-secondary)", borderColor: "var(--border)" });
+  const sectionTitle = (text: string) => (
+    <h2 className="text-xs font-bold uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>{text}</h2>
+  );
+
   return (
-    <Modal open={open} onClose={onClose} title={mode === "create" ? `New ${typeLabel.toLowerCase()}` : `Edit ${product?.name}`}>
-      <form onSubmit={handleSubmit} className="space-y-3 max-h-[70vh] overflow-y-auto pr-1">
-        {error && <div className="text-xs rounded-lg px-3 py-2 bg-rose-500/10 text-rose-500 border border-rose-500/30">{error}</div>}
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="Code">
-            <Input required disabled={mode === "edit"} value={code} onChange={(e) => setCode(e.target.value)} />
-          </Field>
-          <Field label="Name">
-            <Input required value={name} onChange={(e) => setName(e.target.value)} />
-          </Field>
+    <div className="space-y-4">
+      <div className="sticky top-14 z-20 -mx-4 sm:-mx-6 px-4 sm:px-6 py-2.5 flex items-center gap-2 sm:gap-3 border-b backdrop-blur" style={{ background: "var(--bg-app)", borderColor: "var(--border)" }}>
+        <Button type="button" variant="ghost" onClick={requestClose} aria-label={`Back to ${typeLabel.toLowerCase()} list`}>
+          <ArrowLeft className="w-4 h-4" /> <span className="hidden sm:inline">Back</span>
+        </Button>
+        <div className="min-w-0 flex-1">
+          <p className="text-[10px] font-bold uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>{mode === "create" ? "New" : "Edit"} {typeLabel.toLowerCase()}</p>
+          <h1 className="text-sm sm:text-base font-bold truncate" style={{ color: "var(--text-primary)" }}>{mode === "create" ? name || `New ${typeLabel.toLowerCase()}` : product?.name}</h1>
         </div>
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="Slug" hint="Leave blank to auto-generate from the name.">
-            <Input value={slug} onChange={(e) => setSlug(e.target.value)} placeholder="auto-generated" />
-          </Field>
-          {!lockedType && (
-            <Field label="Type">
-              <Select value={type} onChange={(e) => setType(e.target.value as ProductTypeValue)}>
-                {TYPE_OPTIONS.map((t) => (
-                  <option key={t} value={t}>
-                    {TYPE_LABEL[t]}
-                  </option>
+        {dirty && <span className="hidden sm:inline text-[11px] font-semibold" style={{ color: "var(--text-muted)" }}>Unsaved changes</span>}
+        <Button type="button" variant="secondary" onClick={requestClose}>Cancel</Button>
+        <Button type="submit" form="product-form" variant="primary" disabled={submitting}>
+          {submitting ? "Saving…" : mode === "create" ? `Create` : "Save"}
+        </Button>
+      </div>
+
+      {error && <div role="alert" className="text-xs rounded-lg px-3 py-2 bg-rose-500/10 text-rose-500 border border-rose-500/30">{error}</div>}
+
+      <form id="product-form" onSubmit={handleSubmit} className="grid grid-cols-1 lg:grid-cols-3 gap-4 items-start">
+        <div className="lg:col-span-2 space-y-4 min-w-0">
+          <Card className="p-4 space-y-3">
+            {sectionTitle("Identity")}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <Field label="Name">
+                <Input required value={name} onChange={(e) => setName(e.target.value)} />
+              </Field>
+              <Field label="Code">
+                <Input required disabled={mode === "edit"} value={code} onChange={(e) => setCode(e.target.value)} />
+              </Field>
+              <Field label="Slug" hint="Leave blank to auto-generate from the name.">
+                <Input value={slug} onChange={(e) => setSlug(e.target.value)} placeholder="auto-generated" />
+              </Field>
+              {!lockedType && (
+                <Field label="Type">
+                  <Select className="w-full" value={type} onChange={(e) => setType(e.target.value as ProductTypeValue)}>
+                    {TYPE_OPTIONS.map((t) => (
+                      <option key={t} value={t}>{TYPE_LABEL[t]}</option>
+                    ))}
+                  </Select>
+                </Field>
+              )}
+            </div>
+          </Card>
+
+          <AiWriterPanel
+            kind="product"
+            onGenerate={writeWithAi}
+            hasContent={!!(shortDescription || description || benefits.length || features.length)}
+            initialBrief={mode === "edit" ? [product?.name, shortDescription, description].filter(Boolean).join(". ").slice(0, 3900) : ""}
+            identity={{
+              label: mode === "create" ? "Also set the name, code and URL slug" : "Also update the name and URL slug",
+              hint: mode === "create" ? "Writes an SEO-friendly name, the next free code (e.g. CAS-001) and a unique slug." : "Changes the public link of an item that already exists. The code never changes.",
+              defaultChecked: mode === "create",
+            }}
+            image={{
+              label: featuredMediaId ? "Replace the feature image" : "Also design a feature image",
+              hint: "Designs a banner (logo, headline, summary, device mockups) from the product and saves it to the Media Library.",
+              defaultChecked: !featuredMediaId,
+            }}
+          />
+
+          <Card className="p-4 space-y-3">
+            {sectionTitle("Content")}
+            <Field label="Short description">
+              <Input value={shortDescription} onChange={(e) => setShortDescription(e.target.value)} maxLength={300} />
+            </Field>
+            <Field label="Description">
+              <textarea className={textarea} style={textareaStyle} rows={8} value={description} onChange={(e) => setDescription(e.target.value)} />
+            </Field>
+            {type === "SOLUTION" && (
+              <Field label="Business problem" hint="The real-world problem this solution addresses.">
+                <textarea className={textarea} style={textareaStyle} rows={3} value={businessProblem} onChange={(e) => setBusinessProblem(e.target.value)} />
+              </Field>
+            )}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <StringListEditor label="Benefits" values={benefits} onChange={setBenefits} />
+              <StringListEditor label="Features" values={features} onChange={setFeatures} />
+            </div>
+          </Card>
+
+          <Card className="p-4 space-y-3">
+            {sectionTitle("SEO and social sharing")}
+            <SeoFieldsPanel
+              value={seo}
+              onChange={setSeo}
+              fallbackTitle={name || "Untitled"}
+              fallbackDescription={shortDescription || description || ""}
+              previewPath={`/${slug || "slug"}`}
+            />
+          </Card>
+        </div>
+
+        <div className="space-y-4 min-w-0 lg:sticky lg:top-32">
+          <Card className="p-4 space-y-3">
+            {sectionTitle("Publishing")}
+            <Field label="Status">
+              <Select className="w-full" value={status} onChange={(e) => setStatus(e.target.value as ProductStatusValue)}>
+                {STATUS_OPTIONS.filter((s) => s !== "ARCHIVED").map((s) => (
+                  <option key={s} value={s}>{s}</option>
                 ))}
               </Select>
             </Field>
+            <label className="flex items-center gap-2 text-xs" style={{ color: "var(--text-secondary)" }}>
+              <input type="checkbox" checked={isFeatured} onChange={(e) => setIsFeatured(e.target.checked)} />
+              Featured
+            </label>
+            <Field label="Category">
+              <Select className="w-full" value={categoryId} onChange={(e) => setCategoryId(e.target.value)}>
+                <option value="">No category</option>
+                {categories.map((c) => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </Select>
+            </Field>
+            <Field label="Conversion form (CTA)" hint="A real Form from the Marketing section, shown as this item's call-to-action on the public site.">
+              <Select className="w-full" value={ctaFormId} onChange={(e) => setCtaFormId(e.target.value)}>
+                <option value="">No form</option>
+                {forms.map((f) => (
+                  <option key={f.id} value={f.id}>{f.name}</option>
+                ))}
+              </Select>
+            </Field>
+          </Card>
+
+          <Card className="p-4">
+            <FeaturedImageField mediaId={featuredMediaId} onChange={setFeaturedMediaId} />
+          </Card>
+
+          {type === "SOLUTION" && (
+            <Card className="p-4 space-y-2">
+              {sectionTitle("Industries")}
+              <p className="text-[11px]" style={{ color: "var(--text-muted)" }}>Which industries this solution is built for.</p>
+              <div className="flex flex-wrap gap-1.5">
+                {industries.map((ind) => {
+                  const active = industryIds.includes(ind.id);
+                  return (
+                    <button key={ind.id} type="button" aria-pressed={active} onClick={() => setIndustryIds(active ? industryIds.filter((id) => id !== ind.id) : [...industryIds, ind.id])} className="px-2.5 py-1 rounded-full text-[11px] font-semibold border transition" style={chip(active)}>
+                      {ind.name}
+                    </button>
+                  );
+                })}
+                {industries.length === 0 && <p className="text-xs" style={{ color: "var(--text-muted)" }}>No industries defined yet.</p>}
+              </div>
+            </Card>
           )}
-          <Field label="Category">
-            <Select value={categoryId} onChange={(e) => setCategoryId(e.target.value)}>
-              <option value="">No category</option>
-              {categories.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                </option>
-              ))}
-            </Select>
-          </Field>
-        </div>
-        <AiWriterPanel
-          kind="product"
-          onGenerate={writeWithAi}
-          hasContent={!!(shortDescription || description || benefits.length || features.length)}
-          initialBrief={mode === "edit" ? [product?.name, shortDescription, description].filter(Boolean).join(". ").slice(0, 3900) : ""}
-          identity={{
-            label: mode === "create" ? "Also set the name, code and URL slug" : "Also update the name and URL slug",
-            hint: mode === "create" ? "Writes an SEO-friendly name, the next free code (e.g. CAS-001) and a unique slug." : "Changes the public link of an item that already exists. The code never changes.",
-            defaultChecked: mode === "create",
-          }}
-          image={{
-            label: featuredMediaId ? "Replace the feature image" : "Also design a feature image",
-            hint: "Designs a banner (logo, headline, summary, device mockups) from the product and saves it to the Media Library.",
-            defaultChecked: !featuredMediaId,
-          }}
-        />
-        <Field label="Short description">
-          <Input value={shortDescription} onChange={(e) => setShortDescription(e.target.value)} maxLength={300} />
-        </Field>
-        <Field label="Description">
-          <textarea
-            className="w-full px-3 py-2 rounded-lg text-sm focus:outline-none"
-            style={{ background: "var(--bg-app)", border: "1px solid var(--border)", color: "var(--text-primary)" }}
-            rows={3}
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-          />
-        </Field>
 
-        <FeaturedImageField mediaId={featuredMediaId} onChange={setFeaturedMediaId} />
-
-        {type === "SOLUTION" && (
-          <Field label="Business problem" hint="The real-world problem this solution addresses.">
-            <textarea
-              className="w-full px-3 py-2 rounded-lg text-sm focus:outline-none"
-              style={{ background: "var(--bg-app)", border: "1px solid var(--border)", color: "var(--text-primary)" }}
-              rows={2}
-              value={businessProblem}
-              onChange={(e) => setBusinessProblem(e.target.value)}
-            />
-          </Field>
-        )}
-
-        <StringListEditor label="Benefits" values={benefits} onChange={setBenefits} />
-        <StringListEditor label="Features" values={features} onChange={setFeatures} />
-
-        {type === "SOLUTION" && (
-          <Field label="Industries" hint="Which industries this solution is built for.">
+          <Card className="p-4 space-y-2">
+            {sectionTitle("Related items")}
             <div className="flex flex-wrap gap-1.5">
-              {industries.map((ind) => {
-                const active = industryIds.includes(ind.id);
-                return (
-                  <button
-                    key={ind.id}
-                    type="button"
-                    onClick={() => setIndustryIds(active ? industryIds.filter((id) => id !== ind.id) : [...industryIds, ind.id])}
-                    className="px-2.5 py-1 rounded-full text-[11px] font-semibold border transition"
-                    style={active ? { background: "var(--accent-soft)", color: "var(--accent)", borderColor: "var(--accent)" } : { color: "var(--text-secondary)", borderColor: "var(--border)" }}
-                  >
-                    {ind.name}
-                  </button>
-                );
-              })}
-              {industries.length === 0 && <p className="text-xs" style={{ color: "var(--text-muted)" }}>No industries defined yet.</p>}
-            </div>
-          </Field>
-        )}
-
-        <Field label="Related products / services / solutions">
-          <div className="flex flex-wrap gap-1.5">
-            {allProducts
-              .filter((p) => p.id !== product?.id)
-              .slice(0, 60)
-              .map((p) => {
+              {allProducts.filter((p) => p.id !== product?.id).slice(0, 60).map((p) => {
                 const active = relatedProductIds.includes(p.id);
                 return (
-                  <button
-                    key={p.id}
-                    type="button"
-                    onClick={() => setRelatedProductIds(active ? relatedProductIds.filter((id) => id !== p.id) : [...relatedProductIds, p.id])}
-                    className="px-2.5 py-1 rounded-full text-[11px] font-semibold border transition"
-                    style={active ? { background: "var(--accent-soft)", color: "var(--accent)", borderColor: "var(--accent)" } : { color: "var(--text-secondary)", borderColor: "var(--border)" }}
-                  >
+                  <button key={p.id} type="button" aria-pressed={active} onClick={() => setRelatedProductIds(active ? relatedProductIds.filter((id) => id !== p.id) : [...relatedProductIds, p.id])} className="px-2.5 py-1 rounded-full text-[11px] font-semibold border transition" style={chip(active)}>
                     {p.name}
                   </button>
                 );
               })}
-          </div>
-        </Field>
-
-        <Field label="Conversion form (CTA)" hint="A real Form from the Marketing section — rendered as this item's call-to-action on the public site.">
-          <Select value={ctaFormId} onChange={(e) => setCtaFormId(e.target.value)}>
-            <option value="">No form</option>
-            {forms.map((f) => (
-              <option key={f.id} value={f.id}>
-                {f.name}
-              </option>
-            ))}
-          </Select>
-        </Field>
-
-        <div className="pt-2 border-t" style={{ borderColor: "var(--border)" }}>
-          <p className="text-xs font-bold uppercase tracking-wide mb-2" style={{ color: "var(--text-muted)" }}>
-            SEO
-          </p>
-          <SeoFieldsPanel
-            value={seo}
-            onChange={setSeo}
-            fallbackTitle={name || "Untitled"}
-            fallbackDescription={shortDescription || description || ""}
-            previewPath={`/${slug || "slug"}`}
-          />
-        </div>
-
-        <div className="grid grid-cols-2 gap-3 items-end">
-          <Field label="Status">
-            <Select value={status} onChange={(e) => setStatus(e.target.value as ProductStatusValue)}>
-              {STATUS_OPTIONS.filter((s) => s !== "ARCHIVED").map((s) => (
-                <option key={s} value={s}>
-                  {s}
-                </option>
-              ))}
-            </Select>
-          </Field>
-          <label className="flex items-center gap-2 text-xs pb-2" style={{ color: "var(--text-secondary)" }}>
-            <input type="checkbox" checked={isFeatured} onChange={(e) => setIsFeatured(e.target.checked)} />
-            Featured
-          </label>
-        </div>
-        <div className="pt-2 border-t flex justify-end gap-2" style={{ borderColor: "var(--border)" }}>
-          <Button type="button" variant="secondary" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button type="submit" variant="primary" disabled={submitting}>
-            {mode === "create" ? `Create ${typeLabel.toLowerCase()}` : "Save changes"}
-          </Button>
+              {allProducts.filter((p) => p.id !== product?.id).length === 0 && <p className="text-xs" style={{ color: "var(--text-muted)" }}>Nothing to relate to yet.</p>}
+            </div>
+          </Card>
         </div>
       </form>
-    </Modal>
+    </div>
   );
 };
 
@@ -570,13 +558,14 @@ const ModuleFormModal: React.FC<{ open: boolean; onClose: () => void; onSaved: (
 const ProductDetail: React.FC<{
   product: CatalogProduct;
   onChanged: (p?: CatalogProduct) => void;
+  onEdit: (p: CatalogProduct) => void;
   focusModules?: boolean;
   lockedType?: ProductTypeValue;
   categories: ProductCategory[];
   industries: Industry[];
   forms: MarketingForm[];
   allProducts: CatalogProduct[];
-}> = ({ product, onChanged, focusModules, lockedType, categories, industries, forms, allProducts }) => {
+}> = ({ product, onChanged, onEdit, focusModules, lockedType, categories, industries, forms, allProducts }) => {
   const { user } = useAuth();
   const { notify } = useToast();
   const canUpdate = hasPermission(user?.role.permissions, "products.update");
@@ -589,7 +578,6 @@ const ProductDetail: React.FC<{
 
   const [modules, setModules] = useState<ProductModule[]>([]);
   const [modulesLoading, setModulesLoading] = useState(false);
-  const [editOpen, setEditOpen] = useState(false);
   const [addModuleOpen, setAddModuleOpen] = useState(false);
   const [archiveOpen, setArchiveOpen] = useState(false);
   const [reordering, setReordering] = useState(false);
@@ -740,7 +728,7 @@ const ProductDetail: React.FC<{
             </Button>
           )}
           {canUpdate && (
-            <Button variant="secondary" onClick={() => setEditOpen(true)}>
+            <Button variant="secondary" onClick={() => onEdit(product)}>
               Edit
             </Button>
           )}
@@ -885,18 +873,6 @@ const ProductDetail: React.FC<{
         </ul>
       )}
 
-      <ProductFormModal
-        open={editOpen}
-        onClose={() => setEditOpen(false)}
-        onSaved={(updated) => onChanged(updated)}
-        mode="edit"
-        product={product}
-        lockedType={lockedType}
-        categories={categories}
-        industries={industries}
-        forms={forms}
-        allProducts={allProducts}
-      />
       <ModuleFormModal open={addModuleOpen} onClose={() => setAddModuleOpen(false)} onSaved={loadModules} productId={product.id} />
       <ConfirmDialog
         open={archiveOpen}
@@ -960,7 +936,7 @@ export const ProductsPage: React.FC<{ lockedType?: ProductTypeValue }> = ({ lock
   const [totalPages, setTotalPages] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [createOpen, setCreateOpen] = useState(false);
+  const [form, setForm] = useState<{ mode: "create" } | { mode: "edit"; product: CatalogProduct } | null>(null);
   const [bulkArchiveOpen, setBulkArchiveOpen] = useState(false);
   const [categories, setCategories] = useState<ProductCategory[]>([]);
   const [industries, setIndustries] = useState<Industry[]>([]);
@@ -1015,6 +991,37 @@ export const ProductsPage: React.FC<{ lockedType?: ProductTypeValue }> = ({ lock
   }, []);
 
   // Refresh the selectable "related items"/"forms" pools after a save that changed the catalog.
+  // The editor is a full page, but its state lives in the URL (?form=new / ?form=edit&id=…) so reload and the browser Back button work.
+  const syncFromUrl = React.useCallback(async () => {
+    const params = new URLSearchParams(window.location.search);
+    const f = params.get("form");
+    if (f === "new") { setForm({ mode: "create" }); return; }
+    if (f === "edit" && params.get("id")) {
+      try {
+        const res = await productsApi.get(params.get("id")!);
+        setForm({ mode: "edit", product: res.product });
+      } catch {
+        setForm(null);
+        notify("That item could not be opened.", "error");
+      }
+      return;
+    }
+    setForm(null);
+  }, [notify]);
+  useEffect(() => {
+    void syncFromUrl();
+    const onPop = () => void syncFromUrl();
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, [syncFromUrl]);
+  const pushForm = (query: string) => window.history.pushState({ productForm: true }, "", `${window.location.pathname}?${query}`);
+  const openCreate = () => { pushForm("form=new"); setForm({ mode: "create" }); };
+  const openEdit = (product: CatalogProduct) => { pushForm(`form=edit&id=${encodeURIComponent(product.id)}`); setForm({ mode: "edit", product }); };
+  const closeForm = () => {
+    if (window.history.state?.productForm) window.history.back();
+    else { window.history.replaceState({}, "", window.location.pathname); setForm(null); }
+  };
+
   const refreshLookups = () => {
     void productsApi.list({ limit: 100 }).then((res) => setAllProducts(res.items)).catch(() => undefined);
   };
@@ -1041,6 +1048,27 @@ export const ProductsPage: React.FC<{ lockedType?: ProductTypeValue }> = ({ lock
     }
   };
 
+  if (form) {
+    return (
+      <ProductFormPage
+        key={form.mode === "edit" ? form.product.id : "new"}
+        onClose={closeForm}
+        onSaved={(saved) => {
+          refreshLookups();
+          if (form.mode === "edit" && saved) setSelected(saved);
+          void load();
+        }}
+        mode={form.mode}
+        product={form.mode === "edit" ? form.product : undefined}
+        lockedType={lockedType}
+        categories={categories}
+        industries={industries}
+        forms={forms}
+        allProducts={allProducts}
+      />
+    );
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -1059,7 +1087,7 @@ export const ProductsPage: React.FC<{ lockedType?: ProductTypeValue }> = ({ lock
             </Button>
           )}
           {canCreate && (
-            <Button variant="primary" onClick={() => setCreateOpen(true)}>
+            <Button variant="primary" onClick={openCreate}>
               <Plus className="w-4 h-4" /> New {(lockedType ? TYPE_LABEL[lockedType] : "product").toLowerCase()}
             </Button>
           )}
@@ -1145,6 +1173,7 @@ export const ProductsPage: React.FC<{ lockedType?: ProductTypeValue }> = ({ lock
                 if (updated) setSelected(updated);
                 else void load();
               }}
+              onEdit={openEdit}
               focusModules={isModulesView}
               lockedType={lockedType}
               categories={categories}
@@ -1156,20 +1185,6 @@ export const ProductsPage: React.FC<{ lockedType?: ProductTypeValue }> = ({ lock
         </div>
       )}
 
-      <ProductFormModal
-        open={createOpen}
-        onClose={() => setCreateOpen(false)}
-        onSaved={() => {
-          refreshLookups();
-          void load();
-        }}
-        mode="create"
-        lockedType={lockedType}
-        categories={categories}
-        industries={industries}
-        forms={forms}
-        allProducts={allProducts}
-      />
       <ConfirmDialog
         open={bulkArchiveOpen}
         title="Archive selected items"

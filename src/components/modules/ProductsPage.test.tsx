@@ -111,6 +111,8 @@ const moduleB = { ...moduleA, id: "module-2", code: "PAYROLL", name: "Payroll", 
 
 afterEach(() => {
   cleanup();
+  window.history.replaceState({}, "", "/");
+  vi.restoreAllMocks();
   listMock.mockReset();
   createMock.mockReset();
   updateMock.mockReset();
@@ -179,10 +181,13 @@ describe("ProductsPage", () => {
     renderProductsPage();
 
     fireEvent.click(await screen.findByRole("button", { name: /new product/i }));
-    const dialog = await screen.findByRole("dialog");
-    fireEvent.change(within(dialog).getByLabelText(/^code$/i), { target: { value: "hcms-02" } });
-    fireEvent.change(within(dialog).getByLabelText(/^name$/i), { target: { value: "New Product" } });
-    fireEvent.click(within(dialog).getByRole("button", { name: /create product/i }));
+    // The editor is a full page (not a dialog) and its state is in the address.
+    expect(await screen.findByRole("heading", { name: /new product/i })).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(window.location.search).toBe("?form=new");
+    fireEvent.change(screen.getByLabelText(/^code$/i), { target: { value: "hcms-02" } });
+    fireEvent.change(screen.getByLabelText(/^name$/i), { target: { value: "New Product" } });
+    fireEvent.click(screen.getByRole("button", { name: /^create$/i }));
 
     await vi.waitFor(() => expect(createMock).toHaveBeenCalledWith(expect.objectContaining({ code: "hcms-02", name: "New Product" })));
   });
@@ -345,5 +350,42 @@ describe("ProductsPage", () => {
     fireEvent.click(screen.getAllByRole("button", { name: /revert to this/i })[0]!);
 
     await vi.waitFor(() => expect(productsApiModule.productsApi.revert).toHaveBeenCalledWith("product-1", "rev-2"));
+  });
+
+  it("opens Edit as a full page, keeps the code read-only, and Cancel returns to the list", async () => {
+    listMock.mockResolvedValue({ items: [product], page: 1, limit: 20, total: 1, totalPages: 1 });
+    renderProductsPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: /^edit$/i }));
+    expect(await screen.findByRole("heading", { name: product.name })).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(window.location.search).toContain("form=edit");
+    expect(screen.getByLabelText(/^code$/i)).toBeDisabled();
+
+    fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
+    expect(await screen.findByRole("button", { name: /new product/i })).toBeInTheDocument();
+    expect(window.location.search).toBe("");
+  });
+
+  it("asks before discarding unsaved changes", async () => {
+    listMock.mockResolvedValue({ items: [product], page: 1, limit: 20, total: 1, totalPages: 1 });
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValueOnce(false).mockReturnValueOnce(true);
+    renderProductsPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: /new product/i }));
+    fireEvent.change(await screen.findByLabelText(/^name$/i), { target: { value: "Half typed" } });
+    fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
+    expect(confirmSpy).toHaveBeenCalledTimes(1);
+    expect(screen.getByLabelText(/^name$/i)).toHaveValue("Half typed"); // stayed on the form
+
+    fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
+    expect(await screen.findByRole("button", { name: /new product/i })).toBeInTheDocument();
+  });
+
+  it("reopens the form after a reload on ?form=new", async () => {
+    listMock.mockResolvedValue({ items: [], page: 1, limit: 20, total: 0, totalPages: 1 });
+    window.history.replaceState({}, "", "/?form=new");
+    renderProductsPage();
+    expect(await screen.findByRole("heading", { name: /new product/i })).toBeInTheDocument();
   });
 });
