@@ -39,6 +39,7 @@ import { initialSearchFromQuery, consumeNewFlag } from "../../lib/deepLink";
 import { MediaPickerModal } from "../common/MediaPickerModal";
 import { RichTextEditor } from "../common/RichTextEditor";
 import { AiWriterPanel, type AiWriterOptions } from "../common/AiWriterPanel";
+import { createFeatureImage } from "../../lib/featureImage";
 import { SeoFieldsPanel, EMPTY_SEO_FIELDS, seoFieldsFromMetadata, seoFieldsToMetadata, type SeoFieldsValue } from "../common/SeoFieldsPanel";
 
 const STATUS_OPTIONS: ContentStatusValue[] = ["DRAFT", "IN_REVIEW", "SCHEDULED", "PUBLISHED", "ARCHIVED"];
@@ -190,15 +191,25 @@ const PostFormModal: React.FC<{
     }
   };
 
+  const { notify } = useToast();
   const writeWithAi = async (o: AiWriterOptions) => {
     const draft = await contentAiApi.writePost({ brief: o.brief, tone: o.tone, length: o.length, currentTitle: title || undefined, postId: post?.id });
-    const before = { title, slug, excerpt, body, seo };
+    const before = { title, slug, excerpt, body, seo, featuredMediaId };
     setTitle(draft.title);
     if (o.applyIdentity) setSlug(draft.slug);
     setExcerpt(draft.excerpt);
     setBody(draft.bodyHtml);
     setSeo((cur) => ({ ...cur, metaTitle: draft.seoTitle, metaDescription: draft.seoDescription, focusKeywords: draft.focusKeywords.join(", "), ogTitle: draft.ogTitle, ogDescription: draft.ogDescription }));
+    if (o.applyImage) {
+      try {
+        const media = await createFeatureImage({ title: draft.title, subtitle: draft.excerpt.slice(0, 140), label: "Insights" });
+        setFeaturedMediaId(media.id);
+      } catch {
+        notify("The text was written, but the feature image could not be created. Add one from the Media Library.", "error");
+      }
+    }
     return () => {
+      setFeaturedMediaId(before.featuredMediaId);
       setTitle(before.title);
       setSlug(before.slug);
       setExcerpt(before.excerpt);
@@ -220,6 +231,11 @@ const PostFormModal: React.FC<{
             label: "Also set the URL slug",
             hint: mode === "edit" ? "Changes the public link of a post that already exists." : "Writes an SEO-friendly slug from the topic.",
             defaultChecked: mode === "create",
+          }}
+          image={{
+            label: featuredMediaId ? "Replace the feature image" : "Also design a feature image",
+            hint: "Draws a branded 1200x630 card from the title and saves it to the Media Library.",
+            defaultChecked: !featuredMediaId,
           }}
         />
         <Field label="Title">

@@ -16,7 +16,7 @@ describe("AiWriterPanel", () => {
     fireEvent.change(screen.getByLabelText("Length"), { target: { value: "long" } });
     expect(go).toBeEnabled();
     fireEvent.click(go);
-    await waitFor(() => expect(onGenerate).toHaveBeenCalledWith({ brief: "How clinics use chatbots", tone: "professional", length: "long", applyIdentity: false }));
+    await waitFor(() => expect(onGenerate).toHaveBeenCalledWith({ brief: "How clinics use chatbots", tone: "professional", length: "long", applyIdentity: false, applyImage: false }));
     fireEvent.click(await screen.findByRole("button", { name: /Undo AI changes/ }));
     expect(undo).toHaveBeenCalled();
   });
@@ -43,5 +43,17 @@ describe("AiWriterPanel", () => {
     fireEvent.click(box);
     fireEvent.click(screen.getAllByRole("button", { name: /Write with AI/ }).at(-1)!);
     await waitFor(() => expect(onGenerate).toHaveBeenLastCalledWith(expect.objectContaining({ applyIdentity: false })));
+  });
+
+  it("offers the feature image option and passes it through", async () => {
+    const onGenerate = vi.fn().mockResolvedValue(() => {});
+    render(<AiWriterPanel kind="product" onGenerate={onGenerate} hasContent={false} image={{ label: "Also design a feature image", hint: "h", defaultChecked: true }} />);
+    fireEvent.click(screen.getByRole("button", { name: /Write with AI/ }));
+    fireEvent.change(screen.getByLabelText(/Describe it/), { target: { value: "A chatbot package for shops" } });
+    fireEvent.click(screen.getAllByRole("button", { name: /Write with AI/ }).at(-1)!);
+    await waitFor(() => expect(onGenerate).toHaveBeenCalledWith(expect.objectContaining({ applyImage: true })));
+    fireEvent.click(screen.getByRole("checkbox", { name: /feature image/i }));
+    fireEvent.click(screen.getAllByRole("button", { name: /Write with AI/ }).at(-1)!);
+    await waitFor(() => expect(onGenerate).toHaveBeenLastCalledWith(expect.objectContaining({ applyImage: false })));
   });
 });
