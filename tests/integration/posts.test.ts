@@ -240,6 +240,13 @@ describe("CMS posts", () => {
     expect(byTag.status).toBe(200);
   });
 
+  it("list rows carry tags (the editor reads post.tags on the first row)", async () => {
+    const res = await request(app).get("/api/v1/posts").set("Authorization", `Bearer ${adminToken}`);
+    expect(res.status).toBe(200);
+    expect(res.body.data.posts.length).toBeGreaterThan(0);
+    expect(res.body.data.posts.every((p: { tags?: unknown }) => Array.isArray(p.tags))).toBe(true);
+  });
+
   it("enforces permissions and rejects unauthenticated requests", async () => {
     expect((await request(app).get("/api/v1/posts").set("Authorization", `Bearer ${viewerToken}`)).status).toBe(200);
     expect((await request(app).post("/api/v1/posts").set("Authorization", `Bearer ${viewerToken}`).send({ title: "X" })).status).toBe(403);

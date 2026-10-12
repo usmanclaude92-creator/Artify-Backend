@@ -125,6 +125,13 @@ describe("PostsPage", () => {
     expect(screen.getByText("Launch")).toBeInTheDocument();
   });
 
+  it("does not crash when a list row has no tags field (older API shape)", async () => {
+    const { tags: _tags, ...withoutTags } = post;
+    listMock.mockResolvedValue({ items: [withoutTags], page: 1, limit: 20, total: 1, totalPages: 1 });
+    render(<PostsPage />);
+    expect(await screen.findAllByText("Launch Day")).not.toHaveLength(0);
+  });
+
   it("shows an empty state when there are no posts", async () => {
     listMock.mockResolvedValue({ items: [], page: 1, limit: 20, total: 0, totalPages: 1 });
     render(<PostsPage />);
