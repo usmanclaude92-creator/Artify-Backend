@@ -59,7 +59,7 @@ export function errorHandlerMiddleware(err: unknown, req: Request, res: Response
     res,
     appError.statusCode,
     appError.code,
-    appError.statusCode >= 500 ? "An unexpected error occurred" : appError.message,
+    appError.statusCode >= 500 && !appError.exposeMessage ? "An unexpected error occurred" : appError.message,
     exposeDetails ? appError.details : undefined
   );
 }
