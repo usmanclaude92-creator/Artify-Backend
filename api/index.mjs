@@ -22604,31 +22604,38 @@ function unknownNumbers(text, allowed) {
 
 // server/services/social/socialAiService.ts
 var FALLBACK_MODEL = "gemini-3.7-flash";
-var SECOND_MODEL = "gemini-2.5-flash";
+var BACKUP_MODELS = ["gemini-3.8-flash", "gemini-3.7-flash"];
 var aiRetryConfig = { delayMs: 1500, deadlineMs: 35e3 };
 var TRANSIENT = /\b(503|500|429|504)\b|UNAVAILABLE|high demand|overloaded|RESOURCE_EXHAUSTED|rate.?limit|deadline|timed? ?out|ECONNRESET|ETIMEDOUT|fetch failed/i;
 var isTransientAiError = (err) => TRANSIENT.test(err instanceof Error ? err.message : String(err ?? ""));
+var MODEL_GONE = /\b404\b|NOT_FOUND|no longer available|is not found|not supported for generateContent/i;
+var isModelUnavailableError = (err) => MODEL_GONE.test(err instanceof Error ? err.message : String(err ?? ""));
 async function generateWithRetry(adapter, primary, params) {
-  const models = primary === SECOND_MODEL ? [primary] : [primary, SECOND_MODEL];
+  const models = [.../* @__PURE__ */ new Set([primary, ...BACKUP_MODELS])];
   const started = Date.now();
   let last;
+  let sawBusy = false;
   for (const modelName of models) {
     for (let attempt2 = 1; attempt2 <= 2; attempt2++) {
       try {
         return { response: await adapter.generateText({ ...params, modelName }), modelName };
       } catch (err) {
         last = err;
+        if (isModelUnavailableError(err)) {
+          logger.warn({ modelName, err: redactSecrets(err).slice(0, 200) }, "[ai] model not available, trying the next one");
+          break;
+        }
         if (!isTransientAiError(err)) throw err;
+        sawBusy = true;
         logger.warn({ modelName, attempt: attempt2, err: redactSecrets(err).slice(0, 200) }, "[ai] provider busy, retrying");
-        const lastAttemptOfLastModel = modelName === models[models.length - 1] && attempt2 === 2;
-        if (lastAttemptOfLastModel || Date.now() - started + aiRetryConfig.delayMs > aiRetryConfig.deadlineMs) break;
+        if (attempt2 === 2 || Date.now() - started + aiRetryConfig.delayMs > aiRetryConfig.deadlineMs) break;
         await new Promise((r) => setTimeout(r, aiRetryConfig.delayMs));
       }
     }
     if (Date.now() - started > aiRetryConfig.deadlineMs) break;
   }
-  logger.error({ err: redactSecrets(last).slice(0, 300) }, "[ai] provider still busy after retries");
-  throw new ServiceBusyError();
+  logger.error({ err: redactSecrets(last).slice(0, 300) }, "[ai] no model could answer");
+  throw sawBusy ? new ServiceBusyError() : new ServiceBusyError("The AI model is not available right now. Please try again later, or ask an administrator to check the AI settings.");
 }
 var MAX_PLAN_POSTS = 30;
 async function ensureTemplate(caller, def) {
