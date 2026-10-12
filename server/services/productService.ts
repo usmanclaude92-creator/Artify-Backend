@@ -19,6 +19,7 @@ import { productRepository, type ProductFilters, type ProductWithDetail } from "
 import { productCategoryRepository } from "../repositories/productCategoryRepository";
 import { industryRepository } from "../repositories/industryRepository";
 import { mediaRepository } from "../repositories/mediaRepository";
+import { assertFeaturedMediaUsable as assertPublicMedia } from "./mediaService";
 import { formRepository } from "../repositories/formRepository";
 import { auditLogRepository } from "../repositories/auditLogRepository";
 import { prisma } from "../db/prisma";
@@ -65,7 +66,9 @@ async function assertFeaturedMediaUsable(mediaId: string | undefined | null): Pr
   if (!mediaId) return;
   const orgId = config.publicWebsiteOrganizationId;
   const media = orgId ? await mediaRepository.findByIdInOrg(mediaId, orgId) : null;
-  if (!media) throw new ValidationError("featuredMediaId must refer to a real media asset in the public website's organization.");
+  if (!media || !orgId) throw new ValidationError("featuredMediaId must refer to a real media asset in the public website's organization.");
+  // A featured image exists to be shown on the public site: make it PUBLIC (audited), exactly as posts, pages and case studies do.
+  await assertPublicMedia(mediaId, orgId);
 }
 
 async function assertCategoryUsable(categoryId: string | undefined | null): Promise<void> {

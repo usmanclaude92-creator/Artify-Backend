@@ -10751,7 +10751,8 @@ async function assertFeaturedMediaUsable2(mediaId) {
   if (!mediaId) return;
   const orgId2 = config.publicWebsiteOrganizationId;
   const media = orgId2 ? await mediaRepository.findByIdInOrg(mediaId, orgId2) : null;
-  if (!media) throw new ValidationError("featuredMediaId must refer to a real media asset in the public website's organization.");
+  if (!media || !orgId2) throw new ValidationError("featuredMediaId must refer to a real media asset in the public website's organization.");
+  await assertFeaturedMediaUsable(mediaId, orgId2);
 }
 async function assertCategoryUsable(categoryId) {
   if (!categoryId) return;
