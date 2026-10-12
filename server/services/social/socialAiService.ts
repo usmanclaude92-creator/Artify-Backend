@@ -31,7 +31,7 @@ const FALLBACK_MODEL = "gemini-3.7-flash";
 /** Tried, in order, after the primary when it is busy or no longer offered to this account (Google retires models; 3.8 is the one Google currently recommends). */
 const BACKUP_MODELS = ["gemini-3.8-flash", "gemini-3.7-flash"];
 /** Wait between attempts, and the point after which no further attempt is started (the serverless function is capped at 60s). Tests shorten these. */
-export const aiRetryConfig = { delayMs: 1500, deadlineMs: 35_000 };
+export const aiRetryConfig = { delayMs: 1500, deadlineMs: 50_000, attemptTimeoutMs: 22_000 };
 const TRANSIENT = /\b(503|500|429|504)\b|UNAVAILABLE|high demand|overloaded|RESOURCE_EXHAUSTED|rate.?limit|deadline|timed? ?out|ECONNRESET|ETIMEDOUT|fetch failed/i;
 
 export const isTransientAiError = (err: unknown): boolean => TRANSIENT.test(err instanceof Error ? err.message : String(err ?? ""));
@@ -47,10 +47,25 @@ async function generateWithRetry(adapter: { generateText: (p: import("../../ai/a
   let sawBusy = false;
   for (const modelName of models) {
     for (let attempt = 1; attempt <= 2; attempt++) {
+      // A call that hangs would otherwise run until the serverless function is killed (a 504 for the user), so each attempt gets its own limit
+      // inside what is left of the overall budget; a timed-out attempt moves on to the next model instead of waiting again.
+      const remaining = aiRetryConfig.deadlineMs - (Date.now() - started);
+      if (remaining < 4000) break;
+      const limit = Math.min(aiRetryConfig.attemptTimeoutMs, remaining);
+      let timer: ReturnType<typeof setTimeout> | undefined;
       try {
-        return { response: await adapter.generateText({ ...params, modelName }), modelName };
+        const response = await Promise.race([
+          adapter.generateText({ ...params, modelName }),
+          new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`AI call timed out after ${Math.round(limit / 1000)}s`)), limit); }),
+        ]);
+        return { response, modelName };
       } catch (err) {
         last = err;
+        if (err instanceof Error && /^AI call timed out/.test(err.message)) {
+          sawBusy = true;
+          logger.warn({ modelName, limitMs: limit }, "[ai] attempt timed out, trying the next model");
+          break;
+        }
         if (isModelUnavailableError(err)) {
           logger.warn({ modelName, err: redactSecrets(err).slice(0, 200) }, "[ai] model not available, trying the next one");
           break;
@@ -60,6 +75,8 @@ async function generateWithRetry(adapter: { generateText: (p: import("../../ai/a
         logger.warn({ modelName, attempt, err: redactSecrets(err).slice(0, 200) }, "[ai] provider busy, retrying");
         if (attempt === 2 || Date.now() - started + aiRetryConfig.delayMs > aiRetryConfig.deadlineMs) break;
         await new Promise((r) => setTimeout(r, aiRetryConfig.delayMs));
+      } finally {
+        if (timer) clearTimeout(timer);
       }
     }
     if (Date.now() - started > aiRetryConfig.deadlineMs) break;
