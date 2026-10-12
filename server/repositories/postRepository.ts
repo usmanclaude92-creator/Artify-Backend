@@ -51,7 +51,7 @@ export const postRepository = {
   async list(organizationId: string, filters: PostFilters, page: number, limit: number, sort: string, order: "asc" | "desc") {
     const where = buildWhere(organizationId, filters);
     const [rows, total] = await Promise.all([
-      prisma.post.findMany({ where, orderBy: { [sort]: order }, skip: (page - 1) * limit, take: limit }),
+      prisma.post.findMany({ where, orderBy: { [sort]: order }, skip: (page - 1) * limit, take: limit, ...withRelations }),
       prisma.post.count({ where }),
     ]);
     return { rows, total };

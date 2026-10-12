@@ -125,7 +125,7 @@ const PostFormModal: React.FC<{
   const [body, setBody] = useState(post?.currentRevision?.body ?? "");
   const [categoryId, setCategoryId] = useState(post?.categoryId ?? "");
   const [authorId, setAuthorId] = useState(post?.authorId ?? "");
-  const [tagIds, setTagIds] = useState<string[]>(post?.tags.map((t) => t.tagId) ?? []);
+  const [tagIds, setTagIds] = useState<string[]>((post?.tags ?? []).map((t) => t.tagId));
   const [featuredMediaId, setFeaturedMediaId] = useState<string | undefined>(post?.featuredMediaId ?? undefined);
   const [seo, setSeo] = useState<SeoFieldsValue>(post ? seoFieldsFromMetadata(post.currentRevision?.metadata) : EMPTY_SEO_FIELDS);
   const [error, setError] = useState<string | null>(null);
@@ -139,7 +139,7 @@ const PostFormModal: React.FC<{
       setBody(post?.currentRevision?.body ?? "");
       setCategoryId(post?.categoryId ?? "");
       setAuthorId(post?.authorId ?? "");
-      setTagIds(post?.tags.map((t) => t.tagId) ?? []);
+      setTagIds((post?.tags ?? []).map((t) => t.tagId));
       setFeaturedMediaId(post?.featuredMediaId ?? undefined);
       setSeo(post ? seoFieldsFromMetadata(post.currentRevision?.metadata) : EMPTY_SEO_FIELDS);
       setError(null);
@@ -394,9 +394,9 @@ const PostDetail: React.FC<{ post: CmsPost; categories: CmsCategory[]; tags: Cms
             {post.category && <> · {post.category.name}</>}
             {post.scheduledAt && post.status === "SCHEDULED" && <> · scheduled for {new Date(post.scheduledAt).toLocaleString()}</>}
           </p>
-          {post.tags.length > 0 && (
+          {(post.tags ?? []).length > 0 && (
             <div className="flex flex-wrap gap-1 mt-1">
-              {post.tags.map((t) => (
+              {(post.tags ?? []).map((t) => (
                 <Badge key={t.tagId} tone="neutral">
                   {t.tag.name}
                 </Badge>
