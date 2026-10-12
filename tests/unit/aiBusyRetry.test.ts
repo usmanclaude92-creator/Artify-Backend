@@ -2,7 +2,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { prisma } from "../../server/db/prisma";
-import { run, aiRetryConfig, isTransientAiError } from "../../server/services/social/socialAiService";
+import { run, aiRetryConfig, isTransientAiError, isModelUnavailableError } from "../../server/services/social/socialAiService";
 import { CONTENT_PROMPTS } from "../../server/services/contentAiPrompts";
 import { AdapterFactory } from "../../server/ai/adapters/adapterFactory";
 import { ServiceBusyError } from "../../server/core/errors";
@@ -42,11 +42,28 @@ describe("AI busy handling", () => {
     expect(calls[0]).toBe(calls[1]);
   });
 
-  it("switches to the second model when the first stays busy", async () => {
-    adapter((m) => (m === "gemini-2.5-flash" ? ok : BUSY));
+  it("switches to the current backup model when the first stays busy", async () => {
+    adapter((m) => (m === "gemini-3.8-flash" ? ok : BUSY));
     await go();
-    expect(calls[calls.length - 1]).toBe("gemini-2.5-flash");
+    expect(calls[calls.length - 1]).toBe("gemini-3.8-flash");
     expect(calls.length).toBe(3);
+  });
+
+  it("moves straight to the next model when a model is no longer offered, without retrying it", async () => {
+    const GONE = new Error('Gemini error: {"error":{"code":404,"message":"This model models/x is no longer available to new users.","status":"NOT_FOUND"}}');
+    expect(isModelUnavailableError(GONE)).toBe(true);
+    expect(isModelUnavailableError(BUSY)).toBe(false);
+    adapter((m) => (m === "gemini-3.7-flash" ? GONE : ok));
+    await go();
+    expect(calls).toEqual(["gemini-3.7-flash", "gemini-3.8-flash"]);
+  });
+
+  it("explains an unavailable model clearly when no model can answer", async () => {
+    adapter(() => new Error('Gemini error: {"error":{"code":404,"status":"NOT_FOUND"}}'));
+    const err = await go().catch((e) => e);
+    expect(err).toBeInstanceOf(ServiceBusyError);
+    expect(err.message).toMatch(/not available right now/i);
+    expect(err.message).not.toMatch(/busy/i);
   });
 
   it("does not retry a real error", async () => {

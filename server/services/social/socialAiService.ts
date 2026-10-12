@@ -28,36 +28,44 @@ import type { SanitizedUser } from "../../types/domain";
 import type { RequestMeta } from "../authService";
 
 const FALLBACK_MODEL = "gemini-3.7-flash";
-/** Tried when the primary model keeps answering "busy". */
-const SECOND_MODEL = "gemini-2.5-flash";
+/** Tried, in order, after the primary when it is busy or no longer offered to this account (Google retires models; 3.8 is the one Google currently recommends). */
+const BACKUP_MODELS = ["gemini-3.8-flash", "gemini-3.7-flash"];
 /** Wait between attempts, and the point after which no further attempt is started (the serverless function is capped at 60s). Tests shorten these. */
 export const aiRetryConfig = { delayMs: 1500, deadlineMs: 35_000 };
 const TRANSIENT = /\b(503|500|429|504)\b|UNAVAILABLE|high demand|overloaded|RESOURCE_EXHAUSTED|rate.?limit|deadline|timed? ?out|ECONNRESET|ETIMEDOUT|fetch failed/i;
 
 export const isTransientAiError = (err: unknown): boolean => TRANSIENT.test(err instanceof Error ? err.message : String(err ?? ""));
+/** The model itself is not available to this account (retired, renamed, not enabled): retrying it is pointless, so move on to the next model. */
+const MODEL_GONE = /\b404\b|NOT_FOUND|no longer available|is not found|not supported for generateContent/i;
+export const isModelUnavailableError = (err: unknown): boolean => MODEL_GONE.test(err instanceof Error ? err.message : String(err ?? ""));
 
-/** Calls the model, retrying a busy/rate-limited provider on the same model once, then on a second model, within a time budget. */
+/** Calls the model, retrying a busy/rate-limited provider on the same model once, then moving to backup models, within a time budget. */
 async function generateWithRetry(adapter: { generateText: (p: import("../../ai/adapters/types").AiModelCallParams) => Promise<import("../../ai/adapters/types").AiModelCallResult> }, primary: string, params: Omit<import("../../ai/adapters/types").AiModelCallParams, "modelName">) {
-  const models = primary === SECOND_MODEL ? [primary] : [primary, SECOND_MODEL];
+  const models = [...new Set([primary, ...BACKUP_MODELS])];
   const started = Date.now();
   let last: unknown;
+  let sawBusy = false;
   for (const modelName of models) {
     for (let attempt = 1; attempt <= 2; attempt++) {
       try {
         return { response: await adapter.generateText({ ...params, modelName }), modelName };
       } catch (err) {
         last = err;
+        if (isModelUnavailableError(err)) {
+          logger.warn({ modelName, err: redactSecrets(err).slice(0, 200) }, "[ai] model not available, trying the next one");
+          break;
+        }
         if (!isTransientAiError(err)) throw err;
+        sawBusy = true;
         logger.warn({ modelName, attempt, err: redactSecrets(err).slice(0, 200) }, "[ai] provider busy, retrying");
-        const lastAttemptOfLastModel = modelName === models[models.length - 1] && attempt === 2;
-        if (lastAttemptOfLastModel || Date.now() - started + aiRetryConfig.delayMs > aiRetryConfig.deadlineMs) break;
+        if (attempt === 2 || Date.now() - started + aiRetryConfig.delayMs > aiRetryConfig.deadlineMs) break;
         await new Promise((r) => setTimeout(r, aiRetryConfig.delayMs));
       }
     }
     if (Date.now() - started > aiRetryConfig.deadlineMs) break;
   }
-  logger.error({ err: redactSecrets(last).slice(0, 300) }, "[ai] provider still busy after retries");
-  throw new ServiceBusyError();
+  logger.error({ err: redactSecrets(last).slice(0, 300) }, "[ai] no model could answer");
+  throw sawBusy ? new ServiceBusyError() : new ServiceBusyError("The AI model is not available right now. Please try again later, or ask an administrator to check the AI settings.");
 }
 const MAX_PLAN_POSTS = 30;
 
