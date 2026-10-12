@@ -5,6 +5,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import * as productsApiModule from "../../lib/api";
 import { ProductsPage } from "./ProductsPage";
 import { RouterProvider } from "../../lib/router";
 
@@ -110,6 +111,7 @@ const moduleA = {
 const moduleB = { ...moduleA, id: "module-2", code: "PAYROLL", name: "Payroll", displayOrder: 1, isCore: false };
 
 afterEach(() => {
+  listedSolution = null;
   cleanup();
   window.history.replaceState({}, "", "/");
   vi.restoreAllMocks();
@@ -139,7 +141,15 @@ afterEach(() => {
   ];
 });
 
+let listedSolution: typeof product | null = null;
+const fullRevision = {
+  id: "rev-1", productId: "product-1", version: 1, name: "Artify HCMS", createdAt: "2026-01-01T00:00:00.000Z", createdById: null,
+  content: { businessProblem: "Real stored problem.", benefits: ["Stored benefit"], features: ["Stored feature"], seo: { metaTitle: "Stored meta title" } },
+};
+
 beforeEach(() => {
+  // List rows are flat; the full record (with revision content) comes from GET /products/:id.
+  vi.mocked(productsApiModule.productsApi.get).mockReset().mockImplementation((async (id: string) => ({ product: { ...(listedSolution && id === listedSolution.id ? listedSolution : product), currentRevisionId: "rev-1", currentRevision: fullRevision, category: null, industries: [], relatedFrom: [], relatedTo: [] } })) as never);
   modulesMock.mockResolvedValue({ items: [moduleA, moduleB], page: 1, limit: 100, total: 2, totalPages: 1 });
   categoriesListMock.mockResolvedValue({ categories: [] });
   industriesListMock.mockResolvedValue({ industries: [] });
@@ -207,6 +217,32 @@ describe("ProductsPage", () => {
     fireEvent.click(screen.getByRole("button", { name: /^create$/i }));
 
     await vi.waitFor(() => expect(createMock).toHaveBeenCalledWith(expect.objectContaining({ content: expect.objectContaining({ pageStyle: "workflow" }) })));
+  });
+
+  it("Edit opens with the stored problem, benefits, features and SEO even though the list row is flat", async () => {
+    listedSolution = { ...product, type: "SOLUTION" as never };
+    listMock.mockResolvedValue({ items: [listedSolution], page: 1, limit: 20, total: 1, totalPages: 1 });
+    renderProductsPage();
+    await screen.findAllByText("Artify HCMS");
+    // the detail pane loads the full record
+    expect(await screen.findByText("Real stored problem.")).toBeInTheDocument();
+
+    fireEvent.click(await screen.findByRole("button", { name: /^edit$/i }));
+    const problem = (await screen.findByLabelText(/business problem/i)) as HTMLTextAreaElement;
+    expect(problem.value).toBe("Real stored problem.");
+    expect(screen.getByDisplayValue("Stored benefit")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("Stored feature")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("Stored meta title")).toBeInTheDocument();
+  });
+
+  it("Edit fetches the full record when it is clicked before the detail finished loading", async () => {
+    listedSolution = { ...product, type: "SOLUTION" as never };
+    listMock.mockResolvedValue({ items: [listedSolution], page: 1, limit: 20, total: 1, totalPages: 1 });
+    renderProductsPage();
+    await screen.findAllByText("Artify HCMS");
+    fireEvent.click(await screen.findByRole("button", { name: /^edit$/i }));
+    expect(((await screen.findByLabelText(/business problem/i)) as HTMLTextAreaElement).value).toBe("Real stored problem.");
+    expect(vi.mocked(productsApiModule.productsApi.get)).toHaveBeenCalledWith("product-1");
   });
 
   it("adds a module to the selected product through the real API", async () => {
@@ -321,7 +357,6 @@ describe("ProductsPage", () => {
   it("duplicates a product through the real API", async () => {
     listMock.mockResolvedValue({ items: [product], page: 1, limit: 20, total: 1, totalPages: 1 });
     const duplicated = { ...product, id: "product-2", code: "HCMS-01-COPY", slug: "artify-hcms-copy" };
-    const productsApiModule = await import("../../lib/api");
     vi.mocked(productsApiModule.productsApi.duplicate).mockResolvedValue({ product: duplicated });
     renderProductsPage();
 
@@ -332,7 +367,6 @@ describe("ProductsPage", () => {
 
   it("bulk-archives selected items via the real API after confirming", async () => {
     listMock.mockResolvedValue({ items: [product, { ...product, id: "product-2", code: "HCMS-02", name: "Second" }], page: 1, limit: 20, total: 2, totalPages: 1 });
-    const productsApiModule = await import("../../lib/api");
     vi.mocked(productsApiModule.productsApi.bulkArchive).mockResolvedValue({ archived: 1, skipped: [] });
     renderProductsPage();
 
@@ -349,7 +383,6 @@ describe("ProductsPage", () => {
 
   it("opens revision history and reverts to a prior version through the real API", async () => {
     listMock.mockResolvedValue({ items: [product], page: 1, limit: 20, total: 1, totalPages: 1 });
-    const productsApiModule = await import("../../lib/api");
     vi.mocked(productsApiModule.productsApi.listRevisions).mockResolvedValue({
       revisions: [
         { id: "rev-2", productId: "product-1", version: 2, name: "Artify HCMS", content: {}, createdById: null, createdAt: "2026-01-02T00:00:00.000Z" },
