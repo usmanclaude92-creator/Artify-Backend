@@ -978,7 +978,10 @@ export const ProductsPage: React.FC<{ lockedType?: ProductTypeValue }> = ({ lock
       });
       setProducts(res.items);
       setTotalPages(res.totalPages);
-      setSelected((prev) => (prev && res.items.some((p) => p.id === prev.id) ? res.items.find((p) => p.id === prev.id)! : res.items[0] ?? null));
+      setSelected((prev) => {
+        if (prev && res.items.some((p) => p.id === prev.id)) return prev.currentRevision ? { ...res.items.find((p) => p.id === prev.id)!, currentRevision: prev.currentRevision, category: prev.category, industries: prev.industries, relatedFrom: prev.relatedFrom, relatedTo: prev.relatedTo } : res.items.find((p) => p.id === prev.id)!;
+        return res.items[0] ?? null;
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load.");
     } finally {
@@ -1026,11 +1029,42 @@ export const ProductsPage: React.FC<{ lockedType?: ProductTypeValue }> = ({ lock
   }, [syncFromUrl]);
   const pushForm = (query: string) => window.history.pushState({ productForm: true }, "", `${window.location.pathname}?${query}`);
   const openCreate = () => { pushForm("form=new"); setForm({ mode: "create" }); };
-  const openEdit = (product: CatalogProduct) => { pushForm(`form=edit&id=${encodeURIComponent(product.id)}`); setForm({ mode: "edit", product }); };
+  // List rows are flat (no revision content). The editor must start from the full record, otherwise Business problem,
+  // Benefits, Features and SEO would open empty and a save would overwrite what is stored.
+  const openEdit = async (product: CatalogProduct) => {
+    let full = product;
+    if (!product.currentRevision) {
+      try {
+        full = (await productsApi.get(product.id)).product;
+      } catch {
+        notify("Could not load this item for editing. Please try again.", "error");
+        return;
+      }
+    }
+    pushForm(`form=edit&id=${encodeURIComponent(full.id)}`);
+    setForm({ mode: "edit", product: full });
+  };
   const closeForm = () => {
     if (window.history.state?.productForm) window.history.back();
     else { window.history.replaceState({}, "", window.location.pathname); setForm(null); }
   };
+
+  // Selecting a row shows the full record (problem, benefits, features, SEO), not just the flat list fields.
+  const selectedId = selected?.id;
+  const selectedHasDetail = !!selected?.currentRevision;
+  useEffect(() => {
+    if (!selectedId || selectedHasDetail) return;
+    let cancelled = false;
+    void productsApi
+      .get(selectedId)
+      .then((res) => {
+        if (!cancelled) setSelected((cur) => (cur && cur.id === selectedId ? res.product : cur));
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedId, selectedHasDetail]);
 
   const refreshLookups = () => {
     void productsApi.list({ limit: 100 }).then((res) => setAllProducts(res.items)).catch(() => undefined);
