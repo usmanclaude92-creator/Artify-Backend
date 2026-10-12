@@ -56,6 +56,7 @@ import { hasPermission } from "../../lib/permissions";
 import { initialSearchFromQuery } from "../../lib/deepLink";
 import { MediaPickerModal } from "../common/MediaPickerModal";
 import { AiWriterPanel, type AiWriterOptions } from "../common/AiWriterPanel";
+import { createFeatureImage } from "../../lib/featureImage";
 import { SeoFieldsPanel, EMPTY_SEO_FIELDS, seoFieldsFromMetadata, seoFieldsToMetadata } from "../common/SeoFieldsPanel";
 
 const TYPE_OPTIONS: ProductTypeValue[] = ["PRODUCT", "SERVICE", "SOLUTION"];
@@ -269,15 +270,36 @@ const ProductFormModal: React.FC<{
   };
 
   const writeWithAi = async (o: AiWriterOptions) => {
-    const draft = await contentAiApi.writeProduct({ brief: o.brief, tone: o.tone, name: name || undefined, itemType: lockedType ?? type });
-    const before = { shortDescription, description, benefits, features, businessProblem, seo };
+    const draft = await contentAiApi.writeProduct({ brief: o.brief, tone: o.tone, name: name || undefined, itemType: lockedType ?? type, productId: product?.id });
+    const before = { code, name, slug, shortDescription, description, benefits, features, businessProblem, seo, featuredMediaId };
+    if (o.applyIdentity) {
+      if (draft.name) setName(draft.name);
+      if (draft.slug) setSlug(draft.slug);
+      if (draft.code && mode === "create") setCode(draft.code);
+    }
     setShortDescription(draft.shortDescription);
     setDescription(draft.description);
     setBenefits(draft.benefits);
     setFeatures(draft.features);
     if (draft.businessProblem) setBusinessProblem(draft.businessProblem);
-    setSeo((cur) => ({ ...cur, metaTitle: draft.seoTitle, metaDescription: draft.seoDescription }));
+    setSeo((cur) => ({ ...cur, metaTitle: draft.seoTitle, metaDescription: draft.seoDescription, focusKeywords: draft.focusKeywords.join(", "), ogTitle: draft.ogTitle, ogDescription: draft.ogDescription }));
+    if (o.applyImage) {
+      try {
+        const media = await createFeatureImage({
+          title: o.applyIdentity && draft.name ? draft.name : name || draft.name,
+          subtitle: draft.shortDescription,
+          label: TYPE_LABEL[lockedType ?? type],
+        });
+        setFeaturedMediaId(media.id);
+      } catch {
+        notify("The text was written, but the feature image could not be created. Add one with Choose image.", "error");
+      }
+    }
     return () => {
+      setFeaturedMediaId(before.featuredMediaId);
+      setCode(before.code);
+      setName(before.name);
+      setSlug(before.slug);
       setShortDescription(before.shortDescription);
       setDescription(before.description);
       setBenefits(before.benefits);
@@ -327,7 +349,22 @@ const ProductFormModal: React.FC<{
             </Select>
           </Field>
         </div>
-        <AiWriterPanel kind="product" onGenerate={writeWithAi} hasContent={!!(shortDescription || description || benefits.length || features.length)} />
+        <AiWriterPanel
+          kind="product"
+          onGenerate={writeWithAi}
+          hasContent={!!(shortDescription || description || benefits.length || features.length)}
+          initialBrief={mode === "edit" ? [product?.name, shortDescription, description].filter(Boolean).join(". ").slice(0, 3900) : ""}
+          identity={{
+            label: mode === "create" ? "Also set the name, code and URL slug" : "Also update the name and URL slug",
+            hint: mode === "create" ? "Writes an SEO-friendly name, the next free code (e.g. CAS-001) and a unique slug." : "Changes the public link of an item that already exists. The code never changes.",
+            defaultChecked: mode === "create",
+          }}
+          image={{
+            label: featuredMediaId ? "Replace the feature image" : "Also design a feature image",
+            hint: "Draws a branded 1200x630 card from the name and tagline and saves it to the Media Library.",
+            defaultChecked: !featuredMediaId,
+          }}
+        />
         <Field label="Short description">
           <Input value={shortDescription} onChange={(e) => setShortDescription(e.target.value)} maxLength={300} />
         </Field>

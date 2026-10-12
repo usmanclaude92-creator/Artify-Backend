@@ -3633,11 +3633,12 @@ export const metaReviewApi = {
 
 // ---- AI writer for the Posts and Products editors (text only; the editor saves it) ----
 export type AiWriterTone = "professional" | "friendly" | "persuasive" | "technical";
-export interface AiPostDraft { title: string; excerpt: string; bodyHtml: string; seoTitle: string; seoDescription: string; executionId: string }
-export interface AiProductDraft { shortDescription: string; description: string; benefits: string[]; features: string[]; businessProblem: string; seoTitle: string; seoDescription: string; executionId: string }
+export interface AiPostDraft { title: string; slug: string; excerpt: string; bodyHtml: string; seoTitle: string; seoDescription: string; focusKeywords: string[]; ogTitle: string; ogDescription: string; executionId: string }
+/** `code` is null when editing an existing product (a code cannot change after creation). */
+export interface AiProductDraft { name: string; code: string | null; slug: string; shortDescription: string; description: string; benefits: string[]; features: string[]; businessProblem: string; seoTitle: string; seoDescription: string; focusKeywords: string[]; ogTitle: string; ogDescription: string; executionId: string }
 /** Model calls routinely take 10-40s; the default 15s client timeout aborted them while the server was still working. */
 export const AI_REQUEST_TIMEOUT_MS = 65_000;
 export const contentAiApi = {
-  writePost: (input: { brief: string; tone?: AiWriterTone; length?: "short" | "medium" | "long"; language?: string; currentTitle?: string }) => apiClient.post<AiPostDraft>("/ai/content/post", input, { timeoutMs: AI_REQUEST_TIMEOUT_MS }),
-  writeProduct: (input: { brief: string; name?: string; itemType?: "PRODUCT" | "SERVICE" | "SOLUTION"; tone?: AiWriterTone; language?: string }) => apiClient.post<AiProductDraft>("/ai/content/product", input, { timeoutMs: AI_REQUEST_TIMEOUT_MS }),
+  writePost: (input: { brief: string; tone?: AiWriterTone; length?: "short" | "medium" | "long"; language?: string; currentTitle?: string; postId?: string }) => apiClient.post<AiPostDraft>("/ai/content/post", input, { timeoutMs: AI_REQUEST_TIMEOUT_MS }),
+  writeProduct: (input: { brief: string; name?: string; itemType?: "PRODUCT" | "SERVICE" | "SOLUTION"; tone?: AiWriterTone; language?: string; productId?: string }) => apiClient.post<AiProductDraft>("/ai/content/product", input, { timeoutMs: AI_REQUEST_TIMEOUT_MS }),
 };
