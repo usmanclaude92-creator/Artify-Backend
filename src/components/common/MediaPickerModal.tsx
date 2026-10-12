@@ -1,8 +1,15 @@
 /** Phase 9 §28 — CMS media selector: search/paginate ACTIVE images only, preview, attach. Shared by Pages and Posts featured-image fields. */
-import React, { useEffect, useState } from "react";
-import { Image as ImageIcon, Search } from "lucide-react";
-import { mediaApi, type CmsMedia } from "../../lib/api";
+import React, { useEffect, useRef, useState } from "react";
+import { Image as ImageIcon, Search, Upload } from "lucide-react";
+import { useAuth } from "../../context/AuthContext";
+import { useToast } from "../../context/ToastContext";
+import { mediaApi, type AllowedMediaMimeType, type CmsMedia } from "../../lib/api";
+import { ApiClientError } from "../../lib/apiClient";
+import { hasPermission } from "../../lib/permissions";
 import { Modal, Input, Button, LoadingState, EmptyState, Pagination } from "../ui/ui";
+
+const UPLOAD_MIME_TYPES: AllowedMediaMimeType[] = ["image/jpeg", "image/png", "image/webp", "image/gif", "image/svg+xml"];
+const MAX_UPLOAD_MB = 10;
 
 const MediaPickerThumb: React.FC<{ media: CmsMedia }> = ({ media }) => {
   const [url, setUrl] = useState<string | null>(null);
@@ -31,6 +38,34 @@ export const MediaPickerModal: React.FC<{ open: boolean; onClose: () => void; on
   const [items, setItems] = useState<CmsMedia[]>([]);
   const [totalPages, setTotalPages] = useState(1);
   const [loading, setLoading] = useState(true);
+  const [uploading, setUploading] = useState(false);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const { user } = useAuth();
+  const { notify } = useToast();
+  const canUpload = hasPermission(user?.role.permissions, "media.upload");
+
+  // Upload straight from the picker and attach the new image right away.
+  const handleFile = async (file: File | undefined) => {
+    if (!file) return;
+    if (!UPLOAD_MIME_TYPES.includes(file.type as AllowedMediaMimeType)) {
+      notify("Please choose a JPG, PNG, WebP, GIF or SVG image.", "error");
+      return;
+    }
+    if (file.size > MAX_UPLOAD_MB * 1024 * 1024) {
+      notify(`That image is larger than ${MAX_UPLOAD_MB} MB.`, "error");
+      return;
+    }
+    setUploading(true);
+    try {
+      const media = await mediaApi.uploadFile(file, { mimeType: file.type as AllowedMediaMimeType });
+      onSelect(media);
+    } catch (err) {
+      notify(err instanceof ApiClientError ? err.message : "Could not upload the image.", "error");
+    } finally {
+      setUploading(false);
+      if (fileInput.current) fileInput.current.value = "";
+    }
+  };
 
   useEffect(() => {
     if (open) {
@@ -61,14 +96,31 @@ export const MediaPickerModal: React.FC<{ open: boolean; onClose: () => void; on
   return (
     <Modal open={open} onClose={onClose} title="Select featured image">
       <div className="space-y-3">
-        <div className="relative">
-          <Search className="w-3.5 h-3.5 absolute left-2.5 top-2.5" style={{ color: "var(--text-muted)" }} />
-          <Input placeholder="Search images…" value={search} onChange={(e) => setSearch(e.target.value)} className="pl-8" />
+        <div className="flex gap-2">
+          <div className="relative flex-1">
+            <Search className="w-3.5 h-3.5 absolute left-2.5 top-2.5" style={{ color: "var(--text-muted)" }} />
+            <Input placeholder="Search images…" value={search} onChange={(e) => setSearch(e.target.value)} className="pl-8" />
+          </div>
+          {canUpload && (
+            <>
+              <input
+                ref={fileInput}
+                type="file"
+                accept={UPLOAD_MIME_TYPES.join(",")}
+                className="hidden"
+                aria-label="Upload image file"
+                onChange={(e) => void handleFile(e.target.files?.[0])}
+              />
+              <Button type="button" variant="primary" disabled={uploading} onClick={() => fileInput.current?.click()}>
+                <Upload className="w-3.5 h-3.5" /> {uploading ? "Uploading…" : "Upload image"}
+              </Button>
+            </>
+          )}
         </div>
         {loading ? (
           <LoadingState />
         ) : items.length === 0 ? (
-          <EmptyState title="No images found" description="Upload one from the Media Library first." />
+          <EmptyState title="No images found" description={canUpload ? "Upload one with the button above." : "Ask someone with upload access to add one in the Media Library."} />
         ) : (
           <>
             <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 max-h-80 overflow-y-auto">
