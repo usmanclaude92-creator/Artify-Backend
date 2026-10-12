@@ -70,7 +70,7 @@ export const AiWriterPanel: React.FC<{
           {error && <div className="text-xs rounded-lg px-3 py-2 bg-rose-500/10 text-rose-500 border border-rose-500/30" role="alert">{error}</div>}
           <div className="flex flex-wrap items-center gap-2">
             <Button type="button" variant="primary" disabled={busy || brief.trim().length < 10} onClick={() => void generate()}>
-              <Sparkles className="w-3.5 h-3.5" /> {busy ? "Writing…" : "Write with AI"}
+              <Sparkles className="w-3.5 h-3.5" /> {busy ? "Writing… up to a minute" : "Write with AI"}
             </Button>
             {undo && <Button type="button" variant="ghost" onClick={() => { undo(); setUndo(null); }}><Undo2 className="w-3.5 h-3.5" /> Undo AI changes</Button>}
           </div>

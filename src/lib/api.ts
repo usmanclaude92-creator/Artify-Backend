@@ -3125,11 +3125,11 @@ export const socialContentApi = {
   action: (id: string, action: "submit" | "withdraw" | "reopen" | "cancel" | "unschedule" | "approve" | "reject" | "schedule", body: { comment?: string; scheduledAt?: string; timezone?: string } = {}) =>
     apiClient.post<{ post: SocialPostView }>(`/social/posts/${id}/${action}`, body).then((r) => r.post),
   aiDraft: (input: { instruction: string; accountIds: string[]; sourceContent?: { type: "post" | "case_study"; id: string }; title?: string; language?: string }) =>
-    apiClient.post<{ post: SocialPostView; executionId: string }>("/social/ai/draft", input),
+    apiClient.post<{ post: SocialPostView; executionId: string }>("/social/ai/draft", input, { timeoutMs: AI_REQUEST_TIMEOUT_MS }),
   aiPlan: (input: { brief: string; accountIds: string[]; cadencePerWeek: number; startDate: string; endDate: string }) =>
-    apiClient.post<{ plan: SocialPlanSummary; posts: SocialPostView[]; executionId: string }>("/social/ai/plan", input),
+    apiClient.post<{ plan: SocialPlanSummary; posts: SocialPostView[]; executionId: string }>("/social/ai/plan", input, { timeoutMs: AI_REQUEST_TIMEOUT_MS }),
   aiRewrite: (id: string, input: { action: "rewrite" | "shorten" | "translate"; instruction?: string; language?: string; accountId?: string }) =>
-    apiClient.post<{ post: SocialPostView; previousBody: string; executionId: string }>(`/social/posts/${id}/ai/rewrite`, input),
+    apiClient.post<{ post: SocialPostView; previousBody: string; executionId: string }>(`/social/posts/${id}/ai/rewrite`, input, { timeoutMs: AI_REQUEST_TIMEOUT_MS }),
   plans: () => apiClient.get<{ plans: SocialPlanSummary[] }>("/social/plans").then((r) => r.plans),
 };
 
@@ -3635,7 +3635,9 @@ export const metaReviewApi = {
 export type AiWriterTone = "professional" | "friendly" | "persuasive" | "technical";
 export interface AiPostDraft { title: string; excerpt: string; bodyHtml: string; seoTitle: string; seoDescription: string; executionId: string }
 export interface AiProductDraft { shortDescription: string; description: string; benefits: string[]; features: string[]; businessProblem: string; seoTitle: string; seoDescription: string; executionId: string }
+/** Model calls routinely take 10-40s; the default 15s client timeout aborted them while the server was still working. */
+export const AI_REQUEST_TIMEOUT_MS = 65_000;
 export const contentAiApi = {
-  writePost: (input: { brief: string; tone?: AiWriterTone; length?: "short" | "medium" | "long"; language?: string; currentTitle?: string }) => apiClient.post<AiPostDraft>("/ai/content/post", input),
-  writeProduct: (input: { brief: string; name?: string; itemType?: "PRODUCT" | "SERVICE" | "SOLUTION"; tone?: AiWriterTone; language?: string }) => apiClient.post<AiProductDraft>("/ai/content/product", input),
+  writePost: (input: { brief: string; tone?: AiWriterTone; length?: "short" | "medium" | "long"; language?: string; currentTitle?: string }) => apiClient.post<AiPostDraft>("/ai/content/post", input, { timeoutMs: AI_REQUEST_TIMEOUT_MS }),
+  writeProduct: (input: { brief: string; name?: string; itemType?: "PRODUCT" | "SERVICE" | "SOLUTION"; tone?: AiWriterTone; language?: string }) => apiClient.post<AiProductDraft>("/ai/content/product", input, { timeoutMs: AI_REQUEST_TIMEOUT_MS }),
 };
