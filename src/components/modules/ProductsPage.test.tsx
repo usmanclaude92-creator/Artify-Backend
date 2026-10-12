@@ -192,6 +192,23 @@ describe("ProductsPage", () => {
     await vi.waitFor(() => expect(createMock).toHaveBeenCalledWith(expect.objectContaining({ code: "hcms-02", name: "New Product" })));
   });
 
+  it("lets the editor pick a public page style and sends it with the content", async () => {
+    listMock.mockResolvedValue({ items: [], page: 1, limit: 20, total: 0, totalPages: 1 });
+    createMock.mockResolvedValue({ product });
+    renderProductsPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: /new product/i }));
+    const styleSelect = (await screen.findByLabelText(/page style/i)) as HTMLSelectElement;
+    expect(styleSelect.value).toBe("classic");
+    expect(Array.from(styleSelect.options).map((o) => o.value)).toEqual(["classic", "executive", "showcase", "editorial", "story", "bento", "tabbed", "workflow", "cinematic", "datasheet"]);
+    fireEvent.change(styleSelect, { target: { value: "workflow" } });
+    fireEvent.change(screen.getByLabelText(/^code$/i), { target: { value: "hcms-03" } });
+    fireEvent.change(screen.getByLabelText(/^name$/i), { target: { value: "Styled" } });
+    fireEvent.click(screen.getByRole("button", { name: /^create$/i }));
+
+    await vi.waitFor(() => expect(createMock).toHaveBeenCalledWith(expect.objectContaining({ content: expect.objectContaining({ pageStyle: "workflow" }) })));
+  });
+
   it("adds a module to the selected product through the real API", async () => {
     listMock.mockResolvedValue({ items: [product], page: 1, limit: 20, total: 1, totalPages: 1 });
     addModuleMock.mockResolvedValue({ module: moduleA });

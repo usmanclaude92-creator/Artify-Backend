@@ -28252,7 +28252,9 @@ var listProductsQuerySchema = z39.object({
   sort: z39.enum(SORT_FIELDS2).default("displayOrder"),
   order: z39.enum(["asc", "desc"]).default("asc")
 });
+var PRODUCT_PAGE_STYLES = ["classic", "executive", "showcase", "editorial", "story", "bento", "tabbed", "workflow", "cinematic", "datasheet"];
 var productContentSchema = z39.object({
+  pageStyle: z39.enum(PRODUCT_PAGE_STYLES).optional(),
   benefits: z39.array(z39.string().trim().min(1).max(200)).max(20).optional(),
   features: z39.array(z39.string().trim().min(1).max(200)).max(20).optional(),
   businessProblem: z39.string().trim().max(2e3).optional(),
@@ -33957,6 +33959,7 @@ async function projectProductDetail(product) {
     ...await projectProductBasic(product),
     category: projectCategory(product.category),
     featuredMedia,
+    pageStyle: content.pageStyle ?? "classic",
     benefits: content.benefits ?? [],
     features: content.features ?? [],
     businessProblem: content.businessProblem ?? null,

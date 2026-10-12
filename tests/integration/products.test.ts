@@ -437,6 +437,23 @@ describe("product catalog", () => {
     expect(after.status).toBe(404);
   });
 
+  it("stores a page style per product, exposes it publicly (default classic), and rejects unknown styles", async () => {
+    const bad = await request(app).post("/api/v1/products").set("Authorization", `Bearer ${adminToken}`).send({ code: "STYLE-BAD", name: "Style Bad", type: "SOLUTION", content: { pageStyle: "neon" } });
+    expect(bad.status).toBe(400);
+
+    const styled = await request(app).post("/api/v1/products").set("Authorization", `Bearer ${adminToken}`).send({ code: "STYLE-WF", name: "Style Workflow", type: "SOLUTION", status: "ACTIVE", content: { pageStyle: "workflow" } });
+    expect(styled.status).toBe(201);
+    const plain = await request(app).post("/api/v1/products").set("Authorization", `Bearer ${adminToken}`).send({ code: "STYLE-DEF", name: "Style Default", type: "PRODUCT", status: "ACTIVE" });
+    expect(plain.status).toBe(201);
+
+    expect((await request(app).get(`/api/v1/public/products/${styled.body.data.product.slug}`)).body.data.product.pageStyle).toBe("workflow");
+    expect((await request(app).get(`/api/v1/public/products/${plain.body.data.product.slug}`)).body.data.product.pageStyle).toBe("classic");
+
+    const changed = await request(app).patch(`/api/v1/products/${styled.body.data.product.id}`).set("Authorization", `Bearer ${adminToken}`).send({ content: { pageStyle: "datasheet" } });
+    expect(changed.status).toBe(200);
+    expect((await request(app).get(`/api/v1/public/products/${styled.body.data.product.slug}`)).body.data.product.pageStyle).toBe("datasheet");
+  });
+
   it("enforces product_categories.manage / industries.manage permissions: a VIEWER can read but not create", async () => {
     const viewerCategoryRead = await request(app).get("/api/v1/product-categories").set("Authorization", `Bearer ${viewerToken}`);
     expect(viewerCategoryRead.status).toBe(200);
