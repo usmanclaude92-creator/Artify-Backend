@@ -366,6 +366,27 @@ describe("product catalog", () => {
     expect(goodMedia.status).toBe(201);
     expect(goodMedia.body.data.product.featuredMediaId).toBe(media.id);
 
+    // A PRIVATE image (uploads default to PRIVATE) is promoted to PUBLIC when attached, otherwise the public site silently shows no image.
+    const privateMedia = await prisma.mediaAsset.create({
+      data: {
+        organizationId: config.publicWebsiteOrganizationId,
+        originalFilename: "banner.png",
+        storageProvider: "local",
+        storageBucket: "test",
+        storageKey: `products-test/${Date.now()}-banner.png`,
+        mimeType: "image/png",
+        sizeBytes: 2048,
+        visibility: "PRIVATE",
+        status: "ACTIVE",
+      },
+    });
+    const withPrivate = await request(app)
+      .post("/api/v1/products")
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({ code: "MEDIA-PRIV", name: "Private Media", type: "SOLUTION", featuredMediaId: privateMedia.id });
+    expect(withPrivate.status).toBe(201);
+    expect((await prisma.mediaAsset.findUniqueOrThrow({ where: { id: privateMedia.id } })).visibility).toBe("PUBLIC");
+
     const badCta = await request(app)
       .post("/api/v1/products")
       .set("Authorization", `Bearer ${adminToken}`)
