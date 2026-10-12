@@ -5,7 +5,7 @@ import { ApiClientError } from "../../lib/apiClient";
 import type { AiWriterTone } from "../../lib/api";
 import { Button, Select } from "../ui/ui";
 
-export interface AiWriterOptions { brief: string; tone: AiWriterTone; length: "short" | "medium" | "long"; applyIdentity: boolean; applyImage: boolean }
+export interface AiWriterOptions { brief: string; tone: AiWriterTone; length: "short" | "medium" | "long"; applyIdentity: boolean; applyImage: boolean; screenshots?: { desktop?: File; mobile?: File } }
 
 export const AiWriterPanel: React.FC<{
   kind: "article" | "product";
@@ -23,6 +23,8 @@ export const AiWriterPanel: React.FC<{
   const [brief, setBrief] = useState(initialBrief);
   const [applyIdentity, setApplyIdentity] = useState(identity?.defaultChecked ?? false);
   const [applyImage, setApplyImage] = useState(image?.defaultChecked ?? false);
+  const [desktopShot, setDesktopShot] = useState<File | undefined>();
+  const [mobileShot, setMobileShot] = useState<File | undefined>();
   const [tone, setTone] = useState<AiWriterTone>("professional");
   const [length, setLength] = useState<"short" | "medium" | "long">("medium");
   const [busy, setBusy] = useState(false);
@@ -34,7 +36,7 @@ export const AiWriterPanel: React.FC<{
     setError(null);
     try {
       setUndo(null);
-      const restore = await onGenerate({ brief: brief.trim(), tone, length, applyIdentity: !!identity && applyIdentity, applyImage: !!image && applyImage });
+      const restore = await onGenerate({ brief: brief.trim(), tone, length, applyIdentity: !!identity && applyIdentity, applyImage: !!image && applyImage, screenshots: image && applyImage ? { desktop: desktopShot, mobile: mobileShot } : undefined });
       setUndo(() => restore);
     } catch (err) {
       setError(err instanceof ApiClientError ? err.message : "AI writing is not available right now.");
@@ -86,6 +88,24 @@ export const AiWriterPanel: React.FC<{
               <input type="checkbox" className="mt-0.5" checked={applyImage} onChange={(e) => setApplyImage(e.target.checked)} />
               <span><strong>{image.label}</strong><span className="block text-[11px]" style={{ color: "var(--text-muted)" }}>{image.hint}</span></span>
             </label>
+          )}
+          {image && applyImage && (
+            <div className="grid grid-cols-2 gap-2">
+              {([["Desktop screenshot (optional)", "ai-writer-shot-desktop", setDesktopShot, desktopShot], ["Phone screenshot (optional)", "ai-writer-shot-mobile", setMobileShot, mobileShot]] as const).map(([text, id, set, file]) => (
+                <div key={id}>
+                  {label(text, id)}
+                  <input
+                    id={id} type="file" accept="image/png,image/jpeg,image/webp"
+                    className="block w-full text-[11px]" style={{ color: "var(--text-secondary)" }}
+                    onChange={(e) => { const f = e.target.files?.[0]; set(f && f.size <= 8 * 1024 * 1024 ? f : undefined); }}
+                  />
+                  {file && <span className="block text-[11px] truncate" style={{ color: "var(--text-muted)" }}>{file.name}</span>}
+                </div>
+              ))}
+              <p className="col-span-2 text-[11px]" style={{ color: "var(--text-muted)" }}>
+                Without screenshots the laptop and phone show a neutral dashboard sketch. Add your own to show the real product.
+              </p>
+            </div>
           )}
           {error && <div className="text-xs rounded-lg px-3 py-2 bg-rose-500/10 text-rose-500 border border-rose-500/30" role="alert">{error}</div>}
           <div className="flex flex-wrap items-center gap-2">

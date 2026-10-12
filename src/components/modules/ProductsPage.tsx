@@ -285,10 +285,14 @@ const ProductFormModal: React.FC<{
     setSeo((cur) => ({ ...cur, metaTitle: draft.seoTitle, metaDescription: draft.seoDescription, focusKeywords: draft.focusKeywords.join(", "), ogTitle: draft.ogTitle, ogDescription: draft.ogDescription }));
     if (o.applyImage) {
       try {
+        const shownName = o.applyIdentity && draft.name ? draft.name : name || draft.name;
         const media = await createFeatureImage({
-          title: o.applyIdentity && draft.name ? draft.name : name || draft.name,
-          subtitle: draft.shortDescription,
-          label: TYPE_LABEL[lockedType ?? type],
+          title: shownName,
+          headline: draft.imageHeadline || shownName,
+          subtitle: draft.imageSubtitle || draft.shortDescription,
+          label: draft.imageLabel || TYPE_LABEL[lockedType ?? type],
+          tagline: draft.imageTagline || shownName,
+          screenshots: o.screenshots,
         });
         setFeaturedMediaId(media.id);
       } catch {
@@ -361,7 +365,7 @@ const ProductFormModal: React.FC<{
           }}
           image={{
             label: featuredMediaId ? "Replace the feature image" : "Also design a feature image",
-            hint: "Draws a branded 1200x630 card from the name and tagline and saves it to the Media Library.",
+            hint: "Designs a banner (logo, headline, summary, device mockups) from the product and saves it to the Media Library.",
             defaultChecked: !featuredMediaId,
           }}
         />
