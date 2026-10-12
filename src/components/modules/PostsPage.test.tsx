@@ -89,6 +89,8 @@ const post = {
 
 afterEach(() => {
   cleanup();
+  window.history.replaceState({}, "", "/");
+  vi.restoreAllMocks();
   listMock.mockReset();
   createMock.mockReset();
   updateMock.mockReset();
@@ -150,12 +152,50 @@ describe("PostsPage", () => {
     render(<PostsPage />);
 
     fireEvent.click(await screen.findByRole("button", { name: /new post/i }));
-    const dialog = await screen.findByRole("dialog");
-    fireEvent.change(within(dialog).getByLabelText(/^title$/i), { target: { value: "Launch Day" } });
-    fireEvent.click(within(dialog).getByText("Launch"));
-    fireEvent.click(within(dialog).getByRole("button", { name: /create post/i }));
+    expect(await screen.findByRole("heading", { name: "New post" })).toBeTruthy();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(window.location.search).toBe("?form=new");
+    fireEvent.change(screen.getByLabelText(/^title$/i), { target: { value: "Launch Day" } });
+    fireEvent.click(screen.getByText("Launch"));
+    fireEvent.click(screen.getByRole("button", { name: /create post/i }));
 
     await vi.waitFor(() => expect(createMock).toHaveBeenCalledWith(expect.objectContaining({ title: "Launch Day", tagIds: ["tag-1"] })));
+  });
+
+  it("opens Edit as a full page, and Cancel returns to the list", async () => {
+    listMock.mockResolvedValue({ items: [post], page: 1, limit: 20, total: 1, totalPages: 1 });
+    render(<PostsPage />);
+    await screen.findByText("We shipped it.");
+
+    fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
+    expect(await screen.findByText("Edit post")).toBeTruthy();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(window.location.search).toContain("form=edit");
+    expect((screen.getByLabelText(/^title$/i) as HTMLInputElement).value).toBe("Launch Day");
+
+    fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
+    await screen.findByText("We shipped it.");
+    await vi.waitFor(() => expect(window.location.search).toBe(""));
+  });
+
+  it("asks before discarding unsaved changes", async () => {
+    listMock.mockResolvedValue({ items: [post], page: 1, limit: 20, total: 1, totalPages: 1 });
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+    render(<PostsPage />);
+    await screen.findByText("We shipped it.");
+    fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
+    fireEvent.change(await screen.findByLabelText(/^title$/i), { target: { value: "Changed" } });
+
+    fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
+    expect(confirmSpy).toHaveBeenCalled();
+    expect((screen.getByLabelText(/^title$/i) as HTMLInputElement).value).toBe("Changed");
+  });
+
+  it("reopens the editor after a reload on ?form=new", async () => {
+    listMock.mockResolvedValue({ items: [], page: 1, limit: 20, total: 0, totalPages: 1 });
+    window.history.replaceState({}, "", "/?form=new");
+    render(<PostsPage />);
+    expect(await screen.findByRole("heading", { name: "New post" })).toBeTruthy();
   });
 
   it("publishes a post through the real API", async () => {

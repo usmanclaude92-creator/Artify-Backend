@@ -1,6 +1,7 @@
 /** Phase 8 — CMS blog posts: searchable/filterable/paginated list + master-detail editor with category/tag assignment, workflow actions, and revision history/revert. */
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
+  ArrowLeft,
   Newspaper,
   Plus,
   Search,
@@ -110,8 +111,7 @@ const FeaturedImageField: React.FC<{ mediaId: string | undefined; onChange: (med
   );
 };
 
-const PostFormModal: React.FC<{
-  open: boolean;
+const PostFormPage: React.FC<{
   onClose: () => void;
   onSaved: (post?: CmsPost) => void;
   mode: "create" | "edit";
@@ -119,7 +119,7 @@ const PostFormModal: React.FC<{
   categories: CmsCategory[];
   tags: CmsTag[];
   authors: CmsAuthor[];
-}> = ({ open, onClose, onSaved, mode, post, categories, tags, authors }) => {
+}> = ({ onClose, onSaved, mode, post, categories, tags, authors }) => {
   const [title, setTitle] = useState(post?.title ?? "");
   const [slug, setSlug] = useState(post?.slug ?? "");
   const [excerpt, setExcerpt] = useState(post?.currentRevision?.excerpt ?? "");
@@ -132,20 +132,23 @@ const PostFormModal: React.FC<{
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
+  // Unsaved-changes guard: compare the editable state with what the form opened with.
+  const snapshot = JSON.stringify({ title, slug, excerpt, body, categoryId, authorId, tagIds, featuredMediaId, seo });
+  const initialSnapshot = useRef(snapshot);
+  const dirty = snapshot !== initialSnapshot.current;
   useEffect(() => {
-    if (open) {
-      setTitle(post?.title ?? "");
-      setSlug(post?.slug ?? "");
-      setExcerpt(post?.currentRevision?.excerpt ?? "");
-      setBody(post?.currentRevision?.body ?? "");
-      setCategoryId(post?.categoryId ?? "");
-      setAuthorId(post?.authorId ?? "");
-      setTagIds((post?.tags ?? []).map((t) => t.tagId));
-      setFeaturedMediaId(post?.featuredMediaId ?? undefined);
-      setSeo(post ? seoFieldsFromMetadata(post.currentRevision?.metadata) : EMPTY_SEO_FIELDS);
-      setError(null);
-    }
-  }, [open, post]);
+    if (!dirty) return;
+    const warn = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [dirty]);
+  const requestClose = () => {
+    if (dirty && !window.confirm("Discard your unsaved changes?")) return;
+    onClose();
+  };
 
   const toggleTag = (id: string) => setTagIds((prev) => (prev.includes(id) ? prev.filter((t) => t !== id) : [...prev, id]));
 
@@ -225,110 +228,153 @@ const PostFormModal: React.FC<{
     };
   };
 
+  const textareaStyle = { background: "var(--bg-app)", border: "1px solid var(--border)", color: "var(--text-primary)" } as const;
+  const sectionTitle = (text: string) => (
+    <h2 className="text-xs font-bold uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>
+      {text}
+    </h2>
+  );
+
   return (
-    <Modal open={open} onClose={onClose} title={mode === "create" ? "New post" : `Edit ${post?.title}`}>
-      <form onSubmit={handleSubmit} className="space-y-3">
-        {error && <div className="text-xs rounded-lg px-3 py-2 bg-rose-500/10 text-rose-500 border border-rose-500/30">{error}</div>}
-        <AiWriterPanel
-          kind="article"
-          onGenerate={writeWithAi}
-          hasContent={!!(title || body)}
-          initialBrief={mode === "edit" ? [post?.title, post?.currentRevision?.excerpt].filter(Boolean).join(". ") : ""}
-          identity={{
-            label: "Also set the URL slug",
-            hint: mode === "edit" ? "Changes the public link of a post that already exists." : "Writes an SEO-friendly slug from the topic.",
-            defaultChecked: mode === "create",
-          }}
-          image={{
-            label: featuredMediaId ? "Replace the feature image" : "Also design a feature image",
-            hint: "Designs a banner (logo, headline, summary, device mockups) from the article and saves it to the Media Library.",
-            defaultChecked: !featuredMediaId,
-          }}
-        />
-        <Field label="Title">
-          <Input required value={title} onChange={(e) => setTitle(e.target.value)} />
-        </Field>
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="Slug" hint="Leave blank to auto-generate.">
-            <Input value={slug} onChange={(e) => setSlug(e.target.value)} placeholder="auto-generated" />
-          </Field>
-          <Field label="Category">
-            <Select value={categoryId} onChange={(e) => setCategoryId(e.target.value)}>
-              <option value="">None</option>
-              {categories.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                </option>
-              ))}
-            </Select>
-          </Field>
-        </div>
-        <Field label="Author">
-          <Select value={authorId} onChange={(e) => setAuthorId(e.target.value)}>
-            <option value="">Unassigned</option>
-            {authors.map((a) => (
-              <option key={a.id} value={a.id}>
-                {a.user.displayName || `${a.user.firstName} ${a.user.lastName}`}
-              </option>
-            ))}
-          </Select>
-        </Field>
-        <Field label="Excerpt" hint="A short summary for list views and archive cards. Falls back to an auto-generated one if left blank.">
-          <textarea
-            className="w-full px-3 py-2 rounded-lg text-sm focus:outline-none"
-            style={{ background: "var(--bg-app)", border: "1px solid var(--border)", color: "var(--text-primary)" }}
-            rows={2}
-            maxLength={500}
-            value={excerpt}
-            onChange={(e) => setExcerpt(e.target.value)}
-          />
-        </Field>
-        <Field label="Tags">
-          <div className="flex flex-wrap gap-1.5">
-            {tags.length === 0 && <span style={{ color: "var(--text-muted)" }}>No tags yet.</span>}
-            {tags.map((t) => (
-              <button
-                type="button"
-                key={t.id}
-                onClick={() => toggleTag(t.id)}
-                className="px-2.5 py-1 rounded-full text-[11px] font-semibold border"
-                style={
-                  tagIds.includes(t.id)
-                    ? { background: "var(--accent-soft)", color: "var(--accent)", borderColor: "var(--accent)" }
-                    : { color: "var(--text-secondary)", borderColor: "var(--border)" }
-                }
-              >
-                {t.name}
-              </button>
-            ))}
-          </div>
-        </Field>
-        <FeaturedImageField mediaId={featuredMediaId} onChange={setFeaturedMediaId} />
-        <Field label="Body">
-          <RichTextEditor value={body} onChange={setBody} placeholder="Write the post…" />
-        </Field>
-        <div className="pt-3 border-t space-y-3" style={{ borderColor: "var(--border)" }}>
-          <p className="text-xs font-bold uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>
-            SEO
+    <div className="space-y-4">
+      <div
+        className="sticky top-14 z-20 -mx-4 sm:-mx-6 px-4 sm:px-6 py-2.5 flex items-center gap-2 sm:gap-3 border-b backdrop-blur"
+        style={{ background: "var(--bg-app)", borderColor: "var(--border)" }}
+      >
+        <Button type="button" variant="ghost" onClick={requestClose} aria-label="Back to posts list">
+          <ArrowLeft className="w-4 h-4" /> <span className="hidden sm:inline">Back</span>
+        </Button>
+        <div className="min-w-0 flex-1">
+          <p className="text-[10px] font-bold uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>
+            {mode === "create" ? "New post" : "Edit post"}
           </p>
-          <SeoFieldsPanel
-            value={seo}
-            onChange={setSeo}
-            fallbackTitle={title || "(untitled post)"}
-            fallbackDescription={excerpt}
-            previewPath={`/blog/${slug || "your-post-slug"}`}
-          />
+          <h1 className="text-sm sm:text-base font-bold truncate" style={{ color: "var(--text-primary)" }}>
+            {mode === "create" ? title || "New post" : post?.title}
+          </h1>
         </div>
-        <div className="pt-2 border-t flex justify-end gap-2" style={{ borderColor: "var(--border)" }}>
-          <Button type="button" variant="secondary" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button type="submit" variant="primary" disabled={submitting}>
-            {mode === "create" ? "Create post" : "Save changes"}
-          </Button>
+        {dirty && (
+          <span className="hidden sm:inline text-[11px] font-semibold" style={{ color: "var(--text-muted)" }}>
+            Unsaved changes
+          </span>
+        )}
+        <Button type="button" variant="secondary" onClick={requestClose}>
+          Cancel
+        </Button>
+        <Button type="submit" form="post-form" variant="primary" disabled={submitting}>
+          {submitting ? "Saving…" : mode === "create" ? "Create post" : "Save changes"}
+        </Button>
+      </div>
+
+      {error && (
+        <div role="alert" className="text-xs rounded-lg px-3 py-2 bg-rose-500/10 text-rose-500 border border-rose-500/30">
+          {error}
+        </div>
+      )}
+
+      <form id="post-form" onSubmit={handleSubmit} className="grid grid-cols-1 lg:grid-cols-3 gap-4 items-start">
+        <div className="lg:col-span-2 space-y-4 min-w-0">
+          <AiWriterPanel
+            kind="article"
+            onGenerate={writeWithAi}
+            hasContent={!!(title || body)}
+            initialBrief={mode === "edit" ? [post?.title, post?.currentRevision?.excerpt].filter(Boolean).join(". ") : ""}
+            identity={{
+              label: "Also set the URL slug",
+              hint: mode === "edit" ? "Changes the public link of a post that already exists." : "Writes an SEO-friendly slug from the topic.",
+              defaultChecked: mode === "create",
+            }}
+            image={{
+              label: featuredMediaId ? "Replace the feature image" : "Also design a feature image",
+              hint: "Designs a banner (logo, headline, summary, device mockups) from the article and saves it to the Media Library.",
+              defaultChecked: !featuredMediaId,
+            }}
+          />
+          <Card className="p-4 space-y-3">
+            {sectionTitle("Title & summary")}
+            <Field label="Title">
+              <Input required value={title} onChange={(e) => setTitle(e.target.value)} />
+            </Field>
+            <Field label="Slug" hint="Leave blank to auto-generate.">
+              <Input value={slug} onChange={(e) => setSlug(e.target.value)} placeholder="auto-generated" />
+            </Field>
+            <Field label="Excerpt" hint="A short summary for list views and archive cards. Falls back to an auto-generated one if left blank.">
+              <textarea
+                className="w-full px-3 py-2 rounded-lg text-sm focus:outline-none"
+                style={textareaStyle}
+                rows={3}
+                maxLength={500}
+                value={excerpt}
+                onChange={(e) => setExcerpt(e.target.value)}
+              />
+            </Field>
+          </Card>
+          <Card className="p-4 space-y-3">
+            {sectionTitle("Body")}
+            <RichTextEditor value={body} onChange={setBody} placeholder="Write the post…" />
+          </Card>
+          <Card className="p-4 space-y-3">
+            {sectionTitle("SEO")}
+            <SeoFieldsPanel
+              value={seo}
+              onChange={setSeo}
+              fallbackTitle={title || "(untitled post)"}
+              fallbackDescription={excerpt}
+              previewPath={`/blog/${slug || "your-post-slug"}`}
+            />
+          </Card>
+        </div>
+
+        <div className="space-y-4 min-w-0 lg:sticky lg:top-32">
+          <Card className="p-4 space-y-3">
+            {sectionTitle("Organise")}
+            <Field label="Category">
+              <Select className="w-full" value={categoryId} onChange={(e) => setCategoryId(e.target.value)}>
+                <option value="">None</option>
+                {categories.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+            <Field label="Author">
+              <Select className="w-full" value={authorId} onChange={(e) => setAuthorId(e.target.value)}>
+                <option value="">Unassigned</option>
+                {authors.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.user.displayName || `${a.user.firstName} ${a.user.lastName}`}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+            <Field label="Tags">
+              <div className="flex flex-wrap gap-1.5">
+                {tags.length === 0 && <span style={{ color: "var(--text-muted)" }}>No tags yet.</span>}
+                {tags.map((t) => (
+                  <button
+                    type="button"
+                    key={t.id}
+                    onClick={() => toggleTag(t.id)}
+                    className="px-2.5 py-1 rounded-full text-[11px] font-semibold border"
+                    style={
+                      tagIds.includes(t.id)
+                        ? { background: "var(--accent-soft)", color: "var(--accent)", borderColor: "var(--accent)" }
+                        : { color: "var(--text-secondary)", borderColor: "var(--border)" }
+                    }
+                  >
+                    {t.name}
+                  </button>
+                ))}
+              </div>
+            </Field>
+          </Card>
+          <Card className="p-4 space-y-3">
+            {sectionTitle("Featured image")}
+            <FeaturedImageField mediaId={featuredMediaId} onChange={setFeaturedMediaId} />
+          </Card>
         </div>
       </form>
-    </Modal>
+    </div>
   );
 };
 
@@ -356,12 +402,10 @@ const ScheduleModal: React.FC<{ open: boolean; onClose: () => void; onSchedule: 
   );
 };
 
-const PostDetail: React.FC<{ post: CmsPost; categories: CmsCategory[]; tags: CmsTag[]; authors: CmsAuthor[]; onChanged: (p?: CmsPost) => void }> = ({
+const PostDetail: React.FC<{ post: CmsPost; onChanged: (p?: CmsPost) => void; onEdit: (p: CmsPost) => void }> = ({
   post,
-  categories,
-  tags,
-  authors,
   onChanged,
+  onEdit,
 }) => {
   const { user } = useAuth();
   const { notify } = useToast();
@@ -369,7 +413,6 @@ const PostDetail: React.FC<{ post: CmsPost; categories: CmsCategory[]; tags: Cms
   const canPublish = hasPermission(user?.role.permissions, "content.publish");
   const canDelete = hasPermission(user?.role.permissions, "content.delete");
 
-  const [editOpen, setEditOpen] = useState(false);
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [archiveOpen, setArchiveOpen] = useState(false);
   const [revisionsOpen, setRevisionsOpen] = useState(false);
@@ -450,7 +493,7 @@ const PostDetail: React.FC<{ post: CmsPost; categories: CmsCategory[]; tags: Cms
             <History className="w-3.5 h-3.5" /> Revisions
           </Button>
           {canUpdate && (post.status === "DRAFT" || post.status === "IN_REVIEW" || post.status === "SCHEDULED") && (
-            <Button variant="secondary" onClick={() => setEditOpen(true)} disabled={busy}>
+            <Button variant="secondary" onClick={() => onEdit(post)} disabled={busy}>
               Edit
             </Button>
           )}
@@ -495,16 +538,6 @@ const PostDetail: React.FC<{ post: CmsPost; categories: CmsCategory[]; tags: Cms
         </div>
       )}
 
-      <PostFormModal
-        open={editOpen}
-        onClose={() => setEditOpen(false)}
-        onSaved={(updated) => onChanged(updated)}
-        mode="edit"
-        post={post}
-        categories={categories}
-        tags={tags}
-        authors={authors}
-      />
       <ScheduleModal open={scheduleOpen} onClose={() => setScheduleOpen(false)} onSchedule={handleSchedule} />
       <ConfirmDialog
         open={archiveOpen}
@@ -560,7 +593,7 @@ export const PostsPage: React.FC = () => {
   const [totalPages, setTotalPages] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [createOpen, setCreateOpen] = useState(false);
+  const [form, setForm] = useState<null | { mode: "create" } | { mode: "edit"; post: CmsPost }>(null);
   const [authors, setAuthors] = useState<CmsAuthor[]>([]);
 
   // Phase 7 — Content Dashboard: date range filter, Trash view, bulk actions.
@@ -573,9 +606,53 @@ export const PostsPage: React.FC = () => {
   const { notify } = useToast();
   const canDeleteBulk = hasPermission(user?.role.permissions, "content.delete");
 
+  // The editor is a full page, but its state lives in the URL (?form=new / ?form=edit&id=…) so reload and the browser Back button work.
+  const syncFromUrl = React.useCallback(async () => {
+    const params = new URLSearchParams(window.location.search);
+    const f = params.get("form");
+    if (f === "new") {
+      setForm({ mode: "create" });
+      return;
+    }
+    if (f === "edit" && params.get("id")) {
+      try {
+        const res = await postsApi.get(params.get("id")!);
+        setForm({ mode: "edit", post: res.post });
+      } catch {
+        setForm(null);
+        notify("That post could not be opened.", "error");
+      }
+      return;
+    }
+    setForm(null);
+  }, [notify]);
+  useEffect(() => {
+    void syncFromUrl();
+    const onPop = () => void syncFromUrl();
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, [syncFromUrl]);
+  const pushForm = (query: string) => window.history.pushState({ postForm: true }, "", `${window.location.pathname}?${query}`);
+  const openCreate = () => {
+    pushForm("form=new");
+    setForm({ mode: "create" });
+  };
+  const openEdit = (post: CmsPost) => {
+    pushForm(`form=edit&id=${encodeURIComponent(post.id)}`);
+    setForm({ mode: "edit", post });
+  };
+  const closeForm = () => {
+    if (window.history.state?.postForm) window.history.back();
+    else {
+      window.history.replaceState({}, "", window.location.pathname);
+      setForm(null);
+    }
+  };
+
   // Command Center "New Post" deep link (?new=1)
   useEffect(() => {
-    if (consumeNewFlag()) setCreateOpen(true);
+    if (consumeNewFlag()) openCreate();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -654,6 +731,24 @@ export const PostsPage: React.FC = () => {
     }
   };
 
+  if (form) {
+    return (
+      <PostFormPage
+        key={form.mode === "edit" ? form.post.id : "new"}
+        onClose={closeForm}
+        onSaved={(saved) => {
+          if (form.mode === "edit" && saved) setSelected(saved);
+          void load();
+        }}
+        mode={form.mode}
+        post={form.mode === "edit" ? form.post : undefined}
+        categories={categories}
+        tags={tags}
+        authors={authors}
+      />
+    );
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -683,7 +778,7 @@ export const PostsPage: React.FC = () => {
             </button>
           </div>
           {canCreate && view === "active" && (
-            <Button variant="primary" onClick={() => setCreateOpen(true)}>
+            <Button variant="primary" onClick={openCreate}>
               <Plus className="w-4 h-4" /> New post
             </Button>
           )}
@@ -787,16 +882,12 @@ export const PostsPage: React.FC = () => {
           {view === "active" && selected && (
             <PostDetail
               post={selected}
-              categories={categories}
-              tags={tags}
-              authors={authors}
+              onEdit={openEdit}
               onChanged={(updated) => (updated ? setSelected(updated) : void load())}
             />
           )}
         </div>
       )}
-
-      <PostFormModal open={createOpen} onClose={() => setCreateOpen(false)} onSaved={() => load()} mode="create" categories={categories} tags={tags} authors={authors} />
 
       <ConfirmDialog
         open={bulkConfirm !== null}
