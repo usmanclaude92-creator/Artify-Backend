@@ -8,7 +8,7 @@
  */
 import { prisma } from "../../db/prisma";
 import { z } from "zod";
-import { InfrastructureError, ValidationError, ConflictError } from "../../core/errors";
+import { InfrastructureError, ValidationError, ConflictError, ServiceBusyError } from "../../core/errors";
 import { logger } from "../../core/logger";
 import { AdapterFactory } from "../../ai/adapters/adapterFactory";
 import { aiPromptRepository } from "../../repositories/aiPromptRepository";
@@ -28,6 +28,37 @@ import type { SanitizedUser } from "../../types/domain";
 import type { RequestMeta } from "../authService";
 
 const FALLBACK_MODEL = "gemini-3.7-flash";
+/** Tried when the primary model keeps answering "busy". */
+const SECOND_MODEL = "gemini-2.5-flash";
+/** Wait between attempts, and the point after which no further attempt is started (the serverless function is capped at 60s). Tests shorten these. */
+export const aiRetryConfig = { delayMs: 1500, deadlineMs: 35_000 };
+const TRANSIENT = /\b(503|500|429|504)\b|UNAVAILABLE|high demand|overloaded|RESOURCE_EXHAUSTED|rate.?limit|deadline|timed? ?out|ECONNRESET|ETIMEDOUT|fetch failed/i;
+
+export const isTransientAiError = (err: unknown): boolean => TRANSIENT.test(err instanceof Error ? err.message : String(err ?? ""));
+
+/** Calls the model, retrying a busy/rate-limited provider on the same model once, then on a second model, within a time budget. */
+async function generateWithRetry(adapter: { generateText: (p: import("../../ai/adapters/types").AiModelCallParams) => Promise<import("../../ai/adapters/types").AiModelCallResult> }, primary: string, params: Omit<import("../../ai/adapters/types").AiModelCallParams, "modelName">) {
+  const models = primary === SECOND_MODEL ? [primary] : [primary, SECOND_MODEL];
+  const started = Date.now();
+  let last: unknown;
+  for (const modelName of models) {
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        return { response: await adapter.generateText({ ...params, modelName }), modelName };
+      } catch (err) {
+        last = err;
+        if (!isTransientAiError(err)) throw err;
+        logger.warn({ modelName, attempt, err: redactSecrets(err).slice(0, 200) }, "[ai] provider busy, retrying");
+        const lastAttemptOfLastModel = modelName === models[models.length - 1] && attempt === 2;
+        if (lastAttemptOfLastModel || Date.now() - started + aiRetryConfig.delayMs > aiRetryConfig.deadlineMs) break;
+        await new Promise((r) => setTimeout(r, aiRetryConfig.delayMs));
+      }
+    }
+    if (Date.now() - started > aiRetryConfig.deadlineMs) break;
+  }
+  logger.error({ err: redactSecrets(last).slice(0, 300) }, "[ai] provider still busy after retries");
+  throw new ServiceBusyError();
+}
 const MAX_PLAN_POSTS = 30;
 
 /** Who an AI call is attributed to: a user, or `id: null` for system work (inbox triage from a webhook/cron). */
@@ -132,7 +163,7 @@ export async function run<T>(p: RunParams<T>): Promise<{ result: T; executionId:
     const adapter = AdapterFactory.getAdapter(model.providerType);
     const system = fill(version.systemInstructions, p.variables);
     const prompt = fill(version.userTemplate, p.variables);
-    const response = await adapter.generateText({ modelName: model.modelName, prompt, systemInstruction: system, temperature: 0.7, maxTokens: 4096, responseMimeType: "application/json" });
+    const { response, modelName: usedModel } = await generateWithRetry(adapter, model.modelName, { prompt, systemInstruction: system, temperature: 0.7, maxTokens: 4096, responseMimeType: "application/json" });
     const result = parseJson(response.text, p.schema);
 
     const price = model.row;
@@ -140,13 +171,13 @@ export async function run<T>(p: RunParams<T>): Promise<{ result: T; executionId:
       ? (response.inputTokens * Number(price.inputPricePerMillionTokens) + response.outputTokens * Number(price.outputPricePerMillionTokens)) / 1_000_000
       : undefined;
     await aiUsageRepository.record({ organizationId: caller.organizationId, executionId: execution.id, providerId: model.row?.providerId, modelId: model.row?.id, inputTokens: response.inputTokens, outputTokens: response.outputTokens, totalTokens: response.totalTokens, estimatedCost: cost });
-    await aiExecutionRepository.complete(execution.id, "COMPLETED", { model: model.modelName, tokens: response.totalTokens, result: p.outputSummary ? p.outputSummary(result) : result });
+    await aiExecutionRepository.complete(execution.id, "COMPLETED", { model: usedModel, tokens: response.totalTokens, result: p.outputSummary ? p.outputSummary(result) : result });
     return { result, executionId: execution.id };
   } catch (err) {
     const message = redactSecrets(err).slice(0, 300);
     logger.error({ executionId: execution.id, err: message }, "[social-ai] generation failed");
     await aiExecutionRepository.complete(execution.id, "FAILED", { error: message }, message);
-    if (err instanceof InfrastructureError || err instanceof ValidationError) throw err;
+    if (err instanceof InfrastructureError || err instanceof ValidationError || err instanceof ServiceBusyError) throw err;
     throw new InfrastructureError("AI drafting is not available right now.");
   }
 }

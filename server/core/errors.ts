@@ -13,6 +13,8 @@ export abstract class AppError extends Error {
   abstract readonly statusCode: number;
   abstract readonly code: ApiErrorCode;
   readonly details?: unknown;
+  /** True only for errors whose message is written for end users, so it may be shown even on a 5xx response. */
+  readonly exposeMessage: boolean = false;
 
   protected constructor(message: string, details?: unknown) {
     super(message);
@@ -100,6 +102,16 @@ export class InfrastructureError extends AppError {
   readonly statusCode = 503;
   readonly code = ApiErrorCode.SERVICE_UNAVAILABLE;
   constructor(message = "A required infrastructure dependency is unavailable") {
+    super(message);
+  }
+}
+
+/** The AI provider is temporarily overloaded or rate limited. The message is safe and useful to show to the user. */
+export class ServiceBusyError extends AppError {
+  readonly statusCode = 503;
+  readonly code = ApiErrorCode.SERVICE_UNAVAILABLE;
+  readonly exposeMessage = true;
+  constructor(message = "The AI service is busy right now. Please try again in a minute.") {
     super(message);
   }
 }

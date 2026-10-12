@@ -58,6 +58,7 @@ __export(errors_exports, {
   NotFoundError: () => NotFoundError,
   NotImplementedError: () => NotImplementedError,
   RateLimitError: () => RateLimitError,
+  ServiceBusyError: () => ServiceBusyError,
   TenantIsolationError: () => TenantIsolationError,
   ValidationError: () => ValidationError,
   isAppError: () => isAppError
@@ -65,13 +66,15 @@ __export(errors_exports, {
 function isAppError(err) {
   return err instanceof AppError;
 }
-var AppError, ValidationError, AuthenticationError, AuthorizationError, EmailNotVerifiedError, TenantIsolationError, NotFoundError, ConflictError, RateLimitError, NotImplementedError, InfrastructureError, InternalError;
+var AppError, ValidationError, AuthenticationError, AuthorizationError, EmailNotVerifiedError, TenantIsolationError, NotFoundError, ConflictError, RateLimitError, NotImplementedError, InfrastructureError, ServiceBusyError, InternalError;
 var init_errors = __esm({
   "server/core/errors.ts"() {
     init_apiResponse();
     AppError = class extends Error {
       constructor(message, details) {
         super(message);
+        /** True only for errors whose message is written for end users, so it may be shown even on a 5xx response. */
+        this.exposeMessage = false;
         this.name = new.target.name;
         this.details = details;
         Error.captureStackTrace?.(this, new.target);
@@ -145,6 +148,14 @@ var init_errors = __esm({
         super(message);
         this.statusCode = 503;
         this.code = "SERVICE_UNAVAILABLE" /* SERVICE_UNAVAILABLE */;
+      }
+    };
+    ServiceBusyError = class extends AppError {
+      constructor(message = "The AI service is busy right now. Please try again in a minute.") {
+        super(message);
+        this.statusCode = 503;
+        this.code = "SERVICE_UNAVAILABLE" /* SERVICE_UNAVAILABLE */;
+        this.exposeMessage = true;
       }
     };
     InternalError = class extends AppError {
@@ -1242,7 +1253,7 @@ function errorHandlerMiddleware(err, req, res, _next) {
     res,
     appError.statusCode,
     appError.code,
-    appError.statusCode >= 500 ? "An unexpected error occurred" : appError.message,
+    appError.statusCode >= 500 && !appError.exposeMessage ? "An unexpected error occurred" : appError.message,
     exposeDetails ? appError.details : void 0
   );
 }
@@ -22593,6 +22604,32 @@ function unknownNumbers(text, allowed) {
 
 // server/services/social/socialAiService.ts
 var FALLBACK_MODEL = "gemini-3.7-flash";
+var SECOND_MODEL = "gemini-2.5-flash";
+var aiRetryConfig = { delayMs: 1500, deadlineMs: 35e3 };
+var TRANSIENT = /\b(503|500|429|504)\b|UNAVAILABLE|high demand|overloaded|RESOURCE_EXHAUSTED|rate.?limit|deadline|timed? ?out|ECONNRESET|ETIMEDOUT|fetch failed/i;
+var isTransientAiError = (err) => TRANSIENT.test(err instanceof Error ? err.message : String(err ?? ""));
+async function generateWithRetry(adapter, primary, params) {
+  const models = primary === SECOND_MODEL ? [primary] : [primary, SECOND_MODEL];
+  const started = Date.now();
+  let last;
+  for (const modelName of models) {
+    for (let attempt2 = 1; attempt2 <= 2; attempt2++) {
+      try {
+        return { response: await adapter.generateText({ ...params, modelName }), modelName };
+      } catch (err) {
+        last = err;
+        if (!isTransientAiError(err)) throw err;
+        logger.warn({ modelName, attempt: attempt2, err: redactSecrets(err).slice(0, 200) }, "[ai] provider busy, retrying");
+        const lastAttemptOfLastModel = modelName === models[models.length - 1] && attempt2 === 2;
+        if (lastAttemptOfLastModel || Date.now() - started + aiRetryConfig.delayMs > aiRetryConfig.deadlineMs) break;
+        await new Promise((r) => setTimeout(r, aiRetryConfig.delayMs));
+      }
+    }
+    if (Date.now() - started > aiRetryConfig.deadlineMs) break;
+  }
+  logger.error({ err: redactSecrets(last).slice(0, 300) }, "[ai] provider still busy after retries");
+  throw new ServiceBusyError();
+}
 var MAX_PLAN_POSTS = 30;
 async function ensureTemplate(caller, def) {
   let template = await aiPromptRepository.findByKeyInOrg(def.key, caller.organizationId);
@@ -22672,18 +22709,18 @@ async function run(p) {
     const adapter = AdapterFactory.getAdapter(model.providerType);
     const system = fill(version.systemInstructions, p.variables);
     const prompt = fill(version.userTemplate, p.variables);
-    const response = await adapter.generateText({ modelName: model.modelName, prompt, systemInstruction: system, temperature: 0.7, maxTokens: 4096, responseMimeType: "application/json" });
+    const { response, modelName: usedModel } = await generateWithRetry(adapter, model.modelName, { prompt, systemInstruction: system, temperature: 0.7, maxTokens: 4096, responseMimeType: "application/json" });
     const result = parseJson(response.text, p.schema);
     const price = model.row;
     const cost = price?.inputPricePerMillionTokens != null && price.outputPricePerMillionTokens != null ? (response.inputTokens * Number(price.inputPricePerMillionTokens) + response.outputTokens * Number(price.outputPricePerMillionTokens)) / 1e6 : void 0;
     await aiUsageRepository.record({ organizationId: caller.organizationId, executionId: execution.id, providerId: model.row?.providerId, modelId: model.row?.id, inputTokens: response.inputTokens, outputTokens: response.outputTokens, totalTokens: response.totalTokens, estimatedCost: cost });
-    await aiExecutionRepository.complete(execution.id, "COMPLETED", { model: model.modelName, tokens: response.totalTokens, result: p.outputSummary ? p.outputSummary(result) : result });
+    await aiExecutionRepository.complete(execution.id, "COMPLETED", { model: usedModel, tokens: response.totalTokens, result: p.outputSummary ? p.outputSummary(result) : result });
     return { result, executionId: execution.id };
   } catch (err) {
     const message = redactSecrets(err).slice(0, 300);
     logger.error({ executionId: execution.id, err: message }, "[social-ai] generation failed");
     await aiExecutionRepository.complete(execution.id, "FAILED", { error: message }, message);
-    if (err instanceof InfrastructureError || err instanceof ValidationError) throw err;
+    if (err instanceof InfrastructureError || err instanceof ValidationError || err instanceof ServiceBusyError) throw err;
     throw new InfrastructureError("AI drafting is not available right now.");
   }
 }
