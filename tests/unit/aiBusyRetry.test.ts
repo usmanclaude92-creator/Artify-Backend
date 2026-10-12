@@ -18,8 +18,10 @@ describe("AI busy handling", () => {
     await resetDb();
     orgId = (await prisma.organization.create({ data: { name: "Busy Co", slug: "busy-co" } })).id;
     aiRetryConfig.delayMs = 1;
+    aiRetryConfig.deadlineMs = 60_000;
+    aiRetryConfig.attemptTimeoutMs = 60;
   });
-  afterAll(async () => { aiRetryConfig.delayMs = 1500; await prisma.organization.deleteMany({ where: { id: orgId } }); vi.restoreAllMocks(); });
+  afterAll(async () => { aiRetryConfig.delayMs = 1500; aiRetryConfig.deadlineMs = 50_000; aiRetryConfig.attemptTimeoutMs = 22_000; await prisma.organization.deleteMany({ where: { id: orgId } }); vi.restoreAllMocks(); });
   beforeEach(() => { calls.length = 0; vi.restoreAllMocks(); });
 
   const go = () => run({ caller: { id: null, organizationId: orgId }, def: CONTENT_PROMPTS.product, toolCode: "social_cms_product", variables: { brief: "x" }, schema: z.object({ a: z.string() }), meta: {}, inputSummary: {} });
@@ -79,5 +81,27 @@ describe("AI busy handling", () => {
     expect(err.exposeMessage).toBe(true);
     expect(err.message).toMatch(/busy right now/i);
     expect(calls).toHaveLength(4);
+  });
+
+  it("gives up on a hung attempt and tries the next model instead of waiting for the function to be killed", async () => {
+    vi.spyOn(AdapterFactory, "getAdapter").mockReturnValue({
+      providerType: "GEMINI",
+      generateText: async (p: { modelName: string }) => {
+        calls.push(p.modelName);
+        if (p.modelName !== "gemini-3.8-flash") return new Promise(() => {}); // never answers
+        return ok;
+      },
+    } as never);
+    const t0 = Date.now();
+    expect((await go()).result).toEqual({ a: "fine" });
+    expect(calls).toEqual(["gemini-3.7-flash", "gemini-3.8-flash"]);
+    expect(Date.now() - t0).toBeLessThan(2000);
+  });
+
+  it("reports busy (not a gateway timeout) when every model hangs", async () => {
+    vi.spyOn(AdapterFactory, "getAdapter").mockReturnValue({ providerType: "GEMINI", generateText: () => new Promise(() => {}) } as never);
+    const err = await go().catch((e) => e);
+    expect(err).toBeInstanceOf(ServiceBusyError);
+    expect(err.message).toMatch(/busy right now/i);
   });
 });

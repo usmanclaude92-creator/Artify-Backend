@@ -22605,7 +22605,7 @@ function unknownNumbers(text, allowed) {
 // server/services/social/socialAiService.ts
 var FALLBACK_MODEL = "gemini-3.7-flash";
 var BACKUP_MODELS = ["gemini-3.8-flash", "gemini-3.7-flash"];
-var aiRetryConfig = { delayMs: 1500, deadlineMs: 35e3 };
+var aiRetryConfig = { delayMs: 1500, deadlineMs: 5e4, attemptTimeoutMs: 22e3 };
 var TRANSIENT = /\b(503|500|429|504)\b|UNAVAILABLE|high demand|overloaded|RESOURCE_EXHAUSTED|rate.?limit|deadline|timed? ?out|ECONNRESET|ETIMEDOUT|fetch failed/i;
 var isTransientAiError = (err) => TRANSIENT.test(err instanceof Error ? err.message : String(err ?? ""));
 var MODEL_GONE = /\b404\b|NOT_FOUND|no longer available|is not found|not supported for generateContent/i;
@@ -22617,10 +22617,25 @@ async function generateWithRetry(adapter, primary, params) {
   let sawBusy = false;
   for (const modelName of models) {
     for (let attempt2 = 1; attempt2 <= 2; attempt2++) {
+      const remaining = aiRetryConfig.deadlineMs - (Date.now() - started);
+      if (remaining < 4e3) break;
+      const limit = Math.min(aiRetryConfig.attemptTimeoutMs, remaining);
+      let timer;
       try {
-        return { response: await adapter.generateText({ ...params, modelName }), modelName };
+        const response = await Promise.race([
+          adapter.generateText({ ...params, modelName }),
+          new Promise((_, reject) => {
+            timer = setTimeout(() => reject(new Error(`AI call timed out after ${Math.round(limit / 1e3)}s`)), limit);
+          })
+        ]);
+        return { response, modelName };
       } catch (err) {
         last = err;
+        if (err instanceof Error && /^AI call timed out/.test(err.message)) {
+          sawBusy = true;
+          logger.warn({ modelName, limitMs: limit }, "[ai] attempt timed out, trying the next model");
+          break;
+        }
         if (isModelUnavailableError(err)) {
           logger.warn({ modelName, err: redactSecrets(err).slice(0, 200) }, "[ai] model not available, trying the next one");
           break;
@@ -22630,6 +22645,8 @@ async function generateWithRetry(adapter, primary, params) {
         logger.warn({ modelName, attempt: attempt2, err: redactSecrets(err).slice(0, 200) }, "[ai] provider busy, retrying");
         if (attempt2 === 2 || Date.now() - started + aiRetryConfig.delayMs > aiRetryConfig.deadlineMs) break;
         await new Promise((r) => setTimeout(r, aiRetryConfig.delayMs));
+      } finally {
+        if (timer) clearTimeout(timer);
       }
     }
     if (Date.now() - started > aiRetryConfig.deadlineMs) break;
