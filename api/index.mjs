@@ -33989,7 +33989,10 @@ var publicProductService = {
       "displayOrder",
       "asc"
     );
-    return { rows: await Promise.all(rows.map(projectProductBasic)), total };
+    const projected = await Promise.all(
+      rows.map(async (row) => ({ ...await projectProductBasic(row), featuredMedia: await projectFeaturedMedia(row.featuredMediaId) }))
+    );
+    return { rows: projected, total };
   },
   async getProductBySlug(slug) {
     const product = await productRepository.findBySlug(slug);
