@@ -97,6 +97,12 @@ export const updateProductSchema = z
     content: productContentSchema.optional(),
     relatedProductIds: z.array(z.string().trim().uuid()).max(30).optional(),
     industryIds: z.array(z.string().trim().uuid()).max(30).optional(),
+    /**
+     * The revision the editor opened with. When present the save only succeeds if it is still the current one
+     * (otherwise someone else changed the item), and the content is applied exactly as sent. When absent (an older
+     * cached editor) empty lists and the default page style never overwrite content that is already stored.
+     */
+    baseRevisionId: z.string().trim().uuid().nullable().optional(),
   })
   .refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
 export type UpdateProductInput = z.infer<typeof updateProductSchema>;

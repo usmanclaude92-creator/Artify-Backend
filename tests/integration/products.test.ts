@@ -454,6 +454,35 @@ describe("product catalog", () => {
     expect((await request(app).get(`/api/v1/public/products/${styled.body.data.product.slug}`)).body.data.product.pageStyle).toBe("datasheet");
   });
 
+  it("never lets a blank/stale editor wipe stored benefits, features or page style, and refuses saves from an outdated revision", async () => {
+    const created = await request(app).post("/api/v1/products").set("Authorization", `Bearer ${adminToken}`).send({
+      code: "GUARD-1", name: "Guarded", type: "SOLUTION", status: "ACTIVE",
+      content: { benefits: ["Keep me"], features: ["Keep me too"], businessProblem: "Real problem", pageStyle: "tabbed" },
+    });
+    expect(created.status).toBe(201);
+    const id = created.body.data.product.id;
+    const firstRevision = created.body.data.product.currentRevisionId;
+
+    // older cached editor: no baseRevisionId, blank lists and the default style -> stored content is kept
+    const legacy = await request(app).patch(`/api/v1/products/${id}`).set("Authorization", `Bearer ${adminToken}`)
+      .send({ name: "Guarded 2", content: { benefits: [], features: [], businessProblem: "Real problem", pageStyle: "classic" } });
+    expect(legacy.status).toBe(200);
+    expect(legacy.body.data.product.currentRevision.content).toMatchObject({ benefits: ["Keep me"], features: ["Keep me too"], pageStyle: "tabbed" });
+
+    // a stale editor (opened from the first revision) is refused instead of overwriting
+    const stale = await request(app).patch(`/api/v1/products/${id}`).set("Authorization", `Bearer ${adminToken}`)
+      .send({ content: { benefits: ["Old edit"] }, baseRevisionId: firstRevision });
+    expect(stale.status).toBe(409);
+    expect((await request(app).get(`/api/v1/products/${id}`).set("Authorization", `Bearer ${adminToken}`)).body.data.product.currentRevision.content.benefits).toEqual(["Keep me"]);
+
+    // an editor that is up to date can still clear a list on purpose and switch back to classic
+    const current = legacy.body.data.product.currentRevisionId;
+    const intentional = await request(app).patch(`/api/v1/products/${id}`).set("Authorization", `Bearer ${adminToken}`)
+      .send({ content: { benefits: [], pageStyle: "classic" }, baseRevisionId: current });
+    expect(intentional.status).toBe(200);
+    expect(intentional.body.data.product.currentRevision.content).toMatchObject({ benefits: [], features: ["Keep me too"], pageStyle: "classic" });
+  });
+
   it("enforces product_categories.manage / industries.manage permissions: a VIEWER can read but not create", async () => {
     const viewerCategoryRead = await request(app).get("/api/v1/product-categories").set("Authorization", `Bearer ${viewerToken}`);
     expect(viewerCategoryRead.status).toBe(200);

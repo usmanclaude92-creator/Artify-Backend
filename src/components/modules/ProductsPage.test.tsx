@@ -245,6 +245,36 @@ describe("ProductsPage", () => {
     expect(vi.mocked(productsApiModule.productsApi.get)).toHaveBeenCalledWith("product-1");
   });
 
+  it("a second Edit after a save still opens with everything that was saved (content and page style)", async () => {
+    // Stateful fake backend: list rows are flat, get/update return the full record.
+    let stored = { ...product, type: "SOLUTION" as never, currentRevisionId: "rev-1", currentRevision: { ...fullRevision, content: { businessProblem: "Real stored problem.", benefits: ["Stored benefit"], features: ["Stored feature"], pageStyle: "tabbed", seo: {} } }, category: null, industries: [], relatedFrom: [], relatedTo: [] };
+    const flat = () => { const { currentRevision: _r, category: _c, industries: _i, relatedFrom: _f, relatedTo: _t, ...row } = stored; return row; };
+    listMock.mockImplementation(async () => ({ items: [flat()], page: 1, limit: 20, total: 1, totalPages: 1 }));
+    vi.mocked(productsApiModule.productsApi.get).mockImplementation((async () => ({ product: stored })) as never);
+    updateMock.mockImplementation(async (_id: string, body: { content: Record<string, unknown> }) => {
+      stored = { ...stored, currentRevision: { ...stored.currentRevision, version: stored.currentRevision.version + 1, content: { ...stored.currentRevision.content, ...body.content } } } as never;
+      return { product: stored };
+    });
+    renderProductsPage();
+    await screen.findAllByText("Artify HCMS");
+
+    for (let round = 0; round < 2; round += 1) {
+      fireEvent.click(await screen.findByRole("button", { name: /^edit$/i }));
+      expect(((await screen.findByLabelText(/business problem/i)) as HTMLTextAreaElement).value).toBe("Real stored problem.");
+      expect(screen.getByDisplayValue("Stored benefit")).toBeInTheDocument();
+      expect(screen.getByDisplayValue("Stored feature")).toBeInTheDocument();
+      expect((screen.getByLabelText(/page style/i) as HTMLSelectElement).value).toBe(round === 0 ? "tabbed" : "executive");
+      fireEvent.change(screen.getByLabelText(/page style/i), { target: { value: "executive" } });
+      fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+      await vi.waitFor(() => expect(updateMock).toHaveBeenCalledTimes(round + 1));
+      await screen.findByText("Real stored problem.");
+    }
+    // every save names the revision it was loaded from, so the server can refuse a stale form
+    expect(updateMock).toHaveBeenCalledWith("product-1", expect.objectContaining({ baseRevisionId: "rev-1" }));
+    expect(stored.currentRevision.content.benefits).toEqual(["Stored benefit"]);
+    expect(stored.currentRevision.content.pageStyle).toBe("executive");
+  });
+
   it("adds a module to the selected product through the real API", async () => {
     listMock.mockResolvedValue({ items: [product], page: 1, limit: 20, total: 1, totalPages: 1 });
     addModuleMock.mockResolvedValue({ module: moduleA });
