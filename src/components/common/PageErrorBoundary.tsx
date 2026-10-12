@@ -64,6 +64,7 @@ export class PageErrorBoundary extends React.Component<Props, State> {
         <p className="text-sm" style={{ color: "var(--text-secondary)" }}>
           {isChunkLoadError(error) ? "The app was updated while this tab was open. Reload to get the latest version." : "Something went wrong while loading this page. Your data is safe. Reload to try again."}
         </p>
+        <p className="text-[11px] break-words" style={{ color: "var(--text-muted)" }}>Details: {String(error.message || error).slice(0, 240)}</p>
         <button type="button" onClick={() => window.location.reload()} className="px-4 py-2 rounded-lg text-sm font-semibold text-white" style={{ background: "var(--accent)" }}>
           Reload page
         </button>
