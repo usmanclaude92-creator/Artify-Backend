@@ -202,7 +202,14 @@ const PostFormModal: React.FC<{
     setSeo((cur) => ({ ...cur, metaTitle: draft.seoTitle, metaDescription: draft.seoDescription, focusKeywords: draft.focusKeywords.join(", "), ogTitle: draft.ogTitle, ogDescription: draft.ogDescription }));
     if (o.applyImage) {
       try {
-        const media = await createFeatureImage({ title: draft.title, subtitle: draft.excerpt.slice(0, 140), label: "Insights" });
+        const media = await createFeatureImage({
+          title: draft.title,
+          headline: draft.imageHeadline || draft.title,
+          subtitle: draft.imageSubtitle || draft.excerpt.slice(0, 120),
+          label: draft.imageLabel || "Insights",
+          tagline: draft.imageTagline || "Artify Solutions",
+          screenshots: o.screenshots,
+        });
         setFeaturedMediaId(media.id);
       } catch {
         notify("The text was written, but the feature image could not be created. Add one from the Media Library.", "error");
@@ -234,7 +241,7 @@ const PostFormModal: React.FC<{
           }}
           image={{
             label: featuredMediaId ? "Replace the feature image" : "Also design a feature image",
-            hint: "Draws a branded 1200x630 card from the title and saves it to the Media Library.",
+            hint: "Designs a banner (logo, headline, summary, device mockups) from the article and saves it to the Media Library.",
             defaultChecked: !featuredMediaId,
           }}
         />

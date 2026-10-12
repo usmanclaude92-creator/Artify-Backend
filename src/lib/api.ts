@@ -3633,9 +3633,9 @@ export const metaReviewApi = {
 
 // ---- AI writer for the Posts and Products editors (text only; the editor saves it) ----
 export type AiWriterTone = "professional" | "friendly" | "persuasive" | "technical";
-export interface AiPostDraft { title: string; slug: string; excerpt: string; bodyHtml: string; seoTitle: string; seoDescription: string; focusKeywords: string[]; ogTitle: string; ogDescription: string; executionId: string }
+export interface AiPostDraft { title: string; slug: string; excerpt: string; bodyHtml: string; seoTitle: string; seoDescription: string; focusKeywords: string[]; ogTitle: string; ogDescription: string; imageLabel: string; imageHeadline: string; imageSubtitle: string; imageTagline: string; executionId: string }
 /** `code` is null when editing an existing product (a code cannot change after creation). */
-export interface AiProductDraft { name: string; code: string | null; slug: string; shortDescription: string; description: string; benefits: string[]; features: string[]; businessProblem: string; seoTitle: string; seoDescription: string; focusKeywords: string[]; ogTitle: string; ogDescription: string; executionId: string }
+export interface AiProductDraft { name: string; code: string | null; slug: string; shortDescription: string; description: string; benefits: string[]; features: string[]; businessProblem: string; seoTitle: string; seoDescription: string; focusKeywords: string[]; ogTitle: string; ogDescription: string; imageLabel: string; imageHeadline: string; imageSubtitle: string; imageTagline: string; executionId: string }
 /** Model calls routinely take 10-40s; the default 15s client timeout aborted them while the server was still working. */
 export const AI_REQUEST_TIMEOUT_MS = 65_000;
 export const contentAiApi = {

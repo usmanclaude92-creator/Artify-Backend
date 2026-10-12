@@ -17,12 +17,20 @@ const list = (max: number, itemMax: number) => z.array(z.string().trim().min(1))
 
 const slugify = (input: string) => input.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 100);
 const keywords = z.array(z.string().trim().min(1)).max(10).default([]).transform((a) => [...new Set(a.map((k) => clip(k.toLowerCase(), 60)))].slice(0, 6));
+/** Copy printed on the generated feature image; it is derived from the same brief so the picture describes what the text says. */
+const imageCopy = {
+  imageLabel: z.string().trim().default("").transform((s) => clip(s, 40)),
+  imageHeadline: z.string().trim().default("").transform((s) => clip(s, 90)),
+  imageSubtitle: z.string().trim().default("").transform((s) => clip(s, 130)),
+  imageTagline: z.string().trim().default("").transform((s) => clip(s, 70)),
+};
 const seoFields = {
   seoTitle: z.string().trim().default("").transform((s) => clip(s, 60)),
   seoDescription: z.string().trim().default("").transform((s) => clip(s, 160)),
   focusKeywords: keywords,
   ogTitle: z.string().trim().default("").transform((s) => clip(s, 90)),
   ogDescription: z.string().trim().default("").transform((s) => clip(s, 200)),
+  ...imageCopy,
 };
 
 const postSchema = z.object({

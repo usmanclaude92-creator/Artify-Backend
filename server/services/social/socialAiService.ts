@@ -18,7 +18,7 @@ import { aiQuotaService } from "../aiQuotaService";
 import { auditLogRepository } from "../../repositories/auditLogRepository";
 import { connectorRegistry } from "./connectors/registry";
 import { redactSecrets } from "./tokenVault";
-import { SOCIAL_PROMPTS, fill, type SocialPromptDef } from "./socialAiPrompts";
+import { SOCIAL_PROMPTS, fill, promptFingerprint, type SocialPromptDef } from "./socialAiPrompts";
 import { socialPostService } from "./socialPostService";
 import { CONTENT_EDITABLE } from "./postTransitions";
 import { config } from "../../config/env";
@@ -43,7 +43,18 @@ export async function ensureTemplate(caller: AiActor, def: SocialPromptDef) {
   }
   const full = await prisma.aIPromptTemplate.findUnique({ where: { id: template!.id }, include: { currentVersion: true } });
   if (!full?.currentVersion) throw new InfrastructureError("The social prompt template has no current version.");
-  return { template: full, version: full.currentVersion };
+  // Upgrade an unedited older built-in version to the current text (an edited version never matches a legacy fingerprint, so it is kept).
+  const current = full.currentVersion;
+  if (def.legacyFingerprints?.length && promptFingerprint(current) !== promptFingerprint(def) && def.legacyFingerprints.includes(promptFingerprint(current))) {
+    const latest = await prisma.aIPromptVersion.findFirst({ where: { templateId: full.id }, orderBy: { version: "desc" }, select: { version: true } });
+    const upgraded = await prisma.aIPromptVersion.create({
+      data: { templateId: full.id, version: (latest?.version ?? current.version) + 1, systemInstructions: def.systemInstructions, userTemplate: def.userTemplate, createdById: caller.id },
+    });
+    await prisma.aIPromptTemplate.update({ where: { id: full.id }, data: { currentVersionId: upgraded.id } });
+    await auditLogRepository.record({ organizationId: caller.organizationId, actorUserId: caller.id ?? undefined, actorType: "SYSTEM", action: "AI_PROMPT_TEMPLATE_UPGRADED", resourceType: "ai_prompt_template", resourceId: full.id, metadata: { key: def.key, fromVersion: current.version, toVersion: upgraded.version } });
+    return { template: { ...full, currentVersionId: upgraded.id, currentVersion: upgraded }, version: upgraded };
+  }
+  return { template: full, version: current };
 }
 
 /** Daily AI limits (org-wide) also count social usage; copilot usage is read by the existing quota service. */
