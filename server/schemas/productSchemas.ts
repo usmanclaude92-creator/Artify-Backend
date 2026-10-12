@@ -28,7 +28,12 @@ export type ListProductsQuery = z.infer<typeof listProductsQuerySchema>;
 // schema level (a PRODUCT can have benefits too) — `type` only changes
 // which fields the Control Center UI surfaces, never what the server
 // accepts, so switching a row's type later never silently drops data.
+/** Public page layout for a product/service/solution; the website renders each one (and falls back to "classic" for an unknown value). */
+export const PRODUCT_PAGE_STYLES = ["classic", "executive", "showcase", "editorial", "story", "bento", "tabbed", "workflow", "cinematic", "datasheet"] as const;
+export type ProductPageStyle = (typeof PRODUCT_PAGE_STYLES)[number];
+
 export const productContentSchema = z.object({
+  pageStyle: z.enum(PRODUCT_PAGE_STYLES).optional(),
   benefits: z.array(z.string().trim().min(1).max(200)).max(20).optional(),
   features: z.array(z.string().trim().min(1).max(200)).max(20).optional(),
   businessProblem: z.string().trim().max(2000).optional(),

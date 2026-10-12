@@ -11,6 +11,7 @@
  * form content (revisioned — history + rollback), related products,
  * industries (SOLUTION), duplicate, and bulk archive.
  */
+import { PRODUCT_PAGE_STYLES } from "../../lib/productPageStyles";
 import React, { useEffect, useRef, useState } from "react";
 import {
   Package,
@@ -181,6 +182,7 @@ const ProductFormPage: React.FC<{
   const [features, setFeatures] = useState<string[]>(product?.currentRevision?.content.features ?? []);
   const [businessProblem, setBusinessProblem] = useState(product?.currentRevision?.content.businessProblem ?? "");
   const [ctaFormId, setCtaFormId] = useState(product?.currentRevision?.content.ctaFormId ?? "");
+  const [pageStyle, setPageStyle] = useState(product?.currentRevision?.content.pageStyle ?? "classic");
   const [seo, setSeo] = useState(seoFieldsFromMetadata(product?.currentRevision?.content.seo ?? {}));
   const [relatedProductIds, setRelatedProductIds] = useState<string[]>([
     ...(product?.relatedFrom ?? []).map((r) => r.toProductId),
@@ -196,6 +198,7 @@ const ProductFormPage: React.FC<{
     features: features.map((f) => f.trim()).filter(Boolean),
     businessProblem: businessProblem.trim() || undefined,
     ctaFormId: ctaFormId || undefined,
+    pageStyle,
     seo: seoFieldsToMetadata(seo),
   };
 
@@ -295,7 +298,7 @@ const ProductFormPage: React.FC<{
   const typeLabel = TYPE_LABEL[lockedType ?? type];
 
   // Unsaved-changes guard: compare the editable state with what the form opened with.
-  const snapshot = JSON.stringify({ code, name, slug, type, shortDescription, description, status, isFeatured, featuredMediaId, categoryId, benefits, features, businessProblem, ctaFormId, seo, relatedProductIds, industryIds });
+  const snapshot = JSON.stringify({ code, name, slug, type, shortDescription, description, status, isFeatured, featuredMediaId, categoryId, benefits, features, businessProblem, ctaFormId, pageStyle, seo, relatedProductIds, industryIds });
   const initialSnapshot = useRef(snapshot);
   const dirty = snapshot !== initialSnapshot.current;
   useEffect(() => {
@@ -428,6 +431,13 @@ const ProductFormPage: React.FC<{
                 <option value="">No category</option>
                 {categories.map((c) => (
                   <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </Select>
+            </Field>
+            <Field label="Page style" hint={PRODUCT_PAGE_STYLES.find((o) => o.value === pageStyle)?.hint ?? "How this item's public page is laid out."}>
+              <Select className="w-full" value={pageStyle} onChange={(e) => setPageStyle(e.target.value)}>
+                {PRODUCT_PAGE_STYLES.map((o) => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
                 ))}
               </Select>
             </Field>

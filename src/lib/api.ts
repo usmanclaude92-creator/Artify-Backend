@@ -1466,6 +1466,7 @@ export interface ProductSeoValue {
 }
 
 export interface ProductContentValue {
+  pageStyle?: string;
   benefits?: string[];
   features?: string[];
   businessProblem?: string;

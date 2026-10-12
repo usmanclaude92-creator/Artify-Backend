@@ -69,6 +69,7 @@ async function projectProductBasic(product: Product) {
 
 async function projectProductDetail(product: Product & { category: ProductCategory | null; currentRevision: { content: unknown } | null; industries: { industry: Industry }[]; relatedFrom: { toProduct: Pick<Product, "slug" | "name" | "type" | "status"> }[]; relatedTo: { fromProduct: Pick<Product, "slug" | "name" | "type" | "status"> }[] }) {
   const content = (product.currentRevision?.content ?? {}) as {
+    pageStyle?: string;
     benefits?: string[];
     features?: string[];
     businessProblem?: string;
@@ -88,6 +89,7 @@ async function projectProductDetail(product: Product & { category: ProductCatego
     ...(await projectProductBasic(product)),
     category: projectCategory(product.category),
     featuredMedia,
+    pageStyle: content.pageStyle ?? "classic",
     benefits: content.benefits ?? [],
     features: content.features ?? [],
     businessProblem: content.businessProblem ?? null,
