@@ -1585,7 +1585,7 @@ export const productsApi = {
   create: (payload: ProductWritePayload) => apiClient.post<{ product: CatalogProduct }>("/products", payload),
   update: (
     id: string,
-    payload: Partial<ProductWritePayload & { featuredMediaId: string | null; categoryId: string | null }>
+    payload: Partial<ProductWritePayload & { featuredMediaId: string | null; categoryId: string | null; baseRevisionId: string | null }>
   ) => apiClient.patch<{ product: CatalogProduct }>(`/products/${id}`, payload),
   archive: (id: string) => apiClient.post<{ product: CatalogProduct }>(`/products/${id}/archive`),
   bulkArchive: (ids: string[]) => apiClient.post<{ archived: number; skipped: string[] }>("/products/bulk/archive", { ids }),

@@ -10875,6 +10875,9 @@ var productService = {
       assertRelatedProductsUsable(id6, input.relatedProductIds),
       assertIndustriesUsable(input.industryIds)
     ]);
+    if (input.baseRevisionId && existing.currentRevisionId && input.baseRevisionId !== existing.currentRevisionId) {
+      throw new ConflictError("This item was changed after you opened it. Reload the page and try again \u2014 your edit was not saved so nothing is overwritten.");
+    }
     const patch = {};
     if (input.name !== void 0) patch.name = input.name;
     if (input.slug !== void 0) patch.slug = input.slug;
@@ -10894,7 +10897,14 @@ var productService = {
         }
         if (input.content !== void 0) {
           const currentContent = existing.currentRevision?.content ?? {};
-          const nextContent = { ...currentContent, ...input.content };
+          const incoming = { ...input.content };
+          if (input.baseRevisionId === void 0) {
+            for (const key2 of ["benefits", "features"]) {
+              if (Array.isArray(incoming[key2]) && incoming[key2].length === 0 && (currentContent[key2]?.length ?? 0) > 0) delete incoming[key2];
+            }
+            if (incoming.pageStyle === "classic" && currentContent.pageStyle && currentContent.pageStyle !== "classic") delete incoming.pageStyle;
+          }
+          const nextContent = { ...currentContent, ...incoming };
           const nextVersion = (existing.currentRevision?.version ?? 0) + 1;
           const revision = await tx.productRevision.create({
             data: { productId: id6, version: nextVersion, name: input.name ?? existing.name, content: nextContent, createdById: caller.id }
@@ -28293,7 +28303,13 @@ var updateProductSchema = z39.object({
   categoryId: z39.string().trim().uuid().nullable().optional(),
   content: productContentSchema.optional(),
   relatedProductIds: z39.array(z39.string().trim().uuid()).max(30).optional(),
-  industryIds: z39.array(z39.string().trim().uuid()).max(30).optional()
+  industryIds: z39.array(z39.string().trim().uuid()).max(30).optional(),
+  /**
+   * The revision the editor opened with. When present the save only succeeds if it is still the current one
+   * (otherwise someone else changed the item), and the content is applied exactly as sent. When absent (an older
+   * cached editor) empty lists and the default page style never overwrite content that is already stored.
+   */
+  baseRevisionId: z39.string().trim().uuid().nullable().optional()
 }).refine((v) => Object.keys(v).length > 0, { message: "At least one field must be provided." });
 var revertProductSchema = z39.object({
   revisionId: z39.string().trim().uuid()

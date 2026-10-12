@@ -210,6 +210,10 @@ export const productService = {
       assertIndustriesUsable(input.industryIds),
     ]);
 
+    if (input.baseRevisionId && existing.currentRevisionId && input.baseRevisionId !== existing.currentRevisionId) {
+      throw new ConflictError("This item was changed after you opened it. Reload the page and try again — your edit was not saved so nothing is overwritten.");
+    }
+
     const patch: Record<string, unknown> = {};
     if (input.name !== undefined) patch.name = input.name;
     if (input.slug !== undefined) patch.slug = input.slug;
@@ -230,7 +234,15 @@ export const productService = {
         }
         if (input.content !== undefined) {
           const currentContent = (existing.currentRevision?.content ?? {}) as ProductContentInput;
-          const nextContent: ProductContentInput = { ...currentContent, ...input.content };
+          const incoming: ProductContentInput = { ...input.content };
+          if (input.baseRevisionId === undefined) {
+            // Older editor (no base revision): never let an empty list or the default style wipe stored content.
+            for (const key of ["benefits", "features"] as const) {
+              if (Array.isArray(incoming[key]) && incoming[key]!.length === 0 && (currentContent[key]?.length ?? 0) > 0) delete incoming[key];
+            }
+            if (incoming.pageStyle === "classic" && currentContent.pageStyle && currentContent.pageStyle !== "classic") delete incoming.pageStyle;
+          }
+          const nextContent: ProductContentInput = { ...currentContent, ...incoming };
           const nextVersion = (existing.currentRevision?.version ?? 0) + 1;
           const revision = await tx.productRevision.create({
             data: { productId: id, version: nextVersion, name: input.name ?? existing.name, content: nextContent as Prisma.InputJsonValue, createdById: caller.id },

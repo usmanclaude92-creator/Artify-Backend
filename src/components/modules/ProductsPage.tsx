@@ -239,6 +239,8 @@ const ProductFormPage: React.FC<{
           content,
           relatedProductIds,
           industryIds,
+          // the revision this form was loaded from: the server refuses the save if it has changed since
+          baseRevisionId: product.currentRevisionId ?? null,
         });
         notify(`${TYPE_LABEL[type]} updated.`, "success");
         onSaved(res.product);
@@ -979,7 +981,13 @@ export const ProductsPage: React.FC<{ lockedType?: ProductTypeValue }> = ({ lock
       setProducts(res.items);
       setTotalPages(res.totalPages);
       setSelected((prev) => {
-        if (prev && res.items.some((p) => p.id === prev.id)) return prev.currentRevision ? { ...res.items.find((p) => p.id === prev.id)!, currentRevision: prev.currentRevision, category: prev.category, industries: prev.industries, relatedFrom: prev.relatedFrom, relatedTo: prev.relatedTo } : res.items.find((p) => p.id === prev.id)!;
+        const row = prev ? res.items.find((p) => p.id === prev.id) : undefined;
+        if (prev && row) {
+          // keep the already-loaded full record only while it is still the current revision; otherwise reload it
+          return prev.currentRevision && prev.currentRevisionId === row.currentRevisionId
+            ? { ...row, currentRevision: prev.currentRevision, category: prev.category, industries: prev.industries, relatedFrom: prev.relatedFrom, relatedTo: prev.relatedTo }
+            : row;
+        }
         return res.items[0] ?? null;
       });
     } catch (err) {
