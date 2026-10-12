@@ -122,7 +122,11 @@ export const publicProductService = {
       "displayOrder",
       "asc"
     );
-    return { rows: await Promise.all(rows.map(projectProductBasic)), total };
+    // The catalog cards show each item's feature image (null when none / not public).
+    const projected = await Promise.all(
+      rows.map(async (row) => ({ ...(await projectProductBasic(row)), featuredMedia: await projectFeaturedMedia(row.featuredMediaId) }))
+    );
+    return { rows: projected, total };
   },
 
   async getProductBySlug(slug: string) {

@@ -387,6 +387,13 @@ describe("product catalog", () => {
     expect(withPrivate.status).toBe(201);
     expect((await prisma.mediaAsset.findUniqueOrThrow({ where: { id: privateMedia.id } })).visibility).toBe("PUBLIC");
 
+    // The public list (catalog cards) carries the feature image too.
+    const activated = await request(app).patch(`/api/v1/products/${withPrivate.body.data.product.id}`).set("Authorization", `Bearer ${adminToken}`).send({ status: "ACTIVE" });
+    expect(activated.status).toBe(200);
+    const publicList = await request(app).get("/api/v1/public/products").query({ search: "Private Media" });
+    const card = publicList.body.data.products.find((x: { code: string }) => x.code === "MEDIA-PRIV");
+    expect(card?.featuredMedia?.url).toBeTruthy();
+
     const badCta = await request(app)
       .post("/api/v1/products")
       .set("Authorization", `Bearer ${adminToken}`)
