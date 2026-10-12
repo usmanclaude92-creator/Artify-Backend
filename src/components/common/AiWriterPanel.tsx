@@ -5,16 +5,21 @@ import { ApiClientError } from "../../lib/apiClient";
 import type { AiWriterTone } from "../../lib/api";
 import { Button, Select } from "../ui/ui";
 
-export interface AiWriterOptions { brief: string; tone: AiWriterTone; length: "short" | "medium" | "long" }
+export interface AiWriterOptions { brief: string; tone: AiWriterTone; length: "short" | "medium" | "long"; applyIdentity: boolean }
 
 export const AiWriterPanel: React.FC<{
   kind: "article" | "product";
   /** Calls the API and fills the form; returns a function that restores the previous values. */
   onGenerate: (o: AiWriterOptions) => Promise<() => void>;
   hasContent: boolean;
-}> = ({ kind, onGenerate, hasContent }) => {
+  /** Offers to set the name/code/slug too. `defaultChecked` is on for new items and off when editing (a slug change alters the public link). */
+  identity?: { label: string; hint: string; defaultChecked: boolean };
+  /** Pre-fills the brief (e.g. the existing description when editing) so one click can optimise what is already there. */
+  initialBrief?: string;
+}> = ({ kind, onGenerate, hasContent, identity, initialBrief = "" }) => {
   const [open, setOpen] = useState(false);
-  const [brief, setBrief] = useState("");
+  const [brief, setBrief] = useState(initialBrief);
+  const [applyIdentity, setApplyIdentity] = useState(identity?.defaultChecked ?? false);
   const [tone, setTone] = useState<AiWriterTone>("professional");
   const [length, setLength] = useState<"short" | "medium" | "long">("medium");
   const [busy, setBusy] = useState(false);
@@ -26,7 +31,7 @@ export const AiWriterPanel: React.FC<{
     setError(null);
     try {
       setUndo(null);
-      const restore = await onGenerate({ brief: brief.trim(), tone, length });
+      const restore = await onGenerate({ brief: brief.trim(), tone, length, applyIdentity: !!identity && applyIdentity });
       setUndo(() => restore);
     } catch (err) {
       setError(err instanceof ApiClientError ? err.message : "AI writing is not available right now.");
@@ -67,6 +72,12 @@ export const AiWriterPanel: React.FC<{
               </div>
             )}
           </div>
+          {identity && (
+            <label className="flex items-start gap-2 text-xs" style={{ color: "var(--text-secondary)" }}>
+              <input type="checkbox" className="mt-0.5" checked={applyIdentity} onChange={(e) => setApplyIdentity(e.target.checked)} />
+              <span><strong>{identity.label}</strong><span className="block text-[11px]" style={{ color: "var(--text-muted)" }}>{identity.hint}</span></span>
+            </label>
+          )}
           {error && <div className="text-xs rounded-lg px-3 py-2 bg-rose-500/10 text-rose-500 border border-rose-500/30" role="alert">{error}</div>}
           <div className="flex flex-wrap items-center gap-2">
             <Button type="button" variant="primary" disabled={busy || brief.trim().length < 10} onClick={() => void generate()}>
@@ -75,7 +86,7 @@ export const AiWriterPanel: React.FC<{
             {undo && <Button type="button" variant="ghost" onClick={() => { undo(); setUndo(null); }}><Undo2 className="w-3.5 h-3.5" /> Undo AI changes</Button>}
           </div>
           <p className="text-[11px]" style={{ color: "var(--text-muted)" }}>
-            {hasContent ? "This replaces the fields below (you can undo). " : ""}The AI uses only the facts you give it, in your brand voice. Review every line before saving: it can still get things wrong.
+            {hasContent ? "This replaces the fields below, including the SEO fields (you can undo). " : ""}Meta title, description, focus keywords and social-share text are written too. The AI uses only the facts you give it, in your brand voice. Review every line before saving: it can still get things wrong.
           </p>
         </div>
       )}

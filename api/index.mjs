@@ -35052,7 +35052,7 @@ var CONTENT_PROMPTS = {
     name: "CMS: write article",
     purpose: "Draft a blog article (title, excerpt, HTML body, SEO fields) from a brief in the workspace brand voice.",
     systemInstructions: `${RULES}
-Output JSON: {"title": string (max 120 chars), "excerpt": string (max 300 chars), "bodyHtml": string, "seoTitle": string (max 60 chars), "seoDescription": string (max 155 chars)}. bodyHtml uses only <h2>, <h3>, <p>, <ul>, <ol>, <li>, <strong>, <em> (no <h1>, no images, no scripts, no links unless a URL is in the brief). Aim for about {{length}} words.`,
+Output JSON: {"title": string (max 70 chars, clear and keyword-led), "slug": string (lowercase, hyphen-separated, 3 to 6 words, no stop-word padding), "excerpt": string (max 300 chars), "bodyHtml": string, "seoTitle": string (max 60 chars, primary keyword first), "seoDescription": string (140 to 155 chars, includes the primary keyword and a reason to click), "focusKeywords": string[] (3 to 6 realistic search phrases a buyer would type, the first being the primary keyword), "ogTitle": string (max 90 chars, written for a social share, may differ from seoTitle), "ogDescription": string (max 200 chars, social-share wording)}. bodyHtml uses only <h2>, <h3>, <p>, <ul>, <ol>, <li>, <strong>, <em> (no <h1>, no images, no scripts, no links unless a URL is in the brief). Aim for about {{length}} words.`,
     userTemplate: `Brand voice:
 {{brandVoice}}
 
@@ -35070,7 +35070,7 @@ Current title (may be empty): {{currentTitle}}`
     name: "CMS: write product details",
     purpose: "Draft product/service/solution copy (short description, description, benefits, features, business problem, SEO) from a brief.",
     systemInstructions: `${RULES}
-Output JSON: {"shortDescription": string (max 280 chars), "description": string (plain text, 2 to 4 short paragraphs separated by blank lines, no markdown), "benefits": string[] (3 to 6 short items, each max 120 chars), "features": string[] (3 to 8 short items, each max 120 chars), "businessProblem": string (max 400 chars; empty string if the brief gives no problem), "seoTitle": string (max 60 chars), "seoDescription": string (max 155 chars)}.`,
+Output JSON: {"name": string (max 60 chars: the product name followed, when it helps, by a short descriptor with the primary keyword, e.g. "Artify CAS - Construction Accounting Software"; keep the real product name first), "codePrefix": string (2 to 5 uppercase letters abbreviating the product, e.g. "CAS"), "slug": string (lowercase, hyphen-separated, 2 to 6 words, built from the name and primary keyword), "shortDescription": string (max 280 chars), "description": string (plain text, 2 to 4 short paragraphs separated by blank lines, no markdown), "benefits": string[] (3 to 6 short items, each max 120 chars), "features": string[] (3 to 8 short items, each max 120 chars), "businessProblem": string (max 400 chars; empty string if the brief gives no problem), "seoTitle": string (max 60 chars, primary keyword first), "seoDescription": string (140 to 155 chars, includes the primary keyword and a reason to click), "focusKeywords": string[] (3 to 6 realistic search phrases a buyer would type, the first being the primary keyword), "ogTitle": string (max 90 chars, written for a social share, may differ from seoTitle), "ogDescription": string (max 200 chars, social-share wording)}. Search phrases must come from what the brief says the product is and does; never add claims, certifications or numbers.`,
     userTemplate: `Brand voice:
 {{brandVoice}}
 
@@ -35088,22 +35088,59 @@ Name: {{name}}
 // server/services/contentAiService.ts
 var clip = (s, n) => s.length > n ? s.slice(0, n).trimEnd() : s;
 var list = (max, itemMax) => z63.array(z63.string().trim().min(1)).max(max).default([]).transform((a) => a.map((s) => clip(s, itemMax)));
+var slugify16 = (input) => input.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 100);
+var keywords = z63.array(z63.string().trim().min(1)).max(10).default([]).transform((a) => [...new Set(a.map((k) => clip(k.toLowerCase(), 60)))].slice(0, 6));
+var seoFields = {
+  seoTitle: z63.string().trim().default("").transform((s) => clip(s, 60)),
+  seoDescription: z63.string().trim().default("").transform((s) => clip(s, 160)),
+  focusKeywords: keywords,
+  ogTitle: z63.string().trim().default("").transform((s) => clip(s, 90)),
+  ogDescription: z63.string().trim().default("").transform((s) => clip(s, 200))
+};
 var postSchema = z63.object({
   title: z63.string().trim().min(1).transform((s) => clip(s, 200)),
+  slug: z63.string().trim().default(""),
   excerpt: z63.string().trim().default("").transform((s) => clip(s, 500)),
   bodyHtml: z63.string().trim().min(1),
-  seoTitle: z63.string().trim().default("").transform((s) => clip(s, 70)),
-  seoDescription: z63.string().trim().default("").transform((s) => clip(s, 160))
+  ...seoFields
 });
 var productSchema = z63.object({
+  name: z63.string().trim().default("").transform((s) => clip(s, 100)),
+  codePrefix: z63.string().trim().default(""),
+  slug: z63.string().trim().default(""),
   shortDescription: z63.string().trim().min(1).transform((s) => clip(s, 300)),
   description: z63.string().trim().default(""),
   benefits: list(8, 160),
   features: list(10, 160),
   businessProblem: z63.string().trim().default("").transform((s) => clip(s, 500)),
-  seoTitle: z63.string().trim().default("").transform((s) => clip(s, 70)),
-  seoDescription: z63.string().trim().default("").transform((s) => clip(s, 160))
+  ...seoFields
 });
+async function uniqueProductSlug(base3, excludeId) {
+  const root = slugify16(base3) || "product";
+  for (let n = 1; n <= 50; n++) {
+    const slug = n === 1 ? root : `${root}-${n}`;
+    const hit = await prisma.product.findUnique({ where: { slug }, select: { id: true } });
+    if (!hit || hit.id === excludeId) return slug;
+  }
+  return `${root}-${Date.now().toString(36)}`;
+}
+async function uniquePostSlug(organizationId, base3, excludeId) {
+  const root = slugify16(base3) || "post";
+  for (let n = 1; n <= 50; n++) {
+    const slug = n === 1 ? root : `${root}-${n}`;
+    const hit = await prisma.post.findFirst({ where: { organizationId, slug }, select: { id: true } });
+    if (!hit || hit.id === excludeId) return slug;
+  }
+  return `${root}-${Date.now().toString(36)}`;
+}
+async function nextProductCode(prefixHint, name) {
+  let prefix = prefixHint.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 5);
+  if (prefix.length < 2) prefix = (name.toUpperCase().match(/[A-Z0-9]+/g) ?? ["PRD"]).map((w) => w[0]).join("").slice(0, 5).padEnd(2, "X");
+  const existing = await prisma.product.findMany({ where: { code: { startsWith: `${prefix}-` } }, select: { code: true } });
+  const used = existing.map((p) => Number(p.code.slice(prefix.length + 1))).filter((n) => Number.isInteger(n));
+  const next = (used.length ? Math.max(...used) : 0) + 1;
+  return `${prefix}-${String(next).padStart(3, "0")}`;
+}
 var LENGTHS = { short: 400, medium: 800, long: 1400 };
 var TONES = ["professional", "friendly", "persuasive", "technical"];
 var contentAiService = {
@@ -35120,7 +35157,8 @@ var contentAiService = {
       outputSummary: (r) => ({ title: r.title, words: r.bodyHtml.split(/\s+/).length }),
       variables: { brandVoice: brandVoiceText(voice), language: input.language?.trim() || voice.languages[0] || "en", tone: input.tone ?? "professional", length: LENGTHS[length], brief: input.brief, currentTitle: input.currentTitle ?? "" }
     });
-    return { ...result, bodyHtml: sanitizeContentHtml(result.bodyHtml), executionId };
+    const slug = await uniquePostSlug(caller.organizationId, result.slug || result.title, input.postId);
+    return { ...result, slug, bodyHtml: sanitizeContentHtml(result.bodyHtml), executionId };
   },
   async writeProduct(caller, input, meta15 = {}) {
     const voice = await socialPostService.getBrandVoice(caller.organizationId);
@@ -35134,7 +35172,11 @@ var contentAiService = {
       outputSummary: (r) => ({ shortDescription: r.shortDescription, benefits: r.benefits.length, features: r.features.length }),
       variables: { brandVoice: brandVoiceText(voice), language: input.language?.trim() || voice.languages[0] || "en", tone: input.tone ?? "professional", itemType: (input.itemType ?? "PRODUCT").toLowerCase(), name: input.name ?? "", brief: input.brief }
     });
-    return { ...result, executionId };
+    const name = result.name || input.name || "";
+    const slug = await uniqueProductSlug(result.slug || name, input.productId);
+    const code = input.productId ? null : await nextProductCode(result.codePrefix, name);
+    const { codePrefix: _prefix, ...rest } = result;
+    return { ...rest, name, slug, code, executionId };
   }
 };
 
@@ -35143,8 +35185,8 @@ var router54 = Router60();
 router54.use(authenticateToken);
 var meta12 = (req) => ({ ip: req.ip, userAgent: req.headers["user-agent"], requestId: req.requestId });
 var brief = z64.string().trim().min(10, "Describe what to write in at least a sentence.").max(4e3);
-var postSchema2 = z64.object({ brief, tone: z64.enum(TONES).optional(), length: z64.enum(["short", "medium", "long"]).optional(), language: z64.string().trim().max(40).optional(), currentTitle: z64.string().trim().max(200).optional() });
-var productSchema2 = z64.object({ brief, name: z64.string().trim().max(200).optional(), itemType: z64.enum(["PRODUCT", "SERVICE", "SOLUTION"]).optional(), tone: z64.enum(TONES).optional(), language: z64.string().trim().max(40).optional() });
+var postSchema2 = z64.object({ brief, tone: z64.enum(TONES).optional(), length: z64.enum(["short", "medium", "long"]).optional(), language: z64.string().trim().max(40).optional(), currentTitle: z64.string().trim().max(200).optional(), postId: z64.string().uuid().optional() });
+var productSchema2 = z64.object({ brief, name: z64.string().trim().max(200).optional(), itemType: z64.enum(["PRODUCT", "SERVICE", "SOLUTION"]).optional(), tone: z64.enum(TONES).optional(), language: z64.string().trim().max(40).optional(), productId: z64.string().uuid().optional() });
 router54.post("/post", requirePermission("content.create"), aiExecutionLimiter, asyncHandler(async (req, res) => {
   sendSuccess(res, await contentAiService.writePost(req.user, postSchema2.parse(req.body), meta12(req)));
 }));

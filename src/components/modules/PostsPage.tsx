@@ -191,14 +191,16 @@ const PostFormModal: React.FC<{
   };
 
   const writeWithAi = async (o: AiWriterOptions) => {
-    const draft = await contentAiApi.writePost({ brief: o.brief, tone: o.tone, length: o.length, currentTitle: title || undefined });
-    const before = { title, excerpt, body, seo };
+    const draft = await contentAiApi.writePost({ brief: o.brief, tone: o.tone, length: o.length, currentTitle: title || undefined, postId: post?.id });
+    const before = { title, slug, excerpt, body, seo };
     setTitle(draft.title);
+    if (o.applyIdentity) setSlug(draft.slug);
     setExcerpt(draft.excerpt);
     setBody(draft.bodyHtml);
-    setSeo((cur) => ({ ...cur, metaTitle: draft.seoTitle, metaDescription: draft.seoDescription }));
+    setSeo((cur) => ({ ...cur, metaTitle: draft.seoTitle, metaDescription: draft.seoDescription, focusKeywords: draft.focusKeywords.join(", "), ogTitle: draft.ogTitle, ogDescription: draft.ogDescription }));
     return () => {
       setTitle(before.title);
+      setSlug(before.slug);
       setExcerpt(before.excerpt);
       setBody(before.body);
       setSeo(before.seo);
@@ -209,7 +211,17 @@ const PostFormModal: React.FC<{
     <Modal open={open} onClose={onClose} title={mode === "create" ? "New post" : `Edit ${post?.title}`}>
       <form onSubmit={handleSubmit} className="space-y-3">
         {error && <div className="text-xs rounded-lg px-3 py-2 bg-rose-500/10 text-rose-500 border border-rose-500/30">{error}</div>}
-        <AiWriterPanel kind="article" onGenerate={writeWithAi} hasContent={!!(title || body)} />
+        <AiWriterPanel
+          kind="article"
+          onGenerate={writeWithAi}
+          hasContent={!!(title || body)}
+          initialBrief={mode === "edit" ? [post?.title, post?.currentRevision?.excerpt].filter(Boolean).join(". ") : ""}
+          identity={{
+            label: "Also set the URL slug",
+            hint: mode === "edit" ? "Changes the public link of a post that already exists." : "Writes an SEO-friendly slug from the topic.",
+            defaultChecked: mode === "create",
+          }}
+        />
         <Field label="Title">
           <Input required value={title} onChange={(e) => setTitle(e.target.value)} />
         </Field>

@@ -16,7 +16,7 @@ describe("AiWriterPanel", () => {
     fireEvent.change(screen.getByLabelText("Length"), { target: { value: "long" } });
     expect(go).toBeEnabled();
     fireEvent.click(go);
-    await waitFor(() => expect(onGenerate).toHaveBeenCalledWith({ brief: "How clinics use chatbots", tone: "professional", length: "long" }));
+    await waitFor(() => expect(onGenerate).toHaveBeenCalledWith({ brief: "How clinics use chatbots", tone: "professional", length: "long", applyIdentity: false }));
     fireEvent.click(await screen.findByRole("button", { name: /Undo AI changes/ }));
     expect(undo).toHaveBeenCalled();
   });
@@ -29,5 +29,19 @@ describe("AiWriterPanel", () => {
     fireEvent.click(screen.getAllByRole("button", { name: /Write with AI/ }).at(-1)!);
     expect(await screen.findByRole("alert")).toHaveTextContent(/not available/);
     expect(screen.queryByRole("button", { name: /Undo/ })).toBeNull();
+  });
+
+  it("offers the identity option, honours its default, and pre-fills the brief", async () => {
+    const onGenerate = vi.fn().mockResolvedValue(() => {});
+    render(<AiWriterPanel kind="product" onGenerate={onGenerate} hasContent identity={{ label: "Also set the name, code and URL slug", hint: "h", defaultChecked: true }} initialBrief="Artify CAS is a construction accounting system" />);
+    fireEvent.click(screen.getByRole("button", { name: /Write with AI/ }));
+    expect(screen.getByLabelText(/Describe it/)).toHaveValue("Artify CAS is a construction accounting system");
+    const box = screen.getByRole("checkbox");
+    expect(box).toBeChecked();
+    fireEvent.click(screen.getAllByRole("button", { name: /Write with AI/ }).at(-1)!);
+    await waitFor(() => expect(onGenerate).toHaveBeenCalledWith(expect.objectContaining({ applyIdentity: true })));
+    fireEvent.click(box);
+    fireEvent.click(screen.getAllByRole("button", { name: /Write with AI/ }).at(-1)!);
+    await waitFor(() => expect(onGenerate).toHaveBeenLastCalledWith(expect.objectContaining({ applyIdentity: false })));
   });
 });
