@@ -15,7 +15,7 @@
   "functions": {
     "api/index.mjs": {
       "includeFiles": "node_modules/.prisma/client/**",
-      "maxDuration": 30
+      "maxDuration": 60
     }
   },
   "crons": [
