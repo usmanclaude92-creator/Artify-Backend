@@ -38,7 +38,7 @@ const router = Router();
 // per-origin and cannot serve one origin's CORS headers to another.
 router.use((req, res, next) => {
   if (req.method === "GET" || req.method === "HEAD") {
-    res.setHeader("Cache-Control", "public, s-maxage=60, stale-while-revalidate=300");
+    res.setHeader("Cache-Control", "public, s-maxage=300, stale-while-revalidate=3600");
   }
   next();
 });
