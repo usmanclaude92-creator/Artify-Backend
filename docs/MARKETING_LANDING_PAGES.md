@@ -26,7 +26,7 @@
 | Forms / leads | `Form`, `FormSubmission` (consent, UTM, landing path, referrer), `publicFormService.submit` (honeypot, validation, lead merge, automation event, analytics event, in-app notifications), `publicLeadLimiter` | Reused through a managed Form per page |
 | Attribution | `campaignAttributionService.resolveCampaignId(utm_campaign)` | Reused |
 | Analytics | `AnalyticsEvent` (`page_view`, `form_submission`, path, sessionId, UTM), public beacon `POST /public/analytics/events` (rate limited) | Per-page counts; no new tracking table |
-| Public API | `/api/v1/public/*`, GET cached `s-maxage=60, swr=300`, every response an explicit projection | New `/public/landing*` follows the same rules |
+| Public API | `/api/v1/public/*`, GET cached `s-maxage=300, swr=3600`, every response an explicit projection | New `/public/landing*` follows the same rules |
 | Sidebar | `NAV_ITEMS`, section **Marketing** (Dashboard, Forms, Campaigns), **Website Management** (Pages, Site Editor, …) | New **Marketing → Landing Pages** item |
 | Gaps found | no preview tokens, no 410 semantics, no landing-specific blocks or placeholders, no first/last touch columns, `form` block only references a Form id, no per-page stats, no UTM link helper, `content.publish` could publish any page | Built in this step |
 
@@ -77,7 +77,7 @@ DRAFT --submit--> PENDING_APPROVAL --approve--> PUBLISHED --unpublish--> UNPUBLI
 * Version history lists every saved revision. Restore never rewrites history: it clones the old revision into a new draft which still needs approval.
 * Preview: "Private preview link" creates a 256-bit token (only its SHA-256 is stored), valid 1 to 72 hours, revocable. The URL `https://<site>/lp-preview/<token>` renders the saved draft with the same renderer as production, `Cache-Control: no-store`, `noindex`, `Referrer-Policy: no-referrer`; the form is disabled.
 * Address change on a page that has been published creates a 301 from `/lp/<old>` to `/lp/<new>` (query string kept). Unpublished or archived pages answer **410**; addresses that never existed (or never went live) answer 404. Reserved addresses (`admin`, `api`, `blog`, `contact`, … see `RESERVED_LANDING_SLUGS`) cannot be used.
-* Cache: pages are sent with `s-maxage=60, stale-while-revalidate=300` by both the website function and the API, so a publish or unpublish is visible within about two minutes. Previews are never cached.
+* Cache: the website function sends pages with `s-maxage=60, stale-while-revalidate=300` and the API sends its GET responses with `s-maxage=300, stale-while-revalidate=3600`, so a publish or unpublish is visible within about six minutes (a visitor arriving after a long quiet spell in a region can see the previous version once, until the background refresh completes). Previews are never cached.
 
 ## Blocks reference
 

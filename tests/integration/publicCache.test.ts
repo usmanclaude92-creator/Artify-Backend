@@ -13,7 +13,7 @@ describe("public API cache headers", () => {
   it("sets shared-cache headers on GET and keys the cache by Origin", async () => {
     const res = await request(app).get("/api/v1/public/site").set("Origin", "http://localhost:3000");
     expect(res.status).toBe(200);
-    expect(res.headers["cache-control"]).toBe("public, s-maxage=60, stale-while-revalidate=300");
+    expect(res.headers["cache-control"]).toBe("public, s-maxage=300, stale-while-revalidate=3600");
     expect(res.headers["vary"]).toMatch(/Origin/i);
   });
 

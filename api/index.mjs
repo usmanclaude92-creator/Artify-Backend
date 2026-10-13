@@ -34334,7 +34334,7 @@ var reportQuerySchema = z61.object({
 var router50 = Router56();
 router50.use((req, res, next) => {
   if (req.method === "GET" || req.method === "HEAD") {
-    res.setHeader("Cache-Control", "public, s-maxage=60, stale-while-revalidate=300");
+    res.setHeader("Cache-Control", "public, s-maxage=300, stale-while-revalidate=3600");
   }
   next();
 });
