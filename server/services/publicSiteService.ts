@@ -26,7 +26,9 @@ import { SITE_IDENTITY_MEDIA_FIELDS } from "../schemas/siteSettingsSchemas";
 import { publicFormService } from "./publicFormService";
 import { getStorageProvider } from "../storage";
 import { config } from "../config/env";
+import { prisma } from "../db/prisma";
 import { NotFoundError } from "../core/errors";
+import { logger } from "../core/logger";
 import type { MediaAsset } from "@prisma/client";
 
 export interface PublicMedia {
@@ -287,7 +289,24 @@ function projectAuthor(author: PostWithPublicRelations["author"]) {
   return { name: `${author.user.firstName} ${author.user.lastName}`.trim(), bio: author.bio, avatarUrl: author.avatarUrl };
 }
 
-async function projectPost(post: PostWithPublicRelations) {
+/**
+ * Real "visits" per blog post: distinct tab-scoped sessions with a `page_view` on /blog/<slug> (the website beacon's own
+ * data, query strings ignored). Never fabricated and never allowed to break the post API: any failure reads as 0.
+ */
+async function postVisitCounts(organizationId: string, slugs: string[]): Promise<Map<string, number>> {
+  const counts = new Map<string, number>();
+  if (slugs.length === 0) return counts;
+  try {
+    const paths = slugs.map((slug) => `/blog/${slug}`);
+    const rows = await prisma.$queryRaw<Array<{ p: string; n: bigint }>>`SELECT split_part(path, '?', 1) AS p, COUNT(DISTINCT session_id) AS n FROM analytics_events WHERE organization_id = ${organizationId} AND event_type = 'page_view' AND session_id IS NOT NULL AND split_part(path, '?', 1) = ANY(${paths}) GROUP BY 1`;
+    for (const row of rows) counts.set(row.p.replace(/^\/blog\//, ""), Number(row.n));
+  } catch (err) {
+    logger.warn({ err }, "[public-posts] visit counts unavailable");
+  }
+  return counts;
+}
+
+async function projectPost(post: PostWithPublicRelations, visits = 0) {
   const revision = post.currentRevision;
   const featuredMedia = await projectPublicMedia(post.featuredMedia);
   const seo = await applySeoDefaults((revision?.metadata as Record<string, unknown> | undefined) ?? {}, post.organizationId, !!featuredMedia);
@@ -301,6 +320,7 @@ async function projectPost(post: PostWithPublicRelations) {
     tags: post.tags.map((t) => ({ slug: t.tag.slug, name: t.tag.name })),
     author: projectAuthor(post.author),
     featuredMedia,
+    visits,
     publishedAt: post.publishedAt,
     updatedAt: post.updatedAt,
   };
@@ -511,14 +531,16 @@ export const publicSiteService = {
     }
 
     const { rows, total } = await postRepository.listPublished(organizationId, { search: filters.search, categoryId, tagId }, page, limit, sort, order);
-    return { rows: await Promise.all(rows.map(projectPost)), total };
+    const visits = await postVisitCounts(organizationId, rows.map((r) => r.slug));
+    return { rows: await Promise.all(rows.map((r) => projectPost(r, visits.get(r.slug) ?? 0))), total };
   },
 
   async getPostBySlug(slug: string) {
     if (!hasPublicWebsiteOrganization()) throw new NotFoundError("Post not found.");
     const post = await postRepository.findPublishedBySlugWithMedia(config.publicWebsiteOrganizationId, slug);
     if (!post) throw new NotFoundError("Post not found.");
-    return projectPost(post);
+    const visits = await postVisitCounts(config.publicWebsiteOrganizationId, [post.slug]);
+    return projectPost(post, visits.get(post.slug) ?? 0);
   },
 
   /** Phase 11 — Case Studies index. `productSlug`/`industrySlug` resolve through the same global catalog/industry lookups publicProductService uses. */
