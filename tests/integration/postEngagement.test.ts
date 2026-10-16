@@ -100,7 +100,58 @@ describe("post engagement (likes, ratings, comments)", () => {
     expect(pub.body.data.post.commentCount).toBe(0);
   });
 
+  it("notifies Administrators and Super Administrators (bell) of a new comment, grouped, and nobody else", async () => {
+    const mkUser = async (email: string, roleKey: string, orgId = PUBLIC_ORG_ID) => {
+      const role = await prisma.role.findUniqueOrThrow({ where: { key: roleKey } });
+      return prisma.user.create({ data: { organizationId: orgId, email, passwordHash: "x", firstName: "N", lastName: roleKey, roleId: role.id, status: "ACTIVE" } });
+    };
+    const admin = await mkUser("bell-admin@example.com", "ADMIN");
+    const superAdmin = await mkUser("bell-super@example.com", "SUPER_ADMIN");
+    const viewer = await mkUser("bell-viewer@example.com", "VIEWER");
+    const otherOrgAdmin = await mkUser("bell-other@example.com", "ADMIN", adminOrgId);
+    await prisma.postComment.deleteMany({ where: { postId: publicPostId } });
+    // Called through the service: the per-IP comment limiter (5 / 15 min) is covered by the HTTP tests above and would throttle this test.
+    const { postEngagementService } = await import("../../server/services/postEngagementService");
+    const send = async (body: { name: string; role?: string; body: string; website?: string }) => {
+      try {
+        await postEngagementService.addComment(slug, body, "203.0.113.9");
+        return { status: 201 };
+      } catch {
+        return { status: 400 };
+      }
+    };
+    const bell = (userId: string) => prisma.notification.findMany({ where: { userId, type: "post_comment_pending" } });
+
+    // Spam and honeypot fills create nothing, so they notify nobody.
+    await send({ name: "Spammer", body: "visit http://spam.example now" });
+    await send({ name: "Bot", body: "I am a bot comment here", website: "x" });
+    expect(await bell(admin.id)).toHaveLength(0);
+
+    expect((await send({ name: "Reader One", body: "First real comment here." })).status).toBe(201);
+    for (const u of [admin, superAdmin]) {
+      const rows = await bell(u.id);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ status: "UNREAD", title: "New blog comment awaiting review", entityType: "post_comment", organizationId: PUBLIC_ORG_ID });
+      expect(rows[0]!.message).toContain("Reader One");
+      expect(rows[0]!.message).toContain("Blog Comments");
+    }
+    expect(await bell(viewer.id)).toHaveLength(0);
+    expect(await bell(otherOrgAdmin.id)).toHaveLength(0);
+
+    // A second comment updates the same unread notification to a real pending count instead of adding another.
+    expect((await send({ name: "Reader Two", body: "Second real comment here." })).status).toBe(201);
+    const grouped = await bell(admin.id);
+    expect(grouped).toHaveLength(1);
+    expect(grouped[0]!.title).toBe("Blog comments awaiting review");
+    expect(grouped[0]!.message).toContain("2 comments are waiting for review");
+
+    // The admin sees it on the bell (unread count), and the visitor request is unaffected by it.
+    expect(await prisma.notification.count({ where: { userId: admin.id, status: "UNREAD" } })).toBe(1);
+    await prisma.postComment.deleteMany({ where: { postId: publicPostId } });
+  });
+
   it("shows a comment publicly only once it is approved", async () => {
+    await prisma.postComment.create({ data: { organizationId: PUBLIC_ORG_ID, postId: publicPostId, authorName: "Reader One", authorRole: "CFO", body: "Great article about project costing.", status: "PENDING" } });
     await prisma.postComment.updateMany({ where: { postId: publicPostId }, data: { status: "APPROVED" } });
     const pub = await request(app).get(`/api/v1/public/posts/${slug}`);
     expect(pub.body.data.post.commentCount).toBe(1);
