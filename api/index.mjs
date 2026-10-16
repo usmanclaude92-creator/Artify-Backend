@@ -32238,10 +32238,46 @@ function cleanCommentText(value) {
 async function findPublishedPost(slug) {
   const post = await prisma.post.findFirst({
     where: { organizationId: config.publicWebsiteOrganizationId, slug, status: "PUBLISHED", deletedAt: null },
-    select: { id: true, organizationId: true }
+    select: { id: true, organizationId: true, title: true }
   });
   if (!post) throw new NotFoundError("Post not found.");
   return post;
+}
+var COMMENT_NOTIFICATION_TYPE = "post_comment_pending";
+var COMMENT_NOTIFICATION_GROUP_MS = 24 * 60 * 60 * 1e3;
+async function notifyReviewers(organizationId, post, commenter, commentId) {
+  try {
+    const [recipients, pending] = await Promise.all([
+      userRepository.listActiveByRoleKeysInOrg(organizationId, ["ADMIN", "SUPER_ADMIN"]),
+      prisma.postComment.count({ where: { organizationId, status: "PENDING" } })
+    ]);
+    const since = new Date(Date.now() - COMMENT_NOTIFICATION_GROUP_MS);
+    const where2 = "Open Website \u2192 Content \u2192 Blog Comments to approve or reject.";
+    for (const user of recipients) {
+      const recent = await prisma.notification.findFirst({
+        where: { organizationId, userId: user.id, type: COMMENT_NOTIFICATION_TYPE, status: "UNREAD", createdAt: { gte: since } },
+        orderBy: { createdAt: "desc" }
+      });
+      if (recent) {
+        await prisma.notification.update({
+          where: { id: recent.id },
+          data: pending > 1 ? { title: "Blog comments awaiting review", message: `${pending} comments are waiting for review. ${where2}`, createdAt: /* @__PURE__ */ new Date() } : { title: "New blog comment awaiting review", message: `${commenter} commented on "${post.title}". ${where2}`, createdAt: /* @__PURE__ */ new Date() }
+        });
+      } else {
+        await notificationService.notify({
+          organizationId,
+          userId: user.id,
+          type: COMMENT_NOTIFICATION_TYPE,
+          title: "New blog comment awaiting review",
+          message: `${commenter} commented on "${post.title}". ${where2}`,
+          entityType: "post_comment",
+          entityId: commentId
+        });
+      }
+    }
+  } catch (err) {
+    logger.warn({ err }, "[post-comments] reviewer notification skipped");
+  }
 }
 var postEngagementService = {
   /** Counts for many posts in three grouped queries; a failure reads as "no engagement", never as a broken post API. */
@@ -32315,9 +32351,11 @@ var postEngagementService = {
     const ipHash = ip ? hash("ip", ip) : null;
     const duplicate = await prisma.postComment.findFirst({ where: { postId: post.id, body, authorName }, select: { id: true } });
     if (!duplicate) {
-      await prisma.postComment.create({
-        data: { organizationId: post.organizationId, postId: post.id, authorName, authorRole: input.role ? cleanCommentText(input.role) || null : null, body, status: "PENDING", ipHash }
+      const created = await prisma.postComment.create({
+        data: { organizationId: post.organizationId, postId: post.id, authorName, authorRole: input.role ? cleanCommentText(input.role) || null : null, body, status: "PENDING", ipHash },
+        select: { id: true }
       });
+      await notifyReviewers(post.organizationId, post, authorName, created.id);
     }
     return { status: "pending" };
   },

@@ -6,6 +6,9 @@ import { createHash } from "node:crypto";
 import { prisma } from "../db/prisma";
 import { config } from "../config/env";
 import { NotFoundError, ValidationError } from "../core/errors";
+import { logger } from "../core/logger";
+import { userRepository } from "../repositories/userRepository";
+import { notificationService } from "./notificationService";
 import type { SanitizedUser } from "../types/domain";
 
 export interface PostEngagement {
@@ -28,10 +31,53 @@ export function cleanCommentText(value: string): string {
 async function findPublishedPost(slug: string) {
   const post = await prisma.post.findFirst({
     where: { organizationId: config.publicWebsiteOrganizationId, slug, status: "PUBLISHED", deletedAt: null },
-    select: { id: true, organizationId: true },
+    select: { id: true, organizationId: true, title: true },
   });
   if (!post) throw new NotFoundError("Post not found.");
   return post;
+}
+
+const COMMENT_NOTIFICATION_TYPE = "post_comment_pending";
+const COMMENT_NOTIFICATION_GROUP_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Tells every active Administrator and Super Administrator (bell icon) that a visitor comment is waiting for review. Unread notifications
+ * of this type from the last 24 hours are grouped into one ("N comments are waiting for review", N = the real pending count) so a burst of
+ * comments cannot flood the bell. Never throws: the comment is already saved, and a notification failure must not fail the visitor's request.
+ */
+async function notifyReviewers(organizationId: string, post: { title: string }, commenter: string, commentId: string): Promise<void> {
+  try {
+    const [recipients, pending] = await Promise.all([
+      userRepository.listActiveByRoleKeysInOrg(organizationId, ["ADMIN", "SUPER_ADMIN"]),
+      prisma.postComment.count({ where: { organizationId, status: "PENDING" } }),
+    ]);
+    const since = new Date(Date.now() - COMMENT_NOTIFICATION_GROUP_MS);
+    const where = "Open Website → Content → Blog Comments to approve or reject.";
+    for (const user of recipients) {
+      const recent = await prisma.notification.findFirst({
+        where: { organizationId, userId: user.id, type: COMMENT_NOTIFICATION_TYPE, status: "UNREAD", createdAt: { gte: since } },
+        orderBy: { createdAt: "desc" },
+      });
+      if (recent) {
+        await prisma.notification.update({
+          where: { id: recent.id },
+          data:
+            pending > 1
+              ? { title: "Blog comments awaiting review", message: `${pending} comments are waiting for review. ${where}`, createdAt: new Date() }
+              : { title: "New blog comment awaiting review", message: `${commenter} commented on "${post.title}". ${where}`, createdAt: new Date() },
+        });
+      } else {
+        await notificationService.notify({
+          organizationId, userId: user.id, type: COMMENT_NOTIFICATION_TYPE,
+          title: "New blog comment awaiting review",
+          message: `${commenter} commented on "${post.title}". ${where}`,
+          entityType: "post_comment", entityId: commentId,
+        });
+      }
+    }
+  } catch (err) {
+    logger.warn({ err }, "[post-comments] reviewer notification skipped");
+  }
 }
 
 export const postEngagementService = {
@@ -108,9 +154,11 @@ export const postEngagementService = {
     const ipHash = ip ? hash("ip", ip) : null;
     const duplicate = await prisma.postComment.findFirst({ where: { postId: post.id, body, authorName }, select: { id: true } });
     if (!duplicate) {
-      await prisma.postComment.create({
+      const created = await prisma.postComment.create({
         data: { organizationId: post.organizationId, postId: post.id, authorName, authorRole: input.role ? cleanCommentText(input.role) || null : null, body, status: "PENDING", ipHash },
+        select: { id: true },
       });
+      await notifyReviewers(post.organizationId, post, authorName, created.id);
     }
     return { status: "pending" };
   },
