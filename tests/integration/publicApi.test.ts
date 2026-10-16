@@ -370,6 +370,28 @@ describe("public website API", () => {
     expect(found.tags[0].slug).toBe("ai");
   });
 
+  it("reports real visits per post: distinct sessions with a page_view on /blog/<slug>, query strings ignored, 0 when none", async () => {
+    const path = `/blog/${publishedPostSlug}`;
+    const event = (sessionId: string | null, p: string, eventType = "page_view") => ({ organizationId: PUBLIC_ORG_ID, eventType, path: p, sessionId });
+    await prisma.analyticsEvent.createMany({
+      data: [
+        event("sess-a", path), event("sess-a", path), event("sess-a", `${path}?v=2`), // one visitor, three views
+        event("sess-b", path),
+        event(null, path), // no session id: not countable as a visit
+        event("sess-c", path, "cta_click"), // not a page view
+        event("sess-d", "/blog/some-other-post"),
+      ],
+    });
+    const list = await request(app).get("/api/v1/public/posts");
+    const found = list.body.data.posts.find((p: { slug: string }) => p.slug === publishedPostSlug);
+    expect(found.visits).toBe(2);
+    const single = await request(app).get(`/api/v1/public/posts/${publishedPostSlug}`);
+    expect(single.body.data.post.visits).toBe(2);
+    const idle = list.body.data.posts.find((p: { slug: string }) => p.slug !== publishedPostSlug);
+    if (idle) expect(idle.visits).toBe(0);
+    await prisma.analyticsEvent.deleteMany({ where: { organizationId: PUBLIC_ORG_ID } });
+  });
+
   it("filters posts by category slug", async () => {
     const res = await request(app).get("/api/v1/public/posts").query({ category: categorySlug });
     expect(res.status).toBe(200);
