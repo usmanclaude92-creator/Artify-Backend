@@ -16,8 +16,10 @@ import { publicFormService } from "../../services/publicFormService";
 import { publicLandingService } from "../../services/landing/publicLandingService";
 import { publicLandingSubmitSchema } from "../../schemas/landingSchemas";
 import { NotFoundError } from "../../core/errors";
+import { postEngagementService } from "../../services/postEngagementService";
+import { postLikeSchema, postRatingSchema, postCommentSchema } from "../../schemas/postEngagementSchemas";
 import { analyticsEventService } from "../../services/analyticsEventService";
-import { publicLeadLimiter, publicAnalyticsLimiter, tokenLinkLimiter } from "../../middleware/rateLimiter";
+import { publicLeadLimiter, publicAnalyticsLimiter, publicEngagementLimiter, tokenLinkLimiter } from "../../middleware/rateLimiter";
 import { asyncHandler } from "../../utils/asyncHandler";
 import { sendSuccess } from "../../core/apiResponse";
 import {
@@ -112,6 +114,32 @@ router.get(
   asyncHandler(async (req, res) => {
     const post = await publicSiteService.getPostBySlug(req.params.slug!);
     sendSuccess(res, { post });
+  })
+);
+
+// Reader engagement on a published post. Anonymous; likes/ratings are one per browser, comments wait for moderation.
+router.post(
+  "/posts/:slug/like",
+  publicEngagementLimiter,
+  asyncHandler(async (req, res) => {
+    const input = postLikeSchema.parse(req.body);
+    sendSuccess(res, await postEngagementService.setLike(req.params.slug!, input.clientId, input.liked));
+  })
+);
+router.post(
+  "/posts/:slug/rating",
+  publicEngagementLimiter,
+  asyncHandler(async (req, res) => {
+    const input = postRatingSchema.parse(req.body);
+    sendSuccess(res, await postEngagementService.setRating(req.params.slug!, input.clientId, input.score));
+  })
+);
+router.post(
+  "/posts/:slug/comments",
+  publicLeadLimiter,
+  asyncHandler(async (req, res) => {
+    const input = postCommentSchema.parse(req.body);
+    sendSuccess(res, await postEngagementService.addComment(req.params.slug!, input, req.ip), 201);
   })
 );
 

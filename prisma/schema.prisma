@@ -2270,6 +2270,9 @@ model Post {
   featuredMedia   MediaAsset?            @relation("PostFeaturedMedia", fields: [featuredMediaId], references: [id], onDelete: SetNull)
   caseStudies     CaseStudyRelatedPost[]
   campaigns       CampaignRelatedPost[]
+  likes           PostLike[]
+  ratings         PostRating[]
+  comments        PostComment[]
 
   @@unique([organizationId, slug])
   @@index([organizationId, status])
@@ -4686,4 +4689,57 @@ model MetaDataRequest {
   @@index([subjectRef, kind, status])
   @@index([createdAt])
   @@map("meta_data_requests")
+}
+
+// Reader engagement on public blog posts. Every row is a real reader action: nothing is seeded. `clientKey` is a salted hash of a random
+// per-browser id (one like / one rating per browser); raw ids and IPs are never stored in these tables except the comment `ipHash`.
+model PostLike {
+  id             String   @id @default(uuid())
+  organizationId String   @map("organization_id")
+  postId         String   @map("post_id")
+  clientKey      String   @map("client_key")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  post Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  @@unique([postId, clientKey])
+  @@index([postId])
+  @@map("post_likes")
+}
+
+model PostRating {
+  id             String   @id @default(uuid())
+  organizationId String   @map("organization_id")
+  postId         String   @map("post_id")
+  clientKey      String   @map("client_key")
+  score          Int
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  post Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  @@unique([postId, clientKey])
+  @@index([postId])
+  @@map("post_ratings")
+}
+
+// Reader comments are held as PENDING until a Control Center user approves them; only APPROVED comments are public.
+model PostComment {
+  id             String    @id @default(uuid())
+  organizationId String    @map("organization_id")
+  postId         String    @map("post_id")
+  authorName     String    @map("author_name")
+  authorRole     String?   @map("author_role")
+  body           String
+  status         String    @default("PENDING")
+  ipHash         String?   @map("ip_hash")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  moderatedAt    DateTime? @map("moderated_at")
+  moderatedById  String?   @map("moderated_by")
+
+  post Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  @@index([postId, status, createdAt])
+  @@index([organizationId, status, createdAt])
+  @@map("post_comments")
 }

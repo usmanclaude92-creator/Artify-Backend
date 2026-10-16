@@ -182,6 +182,18 @@ export const publicAnalyticsLimiter = rateLimit({
   keyGenerator: (req: Request) => req.ip ?? "unknown-ip",
 });
 
+/** Public reader likes/ratings on blog posts: anonymous and IP-keyed; a few taps per reader, bounded so one address cannot stuff counts. */
+export const publicEngagementLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: rateLimitHandler,
+  store: makeStore("public-engagement"),
+  passOnStoreError: true,
+  keyGenerator: (req: Request) => req.ip ?? "unknown-ip",
+});
+
 /** Authenticated sensitive actions (change-password, organization switch) — lower volume than general API traffic, keyed per-caller. */
 export const sensitiveActionLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
