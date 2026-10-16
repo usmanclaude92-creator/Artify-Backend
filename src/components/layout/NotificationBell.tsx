@@ -7,6 +7,9 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Bell, Check, CheckCheck } from "lucide-react";
 import { notificationsApi, type AppNotification } from "../../lib/api";
 import { Spinner } from "../ui/ui";
+import { useAuth } from "../../context/AuthContext";
+import { useRouter } from "../../lib/router";
+import { notificationLink } from "../../lib/notificationLinks";
 
 function timeAgo(iso: string): string {
   const diffMs = Date.now() - new Date(iso).getTime();
@@ -24,6 +27,8 @@ export const NotificationBell: React.FC = () => {
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [loading, setLoading] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+  const { user } = useAuth();
+  const { navigate } = useRouter();
 
   const refreshCount = useCallback(() => {
     notificationsApi
@@ -62,6 +67,12 @@ export const NotificationBell: React.FC = () => {
     await notificationsApi.markRead(id);
     setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, status: "READ" } : n)));
     setUnreadCount((c) => Math.max(0, c - 1));
+  };
+
+  const handleOpen = async (n: AppNotification, path: string) => {
+    if (n.status === "UNREAD") await handleMarkRead(n.id).catch(() => undefined);
+    setOpen(false);
+    navigate(path);
   };
 
   const handleMarkAllRead = async () => {
@@ -127,6 +138,20 @@ export const NotificationBell: React.FC = () => {
                       <p className="text-[10px] mt-0.5" style={{ color: "var(--text-muted)" }}>
                         {timeAgo(n.createdAt)}
                       </p>
+                      {(() => {
+                        const link = notificationLink(n, user?.role.permissions);
+                        return link ? (
+                          <button
+                            type="button"
+                            onClick={() => void handleOpen(n, link.path)}
+                            className="mt-1 text-[11px] font-semibold underline-offset-2 hover:underline"
+                            style={{ color: "var(--accent-soft-text)" }}
+                            aria-label={`Open ${link.label}`}
+                          >
+                            Open {link.label} →
+                          </button>
+                        ) : null;
+                      })()}
                     </div>
                     {n.status === "UNREAD" && (
                       <button onClick={() => handleMarkRead(n.id)} aria-label="Mark as read" className="shrink-0 p-1" style={{ color: "var(--text-muted)" }}>
