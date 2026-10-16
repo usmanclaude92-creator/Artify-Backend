@@ -2301,6 +2301,25 @@ export const tagsApi = {
   remove: (id: string) => apiClient.delete<{ message: string }>(`/tags/${id}`),
 };
 
+export type PostCommentStatus = "PENDING" | "APPROVED" | "REJECTED";
+export interface PostCommentRow {
+  id: string;
+  authorName: string;
+  authorRole: string | null;
+  body: string;
+  status: PostCommentStatus;
+  createdAt: string;
+  moderatedAt: string | null;
+  post: { slug: string; title: string };
+}
+
+/** Reader comments on public blog posts: held for approval here before they appear on the website. */
+export const postCommentsApi = {
+  list: (status: PostCommentStatus) => apiClient.get<{ comments: PostCommentRow[] }>(`/post-comments?status=${status}&limit=100`),
+  pendingCount: () => apiClient.get<{ count: number }>("/post-comments/pending-count"),
+  moderate: (id: string, status: "APPROVED" | "REJECTED") => apiClient.patch<{ comment: { id: string; status: PostCommentStatus } }>(`/post-comments/${id}`, { status }),
+};
+
 export const authorsApi = {
   list: () => apiClient.get<{ authors: CmsAuthor[] }>("/authors"),
   get: (id: string) => apiClient.get<{ author: CmsAuthor }>(`/authors/${id}`),

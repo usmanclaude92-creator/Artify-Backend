@@ -59,7 +59,7 @@ describe("sidebar structure (Step 1 redesign)", () => {
     Dashboard: ["/dashboard", "/my-work", "/notifications", "/approvals", "/analytics", "/reports"],
     "Website Management": [
       "/website/templates", "/website/template-parts", "/website/navigation-menus", "/website/homepage", "/website/site-identity", "/website/global-styles", "/website/site-editor",
-      "/cms/pages", "/cms/posts", "/cms/case-studies", "/cms/taxonomy", "/cms/authors", "/cms/media",
+      "/cms/pages", "/cms/posts", "/cms/case-studies", "/cms/taxonomy", "/cms/authors", "/cms/comments", "/cms/media",
       "/seo/issues", "/seo/redirects",
     ],
     CRM: ["/crm", "/crm/leads", "/crm/clients", "/crm/contacts", "/crm/opportunities", "/onboarding", "/onboarding/pending", "/marketing/forms"],
@@ -90,10 +90,10 @@ describe("sidebar structure (Step 1 redesign)", () => {
 
   it("keeps every one of the 62 existing pages plus the new /social and /approvals pages, with unique ids and paths", () => {
     const all = Object.values(EXPECTED).flat();
-    expect(all).toHaveLength(82);
-    expect(NAV_ITEMS).toHaveLength(82);
-    expect(new Set(NAV_ITEMS.map((i) => i.path)).size).toBe(82);
-    expect(new Set(NAV_ITEMS.map((i) => i.id)).size).toBe(82);
+    expect(all).toHaveLength(83);
+    expect(NAV_ITEMS).toHaveLength(83);
+    expect(new Set(NAV_ITEMS.map((i) => i.path)).size).toBe(83);
+    expect(new Set(NAV_ITEMS.map((i) => i.id)).size).toBe(83);
     expect(NAV_ITEMS.map((i) => i.path).sort()).toEqual([...all].sort());
   });
 

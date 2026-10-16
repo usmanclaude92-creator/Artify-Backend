@@ -29,6 +29,7 @@ import { config } from "../config/env";
 import { prisma } from "../db/prisma";
 import { NotFoundError } from "../core/errors";
 import { logger } from "../core/logger";
+import { postEngagementService, type PostEngagement } from "./postEngagementService";
 import type { MediaAsset } from "@prisma/client";
 
 export interface PublicMedia {
@@ -306,7 +307,17 @@ async function postVisitCounts(organizationId: string, slugs: string[]): Promise
   return counts;
 }
 
-async function projectPost(post: PostWithPublicRelations, visits = 0) {
+/** Engagement for the public post API: any failure reads as "none yet", never as a broken post. */
+async function engagementFor(postIds: string[]): Promise<Map<string, PostEngagement>> {
+  try {
+    return await postEngagementService.statsFor(postIds);
+  } catch (err) {
+    logger.warn({ err }, "[public-posts] engagement unavailable");
+    return new Map();
+  }
+}
+
+async function projectPost(post: PostWithPublicRelations, visits = 0, engagement: PostEngagement = postEngagementService.empty()) {
   const revision = post.currentRevision;
   const featuredMedia = await projectPublicMedia(post.featuredMedia);
   const seo = await applySeoDefaults((revision?.metadata as Record<string, unknown> | undefined) ?? {}, post.organizationId, !!featuredMedia);
@@ -321,6 +332,9 @@ async function projectPost(post: PostWithPublicRelations, visits = 0) {
     author: projectAuthor(post.author),
     featuredMedia,
     visits,
+    likes: engagement.likes,
+    rating: engagement.rating,
+    commentCount: engagement.commentCount,
     publishedAt: post.publishedAt,
     updatedAt: post.updatedAt,
   };
@@ -531,16 +545,23 @@ export const publicSiteService = {
     }
 
     const { rows, total } = await postRepository.listPublished(organizationId, { search: filters.search, categoryId, tagId }, page, limit, sort, order);
-    const visits = await postVisitCounts(organizationId, rows.map((r) => r.slug));
-    return { rows: await Promise.all(rows.map((r) => projectPost(r, visits.get(r.slug) ?? 0))), total };
+    const [visits, engagement] = await Promise.all([postVisitCounts(organizationId, rows.map((r) => r.slug)), engagementFor(rows.map((r) => r.id))]);
+    return { rows: await Promise.all(rows.map((r) => projectPost(r, visits.get(r.slug) ?? 0, engagement.get(r.id)))), total };
   },
 
   async getPostBySlug(slug: string) {
     if (!hasPublicWebsiteOrganization()) throw new NotFoundError("Post not found.");
     const post = await postRepository.findPublishedBySlugWithMedia(config.publicWebsiteOrganizationId, slug);
     if (!post) throw new NotFoundError("Post not found.");
-    const visits = await postVisitCounts(config.publicWebsiteOrganizationId, [post.slug]);
-    return projectPost(post, visits.get(post.slug) ?? 0);
+    const [visits, engagement] = await Promise.all([postVisitCounts(config.publicWebsiteOrganizationId, [post.slug]), engagementFor([post.id])]);
+    const projected = await projectPost(post, visits.get(post.slug) ?? 0, engagement.get(post.id));
+    let comments: Awaited<ReturnType<typeof postEngagementService.approvedComments>> = [];
+    try {
+      comments = await postEngagementService.approvedComments(post.id);
+    } catch (err) {
+      logger.warn({ err }, "[public-posts] comments unavailable");
+    }
+    return { ...projected, comments };
   },
 
   /** Phase 11 — Case Studies index. `productSlug`/`industrySlug` resolve through the same global catalog/industry lookups publicProductService uses. */
