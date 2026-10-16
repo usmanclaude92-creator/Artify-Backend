@@ -8,12 +8,15 @@ import React, { useCallback, useEffect, useState } from "react";
 import { Bell, Check, CheckCheck } from "lucide-react";
 import { notificationsApi, type AppNotification, type NotificationStatusValue } from "../../lib/api";
 import { Card, Badge, Select, LoadingState, ErrorState, EmptyState, Pagination } from "../ui/ui";
+import { useAuth } from "../../context/AuthContext";
+import { useRouter } from "../../lib/router";
+import { notificationLink } from "../../lib/notificationLinks";
 
 function formatTimestamp(iso: string): string {
   return new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 }
 
-/** A human label for the real entityType string an entity-linked notification carries — no routing/navigation beyond this label since entity-specific editor deep-links vary by module. */
+/** A human label for the real entityType string an entity-linked notification carries. The jump link itself comes from lib/notificationLinks.ts. */
 function entityLabel(entityType: string): string {
   return entityType.replace(/_/g, " ");
 }
@@ -21,6 +24,8 @@ function entityLabel(entityType: string): string {
 type Filter = "ALL" | NotificationStatusValue;
 
 export const NotificationCenterPage: React.FC = () => {
+  const { user } = useAuth();
+  const { navigate } = useRouter();
   const [filter, setFilter] = useState<Filter>("ALL");
   const [page, setPage] = useState(1);
   const [items, setItems] = useState<AppNotification[]>([]);
@@ -49,6 +54,11 @@ export const NotificationCenterPage: React.FC = () => {
   const handleMarkRead = async (id: string) => {
     await notificationsApi.markRead(id);
     setItems((prev) => prev.map((n) => (n.id === id ? { ...n, status: "READ" } : n)));
+  };
+
+  const handleOpen = async (n: AppNotification, path: string) => {
+    if (n.status === "UNREAD") await handleMarkRead(n.id).catch(() => undefined);
+    navigate(path);
   };
 
   const handleMarkAllRead = async () => {
@@ -111,6 +121,20 @@ export const NotificationCenterPage: React.FC = () => {
                   <p className="text-[10px] mt-0.5" style={{ color: "var(--text-muted)" }}>
                     {formatTimestamp(n.createdAt)}
                   </p>
+                  {(() => {
+                    const link = notificationLink(n, user?.role.permissions);
+                    return link ? (
+                      <button
+                        type="button"
+                        onClick={() => void handleOpen(n, link.path)}
+                        className="mt-1 text-[11px] font-semibold underline-offset-2 hover:underline"
+                        style={{ color: "var(--accent)" }}
+                        aria-label={`Open ${link.label}`}
+                      >
+                        Open {link.label} →
+                      </button>
+                    ) : null;
+                  })()}
                 </div>
                 {n.status === "UNREAD" && (
                   <button onClick={() => void handleMarkRead(n.id)} aria-label="Mark as read" className="shrink-0 p-1" style={{ color: "var(--text-muted)" }}>
