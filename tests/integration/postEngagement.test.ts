@@ -75,6 +75,22 @@ describe("post engagement (likes, ratings, comments)", () => {
     expect(list.body.data.posts.find((p: { slug: string }) => p.slug === slug).rating).toEqual({ average: 4, count: 2 });
   });
 
+  it("list ?fields=card omits the article body but keeps reading time and engagement", async () => {
+    const full = await request(app).get("/api/v1/public/posts");
+    const card = await request(app).get("/api/v1/public/posts?fields=card");
+    expect(card.status).toBe(200);
+    const fullRow = full.body.data.posts.find((p: { slug: string }) => p.slug === slug);
+    const cardRow = card.body.data.posts.find((p: { slug: string }) => p.slug === slug);
+    expect(fullRow.body.length).toBeGreaterThan(0);
+    expect(cardRow.body).toBe("");
+    expect(cardRow.readingMinutes).toBe(fullRow.readingMinutes);
+    expect(cardRow.readingMinutes).toBeGreaterThanOrEqual(1);
+    expect(cardRow.title).toBe(fullRow.title);
+    expect(cardRow.excerpt ?? "").not.toBe("");
+    expect(cardRow.rating).toEqual(fullRow.rating);
+    expect((await request(app).get("/api/v1/public/posts?fields=bogus")).status).toBe(400);
+  });
+
   it("rejects malformed client ids and unknown or unpublished posts", async () => {
     expect((await request(app).post(`/api/v1/public/posts/${slug}/like`).send({ clientId: "short", liked: true })).status).toBe(400);
     expect((await request(app).post("/api/v1/public/posts/no-such-post/like").send({ clientId: CLIENT_A, liked: true })).status).toBe(404);

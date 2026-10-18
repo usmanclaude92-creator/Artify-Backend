@@ -33957,15 +33957,26 @@ async function engagementFor(postIds) {
     return /* @__PURE__ */ new Map();
   }
 }
-async function projectPost2(post, visits = 0, engagement = postEngagementService.empty()) {
+function readingMinutesFor(body) {
+  const text = body.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+  const words2 = text ? text.split(" ").length : 0;
+  return Math.max(1, Math.round(words2 / 200));
+}
+function derivedExcerptFor(body) {
+  const text = body.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+  if (!text) return null;
+  return text.length > 220 ? `${text.slice(0, 217)}...` : text;
+}
+async function projectPost2(post, visits = 0, engagement = postEngagementService.empty(), includeBody = true) {
   const revision = post.currentRevision;
   const featuredMedia = await projectPublicMedia(post.featuredMedia);
   const seo = await applySeoDefaults(revision?.metadata ?? {}, post.organizationId, !!featuredMedia);
   return {
     slug: post.slug,
     title: post.title,
-    body: revision?.body ?? "",
-    excerpt: revision?.excerpt ?? null,
+    body: includeBody ? revision?.body ?? "" : "",
+    readingMinutes: readingMinutesFor(revision?.body ?? ""),
+    excerpt: revision?.excerpt ?? (includeBody ? null : derivedExcerptFor(revision?.body ?? "")),
     seo,
     category: post.category ? { slug: post.category.slug, name: post.category.name } : null,
     tags: post.tags.map((t) => ({ slug: t.tag.slug, name: t.tag.name })),
@@ -34111,7 +34122,7 @@ var publicSiteService = {
     const items = (await Promise.all(rawItems.map((item) => resolveMenuItem(item, organizationId)))).filter((i) => i !== null);
     return { type: menu.type, slug: menu.slug, name: menu.name, items };
   },
-  async listPosts(filters, page, limit, sort, order) {
+  async listPosts(filters, page, limit, sort, order, fields = "full") {
     if (!hasPublicWebsiteOrganization()) return { rows: [], total: 0 };
     const organizationId = config.publicWebsiteOrganizationId;
     let categoryId;
@@ -34128,7 +34139,7 @@ var publicSiteService = {
     }
     const { rows, total } = await postRepository.listPublished(organizationId, { search: filters.search, categoryId, tagId }, page, limit, sort, order);
     const [visits, engagement] = await Promise.all([postVisitCounts(organizationId, rows.map((r) => r.slug)), engagementFor(rows.map((r) => r.id))]);
-    return { rows: await Promise.all(rows.map((r) => projectPost2(r, visits.get(r.slug) ?? 0, engagement.get(r.id)))), total };
+    return { rows: await Promise.all(rows.map((r) => projectPost2(r, visits.get(r.slug) ?? 0, engagement.get(r.id), fields !== "card"))), total };
   },
   async getPostBySlug(slug) {
     if (!hasPublicWebsiteOrganization()) throw new NotFoundError("Post not found.");
@@ -34511,7 +34522,9 @@ var listPublicPostsQuerySchema = z61.object({
   category: z61.string().trim().max(150).optional(),
   tag: z61.string().trim().max(150).optional(),
   sort: z61.enum(SORT_FIELDS10).default("publishedAt"),
-  order: z61.enum(["asc", "desc"]).default("desc")
+  order: z61.enum(["asc", "desc"]).default("desc"),
+  // "card" drops the article body from each row (listing cards never render it); "full" keeps the historical payload.
+  fields: z61.enum(["full", "card"]).default("full")
 });
 var listPublicProductsQuerySchema = z61.object({
   page: z61.coerce.number().int().positive().default(1),
@@ -34659,7 +34672,8 @@ router51.get(
       query.page,
       query.limit,
       query.sort,
-      query.order
+      query.order,
+      query.fields
     );
     sendSuccess(res, { posts: rows }, 200, { page: query.page, limit: query.limit, total });
   })

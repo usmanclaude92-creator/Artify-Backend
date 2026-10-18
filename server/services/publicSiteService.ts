@@ -317,15 +317,30 @@ async function engagementFor(postIds: string[]): Promise<Map<string, PostEngagem
   }
 }
 
-async function projectPost(post: PostWithPublicRelations, visits = 0, engagement: PostEngagement = postEngagementService.empty()) {
+/** Whole minutes to read, from the real body length (200 wpm, minimum 1) — the same rule the website used client-side. */
+function readingMinutesFor(body: string): number {
+  const text = body.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+  const words = text ? text.split(" ").length : 0;
+  return Math.max(1, Math.round(words / 200));
+}
+
+/** Listing rows without a body still need the text the website would have derived from it when the author wrote no excerpt. */
+function derivedExcerptFor(body: string): string | null {
+  const text = body.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+  if (!text) return null;
+  return text.length > 220 ? `${text.slice(0, 217)}...` : text;
+}
+
+async function projectPost(post: PostWithPublicRelations, visits = 0, engagement: PostEngagement = postEngagementService.empty(), includeBody = true) {
   const revision = post.currentRevision;
   const featuredMedia = await projectPublicMedia(post.featuredMedia);
   const seo = await applySeoDefaults((revision?.metadata as Record<string, unknown> | undefined) ?? {}, post.organizationId, !!featuredMedia);
   return {
     slug: post.slug,
     title: post.title,
-    body: revision?.body ?? "",
-    excerpt: revision?.excerpt ?? null,
+    body: includeBody ? (revision?.body ?? "") : "",
+    readingMinutes: readingMinutesFor(revision?.body ?? ""),
+    excerpt: revision?.excerpt ?? (includeBody ? null : derivedExcerptFor(revision?.body ?? "")),
     seo,
     category: post.category ? { slug: post.category.slug, name: post.category.name } : null,
     tags: post.tags.map((t) => ({ slug: t.tag.slug, name: t.tag.name })),
@@ -527,7 +542,7 @@ export const publicSiteService = {
     return { type: menu.type, slug: menu.slug, name: menu.name, items };
   },
 
-  async listPosts(filters: { search?: string; categorySlug?: string; tagSlug?: string }, page: number, limit: number, sort: string, order: "asc" | "desc") {
+  async listPosts(filters: { search?: string; categorySlug?: string; tagSlug?: string }, page: number, limit: number, sort: string, order: "asc" | "desc", fields: "full" | "card" = "full") {
     if (!hasPublicWebsiteOrganization()) return { rows: [], total: 0 };
     const organizationId = config.publicWebsiteOrganizationId;
 
@@ -546,7 +561,7 @@ export const publicSiteService = {
 
     const { rows, total } = await postRepository.listPublished(organizationId, { search: filters.search, categoryId, tagId }, page, limit, sort, order);
     const [visits, engagement] = await Promise.all([postVisitCounts(organizationId, rows.map((r) => r.slug)), engagementFor(rows.map((r) => r.id))]);
-    return { rows: await Promise.all(rows.map((r) => projectPost(r, visits.get(r.slug) ?? 0, engagement.get(r.id)))), total };
+    return { rows: await Promise.all(rows.map((r) => projectPost(r, visits.get(r.slug) ?? 0, engagement.get(r.id), fields !== "card"))), total };
   },
 
   async getPostBySlug(slug: string) {
