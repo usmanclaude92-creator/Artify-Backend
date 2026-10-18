@@ -16,6 +16,8 @@ export const listPublicPostsQuerySchema = z.object({
   tag: z.string().trim().max(150).optional(),
   sort: z.enum(SORT_FIELDS).default("publishedAt"),
   order: z.enum(["asc", "desc"]).default("desc"),
+  // "card" drops the article body from each row (listing cards never render it); "full" keeps the historical payload.
+  fields: z.enum(["full", "card"]).default("full"),
 });
 export type ListPublicPostsQuery = z.infer<typeof listPublicPostsQuerySchema>;
 

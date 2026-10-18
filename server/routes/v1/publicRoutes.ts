@@ -103,7 +103,8 @@ router.get(
       query.page,
       query.limit,
       query.sort,
-      query.order
+      query.order,
+      query.fields
     );
     sendSuccess(res, { posts: rows }, 200, { page: query.page, limit: query.limit, total });
   })
