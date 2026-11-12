@@ -6,6 +6,7 @@ describe("redactUrl (secrets never reach the access log)", () => {
     expect(redactUrl("/api/v1/invitations/art_invite_abc123/accept")).toBe("/api/v1/invitations/[REDACTED]/accept");
     expect(redactUrl("/api/v1/public/landing-preview/SECRETTOKEN123")).toBe("/api/v1/public/landing-preview/[REDACTED]");
     expect(redactUrl("/lp-preview/SECRETTOKEN123")).toBe("/lp-preview/[REDACTED]");
+    expect(redactUrl("/api/v1/public/post-preview/SECRETTOKEN123")).toBe("/api/v1/public/post-preview/[REDACTED]");
   });
   it("hides credential-looking query values and keeps the rest", () => {
     const out = redactUrl("/api/v1/auth/verify-email?token=abc&page=2&hub.verify_token=zzz&code=1");

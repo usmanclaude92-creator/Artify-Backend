@@ -7,6 +7,7 @@ import {
   Search,
   Send,
   Rocket,
+  Eye,
   CalendarClock,
   Archive,
   History,
@@ -452,6 +453,23 @@ const PostDetail: React.FC<{ post: CmsPost; onChanged: (p?: CmsPost) => void; on
   const handleRestore = () => run(() => postsApi.update(post.id, { status: "DRAFT" }), "Post restored to draft.");
   const handleSubmitReview = () => run(() => postsApi.submitForReview(post.id), "Submitted for review.");
   const handlePublish = () => run(() => postsApi.publish(post.id), "Post published.");
+  // Opens the post on the real website, exactly as it will look once published. The tab is opened first (inside the click)
+  // so pop-up blockers allow it, then pointed at the private link.
+  const handlePreview = async () => {
+    const tab = window.open("", "_blank");
+    setBusy(true);
+    try {
+      const res = await postsApi.createPreview(post.id);
+      const url = res.preview.url ?? `https://artifysols.com${res.preview.path}`;
+      if (tab) tab.location.href = url;
+      else window.location.assign(url);
+    } catch (err) {
+      tab?.close();
+      notify(err instanceof ApiClientError ? err.message : "Could not create the preview.", "error");
+    } finally {
+      setBusy(false);
+    }
+  };
   const handleArchive = async () => {
     setArchiveOpen(false);
     await run(() => postsApi.archive(post.id), "Post archived.");
@@ -498,6 +516,11 @@ const PostDetail: React.FC<{ post: CmsPost; onChanged: (p?: CmsPost) => void; on
           >
             <History className="w-3.5 h-3.5" /> Revisions
           </Button>
+          {canUpdate && post.status !== "ARCHIVED" && (
+            <Button variant="secondary" onClick={() => void handlePreview()} disabled={busy}>
+              <Eye className="w-3.5 h-3.5" /> Preview
+            </Button>
+          )}
           {canUpdate && (post.status === "DRAFT" || post.status === "IN_REVIEW" || post.status === "SCHEDULED" || post.status === "PUBLISHED") && (
             <Button variant="secondary" onClick={() => onEdit(post)} disabled={busy}>
               Edit

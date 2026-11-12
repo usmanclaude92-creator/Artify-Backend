@@ -2270,6 +2270,7 @@ model Post {
   featuredMedia   MediaAsset?            @relation("PostFeaturedMedia", fields: [featuredMediaId], references: [id], onDelete: SetNull)
   caseStudies     CaseStudyRelatedPost[]
   campaigns       CampaignRelatedPost[]
+  previewTokens   PostPreviewToken[]
   likes           PostLike[]
   ratings         PostRating[]
   comments        PostComment[]
@@ -4493,6 +4494,22 @@ model LandingPreviewToken {
 
   @@index([pageId])
   @@map("landing_preview_tokens")
+}
+
+/// Private preview links for blog posts: a draft (or live) post rendered on the real website before it is published. Only the SHA-256 of the token is stored.
+model PostPreviewToken {
+  id          String    @id @default(uuid())
+  postId      String    @map("post_id")
+  tokenHash   String    @unique @map("token_hash")
+  expiresAt   DateTime  @map("expires_at")
+  revokedAt   DateTime? @map("revoked_at")
+  createdById String?   @map("created_by")
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  post Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  @@index([postId])
+  @@map("post_preview_tokens")
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -26,6 +26,7 @@ import { SITE_IDENTITY_MEDIA_FIELDS } from "../schemas/siteSettingsSchemas";
 import { publicFormService } from "./publicFormService";
 import { getStorageProvider } from "../storage";
 import { config } from "../config/env";
+import { hashToken } from "../utils/crypto";
 import { prisma } from "../db/prisma";
 import { NotFoundError } from "../core/errors";
 import { logger } from "../core/logger";
@@ -577,6 +578,22 @@ export const publicSiteService = {
       logger.warn({ err }, "[public-posts] comments unavailable");
     }
     return { ...projected, comments };
+  },
+
+  /**
+   * Private preview of a post's CURRENT revision (draft or live) for a valid, unexpired, unrevoked token. The token is only
+   * ever compared by hash. No visit/like/comment data: a preview must never look or count like real traffic.
+   */
+  async getPostPreview(token: string) {
+    if (!hasPublicWebsiteOrganization() || !/^[A-Za-z0-9_-]{20,100}$/.test(token)) throw new NotFoundError("Preview not found.");
+    const row = await prisma.postPreviewToken.findUnique({ where: { tokenHash: hashToken(token) } });
+    if (!row || row.revokedAt || row.expiresAt.getTime() <= Date.now()) throw new NotFoundError("Preview not found.");
+    const post = await prisma.post.findFirst({
+      where: { id: row.postId, organizationId: config.publicWebsiteOrganizationId, deletedAt: null },
+      include: { currentRevision: true, category: true, author: { include: { user: { select: { firstName: true, lastName: true } } } }, tags: { include: { tag: true } }, featuredMedia: true },
+    });
+    if (!post) throw new NotFoundError("Preview not found.");
+    return { ...(await projectPost(post, 0)), comments: [], previewStatus: post.status };
   },
 
   /** Phase 11 — Case Studies index. `productSlug`/`industrySlug` resolve through the same global catalog/industry lookups publicProductService uses. */

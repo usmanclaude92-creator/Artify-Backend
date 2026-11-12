@@ -2165,6 +2165,9 @@ export const postsApi = {
   publish: (id: string) => apiClient.post<{ post: CmsPost }>(`/posts/${id}/publish`),
   schedule: (id: string, scheduledAt: string) => apiClient.post<{ post: CmsPost }>(`/posts/${id}/schedule`, { scheduledAt }),
   archive: (id: string) => apiClient.post<{ post: CmsPost }>(`/posts/${id}/archive`),
+  /** Private link to the real website rendering of this post's current content (draft or live), valid 24 hours by default. */
+  createPreview: (id: string, ttlHours?: number) =>
+    apiClient.post<{ preview: { token: string; expiresAt: string; url: string | null; path: string } }>(`/posts/${id}/preview`, ttlHours ? { ttlHours } : {}),
   revert: (id: string, revisionId: string) => apiClient.post<{ post: CmsPost }>(`/posts/${id}/revert`, { revisionId }),
   remove: (id: string) => apiClient.delete<{ message: string }>(`/posts/${id}`),
   // Phase 7 — Trash view + bulk actions.

@@ -134,6 +134,23 @@ router.patch(
 );
 
 router.post(
+  "/:id/preview",
+  requirePermission("content.update"),
+  asyncHandler(async (req, res) => {
+    const ttlHours = Math.min(72, Math.max(1, Number.parseInt(String(req.body?.ttlHours ?? 24), 10) || 24));
+    sendSuccess(res, { preview: await postService.createPreview(req.user!, req.params.id!, ttlHours, requestMeta(req)) }, 201);
+  })
+);
+
+router.post(
+  "/:id/preview/revoke",
+  requirePermission("content.update"),
+  asyncHandler(async (req, res) => {
+    sendSuccess(res, await postService.revokePreviews(req.user!, req.params.id!, requestMeta(req)));
+  })
+);
+
+router.post(
   "/:id/submit-review",
   requirePermission("content.update"),
   asyncHandler(async (req, res) => {
