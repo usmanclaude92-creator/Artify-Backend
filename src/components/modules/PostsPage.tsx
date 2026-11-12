@@ -265,6 +265,12 @@ const PostFormPage: React.FC<{
         </Button>
       </div>
 
+      {mode === "edit" && post?.status === "PUBLISHED" && (
+        <div role="note" className="text-xs rounded-lg px-3 py-2 bg-amber-500/10 text-amber-600 border border-amber-500/30">
+          This post is live. Saving updates the public page immediately. Each save keeps the previous version under Revisions, where you can restore it.
+        </div>
+      )}
+
       {error && (
         <div role="alert" className="text-xs rounded-lg px-3 py-2 bg-rose-500/10 text-rose-500 border border-rose-500/30">
           {error}
@@ -492,7 +498,7 @@ const PostDetail: React.FC<{ post: CmsPost; onChanged: (p?: CmsPost) => void; on
           >
             <History className="w-3.5 h-3.5" /> Revisions
           </Button>
-          {canUpdate && (post.status === "DRAFT" || post.status === "IN_REVIEW" || post.status === "SCHEDULED") && (
+          {canUpdate && (post.status === "DRAFT" || post.status === "IN_REVIEW" || post.status === "SCHEDULED" || post.status === "PUBLISHED") && (
             <Button variant="secondary" onClick={() => onEdit(post)} disabled={busy}>
               Edit
             </Button>

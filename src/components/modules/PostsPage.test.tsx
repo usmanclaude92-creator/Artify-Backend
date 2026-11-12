@@ -178,6 +178,24 @@ describe("PostsPage", () => {
     await vi.waitFor(() => expect(window.location.search).toBe(""));
   });
 
+  it("lets a PUBLISHED post be edited in place: live notice shown, and Save sends no status (a live edit, not an unpublish)", async () => {
+    const published = { ...post, status: "PUBLISHED" as const };
+    listMock.mockResolvedValue({ items: [published], page: 1, limit: 20, total: 1, totalPages: 1 });
+    updateMock.mockResolvedValue({ post: published });
+    render(<PostsPage />);
+    await screen.findByText("We shipped it.");
+
+    fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
+    expect(await screen.findByText(/this post is live/i)).toBeTruthy();
+    fireEvent.change(screen.getByLabelText(/^title$/i), { target: { value: "Launch Day v2" } });
+    fireEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await vi.waitFor(() => expect(updateMock).toHaveBeenCalled());
+    const payload = updateMock.mock.calls[0]![1] as Record<string, unknown>;
+    expect(payload.title).toBe("Launch Day v2");
+    expect("status" in payload).toBe(false);
+  });
+
   it("asks before discarding unsaved changes", async () => {
     listMock.mockResolvedValue({ items: [post], page: 1, limit: 20, total: 1, totalPages: 1 });
     const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
