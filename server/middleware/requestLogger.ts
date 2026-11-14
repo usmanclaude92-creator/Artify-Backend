@@ -13,7 +13,8 @@ export function redactUrl(url: string): string {
   const safePath = path
     .replace(/(\/invitations\/)[^/]+/i, "$1[REDACTED]")
     .replace(/(\/landing-preview\/)[^/]+/i, "$1[REDACTED]")
-    .replace(/(\/lp-preview\/)[^/]+/i, "$1[REDACTED]");
+    .replace(/(\/lp-preview\/)[^/]+/i, "$1[REDACTED]")
+    .replace(/(\/post-preview\/)[^/]+/i, "$1[REDACTED]");
   if (!query) return safePath;
   const params = new URLSearchParams(query);
   for (const k of [...params.keys()]) if (/token|code|key|secret|password|signature|hub\.verify_token/i.test(k)) params.set(k, "[REDACTED]");

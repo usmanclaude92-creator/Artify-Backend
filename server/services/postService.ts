@@ -14,6 +14,9 @@ import { sanitizeContentHtml } from "../utils/sanitizeHtml";
 import { redirectService } from "./redirectService";
 import { notificationService } from "./notificationService";
 import { eventEngine } from "./automation/EventEngine";
+import crypto from "node:crypto";
+import { config } from "../config/env";
+import { hashToken } from "../utils/crypto";
 import { prisma } from "../db/prisma";
 import { ConflictError, NotFoundError, ValidationError } from "../core/errors";
 import type { SanitizedUser } from "../types/domain";
@@ -414,6 +417,32 @@ export const postService = {
     });
 
     return loadPostOrThrow(id, organizationId);
+  },
+
+  /** A private link to the exact public rendering of the post's CURRENT revision (draft or live). Only a hash is stored; the raw token is returned once. */
+  async createPreview(caller: SanitizedUser, id: string, ttlHours: number, meta: RequestMeta = {}) {
+    const organizationId = caller.organizationId;
+    const post = await loadPostOrThrow(id, organizationId);
+    const token = crypto.randomBytes(32).toString("base64url");
+    const expiresAt = new Date(Date.now() + ttlHours * 3600_000);
+    await prisma.postPreviewToken.create({ data: { postId: id, tokenHash: hashToken(token), expiresAt, createdById: caller.id } });
+    await auditLogRepository.record({
+      organizationId, actorUserId: caller.id, actorType: "USER", action: "POST_PREVIEW_CREATED", resourceType: "post", resourceId: id,
+      afterData: { expiresAt }, ipAddress: meta.ip, userAgent: meta.userAgent,
+    });
+    const base = config.publicSiteBaseUrl ? config.publicSiteBaseUrl.replace(/\/+$/, "") : null;
+    const path = `/blog/${post.slug}?preview=${token}`;
+    return { token, expiresAt, url: base ? `${base}${path}` : null, path };
+  },
+
+  async revokePreviews(caller: SanitizedUser, id: string, meta: RequestMeta = {}) {
+    await loadPostOrThrow(id, caller.organizationId);
+    const res = await prisma.postPreviewToken.updateMany({ where: { postId: id, revokedAt: null, expiresAt: { gt: new Date() } }, data: { revokedAt: new Date() } });
+    await auditLogRepository.record({
+      organizationId: caller.organizationId, actorUserId: caller.id, actorType: "USER", action: "POST_PREVIEWS_REVOKED", resourceType: "post", resourceId: id,
+      afterData: { count: res.count }, ipAddress: meta.ip, userAgent: meta.userAgent,
+    });
+    return { revoked: res.count };
   },
 
   async archivePost(caller: SanitizedUser, id: string, meta: RequestMeta = {}): Promise<PostWithRelations> {

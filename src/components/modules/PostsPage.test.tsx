@@ -15,6 +15,7 @@ const tagsListMock = vi.fn();
 const authorsListMock = vi.fn();
 const trashMock = vi.fn();
 const restoreMock = vi.fn();
+const createPreviewMock = vi.fn();
 const bulkArchiveMock = vi.fn();
 const bulkTrashMock = vi.fn();
 const bulkRestoreMock = vi.fn();
@@ -27,6 +28,7 @@ vi.mock("../../lib/api", () => ({
     revisions: (...args: unknown[]) => revisionsMock(...args),
     create: (...args: unknown[]) => createMock(...args),
     update: (...args: unknown[]) => updateMock(...args),
+    createPreview: (...args: unknown[]) => createPreviewMock(...args),
     submitForReview: (...args: unknown[]) => submitForReviewMock(...args),
     publish: (...args: unknown[]) => publishMock(...args),
     schedule: vi.fn(),
@@ -176,6 +178,39 @@ describe("PostsPage", () => {
     fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
     await screen.findByText("We shipped it.");
     await vi.waitFor(() => expect(window.location.search).toBe(""));
+  });
+
+  it("lets a PUBLISHED post be edited in place: live notice shown, and Save sends no status (a live edit, not an unpublish)", async () => {
+    const published = { ...post, status: "PUBLISHED" as const };
+    listMock.mockResolvedValue({ items: [published], page: 1, limit: 20, total: 1, totalPages: 1 });
+    updateMock.mockResolvedValue({ post: published });
+    render(<PostsPage />);
+    await screen.findByText("We shipped it.");
+
+    fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
+    expect(await screen.findByText(/this post is live/i)).toBeTruthy();
+    fireEvent.change(screen.getByLabelText(/^title$/i), { target: { value: "Launch Day v2" } });
+    fireEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await vi.waitFor(() => expect(updateMock).toHaveBeenCalled());
+    const payload = updateMock.mock.calls[0]![1] as Record<string, unknown>;
+    expect(payload.title).toBe("Launch Day v2");
+    expect("status" in payload).toBe(false);
+  });
+
+  it("Preview opens a private link to the real website for a DRAFT post, without publishing it", async () => {
+    listMock.mockResolvedValue({ items: [post], page: 1, limit: 20, total: 1, totalPages: 1 });
+    createPreviewMock.mockResolvedValue({ preview: { token: "t", expiresAt: "2026-11-13T00:00:00Z", url: "https://artifysols.com/blog/launch-day?preview=tok", path: "/blog/launch-day?preview=tok" } });
+    const fakeTab = { location: { href: "" }, close: vi.fn() };
+    const openSpy = vi.spyOn(window, "open").mockReturnValue(fakeTab as unknown as Window);
+    render(<PostsPage />);
+    await screen.findByText("We shipped it.");
+
+    fireEvent.click(screen.getByRole("button", { name: /^preview$/i }));
+    await vi.waitFor(() => expect(fakeTab.location.href).toBe("https://artifysols.com/blog/launch-day?preview=tok"));
+    expect(createPreviewMock).toHaveBeenCalledWith("post-1");
+    expect(publishMock).not.toHaveBeenCalled();
+    openSpy.mockRestore();
   });
 
   it("asks before discarding unsaved changes", async () => {

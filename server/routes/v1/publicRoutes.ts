@@ -110,6 +110,17 @@ router.get(
   })
 );
 
+// Private draft/live preview of a blog post by token (created in the Control Center). Never cached, never indexable.
+router.get(
+  "/post-preview/:token",
+  tokenLinkLimiter,
+  asyncHandler(async (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    res.setHeader("X-Robots-Tag", "noindex, nofollow");
+    sendSuccess(res, { post: await publicSiteService.getPostPreview(req.params.token!) });
+  })
+);
+
 router.get(
   "/posts/:slug",
   asyncHandler(async (req, res) => {

@@ -1314,7 +1314,7 @@ function applySecurityMiddleware(app2) {
 import pinoHttp from "pino-http";
 function redactUrl(url) {
   const [path = "", query] = url.split("?");
-  const safePath = path.replace(/(\/invitations\/)[^/]+/i, "$1[REDACTED]").replace(/(\/landing-preview\/)[^/]+/i, "$1[REDACTED]").replace(/(\/lp-preview\/)[^/]+/i, "$1[REDACTED]");
+  const safePath = path.replace(/(\/invitations\/)[^/]+/i, "$1[REDACTED]").replace(/(\/landing-preview\/)[^/]+/i, "$1[REDACTED]").replace(/(\/lp-preview\/)[^/]+/i, "$1[REDACTED]").replace(/(\/post-preview\/)[^/]+/i, "$1[REDACTED]");
   if (!query) return safePath;
   const params = new URLSearchParams(query);
   for (const k of [...params.keys()]) if (/token|code|key|secret|password|signature|hub\.verify_token/i.test(k)) params.set(k, "[REDACTED]");
@@ -9658,7 +9658,7 @@ import { Router as Router15 } from "express";
 init_apiResponse();
 
 // server/services/aiApprovalService.ts
-import crypto3 from "crypto";
+import crypto4 from "crypto";
 
 // server/repositories/aiApprovalRepository.ts
 var aiApprovalRepository = {
@@ -9703,7 +9703,7 @@ var aiApprovalRepository = {
 };
 
 // server/ai/governance.ts
-import crypto2 from "crypto";
+import crypto3 from "crypto";
 import { Prisma as Prisma4 } from "@prisma/client";
 init_errors();
 
@@ -10179,6 +10179,7 @@ var redirectService = {
 };
 
 // server/services/postService.ts
+import crypto2 from "node:crypto";
 init_errors();
 var CONTENT_EDIT_BLOCKED_STATUSES = /* @__PURE__ */ new Set(["ARCHIVED"]);
 function isUniqueConstraintError2(err) {
@@ -10485,6 +10486,44 @@ var postService = {
       userAgent: meta15.userAgent
     });
     return loadPostOrThrow(id6, organizationId);
+  },
+  /** A private link to the exact public rendering of the post's CURRENT revision (draft or live). Only a hash is stored; the raw token is returned once. */
+  async createPreview(caller, id6, ttlHours, meta15 = {}) {
+    const organizationId = caller.organizationId;
+    const post = await loadPostOrThrow(id6, organizationId);
+    const token = crypto2.randomBytes(32).toString("base64url");
+    const expiresAt = new Date(Date.now() + ttlHours * 36e5);
+    await prisma.postPreviewToken.create({ data: { postId: id6, tokenHash: hashToken(token), expiresAt, createdById: caller.id } });
+    await auditLogRepository.record({
+      organizationId,
+      actorUserId: caller.id,
+      actorType: "USER",
+      action: "POST_PREVIEW_CREATED",
+      resourceType: "post",
+      resourceId: id6,
+      afterData: { expiresAt },
+      ipAddress: meta15.ip,
+      userAgent: meta15.userAgent
+    });
+    const base3 = config.publicSiteBaseUrl ? config.publicSiteBaseUrl.replace(/\/+$/, "") : null;
+    const path = `/blog/${post.slug}?preview=${token}`;
+    return { token, expiresAt, url: base3 ? `${base3}${path}` : null, path };
+  },
+  async revokePreviews(caller, id6, meta15 = {}) {
+    await loadPostOrThrow(id6, caller.organizationId);
+    const res = await prisma.postPreviewToken.updateMany({ where: { postId: id6, revokedAt: null, expiresAt: { gt: /* @__PURE__ */ new Date() } }, data: { revokedAt: /* @__PURE__ */ new Date() } });
+    await auditLogRepository.record({
+      organizationId: caller.organizationId,
+      actorUserId: caller.id,
+      actorType: "USER",
+      action: "POST_PREVIEWS_REVOKED",
+      resourceType: "post",
+      resourceId: id6,
+      afterData: { count: res.count },
+      ipAddress: meta15.ip,
+      userAgent: meta15.userAgent
+    });
+    return { revoked: res.count };
   },
   async archivePost(caller, id6, meta15 = {}) {
     const organizationId = caller.organizationId;
@@ -12049,7 +12088,7 @@ function hasPermission(caller, permission) {
   return caller.role.key === SUPER_ADMIN_ROLE_KEY2 || caller.role.permissions.includes(permission);
 }
 function payloadHash(input) {
-  return crypto2.createHash("sha256").update(JSON.stringify(input ?? {})).digest("hex");
+  return crypto3.createHash("sha256").update(JSON.stringify(input ?? {})).digest("hex");
 }
 function resolveRequiresApproval(definition, orgOverride) {
   if (definition.riskLevel === "HIGH") return true;
@@ -12201,7 +12240,7 @@ async function runToolHandler(definition, caller, validatedInput, meta15, toolEx
 // server/services/aiApprovalService.ts
 init_errors();
 function payloadHash2(input) {
-  return crypto3.createHash("sha256").update(JSON.stringify(input ?? {})).digest("hex");
+  return crypto4.createHash("sha256").update(JSON.stringify(input ?? {})).digest("hex");
 }
 var aiApprovalService = {
   async listApprovals(organizationId, filters, page, limit, sort, order) {
@@ -12278,7 +12317,7 @@ var aiApprovalService = {
 };
 
 // server/services/automation/AutomationService.ts
-import crypto11 from "node:crypto";
+import crypto12 from "node:crypto";
 init_errors();
 
 // server/services/automation/ConditionEngine.ts
@@ -12453,7 +12492,7 @@ var ConditionEngine = class {
 
 // server/services/automation/ActionRegistry.ts
 import { z as z17 } from "zod";
-import crypto4 from "node:crypto";
+import crypto5 from "node:crypto";
 init_errors();
 var ActionRegistry = class _ActionRegistry {
   constructor() {
@@ -12506,7 +12545,7 @@ var ActionRegistry = class _ActionRegistry {
       }),
       outputSchema: z17.object({ taskId: z17.string(), title: z17.string(), status: z17.string() }),
       execute: async (input, context) => {
-        const taskId = crypto4.randomUUID();
+        const taskId = crypto5.randomUUID();
         const dueDate = input.dueDate ? new Date(input.dueDate) : null;
         const task = await prisma.automationTask.create({
           data: {
@@ -12577,7 +12616,7 @@ var ActionRegistry = class _ActionRegistry {
       }),
       outputSchema: z17.object({ notificationId: z17.string(), delivered: z17.boolean() }),
       execute: async (input, context) => {
-        const notifId = crypto4.randomUUID();
+        const notifId = crypto5.randomUUID();
         const autoNotif = await prisma.automationNotification.create({
           data: {
             id: notifId,
@@ -12598,7 +12637,7 @@ var ActionRegistry = class _ActionRegistry {
           try {
             await prisma.notification.create({
               data: {
-                id: crypto4.randomUUID(),
+                id: crypto5.randomUUID(),
                 organizationId: context.organizationId,
                 userId: input.userId,
                 title: input.title,
@@ -12858,7 +12897,7 @@ var ActionRegistry = class _ActionRegistry {
       execute: async (input, context) => {
         await prisma.automationNotification.create({
           data: {
-            id: crypto4.randomUUID(),
+            id: crypto5.randomUUID(),
             organizationId: context.organizationId,
             userId: input.recipientUserId,
             channel: "IN_APP",
@@ -12919,7 +12958,7 @@ var ActionRegistry = class _ActionRegistry {
         try {
           await prisma.automationActionExecution.create({
             data: {
-              id: crypto4.randomUUID(),
+              id: crypto5.randomUUID(),
               organizationId: params.organizationId,
               executionId: params.executionId,
               stepId: params.stepId || "action_step",
@@ -12954,7 +12993,7 @@ var ActionRegistry = class _ActionRegistry {
 var actionRegistry = ActionRegistry.getInstance();
 
 // server/services/automation/ApprovalEngine.ts
-import crypto5 from "node:crypto";
+import crypto6 from "node:crypto";
 init_errors();
 var ApprovalEngine = class _ApprovalEngine {
   static getInstance() {
@@ -12967,7 +13006,7 @@ var ApprovalEngine = class _ApprovalEngine {
    * Request human approval for an automation workflow step.
    */
   async requestApproval(params) {
-    const approvalId = crypto5.randomUUID();
+    const approvalId = crypto6.randomUUID();
     const expiresAt = params.timeoutMinutes ? new Date(Date.now() + params.timeoutMinutes * 60 * 1e3) : null;
     const approval = await prisma.automationApproval.create({
       data: {
@@ -13070,7 +13109,7 @@ var ApprovalEngine = class _ApprovalEngine {
 var approvalEngine = ApprovalEngine.getInstance();
 
 // server/services/automation/TaskManager.ts
-import crypto6 from "node:crypto";
+import crypto7 from "node:crypto";
 init_errors();
 var TaskManager = class _TaskManager {
   static getInstance() {
@@ -13083,7 +13122,7 @@ var TaskManager = class _TaskManager {
    * Create a new automated task.
    */
   async createTask(params) {
-    const taskId = crypto6.randomUUID();
+    const taskId = crypto7.randomUUID();
     const dueDate = params.dueDate ? new Date(params.dueDate) : null;
     const task = await prisma.automationTask.create({
       data: {
@@ -13209,7 +13248,7 @@ var TaskManager = class _TaskManager {
     if (!task) throw new NotFoundError("Automation task not found.");
     const metadata = task.metadata && typeof task.metadata === "object" ? task.metadata : {};
     const comments = Array.isArray(metadata.comments) ? metadata.comments : [];
-    const comment = { id: crypto6.randomUUID(), userId: params.userId, text: params.text, createdAt: (/* @__PURE__ */ new Date()).toISOString() };
+    const comment = { id: crypto7.randomUUID(), userId: params.userId, text: params.text, createdAt: (/* @__PURE__ */ new Date()).toISOString() };
     comments.push(comment);
     const updated = await prisma.automationTask.update({
       where: { id: task.id },
@@ -13337,7 +13376,7 @@ var TaskManager = class _TaskManager {
 var taskManager = TaskManager.getInstance();
 
 // server/services/automation/SchedulerEngine.ts
-import crypto7 from "node:crypto";
+import crypto8 from "node:crypto";
 init_errors();
 var SchedulerEngine = class _SchedulerEngine {
   constructor() {
@@ -13438,7 +13477,7 @@ var SchedulerEngine = class _SchedulerEngine {
       let triggeredCount = 0;
       for (const schedule of dueSchedules) {
         try {
-          const correlationId = crypto7.randomUUID();
+          const correlationId = crypto8.randomUUID();
           const nextRun = _SchedulerEngine.calculateNextRun({
             scheduleType: schedule.scheduleType,
             intervalSeconds: schedule.intervalSeconds,
@@ -13496,7 +13535,7 @@ var SchedulerEngine = class _SchedulerEngine {
     });
     const schedule = await prisma.automationSchedule.create({
       data: {
-        id: crypto7.randomUUID(),
+        id: crypto8.randomUUID(),
         organizationId: params.organizationId,
         workflowId: params.workflowId,
         name: params.name,
@@ -13651,10 +13690,10 @@ var aiQuotaService = {
 };
 
 // server/services/automation/WorkflowEngine.ts
-import crypto10 from "node:crypto";
+import crypto11 from "node:crypto";
 
 // server/services/automation/NotificationEngine.ts
-import crypto8 from "node:crypto";
+import crypto9 from "node:crypto";
 var NotificationEngine = class _NotificationEngine {
   static getInstance() {
     if (!_NotificationEngine.instance) {
@@ -13668,7 +13707,7 @@ var NotificationEngine = class _NotificationEngine {
   async dispatchNotification(params) {
     const channel = params.channel || "IN_APP";
     const level = params.level || "INFO";
-    const notifId = crypto8.randomUUID();
+    const notifId = crypto9.randomUUID();
     if (params.userId && (channel === "EMAIL" || channel === "SMS")) {
       try {
         const pref = await prisma.notificationPreference.findUnique({
@@ -13707,7 +13746,7 @@ var NotificationEngine = class _NotificationEngine {
       try {
         await prisma.notification.create({
           data: {
-            id: crypto8.randomUUID(),
+            id: crypto9.randomUUID(),
             organizationId: params.organizationId,
             userId: params.userId,
             title: params.title,
@@ -13828,7 +13867,7 @@ var UnavailableProvider = class {
 var defaultAiProvider = config.aiProvider === "gemini" ? new GeminiProvider() : new UnavailableProvider();
 
 // server/services/knowledge/KnowledgeService.ts
-import crypto9 from "crypto";
+import crypto10 from "crypto";
 init_errors();
 
 // server/services/knowledge/ExtractionPipeline.ts
@@ -14669,7 +14708,7 @@ var KnowledgeService = class {
     if (!params.buffer || params.buffer.length === 0) {
       throw new ValidationError("Document buffer cannot be empty.");
     }
-    const checksum = crypto9.createHash("sha256").update(params.buffer).digest("hex");
+    const checksum = crypto10.createHash("sha256").update(params.buffer).digest("hex");
     const existing = await prisma.knowledgeDocument.findFirst({
       where: {
         organizationId: params.organizationId,
@@ -14944,9 +14983,9 @@ var WorkflowEngine = class _WorkflowEngine {
     if (workflow.status !== "ACTIVE") {
       throw new Error(`Workflow "${workflow.name}" is not active (status: ${workflow.status}).`);
     }
-    const correlationId = params.correlationId || crypto10.randomUUID();
+    const correlationId = params.correlationId || crypto11.randomUUID();
     const versionToRun = workflow.publishedVersion || workflow.currentVersion;
-    const executionId = crypto10.randomUUID();
+    const executionId = crypto11.randomUUID();
     if (params.idempotencyKey) {
       const existing = await prisma.automationExecution.findFirst({
         where: { organizationId: params.organizationId, idempotencyKey: params.idempotencyKey, status: { in: ["COMPLETED", "RUNNING", "WAITING_APPROVAL"] } }
@@ -15034,7 +15073,7 @@ var WorkflowEngine = class _WorkflowEngine {
       if (stepCount > limits.maxSteps) {
         return this.failExecution(executionId, execution.organizationId, `Exceeded maximum allowed workflow steps (${limits.maxSteps}).`);
       }
-      const stepExecutionId = crypto10.randomUUID();
+      const stepExecutionId = crypto11.randomUUID();
       const stepStartTime = Date.now();
       await prisma.automationStepExecution.create({
         data: { id: stepExecutionId, executionId, stepIndex: currentStepIdx, stepId: step.id, stepName: step.name, stepType: step.type, status: "RUNNING", input: context, startedAt: new Date(stepStartTime) }
@@ -15640,7 +15679,7 @@ var AutomationService = class _AutomationService {
   // Workflows Lifecycle & Management
   // ---------------------------------------------------------------------------
   async createWorkflow(params) {
-    const id6 = crypto11.randomUUID();
+    const id6 = crypto12.randomUUID();
     const workflow = await prisma.automationWorkflow.create({
       data: {
         id: id6,
@@ -15743,7 +15782,7 @@ ${validation.errors.join("\n")}`);
     const newVersionNumber = (workflow.publishedVersion || 0) + 1;
     await prisma.automationWorkflowVersion.create({
       data: {
-        id: crypto11.randomUUID(),
+        id: crypto12.randomUUID(),
         workflowId: workflow.id,
         version: newVersionNumber,
         name: workflow.name,
@@ -16013,7 +16052,7 @@ ${validation.errors.join("\n")}`);
       organizationId: params.organizationId,
       userId: params.userId,
       userPermissions: params.userPermissions,
-      correlationId: crypto11.randomUUID()
+      correlationId: crypto12.randomUUID()
     });
   }
   // ---------------------------------------------------------------------------
@@ -16130,7 +16169,7 @@ ${validation.errors.join("\n")}`);
 var automationService = AutomationService.getInstance();
 
 // server/services/automation/ContentApprovalService.ts
-import crypto12 from "node:crypto";
+import crypto13 from "node:crypto";
 
 // server/repositories/pageRepository.ts
 function slugify11(input) {
@@ -17013,7 +17052,7 @@ var contentApprovalService = {
         triggerType: "MANUAL",
         entityType: contentType,
         entityId: contentId,
-        correlationId: crypto12.randomUUID(),
+        correlationId: crypto13.randomUUID(),
         initiatedById: caller.id
       }
     });
@@ -17137,7 +17176,7 @@ var contentApprovalService = {
 };
 
 // server/services/landing/landingApprovalService.ts
-import crypto14 from "node:crypto";
+import crypto15 from "node:crypto";
 init_errors();
 
 // server/schemas/landingSchemas.ts
@@ -17424,7 +17463,7 @@ function landingPublishIssues(input) {
 }
 
 // server/services/landing/landingPageService.ts
-import crypto13 from "node:crypto";
+import crypto14 from "node:crypto";
 init_errors();
 
 // server/services/landing/landingTemplates.ts
@@ -17759,7 +17798,7 @@ var landingPageService = {
   async createPreview(caller, id6, ttlHours, meta15 = {}) {
     const organizationId = caller.organizationId;
     await loadPage(organizationId, id6);
-    const token = crypto13.randomBytes(32).toString("base64url");
+    const token = crypto14.randomBytes(32).toString("base64url");
     const expiresAt = new Date(Date.now() + ttlHours * 36e5);
     await prisma.landingPreviewToken.create({ data: { pageId: id6, tokenHash: hashToken(token), expiresAt, createdById: caller.id } });
     await audit(caller, organizationId, "LANDING_PAGE_PREVIEW_CREATED", id6, meta15, { expiresAt });
@@ -17819,7 +17858,7 @@ var landingApprovalService = {
     await assertMediaUsable(readDocument(rev), organizationId);
     const workflow = await workflowFor(organizationId);
     const execution = await prisma.automationExecution.create({
-      data: { organizationId, workflowId: workflow.id, workflowVersion: workflow.currentVersion, status: "WAITING_APPROVAL", triggerType: "MANUAL", entityType: LANDING_ENTITY, entityId: id6, correlationId: crypto14.randomUUID(), initiatedById: caller.id }
+      data: { organizationId, workflowId: workflow.id, workflowVersion: workflow.currentVersion, status: "WAITING_APPROVAL", triggerType: "MANUAL", entityType: LANDING_ENTITY, entityId: id6, correlationId: crypto15.randomUUID(), initiatedById: caller.id }
     });
     const approval = await prisma.automationApproval.create({
       data: {
@@ -30820,6 +30859,21 @@ router37.patch(
   })
 );
 router37.post(
+  "/:id/preview",
+  requirePermission("content.update"),
+  asyncHandler(async (req, res) => {
+    const ttlHours = Math.min(72, Math.max(1, Number.parseInt(String(req.body?.ttlHours ?? 24), 10) || 24));
+    sendSuccess(res, { preview: await postService.createPreview(req.user, req.params.id, ttlHours, requestMeta21(req)) }, 201);
+  })
+);
+router37.post(
+  "/:id/preview/revoke",
+  requirePermission("content.update"),
+  asyncHandler(async (req, res) => {
+    sendSuccess(res, await postService.revokePreviews(req.user, req.params.id, requestMeta21(req)));
+  })
+);
+router37.post(
   "/:id/submit-review",
   requirePermission("content.update"),
   asyncHandler(async (req, res) => {
@@ -34155,6 +34209,21 @@ var publicSiteService = {
     }
     return { ...projected, comments };
   },
+  /**
+   * Private preview of a post's CURRENT revision (draft or live) for a valid, unexpired, unrevoked token. The token is only
+   * ever compared by hash. No visit/like/comment data: a preview must never look or count like real traffic.
+   */
+  async getPostPreview(token) {
+    if (!hasPublicWebsiteOrganization() || !/^[A-Za-z0-9_-]{20,100}$/.test(token)) throw new NotFoundError("Preview not found.");
+    const row = await prisma.postPreviewToken.findUnique({ where: { tokenHash: hashToken(token) } });
+    if (!row || row.revokedAt || row.expiresAt.getTime() <= Date.now()) throw new NotFoundError("Preview not found.");
+    const post = await prisma.post.findFirst({
+      where: { id: row.postId, organizationId: config.publicWebsiteOrganizationId, deletedAt: null },
+      include: { currentRevision: true, category: true, author: { include: { user: { select: { firstName: true, lastName: true } } } }, tags: { include: { tag: true } }, featuredMedia: true }
+    });
+    if (!post) throw new NotFoundError("Preview not found.");
+    return { ...await projectPost2(post, 0), comments: [], previewStatus: post.status };
+  },
   /** Phase 11 — Case Studies index. `productSlug`/`industrySlug` resolve through the same global catalog/industry lookups publicProductService uses. */
   async listCaseStudies(filters, page, limit, sort, order) {
     if (!hasPublicWebsiteOrganization()) return { rows: [], total: 0 };
@@ -34676,6 +34745,15 @@ router51.get(
       query.fields
     );
     sendSuccess(res, { posts: rows }, 200, { page: query.page, limit: query.limit, total });
+  })
+);
+router51.get(
+  "/post-preview/:token",
+  tokenLinkLimiter,
+  asyncHandler(async (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    res.setHeader("X-Robots-Tag", "noindex, nofollow");
+    sendSuccess(res, { post: await publicSiteService.getPostPreview(req.params.token) });
   })
 );
 router51.get(
@@ -37266,7 +37344,7 @@ import { Router as Router70 } from "express";
 
 // server/services/copilot/CopilotService.ts
 init_errors();
-import crypto15 from "crypto";
+import crypto16 from "crypto";
 var SYSTEM_WORKSPACES = [
   {
     slug: "general-assistant",
@@ -37618,7 +37696,7 @@ ${transcript.slice(0, 600)}`;
     checkRateLimit(userContext.userId);
     await aiQuotaService.assertWithinLimits(userContext.organizationId);
     const startTime = Date.now();
-    const correlationId = `copilot-${crypto15.randomUUID()}`;
+    const correlationId = `copilot-${crypto16.randomUUID()}`;
     let conversation;
     if (options.conversationId) {
       conversation = await prisma.copilotConversation.findFirst({
@@ -37952,7 +38030,7 @@ ${assistantResponseText}`;
     if (!isSuperAdmin && !userContext.userPermissions.includes(requiredPermission)) {
       throw new AuthorizationError(`Permission "${requiredPermission}" required to confirm and execute this action.`);
     }
-    const correlationId = `copilot-action-${crypto15.randomUUID()}`;
+    const correlationId = `copilot-action-${crypto16.randomUUID()}`;
     const params = preview.parameters || {};
     let executionResult;
     try {
